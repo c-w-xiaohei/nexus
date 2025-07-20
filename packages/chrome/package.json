@@ -1,0 +1,48 @@
+{
+  "name": "@nexus/chrome-adapter",
+  "version": "0.1.0",
+  "description": "Chrome extension adapter for Nexus framework",
+  "private": false,
+  "license": "MIT",
+  "author": "Nexus Team",
+  "keywords": [
+    "nexus",
+    "chrome-extension",
+    "ipc",
+    "cross-context"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@nexus/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.1",
+    "@vitejs/plugin-react-swc": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vite-plugin-dts": "latest",
+    "vitest": "latest"
+  },
+  "peerDependencies": {
+    "@nexus/core": "^0.1.0"
+  }
+}

@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Dependency directories
+node_modules/
+
+# pnpm-specific
+.pnpm-store/
+.pnpm-state.json
+/patches/
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Coverage reports
+coverage/
+
+# Turborepo artifacts
+.turbo/
+
+# Environment variables
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+
+# temp files
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Changesets temporary files
+.changeset/
+
+# private docs
+/.doc
+
+# experimental
+/exp
+

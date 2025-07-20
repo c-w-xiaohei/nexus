@@ -1,0 +1,57 @@
+{
+  "name": "@nexus/core",
+  "version": "0.1.0",
+  "description": "The core engine for Nexus, a type-safe, default-safe, cross-context communication framework.",
+  "private": false,
+  "license": "MIT",
+  "author": "Nexus Team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/nexus.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "ipc",
+    "rpc",
+    "chrome-extension",
+    "electron",
+    "web-worker",
+    "iframe",
+    "postmessage",
+    "type-safe"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run --coverage",
+    "lint": "eslint . --ext .ts"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react-swc": "latest",
+    "@vitest/coverage-v8": "3.2.4",
+    "typescript": "latest",
+    "vite": "latest",
+    "vite-plugin-dts": "latest",
+    "vitest": "latest"
+  },
+  "dependencies": {
+    "es-toolkit": "^1.39.6"
+  }
+}
