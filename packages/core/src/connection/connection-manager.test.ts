@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ConnectionManager } from "./connection-manager";
 import { Transport } from "@/transport";
 import type { IEndpoint } from "@/transport/types/endpoint";
-import { createConnectionManagerStack } from "@/utils/test-utils";
+import { createConnectionManagerStack, createMockPortPair } from "@/utils/test-utils";
 import type { ConnectionManagerHandlers } from "./types";
 import type { IPort } from "@/transport/types/port";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
