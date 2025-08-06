@@ -11,7 +11,7 @@ export {
   type IEndpoint,
   type IPort,
   type NexusConfig,
-} from "@nexus/core";
+} from "@nexus-js/core";
 
 // Chrome-specific exports
 export * from "./types/meta";

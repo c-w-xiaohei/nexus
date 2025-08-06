@@ -1,4 +1,4 @@
-import type { PlatformMetadata } from "@nexus/core";
+import type { PlatformMetadata } from "@nexus-js/core";
 
 /**
  * Chrome extension user metadata using discriminated union types

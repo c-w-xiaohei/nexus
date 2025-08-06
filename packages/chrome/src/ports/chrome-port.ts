@@ -1,4 +1,4 @@
-import type { IPort } from '@nexus/core';
+import type { IPort } from '@nexus-js/core';
 
 /**
  * Wraps chrome.runtime.Port to implement Nexus IPort interface

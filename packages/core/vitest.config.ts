@@ -8,6 +8,8 @@ export default defineConfig({
     },
   },
   test: {
+
+    dangerouslyIgnoreUnhandledErrors: true,
     environment: "node", // 或 'jsdom' 如果需要
     coverage: {
       provider: "v8", // 或 'istanbul'

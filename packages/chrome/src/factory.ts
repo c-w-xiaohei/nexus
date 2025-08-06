@@ -1,4 +1,4 @@
-import { nexus, type NexusConfig } from "@nexus/core";
+import { nexus, type NexusConfig } from "@nexus-js/core";
 import type {
   ChromeUserMeta,
   ChromePlatformMeta,

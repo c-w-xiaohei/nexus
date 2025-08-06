@@ -1,25 +1,29 @@
 {
   "name": "nexus-monorepo",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev --parallel",
     "test": "turbo run test",
     "lint": "turbo run lint",
+    "lint:force": "turbo run lint --force",
     "typecheck": "turbo run typecheck",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "release": "turbo run build && changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "latest",
-    "@typescript-eslint/eslint-plugin": "latest",
-    "@typescript-eslint/parser": "latest",
+    "@eslint/js": "latest",
     "eslint": "latest",
     "eslint-config-prettier": "latest",
+    "eslint-plugin-vitest": "^0.5.4",
+    "globals": "latest",
     "prettier": "latest",
     "turbo": "latest",
     "typescript": "latest",
+    "typescript-eslint": "latest",
     "vitest": "latest"
   },
   "packageManager": "pnpm@10.5.2"
-} 
+}

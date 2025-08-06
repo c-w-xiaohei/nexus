@@ -3,4 +3,4 @@
 "@nexus-js/core": patch
 ---
 
-initial publish
+fix dep

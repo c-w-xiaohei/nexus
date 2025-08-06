@@ -2,9 +2,6 @@
  * This barrel file will export all types and interfaces specific to Layer 3.
  */
 
-import type { UserMetadata, PlatformMetadata } from "../../types/identity";
-import type { MessageId, NexusMessage } from "../../types/message";
-
 /**
  * The type of a locally held resource that is exposed to remote contexts.
  * - `function`: A standard function or a method.
@@ -48,7 +45,7 @@ export interface PendingCall {
   /** The function to call to reject the promise associated with this call. */
   reject: (reason?: any) => void;
   /** An optional timeout timer for the call. */
-  timer?: NodeJS.Timeout;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 export interface ExposedService<T> {
