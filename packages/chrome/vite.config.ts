@@ -17,10 +17,10 @@ export default defineConfig({
       fileName: (format) => `index.${format === 'es' ? 'mjs' : 'js'}`,
     },
     rollupOptions: {
-      external: ['@nexus/core'],
+      external: ['@nexus-js/core'],
       output: {
         globals: {
-          '@nexus/core': 'NexusCore',
+          '@nexus-js/core': 'NexusCore',
         },
       },
     },

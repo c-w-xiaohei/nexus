@@ -1,8 +1,8 @@
-import type { IEndpoint, IPort } from "@nexus/core";
+import type { IEndpoint, IPort } from "@nexus-js/core";
 import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
-} from "@nexus/core";
+} from "@nexus-js/core";
 import type {
   ChromeUserMeta,
   ChromePlatformMeta,

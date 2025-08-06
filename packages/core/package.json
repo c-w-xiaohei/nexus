@@ -22,9 +22,9 @@
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "main": "./dist/index.js",
@@ -46,6 +46,7 @@
   "devDependencies": {
     "@vitejs/plugin-react-swc": "latest",
     "@vitest/coverage-v8": "3.2.4",
+    "eslint-plugin-vitest": "^0.5.4",
     "typescript": "latest",
     "vite": "latest",
     "vite-plugin-dts": "latest",

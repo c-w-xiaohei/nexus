@@ -1,5 +1,5 @@
 {
-  "name": "@nexus-js/chrome-adapter",
+  "name": "@nexus-js/chrome",
   "version": "0.1.0",
   "description": "Chrome extension adapter for Nexus framework",
   "private": false,
