@@ -11,6 +11,11 @@ on:
     branches:
       - main
 
+# Grant necessary permissions for GITHUB_TOKEN so changesets/action can push
+permissions:
+  contents: write
+  pull-requests: write
+
 # Prevent concurrent releases to avoid race conditions
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -52,6 +57,7 @@ jobs:
           # 2. Run 'changeset publish' to publish packages to npm
           # 3. Create GitHub releases
           publish: pnpm changeset publish
+          token: ${{ secrets.BOT_TOKEN }}
         env:
           # GITHUB_TOKEN is automatically provided by GitHub Actions
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
