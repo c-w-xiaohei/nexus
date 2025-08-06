@@ -1,0 +1,59 @@
+# Release
+#
+# This workflow runs on every push to main after a PR is merged.
+# It automatically handles versioning, changelog generation, and publishing to npm.
+# This workflow uses the changesets/action to manage the entire release process.
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+# Prevent concurrent releases to avoid race conditions
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # We need full history to calculate correct version bumps
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'pnpm'
+          # Configure npm registry for publishing
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Build Packages
+        run: pnpm build
+      
+      - name: Create Release Pull Request or Publish to npm
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # This command will automatically:
+          # 1. Run 'changeset version' to update package versions and generate changelog
+          # 2. Run 'changeset publish' to publish packages to npm
+          # 3. Create GitHub releases
+          publish: pnpm changeset publish
+        env:
+          # GITHUB_TOKEN is automatically provided by GitHub Actions
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NPM_TOKEN must be configured as a repository secret
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

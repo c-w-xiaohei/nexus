@@ -1,18 +1,17 @@
 {
-  "name": "@nexus/core",
+  "name": "@nexus-js/core",
   "version": "0.1.0",
   "description": "The core engine for Nexus, a type-safe, default-safe, cross-context communication framework.",
   "private": false,
   "license": "MIT",
-  "author": "Nexus Team",
+  "author": "Carson Yu",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/nexus.git",
+    "url": "https://github.com/c-w-xiaohei/nexus.git",
     "directory": "packages/core"
   },
   "keywords": [
     "ipc",
-    "rpc",
     "chrome-extension",
     "electron",
     "web-worker",
@@ -41,7 +40,8 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest run --coverage",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@vitejs/plugin-react-swc": "latest",

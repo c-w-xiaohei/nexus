@@ -38,7 +38,7 @@ importers:
 
   packages/chrome:
     dependencies:
-      '@nexus/core':
+      '@nexus-js/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
