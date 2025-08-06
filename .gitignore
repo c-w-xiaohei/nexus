@@ -39,9 +39,6 @@ coverage/
 *.swp
 *.swo
 
-# Changesets temporary files
-.changeset/
-
 # private docs
 /.doc
 
