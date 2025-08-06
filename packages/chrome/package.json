@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/chrome",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Chrome extension adapter for Nexus framework",
   "private": false,
   "license": "MIT",
@@ -49,6 +49,6 @@
     "vitest": "latest"
   },
   "peerDependencies": {
-    "@nexus-js/core": "^0.1.0"
+    "@nexus-js/core": "^0.1.1"
   }
 }
