@@ -9,6 +9,7 @@
     "lint": "turbo run lint",
     "lint:force": "turbo run lint --force",
     "typecheck": "turbo run typecheck",
+    "prepare": "husky",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "release": "turbo run build && changeset publish"
   },
@@ -19,6 +20,7 @@
     "eslint-config-prettier": "latest",
     "eslint-plugin-vitest": "^0.5.4",
     "globals": "latest",
+    "husky": "^9.1.7",
     "prettier": "latest",
     "turbo": "latest",
     "typescript": "latest",
