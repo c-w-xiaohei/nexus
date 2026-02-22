@@ -1,7 +1,10 @@
-import type { UserMetadata } from "@/types/identity";
+import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { IEndpoint } from "@/transport";
-import type { ConnectToTarget } from "../types/config";
+import type { TargetCriteria } from "../types/config";
 import { DecoratorRegistry } from "../registry";
+import { NexusUsageError } from "@/errors";
+import { fn } from "@/utils/fn";
+import { z } from "zod";
 
 /**
  * `@Endpoint` 装饰器的配置选项
@@ -14,8 +17,43 @@ export interface EndpointOptions<U extends UserMetadata> {
   /**
    * (可选) 声明此端点在初始化时应主动连接的目标。
    */
-  connectTo?: ConnectToTarget<U, string, string>[];
+  connectTo?: TargetCriteria<U, string, string>[];
 }
+
+const EndpointOptionsSchema = z.object({
+  meta: z.custom<UserMetadata>(
+    (value) => typeof value === "object" && value !== null,
+  ),
+  connectTo: z
+    .array(
+      z
+        .object({
+          descriptor: z
+            .union([
+              z.string(),
+              z.custom<unknown>(
+                (value) =>
+                  typeof value === "object" &&
+                  value !== null &&
+                  !Array.isArray(value),
+              ),
+            ])
+            .optional(),
+          matcher: z
+            .union([
+              z.string(),
+              z.custom<unknown>((value) => typeof value === "function"),
+            ])
+            .optional(),
+        })
+        .refine((item) => typeof item.descriptor !== "undefined", {
+          message: "connectTo item requires descriptor",
+        }),
+    )
+    .optional(),
+});
+
+const validateEndpointOptions = fn(EndpointOptionsSchema, (input) => input);
 
 /**
  * `@Endpoint` 装饰器，用于将一个类声明为当前上下文的通信端点。
@@ -24,17 +62,29 @@ export interface EndpointOptions<U extends UserMetadata> {
  * @param options 配置选项，包含 `meta` 和可选的 `connectTo`。
  */
 export function Endpoint<U extends UserMetadata>(options: EndpointOptions<U>) {
+  const validatedOptions = validateEndpointOptions(options);
+  if (validatedOptions.isErr()) {
+    throw new NexusUsageError(
+      "Nexus Error: Invalid options passed to @Endpoint decorator.",
+      "E_USAGE_INVALID",
+      { cause: validatedOptions.error },
+    );
+  }
+
   return function (
-    targetClass: new (...args: any[]) => IEndpoint<U, any>,
-    context: ClassDecoratorContext
+    targetClass: new (...args: unknown[]) => IEndpoint<U, PlatformMetadata>,
+    context: ClassDecoratorContext,
   ) {
     if (context.kind !== "class") {
-      throw new Error(
-        "Nexus Error: @Endpoint decorator can only be applied to classes."
+      throw new NexusUsageError(
+        "Nexus Error: @Endpoint decorator can only be applied to classes.",
       );
     }
 
     // 阶段一：仅收集注册意图到新的静态类中。
-    DecoratorRegistry.registerEndpoint({ targetClass, options });
+    DecoratorRegistry.registerEndpoint({
+      targetClass,
+      options: validatedOptions.value as EndpointOptions<UserMetadata>,
+    });
   };
 }

@@ -17,6 +17,7 @@ import {
   NexusMessageType,
   type ApplyMessage,
   type IdentityUpdateMessage,
+  type NexusMessage,
 } from "@/types/message";
 
 // 为测试定义简单的元数据类型
@@ -49,7 +50,9 @@ describe("LogicalConnection", () => {
 
   beforeEach(() => {
     const [clientPort, hostPort] = createMockPortPair();
-    const serializer = new JsonSerializer();
+    const serializer = JsonSerializer.serializer;
+    let messageId = 1;
+    const nextMessageId = () => messageId++;
 
     // Mock handlers for both sides
     mockClientHandlers = {
@@ -68,24 +71,32 @@ describe("LogicalConnection", () => {
     };
 
     // To simulate a real scenario, PortProcessors listen to each other
-    const clientPortProcessor = new PortProcessor(
+    const clientPortProcessor = PortProcessor.create(
       clientPort,
       serializer,
       {
-        onLogicalMessage: (msg) => clientConnection.handleMessage(msg),
+        onLogicalMessage: (msg: NexusMessage) =>
+          clientConnection.safeHandleMessage(msg).match(
+            () => undefined,
+            (error) => Promise.reject(error),
+          ),
         onDisconnect: () => clientConnection.handleDisconnect(),
       },
-      Infinity
+      { chunkSize: Infinity },
     );
 
-    const hostPortProcessor = new PortProcessor(
+    const hostPortProcessor = PortProcessor.create(
       hostPort,
       serializer,
       {
-        onLogicalMessage: (msg) => hostConnection.handleMessage(msg),
+        onLogicalMessage: (msg: NexusMessage) =>
+          hostConnection.safeHandleMessage(msg).match(
+            () => undefined,
+            (error) => Promise.reject(error),
+          ),
         onDisconnect: () => hostConnection.handleDisconnect(),
       },
-      Infinity
+      { chunkSize: Infinity },
     );
 
     // Create the LogicalConnection instances
@@ -96,7 +107,8 @@ describe("LogicalConnection", () => {
         connectionId: "conn-client",
         localUserMetadata: clientMeta,
         platformMetadata: hostPlatformMeta, // Client gets host's platform meta
-      }
+        nextMessageId,
+      },
     );
 
     hostConnection = new LogicalConnection(
@@ -106,7 +118,8 @@ describe("LogicalConnection", () => {
         connectionId: "conn-host",
         localUserMetadata: hostMeta,
         platformMetadata: clientPlatformMeta, // Host gets client's platform meta
-      }
+        nextMessageId,
+      },
     );
   });
 
@@ -132,8 +145,8 @@ describe("LogicalConnection", () => {
             {
               platform: clientPlatformMeta,
               connectionId: "conn-host",
-            }
-          )
+            },
+          ),
         );
       });
 
@@ -176,7 +189,7 @@ describe("LogicalConnection", () => {
         expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
         expect(mockHostHandlers.verify).toHaveBeenCalledWith(
           clientMeta,
-          expect.any(Object)
+          expect.any(Object),
         );
       });
 
@@ -221,7 +234,7 @@ describe("LogicalConnection", () => {
         // 1. Host still verifies the original client identity
         expect(mockHostHandlers.verify).toHaveBeenCalledWith(
           clientMeta,
-          expect.any(Object)
+          expect.any(Object),
         );
 
         // 2. Host adopts the new metadata and sends it back in the ACK.
@@ -230,7 +243,7 @@ describe("LogicalConnection", () => {
         expect(mockClientHandlers.onVerified).toHaveBeenCalledWith(
           expect.objectContaining({
             identity: assignmentMeta, // Client sees the host's NEW identity
-          })
+          }),
         );
 
         // 3. The host's local metadata has been updated internally.
@@ -274,7 +287,7 @@ describe("LogicalConnection", () => {
         expect(mockHostHandlers.onMessage).toHaveBeenCalledOnce();
         expect(mockHostHandlers.onMessage).toHaveBeenCalledWith(
           testMessage,
-          "conn-host"
+          "conn-host",
         );
       });
       expect(mockClientHandlers.onMessage).not.toHaveBeenCalled();
@@ -287,7 +300,7 @@ describe("LogicalConnection", () => {
         expect(mockClientHandlers.onMessage).toHaveBeenCalledOnce();
         expect(mockClientHandlers.onMessage).toHaveBeenCalledWith(
           testMessage,
-          "conn-client"
+          "conn-client",
         );
       });
     });
@@ -350,7 +363,7 @@ describe("LogicalConnection", () => {
         expect(mockClientHandlers.onIdentityUpdated).toHaveBeenCalledWith(
           "conn-client",
           expectedNewIdentity,
-          hostMeta // The original identity
+          hostMeta, // The original identity
         );
 
         // 2. The regular message handler is NOT called for this message type
@@ -361,21 +374,22 @@ describe("LogicalConnection", () => {
       });
     });
 
-    it("should ignore identity updates if connection is not ready", () => {
+    it("should ignore identity updates if connection is not ready", async () => {
       // Arrange: Create a new connection that has not completed handshake
       const freshConnection = new LogicalConnection(
-        new PortProcessor(
+        PortProcessor.create(
           createMockPortPair()[0],
-          new JsonSerializer(),
+          JsonSerializer.serializer,
           {} as any,
-          Infinity
+          { chunkSize: Infinity },
         ),
         mockClientHandlers,
         {
           connectionId: "conn-fresh",
           localUserMetadata: clientMeta,
           platformMetadata: hostPlatformMeta,
-        }
+          nextMessageId: () => 1,
+        },
       );
       const updates: Partial<TestUserMeta> = { id: 999 };
       const updateMessage: IdentityUpdateMessage = {
@@ -385,7 +399,7 @@ describe("LogicalConnection", () => {
       };
 
       // Act
-      freshConnection.handleMessage(updateMessage);
+      await freshConnection.safeHandleMessage(updateMessage);
 
       // Assert
       expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();

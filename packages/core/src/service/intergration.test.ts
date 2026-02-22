@@ -1,12 +1,11 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import { ConnectionManager } from "@/connection/connection-manager";
-import { Engine } from "./engine";
-import type { ResourceManager } from "./resource-manager";
+import type { Engine } from "./engine";
+import { ResourceManager } from "./resource-manager";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { configureNexusLogger, LogLevel } from "@/logger";
-import { NexusDisconnectedError, NexusRemoteError } from "@/errors";
+import { CallProcessor } from "./call-processor";
 
 // ===========================================================================
 // Test-Specific Types (as requested, co-located with the test)
@@ -117,7 +116,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
   let hostEngine: Engine<any, any>;
   let serviceProxy: TaskService;
   let clientCm: ConnectionManager<any, any>;
-  let hostCm: ConnectionManager<any, any>;
+  let hostConnectionId: string;
 
   // Note: This setup is now async.
   beforeEach(async () => {
@@ -130,20 +129,20 @@ describe("L3 Engine Integration Test: Task Service", () => {
       },
       {
         meta: { id: "client" },
-      }
+      },
     );
 
     clientEngine = setup.clientEngine;
     hostEngine = setup.hostEngine;
     clientCm = setup.clientCm;
-    hostCm = setup.hostCm;
+    hostConnectionId = setup.hostConnection.connectionId;
 
     // --- Create Proxy ---
     // With the redesigned ProxyFactory, we now create a proxy bound directly
     // to the "tasks" service by name.
     serviceProxy = (clientEngine as any).proxyFactory.createServiceProxy(
       "tasks",
-      { target: { connectionId: setup.clientConnection.connectionId } }
+      { target: { connectionId: setup.clientConnection.connectionId } },
     );
   });
 
@@ -225,31 +224,21 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
   it("should manually release a resource proxy from the client", async () => {
     const task = await serviceProxy.addTask("Task to be processed", {});
+    const hostResourceManager = (hostEngine as any)
+      .resourceManager as ResourceManager.Runtime;
+    const localResourcesBefore =
+      hostResourceManager.listLocalResourceIdsByOwner(hostConnectionId);
+
     const processor = await serviceProxy.getProcessor(task.id);
     expect(processor).toBeDefined();
 
-    // Find the resourceId of the processor proxy on the client
-    const clientResourceManager = (clientEngine as any)
-      .resourceManager as ResourceManager;
-    // Explicitly type the array to guide the linter
-    const remoteProxies: [
-      string,
-      { proxy: object; sourceConnectionId: string },
-    ][] = Array.from(
-      (clientResourceManager as any).remoteProxyRegistry.entries()
+    const localResourcesAfter =
+      hostResourceManager.listLocalResourceIdsByOwner(hostConnectionId);
+    const resourceId = localResourcesAfter.find(
+      (id) => !localResourcesBefore.includes(id),
     );
-    const processorEntry = remoteProxies.find(
-      ([_id, entry]) => entry.proxy === processor
-    );
-    expect(processorEntry).toBeDefined();
-    const resourceId = processorEntry![0];
-
-    // Verify the original resource exists on the host
-    const hostResourceManager = (hostEngine as any)
-      .resourceManager as ResourceManager;
-    expect(
-      (hostResourceManager as any).localResourceRegistry.has(resourceId)
-    ).toBe(true);
+    expect(resourceId).toBeDefined();
+    expect(hostResourceManager.hasLocalResource(resourceId!)).toBe(true);
 
     // Manually release the proxy on the client using the correct symbol.
     await (processor as any)[RELEASE_PROXY_SYMBOL]();
@@ -257,16 +246,14 @@ describe("L3 Engine Integration Test: Task Service", () => {
     // The release message is fire-and-forget, but we can wait for the host
     // to process it by checking the resource registry.
     await vi.waitFor(() => {
-      expect(
-        (hostResourceManager as any).localResourceRegistry.has(resourceId)
-      ).toBe(false);
+      expect(hostResourceManager.hasLocalResource(resourceId!)).toBe(false);
     });
   });
 
   it("should propagate errors from the host back to the client", async () => {
     // Using `expect.rejects` to assert that the promise fails
     await expect(serviceProxy.throwError()).rejects.toBeInstanceOf(
-      NexusRemoteError
+      CallProcessor.Error.Remote,
     );
   });
 
@@ -276,14 +263,16 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
     // Find the dynamic connection ID from the established connection.
     const connection = Array.from(
-      (clientCm as any).connections.values()
+      (clientCm as any).connections.values(),
     )[0] as any;
 
     // Manually call close on the connection, which will trigger disconnect logic
     connection.close();
 
     // Assert that the pending promise is rejected with a specific message.
-    await expect(pendingPromise).rejects.toBeInstanceOf(NexusDisconnectedError);
+    await expect(pendingPromise).rejects.toBeInstanceOf(
+      CallProcessor.Error.Disconnected,
+    );
   });
 
   it("should reject when calling a proxy bound to a closed connection", async () => {
@@ -292,7 +281,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
     // Find the connection and close it
     const connection = Array.from(
-      (clientCm as any).connections.values()
+      (clientCm as any).connections.values(),
     )[0] as any;
     connection.close();
 
@@ -305,7 +294,9 @@ describe("L3 Engine Integration Test: Task Service", () => {
     const resultPromise = serviceProxy.getTasks();
 
     // The call should fail because the target connection is no longer valid.
-    await expect(resultPromise).rejects.toBeInstanceOf(NexusDisconnectedError);
+    await expect(resultPromise).rejects.toBeInstanceOf(
+      CallProcessor.Error.Disconnected,
+    );
   });
 
   it("should clean up resources when a connection is terminated", async () => {
@@ -314,26 +305,20 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
     // Spy on the internal resource managers
     const clientResourceManager = (clientEngine as any)
-      .resourceManager as ResourceManager;
+      .resourceManager as ResourceManager.Runtime;
     const hostResourceManager = (hostEngine as any)
-      .resourceManager as ResourceManager;
+      .resourceManager as ResourceManager.Runtime;
 
     // A local resource (the onUpdate callback) should exist on the client
-    const clientResources = Array.from(
-      (clientResourceManager as any).localResourceRegistry.values()
-    );
-    expect(clientResources.length).toBeGreaterThan(0);
+    expect(clientResourceManager.countLocalResources()).toBeGreaterThan(0);
 
     // A remote proxy for that callback should exist on the host
-    const hostProxies = Array.from(
-      (hostResourceManager as any).remoteProxyRegistry.values()
-    );
-    expect(hostProxies.length).toBeGreaterThan(0);
+    expect(hostResourceManager.countRemoteProxies()).toBeGreaterThan(0);
 
     // --- Simulate connection cleanup ---
     // Find the dynamic connection ID from the established connection.
     const connection = Array.from(
-      (clientCm as any).connections.values()
+      (clientCm as any).connections.values(),
     )[0] as any;
 
     // Manually call close on the connection, which will trigger disconnect logic
@@ -341,15 +326,8 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
     await vi.waitFor(() => {
       // Verify that the resources have been purged
-      const clientResourcesAfter = Array.from(
-        (clientResourceManager as any).localResourceRegistry.values()
-      );
-      expect(clientResourcesAfter).toHaveLength(0);
-
-      const hostProxiesAfter = Array.from(
-        (hostResourceManager as any).remoteProxyRegistry.values()
-      );
-      expect(hostProxiesAfter).toHaveLength(0);
+      expect(clientResourceManager.countLocalResources()).toBe(0);
+      expect(hostResourceManager.countRemoteProxies()).toBe(0);
     });
   });
 
@@ -364,7 +342,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
         {
           target: { matcher: (meta: any) => meta.id === "host" },
           broadcastOptions: { strategy: "all" },
-        }
+        },
       );
     });
 
@@ -394,7 +372,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
         {
           target: { matcher: (meta: any) => meta.id === "host" },
           strategy: "stream",
-        }
+        },
       );
 
       await (streamProxy as any).addTask("Task for stream", {});

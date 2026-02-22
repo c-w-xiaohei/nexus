@@ -14,18 +14,18 @@
     "release": "turbo run build && changeset publish"
   },
   "devDependencies": {
-    "@changesets/cli": "latest",
-    "@eslint/js": "latest",
-    "eslint": "latest",
-    "eslint-config-prettier": "latest",
-    "eslint-plugin-vitest": "^0.5.4",
-    "globals": "latest",
-    "husky": "^9.1.7",
-    "prettier": "latest",
-    "turbo": "latest",
-    "typescript": "latest",
-    "typescript-eslint": "latest",
-    "vitest": "latest"
+    "@changesets/cli": "2.29.8",
+    "@eslint/js": "9.39.2",
+    "eslint": "9.39.2",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-vitest": "0.5.4",
+    "globals": "17.3.0",
+    "husky": "9.1.7",
+    "prettier": "3.8.1",
+    "turbo": "2.8.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.56.0",
+    "vitest": "4.0.18"
   },
   "packageManager": "pnpm@10.5.2"
 }

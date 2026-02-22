@@ -72,7 +72,7 @@ export function createConnectionManagerStack<
 >(
   meta: U & { context?: string },
   hostOnConnect: (port: IPort, platformMeta?: P) => void,
-  config: ConnectionManagerConfig<U, P> = {}
+  config: ConnectionManagerConfig<U, P> = {},
 ) {
   const mockEndpoint: IEndpoint<U, P> = {
     listen: vi.fn(),
@@ -84,12 +84,16 @@ export function createConnectionManagerStack<
       return [clientPort, { from: "host" } as P];
     }),
   };
-  const transport = new Transport(mockEndpoint);
+  const transport = Transport.create(mockEndpoint);
   const handlers: ConnectionManagerHandlers<U, P> = {
     onMessage: vi.fn(),
     onDisconnect: vi.fn(),
   };
   const manager = new ConnectionManager(config, transport, handlers, meta);
+  const initResult = manager.safeInitialize();
+  if (initResult.isErr()) {
+    throw initResult.error;
+  }
   return { manager, mockEndpoint, handlers, transport };
 }
 
@@ -118,13 +122,13 @@ export function createNexusTestStack<
     }),
   };
 
-  const transport = new Transport(mockEndpoint);
+  const transport = Transport.create(mockEndpoint);
 
   const connectionManager = new ConnectionManager(
     setup.cmConfig ?? {},
     transport,
     handlers,
-    setup.meta
+    setup.meta,
   );
 
   return {
@@ -152,7 +156,7 @@ export async function createL3Endpoints<
   clientSetup: {
     meta: U;
     connectTo?: { descriptor: Descriptor<U> }[];
-  }
+  },
 ) {
   const [clientPort, hostPort] = createMockPortPair();
 
@@ -164,7 +168,10 @@ export async function createL3Endpoints<
     services: hostSetup.services,
   });
   hostStack.handlers.onMessage = (msg, connId) =>
-    hostEngine.onMessage(msg, connId);
+    hostEngine.safeOnMessage(msg, connId).match(
+      () => undefined,
+      () => undefined,
+    );
   hostStack.handlers.onDisconnect = (connId) => hostEngine.onDisconnect(connId);
 
   // The host's mock endpoint will listen for incoming connections.
@@ -181,7 +188,10 @@ export async function createL3Endpoints<
   });
   const clientEngine = new Engine(clientStack.connectionManager);
   clientStack.handlers.onMessage = (msg, connId) =>
-    clientEngine.onMessage(msg, connId);
+    clientEngine.safeOnMessage(msg, connId).match(
+      () => undefined,
+      () => undefined,
+    );
   clientStack.handlers.onDisconnect = (connId) =>
     clientEngine.onDisconnect(connId);
 
@@ -190,29 +200,35 @@ export async function createL3Endpoints<
     async (_descriptor: Descriptor<U>) => {
       // The client's connect method returns its end of the port pair.
       return [clientPort, { from: hostSetup.meta.id } as P] as [IPort, P];
-    }
+    },
   );
 
   // --- Establish Connection ---
-  hostStack.connectionManager.initialize();
-  clientStack.connectionManager.initialize();
+  const hostInitResult = hostStack.connectionManager.safeInitialize();
+  if (hostInitResult.isErr()) {
+    throw hostInitResult.error;
+  }
+  const clientInitResult = clientStack.connectionManager.safeInitialize();
+  if (clientInitResult.isErr()) {
+    throw clientInitResult.error;
+  }
 
   await vi.waitFor(() => {
     const clientConn = Array.from(
-      clientStack.connectionManager["connections"].values()
+      clientStack.connectionManager["connections"].values(),
     )[0];
     const hostConn = Array.from(
-      hostStack.connectionManager["connections"].values()
+      hostStack.connectionManager["connections"].values(),
     )[0];
     expect(clientConn?.isReady()).toBe(true);
     expect(hostConn?.isReady()).toBe(true);
   });
 
   const clientConnection = Array.from(
-    clientStack.connectionManager["connections"].values()
+    clientStack.connectionManager["connections"].values(),
   )[0];
   const hostConnection = Array.from(
-    hostStack.connectionManager["connections"].values()
+    hostStack.connectionManager["connections"].values(),
   )[0];
 
   expect(clientConnection).toBeDefined();
@@ -266,8 +282,8 @@ export async function createStarNetwork<
   const centerInstance = instances.get(config.center.meta.context)!;
   const leafInstances = new Map(
     Array.from(instances.entries()).filter(
-      ([key]) => key !== config.center.meta.context
-    )
+      ([key]) => key !== config.center.meta.context,
+    ),
   );
 
   let centerListenCallback: (port: IPort, platformMeta?: P) => void;
@@ -289,7 +305,7 @@ export async function createStarNetwork<
           const targetInstance = leafInstances.get(targetKey);
           if (!targetInstance) {
             throw new Error(
-              `[test-utils] Center could not find leaf to connect to: ${targetKey}`
+              `[test-utils] Center could not find leaf to connect to: ${targetKey}`,
             );
           }
 
@@ -314,7 +330,7 @@ export async function createStarNetwork<
       ([tokenId, implementation]) => ({
         token: new Token(tokenId),
         implementation,
-      })
+      }),
     ),
   });
   (centerInstance.nexus as any).scheduleInit();
@@ -344,7 +360,7 @@ export async function createStarNetwork<
         ([tokenId, implementation]) => ({
           token: new Token(tokenId),
           implementation,
-        })
+        }),
       ),
     });
     (leafInstance.nexus as any).scheduleInit();
@@ -368,7 +384,7 @@ export async function createStarNetwork<
         }
       }
     },
-    { timeout: 2000 }
+    { timeout: 2000 },
   );
 
   return instances;

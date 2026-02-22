@@ -1,6 +1,6 @@
 import type { NexusMessage } from "@/types/message";
 import type { PlatformMetadata, UserMetadata } from "@/types/identity";
-import type { Engine } from "../../engine";
+import type { MessageHandlerCallbacks } from "../../engine";
 import type { PayloadProcessor } from "../../payload/payload-processor";
 import type { ResourceManager } from "../../resource-manager";
 
@@ -12,9 +12,9 @@ export interface HandlerContext<
   U extends UserMetadata,
   P extends PlatformMetadata,
 > {
-  readonly engine: Engine<U, P>;
-  readonly resourceManager: ResourceManager;
-  readonly payloadProcessor: PayloadProcessor<U, P>;
+  readonly engine: MessageHandlerCallbacks<U>;
+  readonly resourceManager: ResourceManager.Runtime;
+  readonly payloadProcessor: PayloadProcessor.Runtime<U, P>;
 }
 
 /**
@@ -30,5 +30,5 @@ export type MessageHandlerFn<
 > = (
   context: HandlerContext<U, P>,
   message: T,
-  sourceConnectionId: string
+  sourceConnectionId: string,
 ) => Promise<void> | void;

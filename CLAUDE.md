@@ -8,6 +8,19 @@ This is a monorepo for the Nexus framework, a type-safe, default-safe cross-cont
 
 Nexus abstracts away the complexities of underlying communication channels, allowing you to focus on your application's business logic through a unified API (`nexus` singleton) across different platforms.
 
+## Coding Style (Mandatory)
+
+- Internal (core/chrome) recoverable errors must use `Result` / `ResultAsync` with railway-oriented composition; avoid implicit throw for business/control flow.
+- Public APIs can expose dual interfaces: throw-style and safe-style (`Result`).
+- Module organization pattern is chosen by a decision tree (see `.doc/style.md` for full spec):
+  - **Namespace + Functions** for data-transparent / stateless layers (e.g. `Transport`, serializers).
+  - **Closure Factory** for opaque capability bundles with hidden mutable state but no system-level identity (e.g. `PortProcessor`, `ResourceManager`, `PendingCallManager`).
+  - **Class** for entities with system-level identity, state machines, lifecycle orchestration, or circular dependencies requiring `this` (e.g. `ConnectionManager`, `LogicalConnection`, `Engine`).
+- Never expose internal mutable collections (`Map`, `Set`) on public interfaces; use methods or `ReadonlyMap` getters.
+- When a closure factory returns an object with methods, do not add equivalent `(runtime, ...args)` wrapper functions at the namespace level.
+- Prefer discriminated unions over interfaces with many optional fields for variant types.
+- `fn` helper location: `packages/core/src/utils/fn.ts`.
+
 ## Repository Structure
 
 - `packages/core` - The core engine for Nexus framework
@@ -177,3 +190,4 @@ This project uses pnpm workspaces with the following key packages:
 Packages are built using Vite with TypeScript and output to `dist/` directories.
 
 The monorepo is managed with Turbo for efficient builds and task execution.
+`

@@ -44,18 +44,18 @@ import {
   ValueType,
 } from "../types";
 import { Placeholder } from "./placeholder";
-import type { PayloadProcessor } from "./payload-processor";
+import { PayloadProcessor } from "./payload-processor";
 
 type SanitizeHandler<U extends UserMetadata, P extends PlatformMetadata> = (
-  processor: PayloadProcessor<U, P>,
+  processor: PayloadProcessor.Runtime<U, P>,
   value: any,
-  context: SanitizeContext
+  context: SanitizeContext,
 ) => Placeholder;
 
 type ReviveHandler<U extends UserMetadata, P extends PlatformMetadata> = (
-  processor: PayloadProcessor<U, P>,
+  processor: PayloadProcessor.Runtime<U, P>,
   placeholder: Placeholder,
-  context: ReviveContext
+  context: ReviveContext,
 ) => any;
 
 export const SANITIZER_TABLE_CONFIG = new Map<
@@ -68,7 +68,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
       const resourceId = processor.resourceManager.registerLocalResource(
         value,
         context.targetConnectionId,
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
       return new Placeholder(PlaceholderType.RESOURCE, resourceId);
     },
@@ -78,7 +78,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
     (_, value) =>
       new Placeholder(
         PlaceholderType.MAP,
-        JSON.stringify(Array.from(value.entries()))
+        JSON.stringify(Array.from(value.entries())),
       ),
   ],
   [
@@ -86,7 +86,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
     (_, value) =>
       new Placeholder(
         PlaceholderType.SET,
-        JSON.stringify(Array.from(value.values()))
+        JSON.stringify(Array.from(value.values())),
       ),
   ],
   [
@@ -104,7 +104,7 @@ export const REVIVER_TABLE_CONFIG = new Map<
     (processor, placeholder, context) =>
       processor.proxyFactory.createRemoteResourceProxy(
         placeholder.payload!,
-        context.sourceConnectionId
+        context.sourceConnectionId,
       ),
   ],
   [

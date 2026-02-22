@@ -1,13 +1,12 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PendingCallManager } from "./pending-call-manager";
 import type { SerializedError } from "@/types/message";
-import { NexusCallTimeoutError, NexusDisconnectedError } from "@/errors";
 
 describe("PendingCallManager", () => {
-  let manager: PendingCallManager;
+  let manager: PendingCallManager.Runtime;
 
   beforeEach(() => {
-    manager = new PendingCallManager();
+    manager = PendingCallManager.create();
     vi.useFakeTimers();
   });
 
@@ -41,6 +40,7 @@ describe("PendingCallManager", () => {
 
       const error: SerializedError = {
         name: "Error",
+        code: "E_UNKNOWN",
         message: "Failure",
       };
       manager.handleResponse(1, null, error, "conn-1");
@@ -61,7 +61,9 @@ describe("PendingCallManager", () => {
 
       vi.advanceTimersByTime(1001);
 
-      await expect(promise).rejects.toBeInstanceOf(NexusCallTimeoutError);
+      await expect(promise).rejects.toBeInstanceOf(
+        PendingCallManager.Error.Timeout,
+      );
     });
 
     it("should aggregate results for a broadcast call", async () => {
@@ -186,7 +188,9 @@ describe("PendingCallManager", () => {
 
       manager.onDisconnect("conn-1");
 
-      await expect(promise).rejects.toBeInstanceOf(NexusDisconnectedError);
+      await expect(promise).rejects.toBeInstanceOf(
+        PendingCallManager.Error.Disconnected,
+      );
     });
 
     it("should adjust expectations for a broadcast call and resolve if complete", async () => {

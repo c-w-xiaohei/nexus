@@ -1,6 +1,10 @@
 import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { TargetCriteria } from "./types/config";
 import { Token } from "./token";
+import { NexusUsageError } from "@/errors";
+import { fn } from "@/utils/fn";
+import { err, ok, type Result } from "neverthrow";
+import { z } from "zod";
 
 /**
  * Configuration options for TokenSpace.
@@ -8,7 +12,7 @@ import { Token } from "./token";
  */
 export interface TokenSpaceConfig<
   U extends UserMetadata,
-  P extends PlatformMetadata,
+  _P extends PlatformMetadata,
 > {
   /** The name of the namespace, which will be used as a prefix for all child Token IDs */
   name: string;
@@ -59,6 +63,43 @@ export interface ChildTokenSpaceConfig<U extends UserMetadata> {
   defaultTarget?: TokenSpaceDefaultTarget<U>;
 }
 
+const NonEmptyNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Name cannot be empty")
+  .refine((value) => !value.includes(":"), {
+    message: "Name cannot contain ':' character",
+  });
+
+const validateTokenSpaceName = fn(NonEmptyNameSchema, (name) => name);
+
+const TokenSpaceDefaultTargetSchema = z
+  .object({
+    descriptor: z
+      .custom<
+        Partial<UserMetadata>
+      >((value) => typeof value === "object" && value !== null && !Array.isArray(value))
+      .optional(),
+    matcher: z
+      .custom<unknown>((value) => typeof value === "function")
+      .optional(),
+    expects: z.enum(["one", "first"]).optional(),
+  })
+  .refine(
+    (input) =>
+      typeof input.descriptor !== "undefined" ||
+      typeof input.matcher !== "undefined",
+    {
+      message: "defaultTarget requires at least one of descriptor or matcher",
+    },
+  )
+  .optional();
+
+const validateDefaultTarget = fn(
+  TokenSpaceDefaultTargetSchema,
+  (input) => input,
+);
+
 /**
  * TokenSpace class: A factory and namespace manager for creating and organizing Tokens.
  *
@@ -83,21 +124,25 @@ export class TokenSpace<U extends UserMetadata, P extends PlatformMetadata> {
    * @param config Configuration object containing name and optional default target
    * @param parentPath Full path of the parent TokenSpace (for nesting)
    */
-  constructor(
-    config: TokenSpaceConfig<U, P>,
-    private readonly parentPath?: string
-  ) {
-    // Validate that name is not empty and does not contain colon (used as separator)
-    if (!config.name || config.name.trim() === "") {
-      throw new Error("TokenSpace name cannot be empty");
+  constructor(config: TokenSpaceConfig<U, P>, parentPath?: string) {
+    const validatedName = validateTokenSpaceName(config.name);
+    if (validatedName.isErr()) {
+      throw new NexusUsageError(validatedName.error.message);
     }
 
-    if (config.name.includes(":")) {
-      throw new Error("TokenSpace name cannot contain ':' character");
+    this._name = validatedName.value;
+    const validatedDefaultTarget = validateDefaultTarget(config.defaultTarget);
+    if (validatedDefaultTarget.isErr()) {
+      throw new NexusUsageError(
+        "TokenSpace defaultTarget is invalid",
+        "E_USAGE_INVALID",
+        { cause: validatedDefaultTarget.error },
+      );
     }
 
-    this._name = config.name.trim();
-    this._defaultTarget = config.defaultTarget;
+    this._defaultTarget = validatedDefaultTarget.value as
+      | TokenSpaceDefaultTarget<U>
+      | undefined;
 
     // Build full path: concatenate with parent path if exists, otherwise use current name
     this._fullPath = parentPath ? `${parentPath}:${this._name}` : this._name;
@@ -132,16 +177,21 @@ export class TokenSpace<U extends UserMetadata, P extends PlatformMetadata> {
    * @returns Newly created Token instance with ID as full path concatenated with service name
    */
   token<T>(serviceName: string): Token<T> {
-    // Validate service name
-    if (!serviceName || serviceName.trim() === "") {
-      throw new Error("Service name cannot be empty");
+    return this.safeToken<T>(serviceName).match(
+      (value) => value,
+      (error) => {
+        throw error;
+      },
+    );
+  }
+
+  safeToken<T>(serviceName: string): Result<Token<T>, Error> {
+    const validatedServiceName = validateTokenSpaceName(serviceName);
+    if (validatedServiceName.isErr()) {
+      return err(new NexusUsageError(validatedServiceName.error.message));
     }
 
-    if (serviceName.includes(":")) {
-      throw new Error("Service name cannot contain ':' character");
-    }
-
-    const cleanServiceName = serviceName.trim();
+    const cleanServiceName = validatedServiceName.value;
     const tokenId = `${this._fullPath}:${cleanServiceName}`;
 
     // Convert TokenSpace's defaultTarget to Token-compatible format
@@ -160,7 +210,7 @@ export class TokenSpace<U extends UserMetadata, P extends PlatformMetadata> {
       }
     }
 
-    return new Token<T>(tokenId, tokenDefaultTarget);
+    return ok(new Token<T>(tokenId, tokenDefaultTarget));
   }
 
   /**
@@ -172,23 +222,31 @@ export class TokenSpace<U extends UserMetadata, P extends PlatformMetadata> {
    */
   tokenSpace(
     name: string,
-    config?: ChildTokenSpaceConfig<U>
+    config?: ChildTokenSpaceConfig<U>,
   ): TokenSpace<U, P> {
-    // Validate child namespace name
-    if (!name || name.trim() === "") {
-      throw new Error("Child TokenSpace name cannot be empty");
-    }
+    return this.safeTokenSpace(name, config).match(
+      (value) => value,
+      (error) => {
+        throw error;
+      },
+    );
+  }
 
-    if (name.includes(":")) {
-      throw new Error("Child TokenSpace name cannot contain ':' character");
+  safeTokenSpace(
+    name: string,
+    config?: ChildTokenSpaceConfig<U>,
+  ): Result<TokenSpace<U, P>, Error> {
+    const validatedName = validateTokenSpaceName(name);
+    if (validatedName.isErr()) {
+      return err(new NexusUsageError(validatedName.error.message));
     }
 
     // Merge configuration: child config overrides parent config
     const mergedConfig: TokenSpaceConfig<U, P> = {
-      name: name.trim(),
+      name: validatedName.value,
       defaultTarget: config?.defaultTarget ?? this._defaultTarget,
     };
 
-    return new TokenSpace<U, P>(mergedConfig, this._fullPath);
+    return ok(new TokenSpace<U, P>(mergedConfig, this._fullPath));
   }
 }

@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ConnectionManager } from "./connection-manager";
 import { Transport } from "@/transport";
 import type { IEndpoint } from "@/transport/types/endpoint";
-import { createConnectionManagerStack, createMockPortPair } from "@/utils/test-utils";
+import {
+  createConnectionManagerStack,
+  createMockPortPair,
+} from "@/utils/test-utils";
 import type { ConnectionManagerHandlers } from "./types";
 import type { IPort } from "@/transport/types/port";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 
-// 为测试定义简单的元数据类型
 interface TestUserMeta {
   context: string;
   id: number;
@@ -17,18 +19,55 @@ interface TestPlatformMeta {
   from: string;
 }
 
-// Helper function to create a full client stack for testing.
-// This avoids repetition when multiple clients are needed.
-// This function is now removed and imported from test-utils.
+const initializeManager = <U extends object, P extends object>(
+  manager: ConnectionManager<U, P>,
+): void => {
+  const result = manager.safeInitialize();
+  if (result.isErr()) {
+    throw result.error;
+  }
+};
+
+const resolveManager = async <U extends object, P extends object>(
+  manager: ConnectionManager<U, P>,
+  options: any,
+) =>
+  manager.safeResolveConnection(options).match(
+    (value) => value,
+    (error) => {
+      throw error;
+    },
+  );
+
+const sendFromManager = <U extends object, P extends object>(
+  manager: ConnectionManager<U, P>,
+  target: any,
+  message: any,
+): string[] =>
+  manager.safeSendMessage(target, message).match(
+    (value) => value,
+    (error) => {
+      throw error;
+    },
+  );
+
+const updateManagerIdentity = <U extends object, P extends object>(
+  manager: ConnectionManager<U, P>,
+  updates: Partial<U>,
+): void => {
+  const result = manager.safeUpdateLocalIdentity(updates);
+  if (result.isErr()) {
+    throw result.error;
+  }
+};
 
 describe("ConnectionManager", () => {
   // L1 Mocks
   let mockHostEndpoint: IEndpoint<TestUserMeta, TestPlatformMeta>;
   let hostL1OnConnect: (port: IPort, platformMeta?: TestPlatformMeta) => void;
 
-  // L2 Instances
+  // L2 state
   let hostManager: ConnectionManager<TestUserMeta, TestPlatformMeta>;
-  // clientManager is now created inside tests where needed
 
   // L3 Handlers Mocks
   let mockHostHandlers: ConnectionManagerHandlers<
@@ -54,7 +93,7 @@ describe("ConnectionManager", () => {
     };
 
     // Real L1 Transport for the host
-    const hostTransport = new Transport(mockHostEndpoint);
+    const hostTransport = Transport.create(mockHostEndpoint);
 
     // Mock L3 handlers for the host
     mockHostHandlers = {
@@ -62,12 +101,12 @@ describe("ConnectionManager", () => {
       onDisconnect: vi.fn(),
     };
 
-    // Create the L2 ConnectionManager for the host
+    // Create the L2 ConnectionManager state for the host
     hostManager = new ConnectionManager(
       {},
       hostTransport,
       mockHostHandlers,
-      hostMeta
+      hostMeta,
     );
   });
 
@@ -78,13 +117,13 @@ describe("ConnectionManager", () => {
   describe("Connection Establishment (B1)", () => {
     it("should establish a connection when one manager resolves a connection to a listening manager", async () => {
       // Arrange
-      hostManager.initialize();
+      initializeManager(hostManager);
       const { manager: clientManager, mockEndpoint: mockClientEndpoint } =
         createConnectionManagerStack(clientMeta, hostL1OnConnect);
       expect(mockHostEndpoint.listen).toHaveBeenCalledOnce();
 
       // Act
-      const clientConnectionPromise = clientManager.resolveConnection({
+      const clientConnectionPromise = resolveManager(clientManager, {
         descriptor: hostMeta,
       });
 
@@ -95,7 +134,6 @@ describe("ConnectionManager", () => {
       expect(clientConn?.remoteIdentity).toEqual(hostMeta);
 
       await vi.waitFor(() => {
-        // @ts-expect-error accessing private property for testing
         const hostConnections = Array.from(hostManager.connections.values());
         expect(hostConnections).toHaveLength(1);
         expect(hostConnections[0].isReady()).toBe(true);
@@ -109,17 +147,17 @@ describe("ConnectionManager", () => {
   describe("Connection Reuse and Concurrency (B2)", () => {
     it("should reuse an existing connection if a matching one is found", async () => {
       // Arrange
-      hostManager.initialize();
+      initializeManager(hostManager);
       const { manager: clientManager, mockEndpoint: mockClientEndpoint } =
         createConnectionManagerStack(clientMeta, hostL1OnConnect);
-      const initialConnection = await clientManager.resolveConnection({
+      const initialConnection = await resolveManager(clientManager, {
         descriptor: hostMeta,
       });
       expect(initialConnection).not.toBeNull();
       expect(mockClientEndpoint.connect).toHaveBeenCalledTimes(1);
 
       // Act
-      const reusedConnection = await clientManager.resolveConnection({
+      const reusedConnection = await resolveManager(clientManager, {
         descriptor: hostMeta,
       });
 
@@ -130,14 +168,14 @@ describe("ConnectionManager", () => {
 
     it("should handle concurrent connection requests for the same target", async () => {
       // Arrange
-      hostManager.initialize();
+      initializeManager(hostManager);
       const { manager: clientManager, mockEndpoint: mockClientEndpoint } =
         createConnectionManagerStack(clientMeta, hostL1OnConnect);
 
       // Act
       const [conn1, conn2] = await Promise.all([
-        clientManager.resolveConnection({ descriptor: hostMeta }),
-        clientManager.resolveConnection({ descriptor: hostMeta }),
+        resolveManager(clientManager, { descriptor: hostMeta }),
+        resolveManager(clientManager, { descriptor: hostMeta }),
       ]);
 
       // Assert
@@ -146,7 +184,6 @@ describe("ConnectionManager", () => {
       expect(conn1).toBe(conn2);
       expect(mockClientEndpoint.connect).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => {
-        // @ts-expect-error accessing private property for testing
         const hostConnections = Array.from(hostManager.connections.values());
         expect(hostConnections).toHaveLength(1);
       });
@@ -167,39 +204,37 @@ describe("ConnectionManager", () => {
         groups: ["group-1", "group-2"],
       };
 
-      hostManager.initialize();
+      initializeManager(hostManager);
 
       const clientA = createConnectionManagerStack(
         clientAMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
       const clientB = createConnectionManagerStack(
         clientBMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
 
       // Act: Connect both clients to the host
       await Promise.all([
-        clientA.manager.resolveConnection({ descriptor: hostMeta }),
-        clientB.manager.resolveConnection({ descriptor: hostMeta }),
+        resolveManager(clientA.manager, { descriptor: hostMeta }),
+        resolveManager(clientB.manager, { descriptor: hostMeta }),
       ]);
 
       // Assert: Service groups are correctly populated on the host
       let clientAConnId: string, clientBConnId: string;
       await vi.waitFor(() => {
-        // @ts-expect-error accessing private property for testing
         const hostConnections = [...hostManager.connections.values()];
         expect(hostConnections).toHaveLength(2);
         clientAConnId = hostConnections.find(
-          (c) => c.remoteIdentity?.id === 10
+          (c) => c.remoteIdentity?.id === 10,
         )!.connectionId;
         clientBConnId = hostConnections.find(
-          (c) => c.remoteIdentity?.id === 20
+          (c) => c.remoteIdentity?.id === 20,
         )!.connectionId;
-        // @ts-expect-error accessing private property for testing
         const groups = hostManager.serviceGroups;
         expect(groups.get("group-1")).toEqual(
-          new Set([clientAConnId, clientBConnId])
+          new Set([clientAConnId, clientBConnId]),
         );
         expect(groups.get("group-2")).toEqual(new Set([clientBConnId]));
       });
@@ -214,26 +249,26 @@ describe("ConnectionManager", () => {
       };
 
       // Act & Assert: Send message to group-1, both clients should receive it
-      hostManager.sendMessage({ groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
       await vi.waitFor(() => {
         expect(clientA.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
-          expect.any(String)
+          expect.any(String),
         );
         expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
-          expect.any(String)
+          expect.any(String),
         );
       });
 
       vi.clearAllMocks();
 
       // Act & Assert: Send message to group-2, only client B should receive it
-      hostManager.sendMessage({ groupName: "group-2" }, testMessage);
+      sendFromManager(hostManager, { groupName: "group-2" }, testMessage);
       await vi.waitFor(() => {
         expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
-          expect.any(String)
+          expect.any(String),
         );
       });
       expect(clientA.handlers.onMessage).not.toHaveBeenCalled();
@@ -254,28 +289,27 @@ describe("ConnectionManager", () => {
         groups: ["group-1", "group-2"],
       };
 
-      hostManager.initialize();
+      initializeManager(hostManager);
       const clientA = createConnectionManagerStack(
         clientAMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
       const clientB = createConnectionManagerStack(
         clientBMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
 
       const [connA_from_client, connB_from_client] = await Promise.all([
-        clientA.manager.resolveConnection({ descriptor: hostMeta }),
-        clientB.manager.resolveConnection({ descriptor: hostMeta }),
+        resolveManager(clientA.manager, { descriptor: hostMeta }),
+        resolveManager(clientB.manager, { descriptor: hostMeta }),
       ]);
 
       let clientBConnOnHost: any;
       await vi.waitFor(() => {
-        // @ts-expect-error - accessing private property for testing
         const hostConnections = [...hostManager.connections.values()];
         expect(hostConnections).toHaveLength(2);
         clientBConnOnHost = hostConnections.find(
-          (c) => c.remoteIdentity?.id === 20
+          (c) => c.remoteIdentity?.id === 20,
         );
         expect(clientBConnOnHost).toBeDefined();
       });
@@ -288,21 +322,19 @@ describe("ConnectionManager", () => {
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledOnce();
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledWith(
           clientBConnOnHost.connectionId,
-          clientBMeta
+          clientBMeta,
         );
 
-        // @ts-expect-error - accessing private property for testing
         const hostConnections = [...hostManager.connections.values()];
         expect(hostConnections).toHaveLength(1);
         expect(hostConnections[0].remoteIdentity).toEqual(clientAMeta);
 
-        // @ts-expect-error - accessing private property for testing
         const groups = hostManager.serviceGroups;
         expect(groups.get("group-1")?.has(clientBConnOnHost.connectionId)).toBe(
-          false
+          false,
         );
         expect(groups.get("group-2")?.has(clientBConnOnHost.connectionId)).toBe(
-          false
+          false,
         );
       });
 
@@ -312,7 +344,7 @@ describe("ConnectionManager", () => {
       expect(connA_from_client!.isReady()).toBe(true);
       expect(mockHostHandlers.onDisconnect).not.toHaveBeenCalledWith(
         expect.any(String),
-        clientAMeta
+        clientAMeta,
       );
     });
   });
@@ -320,14 +352,14 @@ describe("ConnectionManager", () => {
   describe("Static 'connectTo' Configuration (B5)", () => {
     it("should automatically establish connections upon initialization", async () => {
       // Arrange
-      hostManager.initialize();
+      initializeManager(hostManager);
 
       const clientConfig = { connectTo: [{ descriptor: hostMeta }] };
       const { manager: clientManager, mockEndpoint } =
         createConnectionManagerStack(clientMeta, hostL1OnConnect, clientConfig);
 
       // Act
-      clientManager.initialize();
+      initializeManager(clientManager);
 
       // Assert: Connection is established automatically
       await vi.waitFor(() => {
@@ -336,14 +368,12 @@ describe("ConnectionManager", () => {
       });
 
       await vi.waitFor(() => {
-        // @ts-expect-error - accessing private property for testing
         const hostConnections = [...hostManager.connections.values()];
         expect(hostConnections).toHaveLength(1);
         expect(hostConnections[0].remoteIdentity).toEqual(clientMeta);
       });
 
       await vi.waitFor(() => {
-        // @ts-expect-error - accessing private property for testing
         const clientConnections = [...clientManager.connections.values()];
         expect(clientConnections).toHaveLength(1);
         expect(clientConnections[0].isReady()).toBe(true);
@@ -353,7 +383,7 @@ describe("ConnectionManager", () => {
 
     it("should find an existing connection using a matcher without creating a new one", async () => {
       // Arrange: Set up host and establish a client connection
-      hostManager.initialize();
+      initializeManager(hostManager);
       const clientAMeta: TestUserMeta = {
         context: "client",
         id: 10,
@@ -361,11 +391,11 @@ describe("ConnectionManager", () => {
       };
       const clientA = createConnectionManagerStack(
         clientAMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
 
       // Create initial connection
-      const initialConnection = await clientA.manager.resolveConnection({
+      const initialConnection = await resolveManager(clientA.manager, {
         descriptor: hostMeta,
       });
       expect(initialConnection).not.toBeNull();
@@ -374,7 +404,7 @@ describe("ConnectionManager", () => {
 
       // Act: Use a matcher to find the existing connection
       const matcherFn = (identity: TestUserMeta) => identity.context === "host";
-      const foundConnection = await clientA.manager.resolveConnection({
+      const foundConnection = await resolveManager(clientA.manager, {
         matcher: matcherFn,
       });
 
@@ -386,11 +416,11 @@ describe("ConnectionManager", () => {
 
     it("should return null when using a matcher that doesn't match any connection", async () => {
       // Arrange: Set up host and establish a client connection
-      hostManager.initialize();
+      initializeManager(hostManager);
       const clientA = createConnectionManagerStack(clientMeta, hostL1OnConnect);
 
       // Create initial connection
-      const initialConnection = await clientA.manager.resolveConnection({
+      const initialConnection = await resolveManager(clientA.manager, {
         descriptor: hostMeta,
       });
       expect(initialConnection).not.toBeNull();
@@ -398,7 +428,7 @@ describe("ConnectionManager", () => {
 
       // Act: Use a matcher that won't match any connection
       const nonMatchingFn = (identity: TestUserMeta) => identity.id === 999;
-      const result = await clientA.manager.resolveConnection({
+      const result = await resolveManager(clientA.manager, {
         matcher: nonMatchingFn,
       });
 
@@ -409,12 +439,12 @@ describe("ConnectionManager", () => {
 
     it("should find-or-create with both matcher and descriptor", async () => {
       // Arrange: Set up host
-      hostManager.initialize();
+      initializeManager(hostManager);
       const clientA = createConnectionManagerStack(clientMeta, hostL1OnConnect);
 
       // Act 1: First call with a non-matching matcher but valid descriptor
       const nonMatchingFn = (identity: TestUserMeta) => identity.id === 999;
-      const conn1 = await clientA.manager.resolveConnection({
+      const conn1 = await resolveManager(clientA.manager, {
         matcher: nonMatchingFn,
         descriptor: hostMeta,
       });
@@ -428,7 +458,7 @@ describe("ConnectionManager", () => {
       // Act 2: Second call with a matching matcher and same descriptor
       const matchingFn = (identity: TestUserMeta) =>
         identity.context === "host";
-      const conn2 = await clientA.manager.resolveConnection({
+      const conn2 = await resolveManager(clientA.manager, {
         matcher: matchingFn,
         descriptor: hostMeta,
       });
@@ -443,12 +473,12 @@ describe("ConnectionManager", () => {
   describe("Dynamic Identity Update (B6)", () => {
     it("should update remote identity, allowing it to be found by new metadata", async () => {
       // Arrange: Host is connected to a client
-      hostManager.initialize();
+      initializeManager(hostManager);
       const client = createConnectionManagerStack(
         { context: "client", id: 10 },
-        hostL1OnConnect
+        hostL1OnConnect,
       );
-      const hostConnectionOnClient = await client.manager.resolveConnection({
+      const hostConnectionOnClient = await resolveManager(client.manager, {
         descriptor: hostMeta,
       });
       await vi.waitFor(() => {
@@ -457,12 +487,12 @@ describe("ConnectionManager", () => {
 
       // Act: Host updates its own identity
       const hostUpdates: Partial<TestUserMeta> = { id: 999 };
-      hostManager.updateLocalIdentity(hostUpdates);
+      updateManagerIdentity(hostManager, hostUpdates);
 
       // Assert: The client can now find the same connection using the new identity
       const newHostMeta = { ...hostMeta, ...hostUpdates };
       await vi.waitFor(async () => {
-        const foundConn = await client.manager.resolveConnection({
+        const foundConn = await resolveManager(client.manager, {
           descriptor: newHostMeta,
         });
         expect(foundConn).toBe(hostConnectionOnClient);
@@ -471,7 +501,7 @@ describe("ConnectionManager", () => {
 
     it("should update service groups and route messages correctly after identity update", async () => {
       // Arrange: Host is connected to a client that belongs to 'group-1'
-      hostManager.initialize();
+      initializeManager(hostManager);
       const clientInitialMeta: TestUserMeta = {
         context: "client",
         id: 10,
@@ -479,9 +509,9 @@ describe("ConnectionManager", () => {
       };
       const client = createConnectionManagerStack(
         clientInitialMeta,
-        hostL1OnConnect
+        hostL1OnConnect,
       );
-      await client.manager.resolveConnection({
+      await resolveManager(client.manager, {
         descriptor: hostMeta,
       });
 
@@ -500,7 +530,7 @@ describe("ConnectionManager", () => {
       };
 
       // Assert: Client is initially in group-1
-      hostManager.sendMessage({ groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
@@ -510,14 +540,14 @@ describe("ConnectionManager", () => {
       const clientUpdates: Partial<TestUserMeta> = {
         groups: ["group-2"],
       };
-      client.manager.updateLocalIdentity(clientUpdates);
+      updateManagerIdentity(client.manager, clientUpdates);
 
       // Wait for the identity update to propagate
       await new Promise((r) => setTimeout(r, 50));
 
       // Assert: Host routes messages to the new group after propagation
       // 1. Send to new group, SHOULD be received
-      hostManager.sendMessage({ groupName: "group-2" }, testMessage);
+      sendFromManager(hostManager, { groupName: "group-2" }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
@@ -525,7 +555,7 @@ describe("ConnectionManager", () => {
       vi.clearAllMocks();
 
       // 2. Send to old group, should NOT be received
-      hostManager.sendMessage({ groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
       // A short delay to ensure no message arrives if logic is correct
       await new Promise((r) => setTimeout(r, 20));
       expect(client.handlers.onMessage).not.toHaveBeenCalled();

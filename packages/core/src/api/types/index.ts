@@ -8,6 +8,7 @@ import type {
   CreateMulticastOptions,
 } from "./config";
 import type { SerializedError } from "@/types/message";
+import type { Result, ResultAsync } from "neverthrow";
 
 // 类型工具，用于从配置对象中提取匹配器和描述符的名称
 export type GetMatchers<T> = T extends { matchers: infer M }
@@ -80,8 +81,20 @@ export interface NexusInstance<
   RegisteredDescriptors extends string = never,
 > {
   // Configuration
+  safeConfigure<const T extends NexusConfig<U, P>>(
+    config: T,
+  ): Result<
+    NexusInstance<
+      U,
+      P,
+      RegisteredMatchers | GetMatchers<T>,
+      RegisteredDescriptors | GetDescriptors<T>
+    >,
+    Error
+  >;
+
   configure<const T extends NexusConfig<U, P>>(
-    config: T
+    config: T,
   ): NexusInstance<
     U,
     P,
@@ -101,8 +114,13 @@ export interface NexusInstance<
    */
   create<T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>
+    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): Promise<Asyncified<T>>;
+
+  safeCreate<T extends object>(
+    token: Token<T>,
+    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
+  ): ResultAsync<Asyncified<T>, Error>;
 
   /**
    * Creates a multicast proxy to interact with multiple remote services simultaneously.
@@ -123,7 +141,7 @@ export interface NexusInstance<
     >,
   >(
     token: Token<T>,
-    options: O
+    options: O,
   ): Promise<Allified<T>>;
 
   createMulticast<
@@ -136,16 +154,45 @@ export interface NexusInstance<
     >,
   >(
     token: Token<T>,
-    options: O
+    options: O,
   ): Promise<Streamified<T>>;
+
+  safeCreateMulticast<
+    T extends object,
+    const O extends CreateMulticastOptions<
+      U,
+      "all",
+      RegisteredMatchers,
+      RegisteredDescriptors
+    >,
+  >(
+    token: Token<T>,
+    options: O,
+  ): ResultAsync<Allified<T>, Error>;
+
+  safeCreateMulticast<
+    T extends object,
+    const O extends CreateMulticastOptions<
+      U,
+      "stream",
+      RegisteredMatchers,
+      RegisteredDescriptors
+    >,
+  >(
+    token: Token<T>,
+    options: O,
+  ): ResultAsync<Streamified<T>, Error>;
 
   /**
    * Updates the identity of the current endpoint.
    * @param updates A partial object of the user metadata to update.
    */
-  updateIdentity(updates: Partial<U>): void;
+  updateIdentity(updates: Partial<U>): Promise<void>;
+  safeUpdateIdentity(updates: Partial<U>): ResultAsync<void, Error>;
   ref<T extends object>(target: T): RefWrapper<T>;
+  safeRef<T extends object>(target: T): Result<RefWrapper<T>, Error>;
   release(proxy: object): void;
+  safeRelease(proxy: object): Result<void, Error>;
 
   // Utilities
   readonly matchers: MatcherUtils<U, RegisteredMatchers>;

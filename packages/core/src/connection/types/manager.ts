@@ -1,9 +1,4 @@
 import type { NexusMessage } from "../../types/message";
-import type {
-  UserMetadata,
-  PlatformMetadata,
-  ConnectionContext,
-} from "../../types/identity";
 
 /**
  * Configuration for the ConnectionManager.
@@ -19,13 +14,19 @@ export interface ConnectionManagerConfig<U extends object, P extends object> {
  * Handlers provided by Layer 3 (RPC Engine) to the ConnectionManager
  * to process messages and lifecycle events.
  */
-export interface ConnectionManagerHandlers<U extends object, P extends object> {
+export interface ConnectionManagerHandlers<
+  U extends object,
+  _P extends object,
+> {
   /**
    * Forwards a fully-formed message from a connection to Layer 3.
    * @param message The message to be processed by the RPC engine.
    * @param connectionId The ID of the connection from which the message originated.
    */
-  onMessage: (message: NexusMessage, connectionId: string) => void;
+  onMessage: (
+    message: NexusMessage,
+    connectionId: string,
+  ) => void | Promise<void>;
 
   /**
    * Notifies Layer 3 that a connection has been closed.
@@ -38,7 +39,7 @@ export interface ConnectionManagerHandlers<U extends object, P extends object> {
 /**
  * Options for resolving a connection via `connectionManager.resolveConnection`.
  */
-export interface ResolveOptions<U extends object, P extends object> {
+export interface ResolveOptions<U extends object, _P extends object> {
   /**
    * A predicate function to find an existing connection.
    * If provided without a descriptor, resolution will be find-only.

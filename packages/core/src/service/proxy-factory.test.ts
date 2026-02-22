@@ -1,40 +1,42 @@
 import { describe, it, expect, beforeEach, vi, type Mocked } from "vitest";
-import { Engine } from "./engine";
+import type { ProxyFactoryCallbacks } from "./proxy-factory";
 import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
-
-// Mock the Engine class. The mock will be hoisted.
-vi.mock("./engine");
+import { okAsync } from "neverthrow";
 
 // Mock the global FinalizationRegistry
 const mockFinalizationRegistryCallback = vi.fn();
 const mockRegister = vi.fn();
 const mockUnregister = vi.fn();
-global.FinalizationRegistry = vi.fn().mockImplementation((callback) => {
-  // Capture the callback passed to the constructor for manual invocation
-  mockFinalizationRegistryCallback.mockImplementation(callback);
-  return {
-    register: mockRegister,
-    unregister: mockUnregister,
-  };
-});
+global.FinalizationRegistry = class {
+  constructor(callback: any) {
+    mockFinalizationRegistryCallback.mockImplementation(callback);
+  }
+
+  register = mockRegister;
+  unregister = mockUnregister;
+} as any;
 
 describe("ProxyFactory", () => {
-  let proxyFactory: ProxyFactory<any, any>;
-  let mockEngine: Mocked<Engine<any, any>>;
-  let resourceManager: ResourceManager;
+  let proxyFactory: ProxyFactory<any>;
+  let mockEngine: Mocked<ProxyFactoryCallbacks>;
+  let resourceManager: ResourceManager.Runtime;
 
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Create a mock instance of the Engine using the vi.mocked helper
-    mockEngine = new (Engine as any)() as Mocked<Engine<any, any>>;
-    mockEngine.dispatchCall = vi
+    mockEngine = {
+      safeDispatchCall: vi
+        .fn()
+        .mockReturnValue(okAsync("mocked promise result")),
+      dispatchRelease: vi.fn(),
+    } as unknown as Mocked<ProxyFactoryCallbacks>;
+    mockEngine.safeDispatchCall = vi
       .fn()
-      .mockResolvedValue("mocked promise result");
+      .mockReturnValue(okAsync("mocked promise result"));
     mockEngine.dispatchRelease = vi.fn();
 
-    resourceManager = new ResourceManager();
+    resourceManager = ResourceManager.create();
     proxyFactory = new ProxyFactory(mockEngine, resourceManager);
   });
 
@@ -46,15 +48,15 @@ describe("ProxyFactory", () => {
 
       serviceProxy.doSomething("hello", 123);
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith(
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "APPLY",
           target: { connectionId: "conn-1" },
           resourceId: null,
           path: ["api", "doSomething"],
           args: ["hello", 123],
-        })
+        }),
       );
     });
 
@@ -67,8 +69,8 @@ describe("ProxyFactory", () => {
     });
 
     it("should dispatch a GET call when a property is awaited", async () => {
-      mockEngine.dispatchCall.mockReturnValue(
-        Promise.resolve("mocked promise result")
+      mockEngine.safeDispatchCall.mockReturnValue(
+        okAsync("mocked promise result"),
       );
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
@@ -76,14 +78,14 @@ describe("ProxyFactory", () => {
       // The `get` trap returns a promise, so we await it to trigger the call
       await serviceProxy.getValue;
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith(
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "GET",
           target: { connectionId: "conn-1" },
           resourceId: null,
           path: ["api", "getValue"],
-        })
+        }),
       );
     });
 
@@ -93,7 +95,7 @@ describe("ProxyFactory", () => {
       });
       const method = serviceProxy.doSomething; // Access without calling
       expect(method).toBeTypeOf("function");
-      expect(mockEngine.dispatchCall).not.toHaveBeenCalled();
+      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
     });
 
     it("should pass strategy and timeout options to dispatchCall", () => {
@@ -105,8 +107,8 @@ describe("ProxyFactory", () => {
 
       serviceProxy.doWork();
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith(
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "APPLY",
           target: { groupName: "workers" },
@@ -115,7 +117,7 @@ describe("ProxyFactory", () => {
           args: [],
           strategy: "stream",
           timeout: 1000,
-        })
+        }),
       );
     });
   });
@@ -151,12 +153,12 @@ describe("ProxyFactory", () => {
     it("should dispatch an APPLY call when the proxy is called as a function", () => {
       const remoteFn: any = proxyFactory.createRemoteResourceProxy(
         "res-func",
-        "conn-2"
+        "conn-2",
       );
       remoteFn("arg1", { key: "value" });
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith({
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "APPLY",
         target: { connectionId: "conn-2" },
         resourceId: "res-func",
@@ -168,13 +170,13 @@ describe("ProxyFactory", () => {
     it("should dispatch a GET call on property access and return a promise", async () => {
       const remoteObj: any = proxyFactory.createRemoteResourceProxy(
         "res-obj",
-        "conn-3"
+        "conn-3",
       );
       // Await the property to trigger the 'then' trap in the proxy
       const result = await remoteObj.someProp;
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith({
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "GET",
         target: { connectionId: "conn-3" },
         resourceId: "res-obj",
@@ -188,12 +190,12 @@ describe("ProxyFactory", () => {
     it("should dispatch a SET call on property assignment", () => {
       const remoteObj: any = proxyFactory.createRemoteResourceProxy(
         "res-obj",
-        "conn-4"
+        "conn-4",
       );
       remoteObj.someProp = "new value";
 
-      expect(mockEngine.dispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchCall).toHaveBeenCalledWith({
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "SET",
         target: { connectionId: "conn-4" },
         resourceId: "res-obj",
@@ -215,7 +217,7 @@ describe("ProxyFactory", () => {
       expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
       expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
         releaseContext.resourceId,
-        releaseContext.connectionId
+        releaseContext.connectionId,
       );
     });
   });

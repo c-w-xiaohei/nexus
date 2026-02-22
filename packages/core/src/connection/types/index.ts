@@ -1,9 +1,5 @@
 import type { NexusMessage } from "../../types/message";
-import type {
-  UserMetadata,
-  PlatformMetadata,
-  ConnectionContext,
-} from "../../types/identity";
+import type { ConnectionContext } from "../../types/identity";
 
 /**
  * Represents the status of a logical connection.
@@ -70,7 +66,10 @@ export interface LogicalConnectionHandlers<U extends object, P extends object> {
    * @param message The `NexusMessage` received from the remote endpoint.
    * @param connectionId The ID of the connection that received the message.
    */
-  onMessage: (message: NexusMessage, connectionId: string) => void;
+  onMessage: (
+    message: NexusMessage,
+    connectionId: string,
+  ) => void | Promise<void>;
 
   /**
    * Called when a connected peer updates its identity metadata.
@@ -82,7 +81,7 @@ export interface LogicalConnectionHandlers<U extends object, P extends object> {
   onIdentityUpdated?: (
     connectionId: string,
     newIdentity: U,
-    oldIdentity: U
+    oldIdentity: U,
   ) => void;
 
   /**

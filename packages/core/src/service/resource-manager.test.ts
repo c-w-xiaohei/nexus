@@ -3,7 +3,7 @@ import { ResourceManager } from "./resource-manager";
 import { LocalResourceType } from "./types";
 
 describe("ResourceManager", () => {
-  let resourceManager: ResourceManager;
+  let resourceManager: ResourceManager.Runtime;
 
   // Mock objects
   const mockService = {
@@ -17,7 +17,7 @@ describe("ResourceManager", () => {
 
   beforeEach(() => {
     // Create a new instance for each test to ensure isolation.
-    resourceManager = new ResourceManager();
+    resourceManager = ResourceManager.create();
   });
 
   describe("Exposed Services", () => {
@@ -38,12 +38,12 @@ describe("ResourceManager", () => {
       const id1 = resourceManager.registerLocalResource(
         mockResource,
         "conn-1",
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
       const id2 = resourceManager.registerLocalResource(
         {},
         "conn-2",
-        LocalResourceType.OBJECT
+        LocalResourceType.OBJECT,
       );
       expect(id1).toMatch(/^res-\d+$/);
       expect(id2).toMatch(/^res-\d+$/);
@@ -54,7 +54,7 @@ describe("ResourceManager", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockResource,
         "conn-1",
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
       const record = resourceManager.getLocalResource(resourceId);
       expect(record).toBeDefined();
@@ -72,7 +72,7 @@ describe("ResourceManager", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockResource,
         "conn-1",
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
       expect(resourceManager.getLocalResource(resourceId)).toBeDefined();
 
@@ -90,12 +90,12 @@ describe("ResourceManager", () => {
       localResId1 = resourceManager.registerLocalResource(
         {},
         "conn-A",
-        LocalResourceType.OBJECT
+        LocalResourceType.OBJECT,
       );
       localResId2 = resourceManager.registerLocalResource(
         {},
         "conn-B",
-        LocalResourceType.OBJECT
+        LocalResourceType.OBJECT,
       );
       resourceManager.registerRemoteProxy("remote-res-A", mockProxy, "conn-A");
       resourceManager.registerRemoteProxy("remote-res-B", mockProxy, "conn-B");

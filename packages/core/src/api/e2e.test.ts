@@ -6,14 +6,10 @@ import { Expose } from "./decorators/expose";
 import { createStarNetwork, createMockPortPair } from "@/utils/test-utils";
 import type { IEndpoint } from "@/transport";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
-import {
-  NexusRemoteError,
-  NexusTargetingError,
-  NexusDisconnectedError,
-} from "@/errors";
 import { DecoratorRegistry } from "./registry";
 
 import { LogicalConnection } from "@/connection/logical-connection";
+import { CallProcessor } from "@/service/call-processor";
 
 // ===========================================================================
 // 1. Test Scenario: Types, Interfaces, and Tokens
@@ -71,7 +67,7 @@ interface IBackgroundService {
   saveSettings(newSettings: Settings): Promise<void>;
   subscribeToComments(
     issueId: string,
-    onNewComment: (comment: Comment) => void
+    onNewComment: (comment: Comment) => void,
   ): Promise<SubscriptionId>;
   unsubscribe(subId: SubscriptionId): Promise<void>;
   processTimeline(processor: TimelineProcessor): Promise<any>;
@@ -79,7 +75,7 @@ interface IBackgroundService {
   requestHighlight(issueId: string, user: string): Promise<void>;
 }
 const BackgroundServiceToken = new Token<IBackgroundService>(
-  "background-service"
+  "background-service",
 );
 
 // Content Script Service
@@ -105,7 +101,7 @@ interface IUserService {
   getUserProfile(): Promise<{ id: string; name: string }>;
 }
 const ContentScriptServiceToken = new Token<IContentScriptService>(
-  "content-script-service"
+  "content-script-service",
 );
 
 // ===========================================================================
@@ -132,7 +128,7 @@ class BackgroundServiceImpl implements IBackgroundService {
   }
   async subscribeToComments(
     issueId: string,
-    onNewComment: (comment: Comment) => void
+    onNewComment: (comment: Comment) => void,
   ) {
     const subId: SubscriptionId = `sub-${issueId}-${Math.random()}`;
     this.commentSubscriptions.set(subId, onNewComment);
@@ -327,7 +323,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       expect(onNewComment).toHaveBeenCalledTimes(1);
     });
     expect(onNewComment).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Hello Nexus!" })
+      expect.objectContaining({ body: "Hello Nexus!" }),
     );
   });
 
@@ -359,8 +355,8 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       await expect(
         client.create(UnreachableToken, {
           target: { descriptor: hostDescriptor },
-        })
-      ).rejects.toThrow("Simulated connection failure");
+        }),
+      ).rejects.toThrow("Failed to resolve connection");
     });
 
     it("should reject subsequent calls on a proxy after connection is closed", async () => {
@@ -376,7 +372,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       // Now, manually find and close the connection from the popup's side.
       const popupCm = (popup.nexus as any).connectionManager;
       const connection = Array.from(
-        (popupCm as any).connections.values()
+        (popupCm as any).connections.values(),
       )[0] as LogicalConnection<any, any>;
       // connection.handleDisconnect(); // INCORRECT: This only disconnects one side.
       // We must close the underlying port to simulate a real-world disconnect.
@@ -391,7 +387,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       // Because the test harness doesn't support reconnection, this will fail
       // during the connection attempt.
       await expect(bgApi.getSettings()).rejects.toBeInstanceOf(
-        NexusDisconnectedError
+        CallProcessor.Error.Disconnected,
       );
     });
 
@@ -402,30 +398,27 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       const bgResourceManager = (background.nexus as any).engine
         .resourceManager;
 
-      const initialProxyCount = (bgResourceManager as any).remoteProxyRegistry
-        .size;
+      const initialProxyCount = bgResourceManager.countRemoteProxies();
 
       const onNewComment = vi.fn();
       await bgApi.subscribeToComments("CS1-cleanup", onNewComment);
 
       // A remote proxy for the callback should now exist on the background
-      expect(
-        (bgResourceManager as any).remoteProxyRegistry.size
-      ).toBeGreaterThan(initialProxyCount);
+      expect(bgResourceManager.countRemoteProxies()).toBeGreaterThan(
+        initialProxyCount,
+      );
 
       // Now, disconnect CS1 completely by closing the underlying port
       const cs1Cm = (cs1.nexus as any).connectionManager;
       const connection = Array.from(
-        (cs1Cm as any).connections.values()
+        (cs1Cm as any).connections.values(),
       )[0] as LogicalConnection<any, any>;
       // connection.handleDisconnect(); // INCORRECT
       (connection as any).close(); // CORRECT: Simulates full duplex disconnect
 
       // Wait for the background to process the disconnect and clean up
       await vi.waitFor(() => {
-        expect((bgResourceManager as any).remoteProxyRegistry.size).toBe(
-          initialProxyCount
-        );
+        expect(bgResourceManager.countRemoteProxies()).toBe(initialProxyCount);
       });
     });
   });
@@ -438,7 +431,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
         ContentScriptServiceToken.id, // Use the CORRECT service ID
         {
           descriptor: { context: "content-script", issueId: "CS1" },
-        }
+        },
       );
 
       // Request the service from the background using the new token WITHOUT specifying a target
@@ -487,7 +480,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
       // Calling create without a specific target should fail
       await expect(
-        ambiguousNexus.create(BackgroundServiceToken, { target: {} })
+        ambiguousNexus.create(BackgroundServiceToken, { target: {} }),
       ).rejects.toThrow(/ambiguous/);
     });
   });
@@ -498,13 +491,15 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
         id.context === "content-script" && id.issueId === "NON_EXISTENT_ID",
     };
 
-    it("should reject with NexusTargetingError for 'create' (fail-fast)", async () => {
+    it("should reject with targeting error for 'create' (fail-fast)", async () => {
       // The `create` call now rejects immediately if no connection is found.
       const promise = background.nexus.create(ContentScriptServiceToken, {
         target: noMatchTarget,
         expects: "first",
       });
-      await expect(promise).rejects.toBeInstanceOf(NexusTargetingError);
+      await expect(promise).rejects.toMatchObject({
+        code: "E_TARGET_NO_MATCH",
+      });
     });
 
     it("should resolve with an empty array for 'all' strategy (multicast)", async () => {
@@ -513,7 +508,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
         {
           target: noMatchTarget,
           expects: "all",
-        }
+        },
       );
       // For 'all' strategy, the proxy method returns a promise that resolves
       // to an array of results. When no connections match, it resolves to an empty array.
@@ -524,7 +519,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
     it("should return an empty async iterator for 'stream' strategy (multicast)", async () => {
       const streamProxy = await background.nexus.createMulticast(
         ContentScriptServiceToken,
-        { target: noMatchTarget, expects: "stream" }
+        { target: noMatchTarget, expects: "stream" },
       );
       // Calling a method on a stream proxy returns a promise that resolves to the async iterator.
       const iterator = await streamProxy.refresh();
@@ -579,8 +574,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
   it("should correctly release a remote resource proxy", async () => {
     // Spy on the real resource manager of the content script
     const cs1ResourceManager = (cs1.nexus as any).engine.resourceManager;
-    const initialResourceCount = (cs1ResourceManager as any)
-      .localResourceRegistry.size;
+    const initialResourceCount = cs1ResourceManager.countLocalResources();
 
     const csApi = await background.nexus.create(ContentScriptServiceToken, {
       target: {
@@ -593,17 +587,17 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
     // 1. Get a proxy to a resource living on CS1
     const processorProxy = await csApi.getTimelineProcessor();
-    expect(
-      (cs1ResourceManager as any).localResourceRegistry.size
-    ).toBeGreaterThan(initialResourceCount);
+    expect(cs1ResourceManager.countLocalResources()).toBeGreaterThan(
+      initialResourceCount,
+    );
 
     // 2. Manually release it from the background. This is now fire-and-forget.
     background.nexus.release(processorProxy);
 
     // 3. The resource should be gone from CS1's resource manager
     await vi.waitFor(() => {
-      expect((cs1ResourceManager as any).localResourceRegistry.size).toBe(
-        initialResourceCount
+      expect(cs1ResourceManager.countLocalResources()).toBe(
+        initialResourceCount,
       );
     });
   });
@@ -622,7 +616,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
     const promise = csApi.highlightUser("non-existent-user");
 
     // Assert that the promise rejects with a specific Nexus error type
-    await expect(promise).rejects.toBeInstanceOf(NexusRemoteError);
+    await expect(promise).rejects.toBeInstanceOf(CallProcessor.Error.Remote);
     await expect(promise).rejects.toThrow(/User "non-existent-user" not found/);
   });
 
@@ -635,14 +629,14 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
           matcher: (id) => id.context === "content-script" && id.isActive,
         },
         expects: "first",
-      }
+      },
     );
     let title = await activeTabApi.getTitle();
     expect(title).toContain("CS1");
 
     // Now, simulate the user switching tabs. CS2 becomes active, CS1 becomes inactive.
-    cs1.nexus.updateIdentity({ isActive: false });
-    cs2.nexus.updateIdentity({ isActive: true });
+    await cs1.nexus.updateIdentity({ isActive: false });
+    await cs2.nexus.updateIdentity({ isActive: true });
 
     // Allow time for identity updates to propagate.
     // In a real system this is near-instant, but in tests we wait.
@@ -657,6 +651,25 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
     });
     title = await activeTabApi.getTitle();
     expect(title).toContain("CS2");
+  });
+
+  it("safeUpdateIdentity should wait for initialization and succeed", async () => {
+    const isolated = new Nexus<AppUserMeta, AppPlatformMeta>().configure({
+      endpoint: {
+        meta: { context: "background", version: "1.0" },
+        implementation: {},
+      },
+    });
+
+    const result = await isolated.safeUpdateIdentity({ version: "2.0" });
+    expect(result.isOk()).toBe(true);
+  });
+
+  it("safeUpdateIdentity should return usage error for invalid payload", async () => {
+    const result = await background.nexus.safeUpdateIdentity(
+      null as unknown as Partial<AppUserMeta>,
+    );
+    expect(result.isErr()).toBe(true);
   });
 
   it("should use named and compound matchers for discovery", async () => {
@@ -679,11 +692,11 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
           // when they are added to a live instance.
           matcher: (background.nexus.matchers as any).and(
             "is-active",
-            "is-github-issue"
+            "is-github-issue",
           ),
         },
         expects: "first",
-      }
+      },
     );
 
     const title = await activeGitHubTab!.getTitle();
@@ -702,7 +715,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
           matcher: (id) => id.context === "content-script",
         },
         expects: "all",
-      }
+      },
     );
 
     // For the 'all' strategy, the return value is an array of settled results.
@@ -727,7 +740,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       {
         target: { groupName: "issue-pages" },
         expects: "all",
-      }
+      },
     );
 
     const results = await groupProxy.refresh();
@@ -741,7 +754,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
     // Modify CS2's getTitle implementation to throw an error
     vi.spyOn(cs2.service, "getTitle").mockRejectedValue(
-      new Error("Failed to get title from CS2")
+      new Error("Failed to get title from CS2"),
     );
 
     const allTabsProxy = await background.nexus.createMulticast(
@@ -751,7 +764,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
           matcher: (id) => id.context === "content-script",
         },
         expects: "all",
-      }
+      },
     );
 
     const results = await allTabsProxy.getTitle();
@@ -765,7 +778,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
     expect(rejectedResult).toBeDefined();
     expect(rejectedResult?.reason.message).toContain(
-      "Failed to get title from CS2"
+      "Failed to get title from CS2",
     );
   });
 
@@ -777,7 +790,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
           matcher: (id) => id.context === "content-script",
         },
         expects: "stream",
-      }
+      },
     );
 
     const receivedResults: { from: string; title: string }[] = [];
@@ -792,10 +805,10 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
     // We should have received results from both content scripts
     expect(receivedResults).toHaveLength(2);
     expect(receivedResults.map((r) => r.title)).toContain(
-      "Issue CS1 - My Test Project"
+      "Issue CS1 - My Test Project",
     );
     expect(receivedResults.map((r) => r.title)).toContain(
-      "Issue CS2 - My Test Project"
+      "Issue CS2 - My Test Project",
     );
   });
 
@@ -843,11 +856,11 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
     // Now, get the service. The factory should have run.
     const service = (hostNexus as any).engine.resourceManager.getExposedService(
-      "service-with-dep"
+      "service-with-dep",
     );
     expect(service).toBeDefined();
     expect((service as IServiceWithDep).getInjectedValue()).toBe(
-      "injected-value"
+      "injected-value",
     );
   });
 
@@ -925,7 +938,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
       });
 
       const comments = await (commentService as ICommentService).getComments(
-        "test-issue"
+        "test-issue",
       );
       expect(comments).toEqual([
         { id: "1", user: "test-user", body: "Test comment" },
@@ -980,7 +993,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
             url: "test",
             issueId: "1",
             isActive: true,
-          })
+          }),
         ).toBe(true);
         expect(matcher({ context: "background", version: "1.0" })).toBe(false);
       }
@@ -1015,7 +1028,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
 
       // Verify the token ID reflects the full hierarchy
       expect(UserToken.id).toBe(
-        "company:product:backend:microservices:auth:profile"
+        "company:product:backend:microservices:auth:profile",
       );
 
       // Verify configuration inheritance and override
@@ -1033,7 +1046,7 @@ describe("Nexus L4 E2E: GitHub Issue Companion", () => {
             url: "test",
             issueId: "1",
             isActive: true,
-          })
+          }),
         ).toBe(true);
         expect(matcher({ context: "background", version: "1.0" })).toBe(false);
       }

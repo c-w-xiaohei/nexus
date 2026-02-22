@@ -13,7 +13,9 @@ export type MessageId = string | number;
  */
 export interface SerializedError {
   name: string;
+  code: string;
   message: string;
+  cause?: SerializedError;
   stack?: string;
 }
 

@@ -17,7 +17,7 @@ export type Descriptor<U extends UserMetadata> = Partial<U>;
 
 export type ResolveOptions<
   U extends UserMetadata,
-  P extends PlatformMetadata,
+  _P extends PlatformMetadata,
 > = {
   matcher?: (identity: U) => boolean;
   descriptor?: Descriptor<U>;
@@ -44,7 +44,7 @@ export interface LogicalConnectionHandlers<
 > {
   onVerified(connInfo: { connectionId: string; identity: U }): void;
   onClosed(connInfo: { connectionId: string; identity?: U }): void;
-  onMessage(message: NexusMessage, connectionId: string): void;
+  onMessage(message: NexusMessage, connectionId: string): void | Promise<void>;
   onIdentityUpdated(connectionId: string, newIdentity: U, oldIdentity: U): void;
   verify(identity: U, context: ConnectionContext<P>): Promise<boolean>;
 }
@@ -55,7 +55,7 @@ export type ConnectToTarget<U extends UserMetadata> =
 
 export interface ConnectionManagerConfig<
   U extends UserMetadata,
-  P extends PlatformMetadata,
+  _P extends PlatformMetadata,
 > {
   connectTo?: ConnectToTarget<U>[];
   // policy: IConnectionPolicy<U, P>;
@@ -63,8 +63,11 @@ export interface ConnectionManagerConfig<
 
 export interface ConnectionManagerHandlers<
   U extends UserMetadata,
-  P extends PlatformMetadata,
+  _P extends PlatformMetadata,
 > {
-  onMessage(message: NexusMessage, sourceConnectionId: string): void;
+  onMessage(
+    message: NexusMessage,
+    sourceConnectionId: string,
+  ): void | Promise<void>;
   onDisconnect(connectionId: string, identity?: U): void;
 }

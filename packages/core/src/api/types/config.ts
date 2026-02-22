@@ -135,13 +135,19 @@ export interface EndpointConfig<
  * 授权策略，用于精细化控制连接和调用权限。
  * @template U 用户元数据类型
  */
-export interface AuthorizationPolicy<U extends UserMetadata> {
+export interface AuthorizationPolicy<
+  U extends UserMetadata,
+  P extends PlatformMetadata = PlatformMetadata,
+> {
   /**
    * 判断一个远程端点是否有权限连接。
    * @param identity 对方的身份声明
    * @param context 本次连接的上下文（包含平台信息）
    */
-  canConnect(identity: U, context: any): boolean | Promise<boolean>;
+  canConnect(
+    identity: U,
+    context: ConnectionContext<P>,
+  ): boolean | Promise<boolean>;
 
   /**
    * 判断调用者是否有权限调用目标方法。
@@ -152,7 +158,7 @@ export interface AuthorizationPolicy<U extends UserMetadata> {
   canCall(
     callerIdentity: U,
     serviceName: string,
-    methodName: string
+    methodName: string,
   ): boolean | Promise<boolean>;
 }
 
@@ -174,7 +180,7 @@ export interface ServiceRegistration<T> {
   /**
    * （可选）为此服务指定一个独立的授权策略。
    */
-  policy?: AuthorizationPolicy<any>;
+  policy?: AuthorizationPolicy<UserMetadata, PlatformMetadata>;
 }
 
 /**
@@ -203,7 +209,7 @@ export interface NexusConfig<
    * （可选）编程式注册服务列表。
    * @see ServiceRegistration
    */
-  services?: ServiceRegistration<any>[];
+  services?: ServiceRegistration<object>[];
 
   /**
    * （可选）注册命名匹配器，用于在 `create` 方法中复用。

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MessageHandler } from "./message-handler";
 import { ResourceManager } from "../resource-manager";
-import type { Engine } from "../engine";
-import type { PayloadProcessor } from "../payload/payload-processor";
+import type { MessageHandlerCallbacks } from "../engine";
+import { PayloadProcessor } from "../payload/payload-processor";
 import type { HandlerContext } from "./types";
 import {
   NexusMessageType,
@@ -14,60 +14,61 @@ import {
   type ReleaseMessage,
 } from "../../types/message";
 import { LocalResourceType } from "../types";
+import { err, ok } from "neverthrow";
 
-// 1. Mock the dependencies to isolate the MessageHandler logic
 const mockEngine = {
-  sendMessage: vi.fn(),
+  safeSendMessage: vi.fn(() => ok([])),
   handleResponse: vi.fn(),
-} as unknown as Engine<any, any>;
-
-const mockPayloadProcessor = {
-  sanitize: vi.fn(),
-  revive: vi.fn(),
-};
+} as unknown as MessageHandlerCallbacks<any>;
 
 describe("MessageHandler", () => {
-  let messageHandler: MessageHandler<any, any>;
-  let resourceManager: ResourceManager;
+  let messageHandler: MessageHandler.Runtime;
+  let resourceManager: ResourceManager.Runtime;
   let context: HandlerContext<any, any>;
+  let payloadProcessor: PayloadProcessor.Runtime<any, any>;
+  let sanitizeSpy: ReturnType<typeof vi.spyOn>;
+  let reviveSpy: ReturnType<typeof vi.spyOn>;
 
   const sourceConnectionId = "conn-test-source";
 
-  // 2. Setup a clean state before each test
   beforeEach(() => {
-    vi.clearAllMocks(); // Resets call counts and mock implementations
+    vi.clearAllMocks();
 
-    resourceManager = new ResourceManager(); // Use a real, clean ResourceManager
+    resourceManager = ResourceManager.create();
+    payloadProcessor = PayloadProcessor.create(resourceManager, {
+      createRemoteResourceProxy: vi.fn(),
+    } as any);
+
     context = {
       engine: mockEngine,
       resourceManager,
-      payloadProcessor: mockPayloadProcessor as unknown as PayloadProcessor<
-        any,
-        any
-      >,
+      payloadProcessor,
     };
-    messageHandler = new MessageHandler(context);
+    messageHandler = MessageHandler.create(context);
 
-    // Provide default mock implementations that return the input.
-    // This simplifies tests that don't need to assert on processing.
-    mockPayloadProcessor.sanitize.mockImplementation(
-      (args: any[], _connId: string) => args
-    );
-    mockPayloadProcessor.revive.mockImplementation(
-      (args: any[], _connId: string) => args
-    );
+    sanitizeSpy = vi
+      .spyOn(payloadProcessor, "safeSanitize")
+      .mockImplementation((args: any[]) => ok(args));
+    reviveSpy = vi
+      .spyOn(payloadProcessor, "safeRevive")
+      .mockImplementation((args: any[]) => ok(args));
   });
 
   it("should throw an error for an unknown message type", async () => {
     const unknownMessage = { type: 999 } as any;
-    // The handler is designed to throw for unknown types, which is caught by the Engine.
-    // The test should verify this throwing behavior.
-    await expect(
-      messageHandler.handleMessage(unknownMessage, "conn-test-source")
-    ).rejects.toThrowError('No message handler found for message type "999"');
+    const result = await messageHandler.safeHandleMessage(
+      unknownMessage,
+      sourceConnectionId,
+    );
+    expect(result.isErr()).toBe(true);
+    result.match(
+      () => undefined,
+      (error) => {
+        expect(error.message).toContain("No message handler found");
+      },
+    );
   });
 
-  // 3. Test each message handler individually
   describe("APPLY Handler", () => {
     const mockService = {
       add: (a: number, b: number) => a + b,
@@ -75,8 +76,7 @@ describe("MessageHandler", () => {
 
     it("should call a method on an exposed service and return the result", async () => {
       resourceManager.registerExposedService("calculator", mockService);
-      // Mock that the payload processor returns the sanitized result
-      mockPayloadProcessor.sanitize.mockReturnValueOnce(["sanitized_3"]);
+      sanitizeSpy.mockReturnValueOnce(ok(["sanitized_3"]));
 
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
@@ -86,24 +86,42 @@ describe("MessageHandler", () => {
         args: [1, 2],
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockPayloadProcessor.revive).toHaveBeenCalledWith(
-        [1, 2],
-        sourceConnectionId
-      );
-      expect(mockPayloadProcessor.sanitize).toHaveBeenCalledWith(
-        [3],
-        sourceConnectionId
-      );
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(reviveSpy).toHaveBeenCalledWith([1, 2], sourceConnectionId);
+      expect(sanitizeSpy).toHaveBeenCalledWith([3], sourceConnectionId);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         {
           type: NexusMessageType.RES,
           id: 1,
           result: "sanitized_3",
         },
-        sourceConnectionId
+        sourceConnectionId,
       );
+    });
+
+    it("should return Err when safeSendMessage fails", async () => {
+      const sendError = new Error("send failed");
+      const sendSpy = vi
+        .spyOn(mockEngine, "safeSendMessage")
+        .mockReturnValueOnce(err(sendError));
+
+      resourceManager.registerExposedService("calculator", mockService);
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 999,
+        resourceId: null,
+        path: ["calculator", "add"],
+        args: [1, 2],
+      };
+
+      const result = await messageHandler.safeHandleMessage(
+        message,
+        sourceConnectionId,
+      );
+
+      expect(sendSpy).toHaveBeenCalled();
+      expect(result.isErr()).toBe(true);
     });
 
     it("should call a function from the local resource registry", async () => {
@@ -111,7 +129,7 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockFn,
         sourceConnectionId,
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
 
       const message: ApplyMessage = {
@@ -122,20 +140,20 @@ describe("MessageHandler", () => {
         args: ["arg1"],
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
       expect(mockFn).toHaveBeenCalledWith("arg1");
-      expect(mockPayloadProcessor.sanitize).toHaveBeenCalledWith(
+      expect(sanitizeSpy).toHaveBeenCalledWith(
         ["resource_result"],
-        sourceConnectionId
+        sourceConnectionId,
       );
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           type: NexusMessageType.RES,
           id: 2,
-          result: "resource_result", // Should be the value itself
+          result: "resource_result",
         }),
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
 
@@ -156,9 +174,9 @@ describe("MessageHandler", () => {
         args: [],
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         {
           type: NexusMessageType.ERR,
           id: 3,
@@ -167,7 +185,7 @@ describe("MessageHandler", () => {
             message: "Calculation failed",
           }),
         },
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
   });
@@ -177,7 +195,7 @@ describe("MessageHandler", () => {
 
     it("should get a property from an exposed service", async () => {
       resourceManager.registerExposedService("store", mockStore);
-      mockPayloadProcessor.sanitize.mockReturnValueOnce(["sanitized_v1.0"]);
+      sanitizeSpy.mockReturnValueOnce(ok(["sanitized_v1.0"]));
 
       const message: GetMessage = {
         type: NexusMessageType.GET,
@@ -186,19 +204,16 @@ describe("MessageHandler", () => {
         path: ["store", "config", "version"],
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockPayloadProcessor.sanitize).toHaveBeenCalledWith(
-        ["1.0"],
-        sourceConnectionId
-      );
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(sanitizeSpy).toHaveBeenCalledWith(["1.0"], sourceConnectionId);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         {
           type: NexusMessageType.RES,
           id: 10,
           result: "sanitized_v1.0",
         },
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
 
@@ -206,11 +221,10 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockStore,
         sourceConnectionId,
-        LocalResourceType.OBJECT
+        LocalResourceType.OBJECT,
       );
       const expectedConfig = { version: "1.0" };
-      // CORRECT: Mock sanitize to return an ARRAY containing the expected value.
-      mockPayloadProcessor.sanitize.mockReturnValueOnce([expectedConfig]);
+      sanitizeSpy.mockReturnValueOnce(ok([expectedConfig]));
 
       const message: GetMessage = {
         type: NexusMessageType.GET,
@@ -219,19 +233,19 @@ describe("MessageHandler", () => {
         path: ["config"],
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockPayloadProcessor.sanitize).toHaveBeenCalledWith(
+      expect(sanitizeSpy).toHaveBeenCalledWith(
         [expectedConfig],
-        sourceConnectionId
+        sourceConnectionId,
       );
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           type: NexusMessageType.RES,
           id: 11,
-          result: expectedConfig, // Should be the value itself
+          result: expectedConfig,
         }),
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
   });
@@ -241,7 +255,7 @@ describe("MessageHandler", () => {
 
     it("should set a property on an exposed service", async () => {
       resourceManager.registerExposedService("store", mockStore);
-      mockPayloadProcessor.revive.mockReturnValueOnce([{ name: "John" }]);
+      reviveSpy.mockReturnValueOnce(ok([{ name: "John" }]));
 
       const message: SetMessage = {
         type: NexusMessageType.SET,
@@ -251,64 +265,68 @@ describe("MessageHandler", () => {
         value: { name: "John" },
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockPayloadProcessor.revive).toHaveBeenCalledWith(
+      expect(reviveSpy).toHaveBeenCalledWith(
         [{ name: "John" }],
-        sourceConnectionId
+        sourceConnectionId,
       );
       expect(mockStore.user?.name).toBe("John");
-      expect(mockEngine.sendMessage).toHaveBeenCalledWith(
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         {
           type: NexusMessageType.RES,
           id: 20,
-          result: true, // Acknowledge success
+          result: true,
         },
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
   });
 
   describe("RES Handler", () => {
     it("should resolve a pending call with the revived result", async () => {
-      mockPayloadProcessor.revive.mockReturnValueOnce(["revived_result"]);
+      reviveSpy.mockReturnValueOnce(ok(["revived_result"]));
       const message: ResMessage = {
         type: NexusMessageType.RES,
         id: 30,
         result: "original_result",
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(mockPayloadProcessor.revive).toHaveBeenCalledWith(
+      expect(reviveSpy).toHaveBeenCalledWith(
         ["original_result"],
-        sourceConnectionId
+        sourceConnectionId,
       );
       expect(mockEngine.handleResponse).toHaveBeenCalledWith(
         30,
         "revived_result",
         null,
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
   });
 
   describe("ERR Handler", () => {
     it("should reject a pending call with the error", async () => {
-      const error = { name: "Error", message: "Remote failure" };
+      const error = {
+        name: "Error",
+        code: "E_UNKNOWN",
+        message: "Remote failure",
+      };
       const message: ErrMessage = {
         type: NexusMessageType.ERR,
         id: 40,
         error,
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
       expect(mockEngine.handleResponse).toHaveBeenCalledWith(
         40,
         null,
         error,
-        sourceConnectionId
+        sourceConnectionId,
       );
     });
   });
@@ -318,7 +336,7 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         () => {},
         "some-other-conn",
-        LocalResourceType.FUNCTION
+        LocalResourceType.FUNCTION,
       );
       expect(resourceManager.getLocalResource(resourceId)).toBeDefined();
 
@@ -328,7 +346,7 @@ describe("MessageHandler", () => {
         resourceId,
       };
 
-      await messageHandler.handleMessage(message, sourceConnectionId);
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
       expect(resourceManager.getLocalResource(resourceId)).toBeUndefined();
     });

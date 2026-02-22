@@ -74,7 +74,7 @@ export function usingContentScript() {
 
   // Automatically update isActive status based on page visibility
   document.addEventListener("visibilitychange", () => {
-    nexusInstance.updateIdentity({
+    void nexusInstance.updateIdentity({
       isActive: !document.hidden,
     } as ContentScriptMeta);
   });

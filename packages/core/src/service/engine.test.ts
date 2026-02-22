@@ -1,6 +1,5 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Engine } from "./engine";
-import { ConnectionManager } from "@/connection/connection-manager";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
 
@@ -13,8 +12,6 @@ const mockTestService = {
 describe("Engine", () => {
   let clientEngine: Engine<any, any>;
   let hostEngine: Engine<any, any>;
-  let clientCm: ConnectionManager<any, any>;
-  let hostCm: ConnectionManager<any, any>;
   let clientConnectionId: string;
   let hostConnectionId: string;
 
@@ -25,13 +22,11 @@ describe("Engine", () => {
         meta: { id: "host" },
         services: { testService: mockTestService },
       },
-      { meta: { id: "client" } }
+      { meta: { id: "client" } },
     );
 
     clientEngine = setup.clientEngine;
     hostEngine = setup.hostEngine;
-    clientCm = setup.clientCm;
-    hostCm = setup.hostCm;
     clientConnectionId = setup.clientConnection.connectionId;
     hostConnectionId = setup.hostConnection.connectionId;
   });
@@ -41,14 +36,13 @@ describe("Engine", () => {
   });
 
   it("should delegate dispatchCall to CallProcessor", async () => {
-    // Get a reference to the internal callProcessor and spy on its process method
     const callProcessorSpy = vi.spyOn(
       (clientEngine as any).callProcessor,
-      "process"
+      "safeProcess",
     );
 
     // Create a proxy to trigger the call
-    const proxy = (clientEngine as any).createServiceProxy("testService", {
+    const proxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
     });
 
@@ -60,7 +54,13 @@ describe("Engine", () => {
       expect(callProcessorSpy).toHaveBeenCalledOnce();
     });
 
-    const [options] = callProcessorSpy.mock.calls[0];
+    const [options] = callProcessorSpy.mock.calls[0] as [
+      {
+        type: string;
+        path: (string | number)[];
+        args?: any[];
+      },
+    ];
     expect(options.type).toBe("APPLY");
     expect(options.path).toEqual(["testService", "someMethod"]);
     expect(options.args).toEqual(["arg1", 2]);
@@ -69,7 +69,7 @@ describe("Engine", () => {
   it("should forward incoming messages to the message handler", async () => {
     const handleMessageSpy = vi.spyOn(
       (hostEngine as any).messageHandler,
-      "handleMessage"
+      "safeHandleMessage",
     );
 
     const message: ApplyMessage = {
@@ -81,7 +81,7 @@ describe("Engine", () => {
     };
 
     // Simulate L2 passing a message to L3
-    await hostEngine.onMessage(message, hostConnectionId);
+    await hostEngine.safeOnMessage(message, hostConnectionId);
 
     expect(handleMessageSpy).toHaveBeenCalledWith(message, hostConnectionId);
   });
@@ -89,11 +89,11 @@ describe("Engine", () => {
   it("should notify managers on disconnect", () => {
     const resourceManagerSpy = vi.spyOn(
       (clientEngine as any).resourceManager,
-      "cleanupConnection"
+      "cleanupConnection",
     );
     const pendingCallManagerSpy = vi.spyOn(
       (clientEngine as any).pendingCallManager,
-      "onDisconnect"
+      "onDisconnect",
     );
 
     // Simulate L2 notifying L3 of a disconnect

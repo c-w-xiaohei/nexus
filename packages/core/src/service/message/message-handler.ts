@@ -3,53 +3,83 @@ import type { NexusMessage } from "@/types/message";
 import { getHandler } from "./handler-map";
 import type { HandlerContext, MessageHandlerFn } from "./types";
 import { Logger } from "@/logger";
+import { ResultAsync, errAsync } from "neverthrow";
 
-/**
- * The main entry point for processing all incoming Layer 3 messages.
- * It looks up the appropriate handler for a message type and executes it.
- */
-export class MessageHandler<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
-> {
-  private readonly logger = new Logger("L3 <- MessageHandler");
-  constructor(private readonly context: HandlerContext<U, P>) {}
+export namespace MessageHandler {
+  type ErrorCode = "E_USAGE_INVALID";
 
-  /**
-   * Finds and executes the handler for a given message.
-   * @param message The message to handle.
-   * @param sourceConnectionId The ID of the connection the message came from.
-   */
-  public handleMessage(
-    message: NexusMessage,
-    sourceConnectionId: string
-  ): Promise<void> {
-    const handler = getHandler(message.type) as MessageHandlerFn<
-      NexusMessage,
-      U,
-      P
-    >;
+  type ErrorOptions = {
+    readonly context?: Record<string, unknown>;
+  };
 
-    if (handler) {
-      this.logger.debug(
-        `Dispatching message #${message.id ?? "N/A"} to handler for type "${
-          message.type
-        }"`
-      );
-      // Wrap the handler's result in Promise.resolve() to ensure a promise is always returned.
-      // This handles both sync (void) and async (Promise<void>) handlers.
-      return Promise.resolve(
-        handler(this.context, message, sourceConnectionId)
-      );
+  class InvalidMessageError extends globalThis.Error {
+    readonly code: ErrorCode = "E_USAGE_INVALID";
+    readonly context?: Record<string, unknown>;
+
+    constructor(message: string, options: ErrorOptions = {}) {
+      super(message);
+      this.name = "MessageHandlerInvalidMessageError";
+      this.context = options.context;
     }
-
-    // Reject the promise if no handler is found.
-    // The Engine's catch block will be responsible for logging this critical failure.
-    this.logger.error(
-      `No message handler found for message type "${message.type}"`
-    );
-    return Promise.reject(
-      new Error(`No message handler found for message type "${message.type}"`)
-    );
   }
+
+  export const Error = {
+    InvalidMessage: InvalidMessageError,
+  } as const;
+
+  export interface Runtime {
+    safeHandleMessage(
+      message: NexusMessage,
+      sourceConnectionId: string,
+    ): ResultAsync<void, globalThis.Error>;
+  }
+
+  export const create = <U extends UserMetadata, P extends PlatformMetadata>(
+    context: HandlerContext<U, P>,
+  ): Runtime => {
+    const logger = new Logger("L3 <- MessageHandler");
+
+    const safeHandleMessage = (
+      message: NexusMessage,
+      sourceConnectionId: string,
+    ): ResultAsync<void, globalThis.Error> => {
+      const handler = getHandler(message.type) as MessageHandlerFn<
+        NexusMessage,
+        U,
+        P
+      >;
+
+      if (handler) {
+        logger.debug(
+          `Dispatching message #${message.id ?? "N/A"} to handler for type "${
+            message.type
+          }"`,
+        );
+        return ResultAsync.fromPromise(
+          Promise.resolve(handler(context, message, sourceConnectionId)),
+          (error) =>
+            error instanceof globalThis.Error
+              ? error
+              : new Error.InvalidMessage(String(error), {
+                  context: { messageType: message.type },
+                }),
+        );
+      }
+
+      logger.error(
+        `No message handler found for message type "${message.type}"`,
+      );
+
+      return errAsync(
+        new Error.InvalidMessage(
+          `No message handler found for message type "${message.type}"`,
+          { context: { messageType: message.type } },
+        ),
+      );
+    };
+
+    return {
+      safeHandleMessage,
+    };
+  };
 }

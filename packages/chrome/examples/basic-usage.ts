@@ -78,7 +78,7 @@ export async function setupContentScript() {
 
   // Update activity status based on visibility
   document.addEventListener("visibilitychange", () => {
-    nexus.updateIdentity({ isActive: !document.hidden });
+    void nexus.updateIdentity({ isActive: !document.hidden });
   });
 }
 
@@ -101,7 +101,7 @@ export async function setupPopup() {
       if (currentTab?.id) {
         await tabService.executeScript(
           currentTab.id,
-          'console.log("Hello from popup via background!");'
+          'console.log("Hello from popup via background!");',
         );
       }
     });
@@ -124,6 +124,6 @@ export async function broadcastToContentScripts() {
 
   // This will call the method on all connected content scripts
   await contentScripts.sendNotification(
-    "Broadcast message to all content scripts!"
+    "Broadcast message to all content scripts!",
   );
 }

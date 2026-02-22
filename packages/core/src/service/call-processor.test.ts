@@ -1,46 +1,32 @@
-import { vi, describe, it, expect, beforeEach, type Mocked } from "vitest";
-import {
-  CallProcessor,
-  type CallProcessorDependencies,
-} from "./call-processor";
+import { vi, describe, it, expect, beforeEach } from "vitest";
+import { CallProcessor } from "./call-processor";
 import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { DispatchCallOptions } from "./engine";
-import {
-  NexusRemoteError,
-  NexusTargetingError,
-  NexusDisconnectedError,
-} from "@/errors";
+import { PendingCallManager } from "./pending-call-manager";
+import { PayloadProcessor } from "./payload/payload-processor";
+import { ok, okAsync } from "neverthrow";
 
 describe("CallProcessor", () => {
-  let callProcessor: CallProcessor<any, any>;
-  let mockDeps: Mocked<
-    CallProcessorDependencies<UserMetadata, PlatformMetadata>
-  >;
+  let processorState: CallProcessor.Runtime;
+  let deps: CallProcessor.Dependencies<UserMetadata, PlatformMetadata>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDeps = {
-      connectionManager: {
-        resolveConnection: vi.fn(),
-        sendMessage: vi.fn(),
-      },
-      payloadProcessor: {
-        sanitize: vi.fn((args) => args),
-      },
-      pendingCallManager: {
-        register: vi.fn(),
-      },
-    } as unknown as Mocked<
-      CallProcessorDependencies<UserMetadata, PlatformMetadata>
-    >;
 
-    callProcessor = new CallProcessor(mockDeps);
+    deps = {
+      nextMessageId: vi.fn(() => 1),
+      resolveConnection: vi.fn(() => okAsync(null)),
+      sendMessage: vi.fn(() => ok([])),
+      payloadProcessor: PayloadProcessor.create({} as any, {} as any),
+      pendingCallManager: PendingCallManager.create(),
+    };
+
+    processorState = CallProcessor.create(deps);
   });
 
   describe("Error Handling", () => {
-    it("should throw NexusDisconnectedError if sendMessage finds no connections for a specific connectionId", async () => {
-      // Simulate that the connection was closed between creation and call
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([]);
+    it("should throw disconnected error if sendMessage finds no connections for a specific connectionId", async () => {
+      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
 
       const options: DispatchCallOptions = {
         type: "APPLY",
@@ -49,33 +35,39 @@ describe("CallProcessor", () => {
         path: ["method"],
       };
 
-      await expect(callProcessor.process(options)).rejects.toBeInstanceOf(
-        NexusDisconnectedError
-      );
+      const result = await processorState.safeProcess(options);
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
+      }
     });
 
     it("should return an empty result for a broadcast that finds no connections", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([]);
+      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
 
       const options: DispatchCallOptions = {
         type: "APPLY",
-        target: { matcher: () => true }, // Broadcast target
+        target: { matcher: () => true },
         resourceId: "service",
         path: ["method"],
         strategy: "all",
       };
 
-      const result = await callProcessor.process(options);
-      expect(result).toEqual([]); // Empty array for 'all' strategy
+      const result = await processorState.safeProcess(options);
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value).toEqual([]);
+      }
     });
   });
 
   describe("Message Building and Sending", () => {
-    it("should call payloadProcessor.sanitize for APPLY calls", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue([]);
+    it("should call PayloadProcessor.safeSanitize for APPLY calls", async () => {
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
+        [] as any,
+      );
+      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
 
       const options: DispatchCallOptions = {
         type: "APPLY",
@@ -85,19 +77,17 @@ describe("CallProcessor", () => {
         args: ["arg1", 123],
       };
 
-      await callProcessor.process(options);
+      await processorState.safeProcess(options);
 
-      expect(mockDeps.payloadProcessor.sanitize).toHaveBeenCalledWith(
-        ["arg1", 123],
-        "conn-1"
-      );
+      expect(sanitizeSpy).toHaveBeenCalledWith(["arg1", 123], "conn-1");
     });
 
-    it("should call payloadProcessor.sanitize for SET calls", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue([]);
+    it("should call PayloadProcessor.safeSanitize for SET calls", async () => {
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
+        [] as any,
+      );
+      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
 
       const options: DispatchCallOptions = {
         type: "SET",
@@ -107,19 +97,13 @@ describe("CallProcessor", () => {
         value: "new-value",
       };
 
-      await callProcessor.process(options);
+      await processorState.safeProcess(options);
 
-      expect(mockDeps.payloadProcessor.sanitize).toHaveBeenCalledWith(
-        ["new-value"],
-        "conn-1"
-      );
+      expect(sanitizeSpy).toHaveBeenCalledWith(["new-value"], "conn-1");
     });
 
     it("should throw if strategy is 'one' and more than one connection is found", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-        "conn-2",
-      ]);
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1", "conn-2"]));
 
       const options: DispatchCallOptions = {
         type: "APPLY",
@@ -129,18 +113,20 @@ describe("CallProcessor", () => {
         strategy: "one",
       };
 
-      await expect(callProcessor.process(options)).rejects.toBeInstanceOf(
-        NexusTargetingError
-      );
+      const result = await processorState.safeProcess(options);
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toBeInstanceOf(CallProcessor.Error.Targeting);
+      }
     });
   });
 
   describe("Pending Call Registration", () => {
     it("should register a call with PendingCallManager", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue([]);
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      const registerSpy = vi
+        .spyOn(deps.pendingCallManager, "register")
+        .mockResolvedValue([] as any);
 
       const options: DispatchCallOptions = {
         type: "APPLY",
@@ -150,15 +136,13 @@ describe("CallProcessor", () => {
         timeout: 3000,
       };
 
-      await callProcessor.process(options);
+      await processorState.safeProcess(options);
 
-      expect(mockDeps.pendingCallManager.register).toHaveBeenCalledOnce();
-      const [messageId, registerOptions] = vi.mocked(
-        mockDeps.pendingCallManager.register
-      ).mock.calls[0];
+      expect(registerSpy).toHaveBeenCalledOnce();
+      const [messageId, registerOptions] = registerSpy.mock.calls[0];
       expect(messageId).toBeTypeOf("number");
       expect(registerOptions).toEqual({
-        strategy: "all", // "first" maps to "all" for the manager
+        strategy: "all",
         isBroadcast: false,
         sentConnectionIds: ["conn-1"],
         timeout: 3000,
@@ -166,11 +150,10 @@ describe("CallProcessor", () => {
     });
 
     it("should correctly identify a broadcast call", async () => {
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-        "conn-2",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue([]);
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1", "conn-2"]));
+      const registerSpy = vi
+        .spyOn(deps.pendingCallManager, "register")
+        .mockResolvedValue([] as any);
 
       const options: DispatchCallOptions = {
         type: "APPLY",
@@ -180,14 +163,14 @@ describe("CallProcessor", () => {
         strategy: "all",
       };
 
-      await callProcessor.process(options);
+      await processorState.safeProcess(options);
 
-      expect(mockDeps.pendingCallManager.register).toHaveBeenCalledWith(
+      expect(registerSpy).toHaveBeenCalledWith(
         expect.any(Number),
         expect.objectContaining({
           isBroadcast: true,
           sentConnectionIds: ["conn-1", "conn-2"],
-        })
+        }),
       );
     });
   });
@@ -197,11 +180,9 @@ describe("CallProcessor", () => {
       const settlement = [
         { status: "fulfilled", value: "success", from: "conn-1" },
       ];
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue(
-        settlement
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
+        settlement as any,
       );
 
       const options: DispatchCallOptions = {
@@ -212,18 +193,25 @@ describe("CallProcessor", () => {
         strategy: "first",
       };
 
-      const result = await callProcessor.process(options);
-      expect(result).toBe("success");
+      const result = await processorState.safeProcess(options);
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value).toBe("success");
+      }
     });
 
     it("should re-throw error for 'first' strategy on rejection", async () => {
-      const error = { name: "Error", message: "Remote Error" };
-      const settlement = [{ status: "rejected", value: error, from: "conn-1" }];
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue(
-        settlement
+      const error = {
+        name: "Error",
+        code: "E_UNKNOWN",
+        message: "Remote Error",
+      };
+      const settlement = [
+        { status: "rejected", reason: error, from: "conn-1" },
+      ];
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
+        settlement as any,
       );
 
       const options: DispatchCallOptions = {
@@ -234,20 +222,20 @@ describe("CallProcessor", () => {
         strategy: "first",
       };
 
-      await expect(callProcessor.process(options)).rejects.toBeInstanceOf(
-        NexusRemoteError
-      );
+      const result = await processorState.safeProcess(options);
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toBeInstanceOf(CallProcessor.Error.Remote);
+      }
     });
 
     it("should return raw result for 'all' strategy", async () => {
       const settlement = [
         { status: "fulfilled", value: "success", from: "conn-1" },
       ];
-      vi.mocked(mockDeps.connectionManager.sendMessage).mockReturnValue([
-        "conn-1",
-      ]);
-      vi.mocked(mockDeps.pendingCallManager.register).mockResolvedValue(
-        settlement
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
+        settlement as any,
       );
 
       const options: DispatchCallOptions = {
@@ -258,8 +246,29 @@ describe("CallProcessor", () => {
         strategy: "all",
       };
 
-      const result = await callProcessor.process(options);
-      expect(result).toEqual(settlement);
+      const result = await processorState.safeProcess(options);
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value).toEqual(settlement);
+      }
+    });
+
+    it("should return Err when 'all' strategy promise rejects", async () => {
+      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.spyOn(deps.pendingCallManager, "register").mockReturnValue(
+        Promise.reject(new Error("pending failed")) as any,
+      );
+
+      const options: DispatchCallOptions = {
+        type: "APPLY",
+        target: { connectionId: "conn-1" },
+        resourceId: "service",
+        path: ["method"],
+        strategy: "all",
+      };
+
+      const result = await processorState.safeProcess(options);
+      expect(result.isErr()).toBe(true);
     });
   });
 });

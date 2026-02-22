@@ -5,101 +5,163 @@ import {
 } from "./types";
 import { Logger } from "@/logger";
 
-let nextResourceId = 1;
-
-/**
- * Manages the lifecycle and state of all local and remote resources.
- * This class is the stateful core of the service layer, tracking exposed
- * services, local resources passed by reference, and proxies to remote resources.
- */
-export class ResourceManager {
-  private readonly logger = new Logger("L3 --- ResourceManager");
-  // Stores local services exposed via @Expose. Key: service name.
-  private readonly exposedServices = new Map<string, object>();
-
-  // Stores local resources passed by reference. Key: resource ID.
-  private readonly localResourceRegistry = new Map<
-    string,
-    LocalResourceRecord
-  >();
-
-  // Stores proxies to remote resources. Key: resource ID.
-  private readonly remoteProxyRegistry = new Map<string, RemoteProxyRecord>();
-
-  public registerExposedService(name: string, service: object): void {
-    if (this.exposedServices.has(name)) {
-      const message = `Service with name "${name}" is already registered. Overwriting.`;
-      this.logger.warn(message);
-      console.warn(`Nexus L3: ${message}`);
-    }
-    this.logger.debug(`Registered exposed service: "${name}"`, service);
-    this.exposedServices.set(name, service);
+export namespace ResourceManager {
+  export interface Runtime {
+    registerExposedService(name: string, service: object): void;
+    getExposedService(name: string): object | undefined;
+    registerLocalResource(
+      target: object,
+      ownerConnectionId: string,
+      type: LocalResourceType,
+    ): string;
+    getLocalResource(resourceId: string): LocalResourceRecord | undefined;
+    releaseLocalResource(resourceId: string): void;
+    registerRemoteProxy(
+      resourceId: string,
+      proxy: object,
+      sourceConnectionId: string,
+    ): void;
+    hasLocalResource(resourceId: string): boolean;
+    countLocalResources(): number;
+    countRemoteProxies(): number;
+    listRemoteProxyIdsBySource(connectionId: string): string[];
+    listLocalResourceIdsByOwner(connectionId: string): string[];
+    cleanupConnection(connectionId: string): void;
   }
 
-  public getExposedService(name: string): object | undefined {
-    return this.exposedServices.get(name);
-  }
+  export const create = (): Runtime => {
+    const logger = new Logger("L3 --- ResourceManager");
+    const exposedServices = new Map<string, object>();
+    const localResourceRegistry = new Map<string, LocalResourceRecord>();
+    const remoteProxyRegistry = new Map<string, RemoteProxyRecord>();
+    let resourceIdSeq = 1;
 
-  public registerLocalResource(
-    target: object,
-    ownerConnectionId: string,
-    type: LocalResourceType
-  ): string {
-    const resourceId = `res-${nextResourceId++}`;
-    this.logger.debug(
-      `Registering local resource #${resourceId} for connection ${ownerConnectionId}.`,
-      { type, target }
-    );
-    this.localResourceRegistry.set(resourceId, {
-      target,
-      ownerConnectionId,
-      type,
-    });
-    return resourceId;
-  }
-
-  public getLocalResource(resourceId: string): LocalResourceRecord | undefined {
-    return this.localResourceRegistry.get(resourceId);
-  }
-
-  public releaseLocalResource(resourceId: string): void {
-    this.logger.debug(`Releasing local resource #${resourceId}`);
-    this.localResourceRegistry.delete(resourceId);
-  }
-
-  public registerRemoteProxy(
-    resourceId: string,
-    proxy: object,
-    sourceConnectionId: string
-  ): void {
-    this.logger.debug(
-      `Registering remote proxy #${resourceId} from connection ${sourceConnectionId}.`
-    );
-    this.remoteProxyRegistry.set(resourceId, { proxy, sourceConnectionId });
-  }
-
-  public cleanupConnection(connectionId: string): void {
-    this.logger.info(
-      `Cleaning up all resources for connection ${connectionId}`
-    );
-    // Clean up local resources owned by the disconnected client
-    for (const [resourceId, record] of this.localResourceRegistry.entries()) {
-      if (record.ownerConnectionId === connectionId) {
-        this.logger.debug(
-          `Cleaning up local resource #${resourceId} due to disconnect.`
-        );
-        this.localResourceRegistry.delete(resourceId);
+    const registerExposedService = (name: string, service: object): void => {
+      if (exposedServices.has(name)) {
+        const message = `Service with name "${name}" is already registered. Overwriting.`;
+        logger.warn(message);
+        console.warn(`Nexus L3: ${message}`);
       }
-    }
+      logger.debug(`Registered exposed service: "${name}"`, service);
+      exposedServices.set(name, service);
+    };
 
-    // Clean up remote proxies that originated from the disconnected client
-    for (const [resourceId, record] of this.remoteProxyRegistry.entries()) {
-      if (record.sourceConnectionId === connectionId) {
-        this.logger.debug(
-          `Cleaning up remote proxy #${resourceId} due to disconnect.`
-        );
-        this.remoteProxyRegistry.delete(resourceId);
+    const getExposedService = (name: string): object | undefined =>
+      exposedServices.get(name);
+
+    const registerLocalResource = (
+      target: object,
+      ownerConnectionId: string,
+      type: LocalResourceType,
+    ): string => {
+      const resourceId = `res-${resourceIdSeq++}`;
+      logger.debug(
+        `Registering local resource #${resourceId} for connection ${ownerConnectionId}.`,
+        { type, target },
+      );
+      localResourceRegistry.set(resourceId, {
+        target,
+        ownerConnectionId,
+        type,
+      });
+      return resourceId;
+    };
+
+    const getLocalResource = (
+      resourceId: string,
+    ): LocalResourceRecord | undefined => localResourceRegistry.get(resourceId);
+
+    const releaseLocalResource = (resourceId: string): void => {
+      logger.debug(`Releasing local resource #${resourceId}`);
+      localResourceRegistry.delete(resourceId);
+    };
+
+    const registerRemoteProxy = (
+      resourceId: string,
+      proxy: object,
+      sourceConnectionId: string,
+    ): void => {
+      logger.debug(
+        `Registering remote proxy #${resourceId} from connection ${sourceConnectionId}.`,
+      );
+      remoteProxyRegistry.set(resourceId, { proxy, sourceConnectionId });
+    };
+
+    const hasLocalResource = (resourceId: string): boolean =>
+      localResourceRegistry.has(resourceId);
+
+    const countLocalResources = (): number => localResourceRegistry.size;
+
+    const countRemoteProxies = (): number => remoteProxyRegistry.size;
+
+    const listRemoteProxyIdsBySource = (connectionId: string): string[] => {
+      const result: string[] = [];
+      for (const [resourceId, record] of remoteProxyRegistry.entries()) {
+        if (record.sourceConnectionId === connectionId) {
+          result.push(resourceId);
+        }
       }
-    }
-  }
+      return result;
+    };
+
+    const listLocalResourceIdsByOwner = (connectionId: string): string[] => {
+      const result: string[] = [];
+      for (const [resourceId, record] of localResourceRegistry.entries()) {
+        if (record.ownerConnectionId === connectionId) {
+          result.push(resourceId);
+        }
+      }
+      return result;
+    };
+
+    const cleanupConnection = (connectionId: string): void => {
+      logger.info(`Cleaning up all resources for connection ${connectionId}`);
+
+      const localResourceIdsToDelete: string[] = [];
+      const remoteProxyIdsToDelete: string[] = [];
+
+      for (const [resourceId, record] of localResourceRegistry.entries()) {
+        if (record.ownerConnectionId === connectionId) {
+          logger.debug(
+            `Cleaning up local resource #${resourceId} due to disconnect.`,
+          );
+          localResourceIdsToDelete.push(resourceId);
+        }
+      }
+
+      for (const resourceId of localResourceIdsToDelete) {
+        localResourceRegistry.delete(resourceId);
+      }
+
+      for (const [resourceId, record] of remoteProxyRegistry.entries()) {
+        if (record.sourceConnectionId === connectionId) {
+          logger.debug(
+            `Cleaning up remote proxy #${resourceId} due to disconnect.`,
+          );
+          remoteProxyIdsToDelete.push(resourceId);
+        }
+      }
+
+      for (const resourceId of remoteProxyIdsToDelete) {
+        remoteProxyRegistry.delete(resourceId);
+      }
+    };
+
+    const runtime: Runtime = {
+      registerExposedService,
+      getExposedService,
+      registerLocalResource,
+      getLocalResource,
+      releaseLocalResource,
+      registerRemoteProxy,
+      hasLocalResource,
+      countLocalResources,
+      countRemoteProxies,
+      listRemoteProxyIdsBySource,
+      listLocalResourceIdsByOwner,
+      cleanupConnection,
+    };
+
+    return runtime;
+  };
 }

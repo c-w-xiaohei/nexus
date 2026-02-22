@@ -1,10 +1,9 @@
 import type { MessageId, SerializedError } from "@/types/message";
 import { Logger } from "@/logger";
-import { NexusCallTimeoutError, NexusDisconnectedError } from "@/errors";
 
 /**
- * A helper class to create an AsyncIterable and control it from the outside.
- * @internal
+ * A helper to create an AsyncIterable and control it externally.
+ * Kept class-based to follow JavaScript async iterator protocol ergonomically.
  */
 class AsyncIteratorController<T> {
   private pullQueue: ((result: IteratorResult<T>) => void)[] = [];
@@ -12,33 +11,24 @@ class AsyncIteratorController<T> {
   private isFinished = false;
 
   public push(value: T) {
-    if (this.isFinished) return;
+    if (this.isFinished) {
+      return;
+    }
     const result: IteratorResult<T> = { done: false, value };
     if (this.pullQueue.length > 0) {
-      this.pullQueue.shift()!(result);
-    } else {
-      this.pushQueue.push(result);
+      const nextResolve = this.pullQueue.shift();
+      if (nextResolve) {
+        nextResolve(result);
+      }
+      return;
     }
-  }
-
-  public error(err: any) {
-    if (this.isFinished) return;
-    this.isFinished = true;
-    const result: IteratorResult<T> = {
-      done: false,
-      value: Promise.reject(err) as any,
-    };
-    if (this.pullQueue.length > 0) {
-      this.pullQueue.shift()!(result);
-    } else {
-      // If we push an error before anyone is listening, it will be unhandled.
-      // This is a complex issue, for now we queue it.
-      this.pushQueue.push(result);
-    }
+    this.pushQueue.push(result);
   }
 
   public end() {
-    if (this.isFinished) return;
+    if (this.isFinished) {
+      return;
+    }
     this.isFinished = true;
     const result: IteratorResult<T> = { done: true, value: undefined };
     this.pullQueue.forEach((resolve) => resolve(result));
@@ -49,7 +39,10 @@ class AsyncIteratorController<T> {
     return {
       next: (): Promise<IteratorResult<T>> => {
         if (this.pushQueue.length > 0) {
-          return Promise.resolve(this.pushQueue.shift()!);
+          const queuedResult = this.pushQueue.shift();
+          if (queuedResult) {
+            return Promise.resolve(queuedResult);
+          }
         }
         if (this.isFinished) {
           return Promise.resolve({ done: true, value: undefined });
@@ -65,267 +58,374 @@ class AsyncIteratorController<T> {
   }
 }
 
-export type BroadcastStrategy = "all" | "stream";
+export namespace PendingCallManager {
+  type ErrorCode = "E_CALL_TIMEOUT" | "E_CONN_CLOSED";
 
-/** Represents the state of a call awaiting one or more responses. */
-interface PendingCall {
-  strategy: BroadcastStrategy;
-  messageId: MessageId;
-  isBroadcast: boolean;
-  targetConnectionIds: string[]; // Track which connections are part of this call
-  // For 'all' strategy
-  resolve?: (value: any) => void;
-  reject?: (reason?: any) => void;
-  results?: (
+  type ErrorOptions = {
+    readonly context?: Record<string, unknown>;
+  };
+
+  class BaseError extends globalThis.Error {
+    readonly code: ErrorCode;
+    readonly context?: Record<string, unknown>;
+
+    constructor(message: string, code: ErrorCode, options: ErrorOptions = {}) {
+      super(message);
+      this.name = "PendingCallManagerError";
+      this.code = code;
+      this.context = options.context;
+    }
+  }
+
+  class TimeoutError extends BaseError {
+    constructor(message: string, options: ErrorOptions = {}) {
+      super(message, "E_CALL_TIMEOUT", options);
+      this.name = "PendingCallTimeoutError";
+    }
+  }
+
+  class DisconnectedError extends BaseError {
+    constructor(message: string, options: ErrorOptions = {}) {
+      super(message, "E_CONN_CLOSED", options);
+      this.name = "PendingCallDisconnectedError";
+    }
+  }
+
+  export const Error = {
+    Base: BaseError,
+    Timeout: TimeoutError,
+    Disconnected: DisconnectedError,
+  } as const;
+
+  export type BroadcastStrategy = "all" | "stream";
+
+  type SettledResult =
     | { status: "fulfilled"; value: any; from: string }
-    | { status: "rejected"; reason: any; from: string }
-  )[];
-  expectedResponses?: number;
-  timeoutHandle?: ReturnType<typeof setTimeout>;
-  // For 'stream' strategy
-  iteratorController?: AsyncIteratorController<any>;
-  receivedResponses?: number;
-}
+    | { status: "rejected"; reason: any; from: string };
 
-export interface RegisterCallOptions {
-  strategy: BroadcastStrategy;
-  isBroadcast: boolean;
-  sentConnectionIds: string[];
-  timeout: number;
-}
+  interface PendingCallBase {
+    readonly messageId: MessageId;
+    readonly isBroadcast: boolean;
+    readonly targetConnectionIds: string[];
+    expectedResponses: number;
+    readonly timeoutHandle: ReturnType<typeof setTimeout>;
+  }
 
-export class PendingCallManager {
-  private readonly pendingCalls = new Map<MessageId, PendingCall>();
-  private readonly logger = new Logger("L3 --- PendingCallManager");
+  interface CollectPendingCall extends PendingCallBase {
+    readonly strategy: "all";
+    readonly resolve: (value: SettledResult[]) => void;
+    readonly reject: (reason?: any) => void;
+    readonly promise: Promise<SettledResult[]>;
+    readonly results: SettledResult[];
+  }
 
-  /**
-   * Registers a new pending call and returns a Promise or AsyncIterable
-   * that will be resolved/rejected when the response arrives.
-   */
-  public register(
-    messageId: MessageId,
-    options: RegisterCallOptions
-  ): Promise<any> | AsyncIterable<any> {
-    const { strategy, isBroadcast, sentConnectionIds, timeout } = options;
+  interface StreamPendingCall extends PendingCallBase {
+    readonly strategy: "stream";
+    readonly iteratorController: AsyncIteratorController<SettledResult>;
+    receivedResponses: number;
+  }
 
-    this.logger.debug(
-      `Registering call #${messageId} with strategy '${strategy}'. Expecting ${sentConnectionIds.length} response(s).`,
-      { isBroadcast, timeout }
-    );
+  type PendingCall = CollectPendingCall | StreamPendingCall;
 
-    const pendingCall: PendingCall = {
-      strategy,
-      messageId,
-      isBroadcast,
-      targetConnectionIds: sentConnectionIds,
+  export interface RegisterCallOptions {
+    strategy: BroadcastStrategy;
+    isBroadcast: boolean;
+    sentConnectionIds: string[];
+    timeout: number;
+  }
+
+  export interface Runtime {
+    register(
+      messageId: MessageId,
+      options: RegisterCallOptions,
+    ): Promise<any> | AsyncIterable<any>;
+    handleResponse(
+      id: MessageId,
+      result: any,
+      error: SerializedError | null,
+      sourceConnectionId?: string,
+      isTimeout?: boolean,
+    ): void;
+    onDisconnect(connectionId: string): void;
+  }
+
+  export const create = (): Runtime => {
+    const pendingCalls = new Map<MessageId, PendingCall>();
+    const logger = new Logger("L3 --- PendingCallManager");
+
+    const rejectSafely = (
+      pending: CollectPendingCall,
+      error: InstanceType<typeof Error.Base>,
+    ): void => {
+      pending.promise.catch((promiseError) => {
+        logger.error(
+          `Unhandled pending call rejection for #${pending.messageId}.`,
+          promiseError,
+        );
+      });
+      pending.reject(error);
     };
 
-    if (strategy === "stream") {
-      const controller = new AsyncIteratorController<any>();
-      pendingCall.iteratorController = controller;
-      pendingCall.receivedResponses = 0;
-      pendingCall.expectedResponses = sentConnectionIds.length;
-      pendingCall.timeoutHandle = setTimeout(() => {
-        this.handleResponse(messageId, null, null, undefined, true);
-      }, timeout);
-      this.pendingCalls.set(messageId, pendingCall);
-      return controller[Symbol.asyncIterator]();
-    }
-
-    // 'all' strategy
-    return new Promise((resolve, reject) => {
-      pendingCall.resolve = resolve;
-      pendingCall.reject = reject;
-      pendingCall.results = [];
-      pendingCall.expectedResponses = sentConnectionIds.length;
-      pendingCall.timeoutHandle = setTimeout(() => {
-        this.handleResponse(messageId, null, null, undefined, true);
-      }, timeout);
-      this.pendingCalls.set(messageId, pendingCall);
-    });
-  }
-
-  /**
-   * Handles a response (success or error) for a pending call.
-   */
-  public handleResponse(
-    id: MessageId,
-    result: any,
-    error: SerializedError | null,
-    sourceConnectionId?: string,
-    isTimeout = false
-  ): void {
-    const pending = this.pendingCalls.get(id);
-    if (!pending) {
-      this.logger.debug(
-        `Received response for call #${id}, but it was not pending. Ignoring.`
-      );
-      return;
-    }
-
-    this.logger.debug(
-      `Handling response for call #${id}. From: ${
-        sourceConnectionId ?? "internal"
-      }, Timeout: ${isTimeout}`,
-      { result, error }
-    );
-
-    if (pending.strategy === "stream") {
-      if (isTimeout) {
-        pending.iteratorController?.end();
-        this.pendingCalls.delete(id);
-        return;
-      }
-
-      // For stream, push a standard settlement object, just like 'all' strategy.
-      // This ensures a consistent data structure for consumers of streams.
+    const createSettledResult = (
+      result: any,
+      error: SerializedError | null,
+      sourceConnectionId?: string,
+    ): SettledResult => {
       if (error) {
-        pending.iteratorController?.push({
+        return {
           status: "rejected",
           reason: error,
           from: sourceConnectionId ?? "unknown",
-        });
-      } else {
-        pending.iteratorController?.push({
-          status: "fulfilled",
-          value: result,
-          from: sourceConnectionId ?? "unknown",
-        });
+        };
       }
 
-      // Check if we have received all expected responses
-      pending.receivedResponses!++;
-      if (pending.receivedResponses! >= pending.expectedResponses!) {
+      return {
+        status: "fulfilled",
+        value: result,
+        from: sourceConnectionId ?? "unknown",
+      };
+    };
+
+    const finalizeCall = (messageId: MessageId): void => {
+      pendingCalls.delete(messageId);
+    };
+
+    const handleStreamResponse = (
+      pending: StreamPendingCall,
+      settledResult: SettledResult | null,
+      isTimeout: boolean,
+    ): void => {
+      if (isTimeout) {
+        pending.iteratorController.end();
+        finalizeCall(pending.messageId);
+        return;
+      }
+
+      if (settledResult) {
+        pending.iteratorController.push(settledResult);
+      }
+
+      pending.receivedResponses += 1;
+      if (pending.receivedResponses >= pending.expectedResponses) {
         clearTimeout(pending.timeoutHandle);
-        pending.iteratorController?.end();
-        this.pendingCalls.delete(id);
+        pending.iteratorController.end();
+        finalizeCall(pending.messageId);
       }
-      return;
-    }
+    };
 
-    // 'all' strategy
-    if (pending.strategy === "all") {
+    const handleCollectResponse = (
+      pending: CollectPendingCall,
+      settledResult: SettledResult | null,
+      isTimeout: boolean,
+    ): void => {
       if (isTimeout) {
         clearTimeout(pending.timeoutHandle);
-        this.logger.warn(`Call #${id} timed out.`, {
+        logger.warn(`Call #${pending.messageId} timed out.`, {
           isBroadcast: pending.isBroadcast,
         });
-        // For broadcast, resolve with what we have. For a single-target call, reject.
         if (pending.isBroadcast) {
-          pending.resolve!(pending.results);
+          pending.resolve(pending.results);
         } else {
-          pending.reject!(
-            new NexusCallTimeoutError(
-              `Call #${id} timed out after ${
-                (pending.timeoutHandle as any)?._idleTimeout ?? "N/A"
-              }ms.`,
-              "E_CALL_TIMEOUT",
-              { messageId: id }
-            )
+          rejectSafely(
+            pending,
+            new Error.Timeout(
+              `Call #${pending.messageId} timed out after timeout.`,
+              {
+                context: { messageId: pending.messageId },
+              },
+            ),
           );
         }
-        this.pendingCalls.delete(id);
+        finalizeCall(pending.messageId);
         return;
       }
 
-      // Aggregate results for ALL calls, both single-target and broadcast.
-      // This creates a consistent return format for the Engine to process.
-      if (error) {
-        pending.results!.push({
-          status: "rejected",
-          reason: error,
-          from: sourceConnectionId ?? "unknown",
-        });
-      } else {
-        pending.results!.push({
-          status: "fulfilled",
-          value: result,
-          from: sourceConnectionId ?? "unknown",
-        });
+      if (settledResult) {
+        pending.results.push(settledResult);
       }
 
-      if (pending.results!.length >= pending.expectedResponses!) {
+      if (pending.results.length >= pending.expectedResponses) {
         clearTimeout(pending.timeoutHandle);
-        this.logger.debug(
-          `Call #${id} fulfilled. Got ${pending.results!.length} of ${pending.expectedResponses} expected responses.`
+        logger.debug(
+          `Call #${pending.messageId} fulfilled. Got ${pending.results.length} of ${pending.expectedResponses} expected responses.`,
         );
-        pending.resolve!(pending.results);
-        this.pendingCalls.delete(id);
+        pending.resolve(pending.results);
+        finalizeCall(pending.messageId);
       }
-    }
-  }
+    };
 
-  /**
-   * Cleans up any pending calls related to a disconnected endpoint.
-   */
-  public onDisconnect(connectionId: string): void {
-    this.logger.info(
-      `Cleaning up pending calls for disconnected connection: ${connectionId}`
-    );
-    for (const [id, pending] of this.pendingCalls.entries()) {
-      if (!pending.targetConnectionIds.includes(connectionId)) {
-        continue;
+    const handleResponse = (
+      id: MessageId,
+      result: any,
+      error: SerializedError | null,
+      sourceConnectionId?: string,
+      isTimeout = false,
+    ): void => {
+      const pending = pendingCalls.get(id);
+      if (!pending) {
+        logger.debug(
+          `Received response for call #${id}, but it was not pending. Ignoring.`,
+        );
+        return;
       }
 
-      this.logger.debug(
-        `Found pending call #${id} affected by disconnect of ${connectionId}`
+      logger.debug(
+        `Handling response for call #${id}. From: ${
+          sourceConnectionId ?? "internal"
+        }, Timeout: ${isTimeout}`,
+        { result, error },
       );
 
-      // If a single-target call, reject it immediately.
-      if (!pending.isBroadcast) {
-        clearTimeout(pending.timeoutHandle);
-        pending.reject?.(
-          new NexusDisconnectedError(
-            `Call #${id} failed. The connection "${connectionId}" was closed.`,
-            "E_CONN_CLOSED",
-            { connectionId, messageId: id }
-          )
-        );
-        this.logger.warn(`Rejected unicast call #${id} due to disconnect.`);
-        this.pendingCalls.delete(id);
-        continue;
+      const settledResult =
+        isTimeout && error === null
+          ? null
+          : createSettledResult(result, error, sourceConnectionId);
+
+      switch (pending.strategy) {
+        case "stream":
+          handleStreamResponse(pending, settledResult, isTimeout);
+          break;
+        case "all":
+          handleCollectResponse(pending, settledResult, isTimeout);
+          break;
+      }
+    };
+
+    const register = (
+      messageId: MessageId,
+      options: RegisterCallOptions,
+    ): Promise<any> | AsyncIterable<any> => {
+      const { strategy, isBroadcast, sentConnectionIds, timeout } = options;
+
+      logger.debug(
+        `Registering call #${messageId} with strategy '${strategy}'. Expecting ${sentConnectionIds.length} response(s).`,
+        { isBroadcast, timeout },
+      );
+
+      if (strategy === "stream") {
+        const controller = new AsyncIteratorController<any>();
+        const timeoutHandle = setTimeout(() => {
+          handleResponse(messageId, null, null, undefined, true);
+        }, timeout);
+        const pendingCall: StreamPendingCall = {
+          strategy,
+          messageId,
+          isBroadcast,
+          targetConnectionIds: sentConnectionIds,
+          iteratorController: controller,
+          receivedResponses: 0,
+          expectedResponses: sentConnectionIds.length,
+          timeoutHandle,
+        };
+        pendingCalls.set(messageId, pendingCall);
+        return controller[Symbol.asyncIterator]();
       }
 
-      // If a broadcast/stream call, decrement expected and check for completion.
-      pending.expectedResponses = (pending.expectedResponses ?? 1) - 1;
+      let resolveCall!: (value: SettledResult[]) => void;
+      let rejectCall!: (reason?: any) => void;
+      const promise: Promise<SettledResult[]> = new Promise(
+        (resolve, reject) => {
+          resolveCall = resolve;
+          rejectCall = reject;
+        },
+      );
 
-      if (pending.strategy === "stream") {
-        if (pending.receivedResponses! >= pending.expectedResponses!) {
-          clearTimeout(pending.timeoutHandle);
-          this.logger.debug(
-            `Stream call #${id} finished due to disconnect. Ending stream.`
-          );
-          pending.iteratorController?.end();
-          this.pendingCalls.delete(id);
+      const timeoutHandle = setTimeout(() => {
+        handleResponse(messageId, null, null, undefined, true);
+      }, timeout);
+
+      const pendingCall: CollectPendingCall = {
+        strategy: "all",
+        messageId,
+        isBroadcast,
+        targetConnectionIds: sentConnectionIds,
+        resolve: resolveCall,
+        reject: rejectCall,
+        promise,
+        results: [],
+        expectedResponses: sentConnectionIds.length,
+        timeoutHandle,
+      };
+
+      pendingCalls.set(messageId, pendingCall);
+      return promise;
+    };
+
+    const onDisconnect = (connectionId: string): void => {
+      logger.info(
+        `Cleaning up pending calls for disconnected connection: ${connectionId}`,
+      );
+
+      for (const [id, pending] of pendingCalls.entries()) {
+        if (!pending.targetConnectionIds.includes(connectionId)) {
+          continue;
         }
-      } else if (pending.strategy === "all") {
-        if (pending.results!.length >= pending.expectedResponses!) {
-          clearTimeout(pending.timeoutHandle);
-          this.logger.debug(
-            `Broadcast call #${id} finished due to disconnect. Resolving with results.`
-          );
-          // If a broadcast resolves because all remaining connections disconnected
-          // but we have no actual results, it should be a rejection.
-          if (
-            pending.results!.length === 0 &&
-            pending.expectedResponses! <= 0
-          ) {
-            pending.reject?.(
-              new NexusDisconnectedError(
-                `Broadcast call #${id} failed as all target connections were lost.`,
-                "E_CONN_CLOSED",
-                { messageId: id }
-              )
-            );
-            this.logger.warn(
-              `Broadcast call #${id} failed. All targets disconnected.`
+
+        logger.debug(
+          `Found pending call #${id} affected by disconnect of ${connectionId}`,
+        );
+
+        if (!pending.isBroadcast) {
+          if (pending.strategy === "all") {
+            clearTimeout(pending.timeoutHandle);
+            rejectSafely(
+              pending,
+              new Error.Disconnected(
+                `Call #${id} failed. The connection "${connectionId}" was closed.`,
+                { context: { connectionId, messageId: id } },
+              ),
             );
           } else {
-            pending.resolve?.(pending.results);
+            clearTimeout(pending.timeoutHandle);
+            pending.iteratorController.end();
           }
-          this.pendingCalls.delete(id);
+          logger.warn(`Rejected unicast call #${id} due to disconnect.`);
+          pendingCalls.delete(id);
+          continue;
+        }
+
+        pending.expectedResponses -= 1;
+
+        if (pending.strategy === "stream") {
+          if (pending.receivedResponses >= pending.expectedResponses) {
+            clearTimeout(pending.timeoutHandle);
+            logger.debug(
+              `Stream call #${id} finished due to disconnect. Ending stream.`,
+            );
+            pending.iteratorController.end();
+            pendingCalls.delete(id);
+          }
+          continue;
+        }
+
+        if (pending.results.length >= pending.expectedResponses) {
+          clearTimeout(pending.timeoutHandle);
+          logger.debug(
+            `Broadcast call #${id} finished due to disconnect. Resolving with results.`,
+          );
+          if (pending.results.length === 0 && pending.expectedResponses <= 0) {
+            rejectSafely(
+              pending,
+              new Error.Disconnected(
+                `Broadcast call #${id} failed as all target connections were lost.`,
+                { context: { messageId: id } },
+              ),
+            );
+            logger.warn(
+              `Broadcast call #${id} failed. All targets disconnected.`,
+            );
+          } else {
+            pending.resolve(pending.results);
+          }
+          pendingCalls.delete(id);
         }
       }
-    }
-  }
+    };
+
+    return {
+      register,
+      handleResponse,
+      onDisconnect,
+    };
+  };
 }

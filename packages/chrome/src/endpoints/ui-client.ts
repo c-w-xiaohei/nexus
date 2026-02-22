@@ -10,9 +10,10 @@ import { ChromePort } from "../ports/chrome-port";
  * Generic UI client endpoint implementation for Chrome extension contexts
  * that primarily connect to background script (popup, options page, devtools page, etc.)
  */
-export class UIClientEndpoint
-  implements IEndpoint<ChromeUserMeta, ChromePlatformMeta>
-{
+export class UIClientEndpoint implements IEndpoint<
+  ChromeUserMeta,
+  ChromePlatformMeta
+> {
   capabilities = {
     supportsTransferables: false,
   };
@@ -20,16 +21,16 @@ export class UIClientEndpoint
   /**
    * UI clients typically don't listen for connections
    */
-  listen?(onConnect: (port: IPort, meta?: ChromePlatformMeta) => void): void {
+  listen?(_onConnect: (port: IPort, meta?: ChromePlatformMeta) => void): void {
     try {
       console.warn(
-        "UIClientEndpoint.listen is not commonly used for this context."
+        "UIClientEndpoint.listen is not commonly used for this context.",
       );
       // If future special requirements arise, chrome.runtime.onConnect.addListener can be added here
     } catch (error) {
       throw new NexusEndpointListenError(
         `Failed to start listening for connections: ${error instanceof Error ? error.message : String(error)}`,
-        { originalError: error }
+        { originalError: error },
       );
     }
   }
@@ -38,7 +39,7 @@ export class UIClientEndpoint
    * Connect to target, typically background script
    */
   async connect(
-    target: Partial<ChromeUserMeta>
+    target: Partial<ChromeUserMeta>,
   ): Promise<[IPort, ChromePlatformMeta]> {
     try {
       if (target.context === "background") {
@@ -52,7 +53,7 @@ export class UIClientEndpoint
 
       throw new NexusEndpointConnectError(
         "Cannot connect to target: expected 'background' context",
-        { target }
+        { target },
       );
     } catch (error) {
       if (error instanceof NexusEndpointConnectError) {
@@ -60,7 +61,7 @@ export class UIClientEndpoint
       }
       throw new NexusEndpointConnectError(
         `Failed to connect to target: ${error instanceof Error ? error.message : String(error)}`,
-        { target, originalError: error }
+        { target, originalError: error },
       );
     }
   }

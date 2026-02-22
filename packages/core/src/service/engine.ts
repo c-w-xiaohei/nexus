@@ -1,215 +1,247 @@
 import type { ConnectionManager } from "@/connection/connection-manager";
 import type {
-  NexusMessage,
   MessageId,
-  SerializedError,
+  NexusMessage,
   ReleaseMessage,
+  SerializedError,
 } from "@/types/message";
 import { NexusMessageType } from "@/types/message";
 import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { CallTarget, MessageTarget } from "@/connection/types";
+import { Logger } from "@/logger";
+import { toSerializedError } from "@/utils/error";
+import { CallProcessor } from "./call-processor";
 import { MessageHandler } from "./message/message-handler";
 import { PayloadProcessor } from "./payload/payload-processor";
-import { ProxyFactory } from "./proxy-factory";
-import { ResourceManager } from "./resource-manager";
-import type { CallTarget, MessageTarget } from "@/connection/types";
-import { createSerializedError } from "@/utils/error";
 import { PendingCallManager } from "./pending-call-manager";
-import type { CreateProxyOptions } from "./proxy-factory";
-import { CallProcessor } from "./call-processor";
-import { Logger } from "@/logger";
+import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
+import { ResourceManager } from "./resource-manager";
+import {
+  err,
+  errAsync,
+  ok,
+  okAsync,
+  type Result,
+  type ResultAsync,
+} from "neverthrow";
 
-/** Arguments for dispatching a call from a proxy. */
-export type DispatchCallOptions = {
-  type: "GET" | "SET" | "APPLY";
+type DispatchCallBase = {
   target: CallTarget<any, any>;
   resourceId: string | null;
   path: (string | number)[];
-  args?: any[]; // Only for APPLY
-  value?: any; // Only for SET
   strategy?: "one" | "first" | "all" | "stream";
   timeout?: number;
-  // Options inherited from the proxy's creation
   proxyOptions?: CreateProxyOptions<any>;
 };
 
-/**
- * The central orchestrator for Layer 3 (Service & Proxy).
- * It instantiates and wires together all the L3 managers. Its primary role
- * is to receive messages from Layer 2 and delegate them to the MessageHandler.
- */
-export class Engine<U extends UserMetadata, P extends PlatformMetadata> {
+type DispatchGetCallOptions = DispatchCallBase & {
+  type: "GET";
+};
+
+type DispatchSetCallOptions = DispatchCallBase & {
+  type: "SET";
+  value: any;
+};
+
+type DispatchApplyCallOptions = DispatchCallBase & {
+  type: "APPLY";
+  args: any[];
+};
+
+export type DispatchCallOptions =
+  | DispatchGetCallOptions
+  | DispatchSetCallOptions
+  | DispatchApplyCallOptions;
+
+export interface MessageHandlerCallbacks<U extends UserMetadata> {
+  safeSendMessage(
+    message: NexusMessage,
+    target: MessageTarget<U> | string,
+  ): Result<string[], Error>;
+  handleResponse(
+    id: MessageId,
+    result: any,
+    error: SerializedError | null,
+    sourceConnectionId?: string,
+    isTimeout?: boolean,
+  ): void;
+}
+
+export class Engine<
+  U extends UserMetadata,
+  P extends PlatformMetadata,
+> implements MessageHandlerCallbacks<U> {
   private readonly logger = new Logger("L3 --- Engine");
-  private readonly resourceManager: ResourceManager;
-  private readonly payloadProcessor: PayloadProcessor<U, P>;
-  private readonly proxyFactory: ProxyFactory<U, P>;
-  private readonly messageHandler: MessageHandler<U, P>;
-  private readonly pendingCallManager: PendingCallManager;
-  private readonly callProcessor: CallProcessor<U, P>;
+  private readonly resourceManager: ResourceManager.Runtime;
+  private readonly payloadProcessor: PayloadProcessor.Runtime<U, P>;
+  private readonly proxyFactory: ProxyFactory<U>;
+  private readonly messageHandler: MessageHandler.Runtime;
+  private readonly pendingCallManager: PendingCallManager.Runtime;
+  private readonly callProcessor: CallProcessor.Runtime;
+
+  private messageIdSeq = 1;
 
   constructor(
-    private readonly connectionManager: ConnectionManager<U, P>,
-    config: { services?: Record<string, object> } = {}
+    private readonly connectionManagerState: ConnectionManager<U, P>,
+    config: { services?: Record<string, object> } = {},
   ) {
-    // Note: The order of instantiation is important due to dependencies.
-    this.resourceManager = new ResourceManager();
+    this.resourceManager = ResourceManager.create();
+
     if (config.services) {
-      for (const [name, service] of Object.entries(config.services)) {
-        this.resourceManager.registerExposedService(name, service);
-      }
+      this.registerServices(config.services);
     }
-    this.proxyFactory = new ProxyFactory(this, this.resourceManager);
-    this.payloadProcessor = new PayloadProcessor(
+
+    this.proxyFactory = new ProxyFactory<U>(
+      {
+        safeDispatchCall: (options) => this.safeDispatchCall(options),
+        dispatchRelease: (resourceId, connectionId) =>
+          this.dispatchRelease(resourceId, connectionId),
+      },
       this.resourceManager,
-      this.proxyFactory
     );
-    this.pendingCallManager = new PendingCallManager();
-    this.messageHandler = new MessageHandler({
-      engine: this,
+    this.payloadProcessor = PayloadProcessor.create(
+      this.resourceManager,
+      this.proxyFactory,
+    );
+    this.pendingCallManager = PendingCallManager.create();
+    this.messageHandler = MessageHandler.create({
+      engine: {
+        safeSendMessage: (message, target) =>
+          this.safeSendMessage(message, target),
+        handleResponse: (id, result, error, sourceConnectionId, isTimeout) =>
+          this.handleResponse(id, result, error, sourceConnectionId, isTimeout),
+      },
       resourceManager: this.resourceManager,
       payloadProcessor: this.payloadProcessor,
     });
-    this.callProcessor = new CallProcessor({
-      connectionManager: this.connectionManager,
+    this.callProcessor = CallProcessor.create({
+      nextMessageId: () => this.nextMessageId(),
+      resolveConnection: (options) =>
+        this.connectionManagerState.safeResolveConnection(options),
+      sendMessage: (target, message) =>
+        this.connectionManagerState.safeSendMessage(target, message),
       payloadProcessor: this.payloadProcessor,
       pendingCallManager: this.pendingCallManager,
-      resourceManager: this.resourceManager,
     });
-
-    // In a complete implementation, this is where the engine would register
-    // its `onMessage` handler with the connection manager.
   }
 
-  /**
-   * Creates a service proxy. This is the entry point for L4.
-   * @internal
-   */
+  private nextMessageId(): number {
+    return this.messageIdSeq++;
+  }
+
   public createServiceProxy<T extends object>(
     serviceName: string,
-    options: CreateProxyOptions<U>
+    options: CreateProxyOptions<U>,
   ): T {
-    // Directly delegate to the internal proxyFactory
     return this.proxyFactory.createServiceProxy(serviceName, options);
   }
 
-  /**
-   * Dynamically registers new services with the resource manager.
-   * @param services A map of service names to service implementations.
-   */
   public registerServices(services: Record<string, object>): void {
-    if (!services) return;
     for (const [name, service] of Object.entries(services)) {
       this.resourceManager.registerExposedService(name, service);
     }
   }
 
-  /**
-   * Dispatches a call originating from a proxy.
-   * This determines the message type, sanitizes the payload,
-   * sends the message, and returns a promise for the response.
-   * @internal
-   */
-  public dispatchCall(
-    options: DispatchCallOptions & { broadcastOptions?: { strategy: "stream" } }
-  ): AsyncIterable<any>;
-  public dispatchCall(options: DispatchCallOptions): Promise<any>;
-  public dispatchCall(
-    options: DispatchCallOptions
-  ): Promise<any> | AsyncIterable<any> {
-    return this.callProcessor.process(options);
+  public safeDispatchCall(
+    options: DispatchCallOptions,
+  ): ResultAsync<any, globalThis.Error> {
+    return this.callProcessor.safeProcess(options);
   }
 
-  /**
-   * Dispatches a fire-and-forget notification to release a remote resource.
-   * @internal
-   */
   public dispatchRelease(resourceId: string, connectionId: string): void {
     const message: ReleaseMessage = {
       type: NexusMessageType.RELEASE,
       id: null,
       resourceId,
     };
-    // This is a targeted message, so we create a specific target.
-    this.sendMessage(message, { connectionId });
+    this.safeSendMessage(message, { connectionId }).match(
+      () => undefined,
+      (error) => {
+        this.logger.warn(
+          `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
+          error,
+        );
+      },
+    );
   }
 
-  /**
-   * The single entry point for messages incoming from Layer 2.
-   * This method would be registered as a handler with the ConnectionManager.
-   * @param message The message from a remote endpoint.
-   * @param sourceConnectionId The ID of the connection it came from.
-   */
-  public async onMessage(
+  public safeOnMessage(
     message: NexusMessage,
-    sourceConnectionId: string
-  ): Promise<void> {
+    sourceConnectionId: string,
+  ): ResultAsync<void, globalThis.Error> {
     this.logger.debug(
-      `<- Received message #${
-        message.id ?? "N/A"
-      } from connection ${sourceConnectionId}`,
-      message
+      `<- Received message #${message.id ?? "N/A"} from connection ${sourceConnectionId}`,
+      message,
     );
-    try {
-      await this.messageHandler.handleMessage(message, sourceConnectionId);
-    } catch (err: unknown) {
-      this.logger.error(
-        `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
-        err
-      );
-      if (message.id) {
-        this.sendMessage(
+
+    return this.messageHandler
+      .safeHandleMessage(message, sourceConnectionId)
+      .orElse((error) => {
+        this.logger.error(
+          `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
+          error,
+        );
+
+        if (!message.id) {
+          return okAsync(undefined);
+        }
+
+        const sendResult = this.safeSendMessage(
           {
             type: NexusMessageType.ERR,
             id: message.id,
-            error: createSerializedError(err),
+            error: toSerializedError(error),
           },
-          sourceConnectionId
+          sourceConnectionId,
         );
-      }
-    }
+
+        if (sendResult.isErr()) {
+          this.logger.error(
+            `Failed to send ERR response for message #${message.id}.`,
+            sendResult.error,
+          );
+          return errAsync(sendResult.error);
+        }
+
+        return okAsync(undefined);
+      });
   }
 
-  /**
-   * Handles a response (success or error) for a pending call.
-   * This is the unified replacement for resolve/rejectPendingCall.
-   * @internal
-   */
   public handleResponse(
     id: MessageId,
     result: any,
     error: SerializedError | null,
     sourceConnectionId?: string,
-    isTimeout = false
+    isTimeout = false,
   ): void {
     this.pendingCallManager.handleResponse(
       id,
       result,
       error,
       sourceConnectionId,
-      isTimeout
+      isTimeout,
     );
   }
 
-  /**
-   * Sends a message through Layer 2. This is an internal API for handlers.
-   * @internal
-   */
-  public sendMessage(
+  public safeSendMessage(
     message: NexusMessage,
-    target: CallTarget<U, any> | string
-  ): string[] {
+    target: MessageTarget<U> | string,
+  ): Result<string[], Error> {
     const messageTarget =
       typeof target === "string" ? { connectionId: target } : target;
-    return this.connectionManager.sendMessage(
-      messageTarget as MessageTarget<U>,
-      message
+
+    const sendResult = this.connectionManagerState.safeSendMessage(
+      messageTarget,
+      message,
     );
+
+    if (sendResult.isErr()) {
+      return err(sendResult.error);
+    }
+
+    return ok(sendResult.value);
   }
 
-  /**
-   * Disconnected endpoint.
-   * @internal
-   * @param connectionId The ID of the connection that was closed.
-   */
   public onDisconnect(connectionId: string): void {
     this.resourceManager.cleanupConnection(connectionId);
     this.pendingCallManager.onDisconnect(connectionId);

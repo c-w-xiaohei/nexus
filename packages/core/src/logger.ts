@@ -35,21 +35,14 @@ interface NexusLoggerConfig {
   handler: LogHandler;
 }
 
-// Default configuration: Disabled
-const config: NexusLoggerConfig = {
-  enabled: false,
-  levels: {
-    "*": LogLevel.WARN,
-  },
-  handler: (level, scope, message, ...args) => {
+namespace LoggerConfigStore {
+  const defaultHandler: LogHandler = (level, scope, message, ...args) => {
     const formattedMessage = `[${scope}] ${message}`;
     switch (level) {
       case LogLevel.DEBUG:
-        // eslint-disable-next-line no-console
         console.debug(formattedMessage, ...args);
         break;
       case LogLevel.INFO:
-        // eslint-disable-next-line no-console
         console.info(formattedMessage, ...args);
         break;
       case LogLevel.WARN:
@@ -59,8 +52,28 @@ const config: NexusLoggerConfig = {
         console.error(formattedMessage, ...args);
         break;
     }
-  },
-};
+  };
+
+  export const defaults: NexusLoggerConfig = {
+    enabled: false,
+    levels: {
+      "*": LogLevel.WARN,
+    },
+    handler: defaultHandler,
+  };
+
+  export const config: NexusLoggerConfig = {
+    enabled: defaults.enabled,
+    levels: { ...defaults.levels },
+    handler: defaults.handler,
+  };
+
+  export const reset = (): void => {
+    config.enabled = defaults.enabled;
+    config.handler = defaults.handler;
+    config.levels = { ...defaults.levels };
+  };
+}
 
 /**
  * Configures the Nexus internal logger. This is the primary way to enable
@@ -98,8 +111,9 @@ export function configureNexusLogger(
     level: LogLevel;
     levels: LogLevels;
     handler: LogHandler;
-  }>
+  }>,
 ): void {
+  const config = LoggerConfigStore.config;
   if (options.enabled !== undefined) {
     config.enabled = options.enabled;
   }
@@ -125,6 +139,10 @@ export function configureNexusLogger(
   }
 }
 
+export function resetNexusLoggerForTest(): void {
+  LoggerConfigStore.reset();
+}
+
 /**
  * A lightweight, scoped logger that only outputs when its level is enabled
  * in the global configuration.
@@ -143,6 +161,7 @@ export class Logger {
   }
 
   private getEffectiveLevel(): LogLevel {
+    const config = LoggerConfigStore.config;
     if (this.layer && this.layer in config.levels) {
       // A specific level is set for this logger's layer
       return config.levels[this.layer as keyof LogLevels]!;
@@ -155,6 +174,7 @@ export class Logger {
    * Logs a high-volume, detailed message for deep debugging.
    */
   public debug(message: string, ...args: unknown[]): void {
+    const config = LoggerConfigStore.config;
     if (!config.enabled) return;
     if (this.getEffectiveLevel() <= LogLevel.DEBUG) {
       config.handler(LogLevel.DEBUG, this.scope, message, ...args);
@@ -165,6 +185,7 @@ export class Logger {
    * Logs a message for major lifecycle events or important information.
    */
   public info(message: string, ...args: unknown[]): void {
+    const config = LoggerConfigStore.config;
     if (!config.enabled) return;
     if (this.getEffectiveLevel() <= LogLevel.INFO) {
       config.handler(LogLevel.INFO, this.scope, message, ...args);
@@ -175,6 +196,7 @@ export class Logger {
    * Logs a warning for potential issues that don't break execution.
    */
   public warn(message: string, ...args: unknown[]): void {
+    const config = LoggerConfigStore.config;
     if (!config.enabled) return;
     if (this.getEffectiveLevel() <= LogLevel.WARN) {
       config.handler(LogLevel.WARN, this.scope, message, ...args);
@@ -185,6 +207,7 @@ export class Logger {
    * Logs an error that has occurred.
    */
   public error(message: string, ...args: unknown[]): void {
+    const config = LoggerConfigStore.config;
     if (!config.enabled) return;
     if (this.getEffectiveLevel() <= LogLevel.ERROR) {
       config.handler(LogLevel.ERROR, this.scope, message, ...args);
