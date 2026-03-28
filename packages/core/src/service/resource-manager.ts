@@ -9,6 +9,7 @@ export namespace ResourceManager {
   export interface Runtime {
     registerExposedService(name: string, service: object): void;
     getExposedService(name: string): object | undefined;
+    listExposedServices(): readonly object[];
     registerLocalResource(
       target: object,
       ownerConnectionId: string,
@@ -48,6 +49,9 @@ export namespace ResourceManager {
 
     const getExposedService = (name: string): object | undefined =>
       exposedServices.get(name);
+
+    const listExposedServices = (): readonly object[] =>
+      Array.from(exposedServices.values());
 
     const registerLocalResource = (
       target: object,
@@ -150,6 +154,7 @@ export namespace ResourceManager {
     const runtime: Runtime = {
       registerExposedService,
       getExposedService,
+      listExposedServices,
       registerLocalResource,
       getLocalResource,
       releaseLocalResource,

@@ -18,10 +18,14 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: path.resolve(__dirname, "src/index.ts"),
+      entry: {
+        index: path.resolve(__dirname, "src/index.ts"),
+        "state/index": path.resolve(__dirname, "src/state/index.ts"),
+      },
       name: "NexusCore",
       formats: ["es", "cjs"], // Explicitly output ES Module and CommonJS
-      fileName: (format) => `index.${format === "es" ? "mjs" : "js"}`,
+      fileName: (format, entryName) =>
+        `${entryName}.${format === "es" ? "mjs" : "js"}`,
     },
   },
 });

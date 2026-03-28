@@ -17,6 +17,11 @@ import { PendingCallManager } from "./pending-call-manager";
 import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import {
+  isServiceWithHooks,
+  SERVICE_ON_DISCONNECT,
+} from "./service-invocation-hooks";
+import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "@/types/symbols";
+import {
   err,
   errAsync,
   ok,
@@ -80,6 +85,7 @@ export class Engine<
   private readonly callProcessor: CallProcessor.Runtime;
 
   private messageIdSeq = 1;
+  private readonly disconnectListeners = new Map<string, Set<() => void>>();
 
   constructor(
     private readonly connectionManagerState: ConnectionManager<U, P>,
@@ -133,7 +139,41 @@ export class Engine<
     serviceName: string,
     options: CreateProxyOptions<U>,
   ): T {
-    return this.proxyFactory.createServiceProxy(serviceName, options);
+    const proxy = this.proxyFactory.createServiceProxy(
+      serviceName,
+      options,
+    ) as T & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    if ("connectionId" in options.target) {
+      const connectionId = options.target.connectionId;
+
+      proxy[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL] = (callback) => {
+        let listeners = this.disconnectListeners.get(connectionId);
+        if (!listeners) {
+          listeners = new Set();
+          this.disconnectListeners.set(connectionId, listeners);
+        }
+
+        listeners.add(callback);
+        return () => {
+          const current = this.disconnectListeners.get(connectionId);
+          if (!current) {
+            return;
+          }
+
+          current.delete(callback);
+          if (current.size === 0) {
+            this.disconnectListeners.delete(connectionId);
+          }
+        };
+      };
+    }
+
+    return proxy;
   }
 
   public registerServices(services: Record<string, object>): void {
@@ -243,6 +283,24 @@ export class Engine<
   }
 
   public onDisconnect(connectionId: string): void {
+    const listeners = this.disconnectListeners.get(connectionId);
+    if (listeners) {
+      for (const listener of Array.from(listeners)) {
+        try {
+          listener();
+        } catch {
+          // listener isolation
+        }
+      }
+      this.disconnectListeners.delete(connectionId);
+    }
+
+    for (const service of this.resourceManager.listExposedServices()) {
+      if (isServiceWithHooks(service)) {
+        service[SERVICE_ON_DISCONNECT]?.(connectionId);
+      }
+    }
+
     this.resourceManager.cleanupConnection(connectionId);
     this.pendingCallManager.onDisconnect(connectionId);
   }
