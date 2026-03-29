@@ -1,4 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { errAsync } from "neverthrow";
+import { z } from "zod";
 import { Token } from "../api/token";
 import { createL3Endpoints, createStarNetwork } from "../utils/test-utils";
 import { defineNexusStore } from "./define-store";
@@ -7,6 +9,8 @@ import {
   NexusStoreActionError,
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
+  NexusStoreError,
+  normalizeNexusStoreError,
 } from "./errors";
 import { provideNexusStore } from "./provide-store";
 import { createStoreHost } from "./host/store-host";
@@ -20,7 +24,12 @@ import {
   safeConnectNexusStore,
   safeInvokeStoreAction,
 } from "./connect-store";
-import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "@/types/symbols";
+import { RemoteStoreEntity } from "./client/remote-store";
+import {
+  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+  RELEASE_PROXY_SYMBOL,
+} from "../types/symbols";
 
 const createCounterDefinition = () =>
   defineNexusStore({
@@ -123,9 +132,151 @@ describe("state host runtime baseline handshake", () => {
     expect(unstable).toHaveBeenCalledTimes(1);
     expect(stable).toHaveBeenCalledTimes(2);
   });
+
+  it("clears disconnected owner marker once invocation ends", async () => {
+    const host = createStoreHost(createCounterDefinition());
+    const invocation = host.onInvokeStart("conn-owner-marker");
+
+    host.cleanupConnection("conn-owner-marker");
+
+    await expect(
+      host.subscribe(() => undefined, {
+        ownerConnectionId: "conn-owner-marker",
+      }),
+    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+
+    host.onInvokeEnd(invocation);
+
+    await expect(
+      host.subscribe(() => undefined, {
+        ownerConnectionId: "conn-owner-marker",
+      }),
+    ).resolves.toMatchObject({
+      version: 0,
+      state: { count: 0 },
+    });
+  });
+
+  it("destroy clears invocation and disconnect owner bookkeeping maps", () => {
+    const host = createStoreHost(createCounterDefinition());
+    const invocation = host.onInvokeStart("conn-destroy-cleanup");
+
+    host.cleanupConnection("conn-destroy-cleanup");
+    host.onInvokeEnd(invocation);
+
+    host.destroy();
+
+    const runtime = host as any;
+    expect(runtime.disconnectedConnections.size).toBe(0);
+    expect(runtime.activeInvocationsByConnection.size).toBe(0);
+  });
 });
 
 describe("state host runtime dispatch semantics", () => {
+  it("rejects non-object initial state payload at host boundary", () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:invalid-initial-state"),
+      state: () => 123 as unknown as { count: number },
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    expect(() => createStoreHost(definition)).toThrowError(
+      NexusStoreProtocolError,
+    );
+  });
+
+  it("covers host missing-subscription cleanup branches", async () => {
+    const host = createStoreHost(createCounterDefinition());
+    const removedListener = vi.fn();
+    const siblingListener = vi.fn();
+
+    const removed = await host.subscribe(removedListener, {
+      ownerConnectionId: "conn-a",
+    });
+
+    const sibling = await host.subscribe(siblingListener, {
+      ownerConnectionId: "conn-b",
+    });
+
+    await host.unsubscribe("missing-subscription");
+    await host.unsubscribe(removed.subscriptionId);
+
+    await host.dispatch("increment", [1]);
+
+    expect(removedListener).not.toHaveBeenCalled();
+    expect(siblingListener).toHaveBeenCalledTimes(1);
+
+    const dangling = await host.subscribe(() => {});
+    (host as any).subscriptions.set(dangling.subscriptionId, {
+      onSync: vi.fn(),
+      ownerConnectionId: "conn-ghost",
+    });
+    await host.unsubscribe(dangling.subscriptionId);
+
+    await host.unsubscribe(sibling.subscriptionId);
+  });
+
+  it("releases subscribe callback proxies on unsubscribe and destroy", async () => {
+    const host = createStoreHost(createCounterDefinition());
+    const releaseLeft = vi.fn();
+    const releaseRight = vi.fn();
+
+    const leftListener = Object.assign(vi.fn(), {
+      [RELEASE_PROXY_SYMBOL]: releaseLeft,
+    });
+    const rightListener = Object.assign(vi.fn(), {
+      [RELEASE_PROXY_SYMBOL]: releaseRight,
+    });
+
+    const left = await host.subscribe(leftListener);
+    await host.subscribe(rightListener);
+
+    await host.unsubscribe(left.subscriptionId);
+    expect(releaseLeft).toHaveBeenCalledTimes(1);
+    expect(releaseRight).toHaveBeenCalledTimes(0);
+
+    host.destroy();
+    expect(releaseLeft).toHaveBeenCalledTimes(1);
+    expect(releaseRight).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects subscribe for already disconnected owner and unknown action dispatch", async () => {
+    const host = createStoreHost(createCounterDefinition());
+    const invocation = host.onInvokeStart("conn-stale-owner");
+
+    host.cleanupConnection("conn-stale-owner");
+    await expect(
+      host.subscribe(() => undefined, {
+        ownerConnectionId: "conn-stale-owner",
+      }),
+    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+    host.onInvokeEnd(invocation);
+
+    await expect(
+      host.dispatch("missingAction" as any, []),
+    ).rejects.toBeInstanceOf(NexusStoreProtocolError);
+  });
+
+  it("supports functional setState updater actions", async () => {
+    const host = createStoreHost(
+      defineNexusStore({
+        token: new Token("state:counter:functional-set-state"),
+        state: () => ({ count: 0 }),
+        actions: ({ getState, setState }) => ({
+          increment() {
+            setState((current) => ({ count: current.count + 1 }));
+            return getState().count;
+          },
+        }),
+      }),
+    );
+
+    await expect(host.dispatch("increment", [])).resolves.toMatchObject({
+      committedVersion: 1,
+      result: 1,
+    });
+  });
+
   it("dispatch advances version monotonically", async () => {
     const host = createStoreHost(createCounterDefinition());
     const baseline = await host.subscribe(() => {});
@@ -156,6 +307,33 @@ describe("state host runtime dispatch semantics", () => {
     const after = await host.subscribe(() => {});
     expect(after.version).toBe(0);
     expect(after.state).toEqual({ count: 0 });
+  });
+
+  it("host rollback is transactional for nested in-place mutation through getState", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:host-rollback-nested-inplace"),
+      state: () => ({ nested: { count: 0 } }),
+      actions: ({ getState }) => ({
+        mutateNestedThenThrow() {
+          getState().nested.count += 1;
+          throw new Error("nested-mutate-failed");
+        },
+      }),
+    });
+
+    const host = createStoreHost(definition);
+    const before = await host.subscribe(() => {});
+
+    await expect(
+      host.dispatch("mutateNestedThenThrow", []),
+    ).rejects.toMatchObject({
+      name: "NexusStoreActionError",
+      cause: expect.objectContaining({ message: "nested-mutate-failed" }),
+    } satisfies Partial<NexusStoreActionError>);
+
+    const after = await host.subscribe(() => {});
+    expect(after.version).toBe(before.version);
+    expect(after.state).toEqual({ nested: { count: 0 } });
   });
 
   it("serializes overlapping async dispatches without losing updates", async () => {
@@ -203,6 +381,34 @@ describe("state host runtime dispatch semantics", () => {
     await expect(
       host.dispatch("increment", "not-array" as unknown as [number]),
     ).rejects.toBeInstanceOf(NexusStoreProtocolError);
+  });
+
+  it("validates host action result payload when author provides schema", async () => {
+    const host = createStoreHost(
+      defineNexusStore({
+        token: new Token("state:counter:host-action-result-validation"),
+        state: () => ({ count: 0 }),
+        actions: ({ getState, setState }) => ({
+          increment(by: number) {
+            setState({ count: getState().count + by });
+            return "invalid" as unknown as number;
+          },
+        }),
+        validation: {
+          actionResults: {
+            increment: z.number(),
+          },
+        },
+      }),
+    );
+
+    const before = await host.subscribe(() => {});
+    await expect(host.dispatch("increment", [1])).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+    const after = await host.subscribe(() => {});
+    expect(after.version).toBe(before.version);
+    expect(after.state).toEqual(before.state);
   });
 });
 
@@ -375,7 +581,7 @@ describe("provideNexusStore", () => {
     const originalSubscribe = registration.implementation.subscribe.bind(
       registration.implementation,
     );
-    registration.implementation.subscribe = async (onSync) => {
+    registration.implementation.subscribe = async (onSync: any) => {
       await subscribeBarrier.promise;
       return originalSubscribe(onSync);
     };
@@ -482,7 +688,7 @@ describe("provideNexusStore", () => {
     const originalSubscribe = registration.implementation.subscribe.bind(
       registration.implementation,
     );
-    registration.implementation.subscribe = async (onSync) => {
+    registration.implementation.subscribe = async (onSync: any) => {
       await subscribeGate.promise;
       return originalSubscribe(onSync);
     };
@@ -541,9 +747,508 @@ describe("provideNexusStore", () => {
       expect(remoteListener).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("rejects late subscribe completion when connection already disconnected", async () => {
+    const definition = createCounterDefinition();
+    const registration = provideNexusStore(definition);
+    const subscribeGate = deferred<void>();
+    const localListener = vi.fn();
+
+    await registration.implementation.subscribe(localListener);
+
+    const originalSubscribe = registration.implementation.subscribe.bind(
+      registration.implementation,
+    );
+    registration.implementation.subscribe = async (
+      onSync: any,
+      invocation: any,
+    ) => {
+      await subscribeGate.promise;
+      return originalSubscribe(onSync, invocation);
+    };
+
+    const setup = await createL3Endpoints(
+      {
+        meta: { id: "host" },
+        services: {
+          [definition.token.id]:
+            registration.implementation as NexusStoreServiceContract<
+              object,
+              any
+            >,
+        },
+      },
+      {
+        meta: { id: "client" },
+      },
+    );
+
+    const storeProxy = (
+      setup.clientEngine as any
+    ).proxyFactory.createServiceProxy(definition.token.id, {
+      target: {
+        connectionId: (setup.clientConnection as { connectionId: string })
+          .connectionId,
+      },
+    }) as NexusStoreServiceContract<
+      { count: number },
+      { increment(by: number): number }
+    >;
+
+    const remoteListener = vi.fn();
+    const pendingSubscribe = storeProxy.subscribe(remoteListener);
+
+    (setup.clientConnection as { close(): void }).close();
+    await vi.waitFor(() => {
+      expect(
+        Array.from((setup.hostCm as any).connections.values()),
+      ).toHaveLength(0);
+    });
+
+    subscribeGate.resolve();
+    await expect(
+      pendingSubscribe.catch((error) => {
+        throw normalizeNexusStoreError(error);
+      }),
+    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+
+    await registration.implementation.dispatch("increment", [1]);
+    await vi.waitFor(() => {
+      expect(localListener).toHaveBeenCalledTimes(1);
+      expect(remoteListener).toHaveBeenCalledTimes(0);
+    });
+  });
 });
 
 describe("state client runtime and connect APIs", () => {
+  it("safeConnectNexusStore maps disconnect-hook getter errors with normalization branches", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:disconnect-hook-getter-errors"),
+      state: () => ({ count: 0 }),
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    const baseline = {
+      storeInstanceId: "store-disconnect-hook-getter-errors",
+      subscriptionId: "sub-disconnect-hook-getter-errors",
+      version: 0,
+      state: { count: 0 },
+    };
+
+    const actionGetterService = {
+      subscribe: vi.fn(async () => baseline),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      get [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]() {
+        throw new NexusStoreActionError("disconnect-getter-action-error");
+      },
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const actionGetterResult = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof actionGetterService) => any) =>
+                next(actionGetterService),
+            }),
+          }) as any,
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(actionGetterResult.isErr()).toBe(true);
+    if (actionGetterResult.isErr()) {
+      expect(actionGetterResult.error).toBeInstanceOf(NexusStoreConnectError);
+      expect(actionGetterResult.error.cause).toBeInstanceOf(
+        NexusStoreActionError,
+      );
+    }
+
+    const disconnectLike = Object.assign(new Error("conn closed in getter"), {
+      code: "E_CONN_CLOSED",
+    });
+    const disconnectedGetterService = {
+      subscribe: vi.fn(async () => baseline),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      get [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]() {
+        throw disconnectLike;
+      },
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const disconnectedGetterResult = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (
+                next: (value: typeof disconnectedGetterService) => any,
+              ) => next(disconnectedGetterService),
+            }),
+          }) as any,
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(disconnectedGetterResult.isErr()).toBe(true);
+    if (disconnectedGetterResult.isErr()) {
+      expect(disconnectedGetterResult.error).toBeInstanceOf(
+        NexusStoreDisconnectedError,
+      );
+    }
+  });
+
+  it("safeConnectNexusStore handles disconnect-hook subscribe branches", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:disconnect-hook-subscribe-branches"),
+      state: () => ({ count: 0 }),
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    const baseline = {
+      storeInstanceId: "store-disconnect-hook-subscribe-branches",
+      subscriptionId: "sub-disconnect-hook-subscribe-branches",
+      version: 0,
+      state: { count: 0 },
+    };
+
+    const throwingHookService = {
+      subscribe: vi.fn(async () => baseline),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => {
+        throw new Error("disconnect-subscribe-throw");
+      },
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const throwingHookResult = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof throwingHookService) => any) =>
+                next(throwingHookService),
+            }),
+          }) as any,
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(throwingHookResult.isErr()).toBe(true);
+    if (throwingHookResult.isErr()) {
+      expect(throwingHookResult.error).toBeInstanceOf(NexusStoreProtocolError);
+      expect(throwingHookResult.error.message).toBe(
+        "disconnect-subscribe-throw",
+      );
+    }
+
+    const noopHookService = {
+      subscribe: vi.fn(async () => baseline),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => 123,
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const noopHookResult = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof noopHookService) => any) =>
+                next(noopHookService),
+            }),
+          }) as any,
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(noopHookResult.isOk()).toBe(true);
+    if (noopHookResult.isOk()) {
+      noopHookResult.value.destroy();
+    }
+  });
+
+  it("safeConnectNexusStore timeout skips late unsubscribe for non-string subscription id", async () => {
+    const baselineGate = deferred<{
+      storeInstanceId: string;
+      subscriptionId: number;
+      version: number;
+      state: { count: number };
+    }>();
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => baselineGate.promise),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:timeout-non-string-subscription-id"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      { timeout: 10 },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreConnectError);
+      expect(result.error.message).toMatch(/timed out/i);
+    }
+
+    baselineGate.resolve({
+      storeInstanceId: "store-timeout-non-string-subscription-id",
+      subscriptionId: 123,
+      version: 0,
+      state: { count: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(unsubscribe).not.toHaveBeenCalled();
+    });
+  });
+
+  it("connectNexusStore wraps rejected create errors from create-only nexus", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:connect-create-rejects"),
+      state: () => ({ count: 0 }),
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    await expect(
+      connectNexusStore(
+        {
+          create: async () => {
+            throw new Error("create-error-instance");
+          },
+        } as any,
+        definition,
+        {},
+      ),
+    ).rejects.toMatchObject({
+      name: "NexusStoreConnectError",
+      cause: expect.objectContaining({ message: "create-error-instance" }),
+    });
+
+    await expect(
+      connectNexusStore(
+        {
+          create: async () => {
+            throw "create-error-non-instance";
+          },
+        } as any,
+        definition,
+        {},
+      ),
+    ).rejects.toMatchObject({
+      name: "NexusStoreConnectError",
+      cause: expect.objectContaining({ message: "create-error-non-instance" }),
+    });
+  });
+
+  it("safeInvokeStoreAction preserves known store error types", async () => {
+    const disconnected = new NexusStoreDisconnectedError(
+      "already disconnected",
+    );
+    const protocol = new NexusStoreProtocolError("protocol mismatch");
+    const action = new NexusStoreActionError("already wrapped action error");
+
+    const disconnectedResult = await safeInvokeStoreAction(
+      {
+        actions: {
+          run: async () => {
+            throw disconnected;
+          },
+        },
+      } as any,
+      "run",
+      [],
+    );
+    expect(disconnectedResult.isErr()).toBe(true);
+    if (disconnectedResult.isErr()) {
+      expect(disconnectedResult.error).toBe(disconnected);
+    }
+
+    const protocolResult = await safeInvokeStoreAction(
+      {
+        actions: {
+          run: async () => {
+            throw protocol;
+          },
+        },
+      } as any,
+      "run",
+      [],
+    );
+    expect(protocolResult.isErr()).toBe(true);
+    if (protocolResult.isErr()) {
+      expect(protocolResult.error).toBe(protocol);
+    }
+
+    const actionResult = await safeInvokeStoreAction(
+      {
+        actions: {
+          run: async () => {
+            throw action;
+          },
+        },
+      } as any,
+      "run",
+      [],
+    );
+    expect(actionResult.isErr()).toBe(true);
+    if (actionResult.isErr()) {
+      expect(actionResult.error).toBe(action);
+    }
+  });
+
+  it("safeConnectNexusStore rejects invalid connect options refine path", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:connect-invalid-options"),
+      state: () => ({ count: 0 }),
+      actions: () => ({
+        increment: (by: number) => by,
+      }),
+    });
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: vi.fn(),
+      } as any,
+      definition,
+      {
+        target: {} as any,
+      },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreConnectError);
+      expect(result.error.message).toBe("Invalid connect store options.");
+      expect(result.error.cause).toBeDefined();
+    }
+  });
+
+  it("safeConnectNexusStore adapts safeCreate failure to connect error", async () => {
+    const definition = defineNexusStore({
+      token: new Token("state:counter:safe-create-failure"),
+      state: () => ({ count: 0 }),
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    const createFailure = new Error("safeCreate failed");
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () => errAsync(createFailure),
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreConnectError);
+      expect(result.error.message).toBe("Failed to create store proxy.");
+      expect(result.error.cause).toBe(createFailure);
+    }
+  });
+
+  it("safeConnectNexusStore captures synchronous definition.state throw", async () => {
+    const stateError = new Error("state-init-failed");
+    const definition = defineNexusStore({
+      token: new Token("state:counter:state-throw"),
+      state: () => {
+        throw stateError;
+      },
+      actions: () => ({ noop: () => 0 }),
+    });
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (
+                next: (value: NexusStoreServiceContract<any, any>) => any,
+              ) =>
+                next({
+                  subscribe: vi.fn(async () => ({
+                    storeInstanceId: "store-state-throw",
+                    subscriptionId: "sub-state-throw",
+                    version: 0,
+                    state: { count: 0 },
+                  })),
+                  unsubscribe: vi.fn(async () => {}),
+                  dispatch: vi.fn(async () => ({
+                    type: "dispatch-result",
+                    committedVersion: 1,
+                    result: 0,
+                  })),
+                } as NexusStoreServiceContract<any, any>),
+            }),
+          }) as any,
+      } as any,
+      definition,
+      {},
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreProtocolError);
+      expect(result.error.message).toBe("state-init-failed");
+      expect(result.error.cause).toBe(stateError);
+    }
+  });
+
   it("connectNexusStore connects through ordinary Nexus service proxy", async () => {
     const counterStore = defineNexusStore({
       token: new Token("state:counter:connect-api"),
@@ -589,6 +1294,147 @@ describe("state client runtime and connect APIs", () => {
     remote.destroy();
   });
 
+  it("keeps still-matching dynamic-target handle ready on benign identity updates", async () => {
+    type Meta = {
+      context: "background" | "content-script";
+      isActive?: boolean;
+      issueId?: string;
+      url?: string;
+    };
+
+    const definition = defineNexusStore({
+      token: new Token("state:counter:still-matching-dynamic-target"),
+      state: () => ({ count: 0 }),
+      actions: ({ getState, setState }) => ({
+        increment(by: number) {
+          setState({ count: getState().count + by });
+          return getState().count;
+        },
+      }),
+    });
+
+    const registration = provideNexusStore(definition);
+    const network = await createStarNetwork<Meta, { from: string }>({
+      center: {
+        meta: { context: "background" },
+      },
+      leaves: [
+        {
+          meta: {
+            context: "content-script",
+            isActive: true,
+            issueId: "CS-ACTIVE",
+            url: "github.com/issue/a",
+          },
+          services: {
+            [definition.token.id]: registration.implementation,
+          },
+          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        },
+      ],
+    });
+
+    const backgroundNexus = network.get("background")!.nexus;
+    const csNexus = network.get("content-script:CS-ACTIVE")!.nexus;
+
+    const remote = await connectNexusStore(backgroundNexus, definition, {
+      target: {
+        descriptor: { context: "content-script" },
+        matcher: (id: Meta) =>
+          id.context === "content-script" && id.isActive === true,
+      },
+    });
+
+    await remote.actions.increment(1);
+    expect(remote.getState().count).toBe(1);
+
+    await csNexus.updateIdentity({ url: "github.com/issue/a?updated=1" });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(remote.getStatus().type).toBe("ready");
+    await expect(remote.actions.increment(2)).resolves.toBe(3);
+    expect(remote.getState().count).toBe(3);
+
+    remote.destroy();
+  });
+
+  it("marks dynamic-target handle stale when target semantics stop matching", async () => {
+    type Meta = {
+      context: "background" | "content-script";
+      isActive?: boolean;
+      issueId?: string;
+      url?: string;
+    };
+
+    const definition = defineNexusStore({
+      token: new Token("state:counter:dynamic-target-movement"),
+      state: () => ({ count: 0 }),
+      actions: ({ getState, setState }) => ({
+        increment(by: number) {
+          setState({ count: getState().count + by });
+          return getState().count;
+        },
+      }),
+    });
+
+    const registration1 = provideNexusStore(definition);
+    const registration2 = provideNexusStore(definition);
+
+    const network = await createStarNetwork<Meta, { from: string }>({
+      center: {
+        meta: { context: "background" },
+      },
+      leaves: [
+        {
+          meta: {
+            context: "content-script",
+            isActive: true,
+            issueId: "CS-1",
+            url: "github.com/issue/1",
+          },
+          services: {
+            [definition.token.id]: registration1.implementation,
+          },
+          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        },
+        {
+          meta: {
+            context: "content-script",
+            issueId: "CS-2",
+            url: "github.com/issue/2",
+          },
+          services: {
+            [definition.token.id]: registration2.implementation,
+          },
+          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        },
+      ],
+    });
+
+    const backgroundNexus = network.get("background")!.nexus;
+    const cs1Nexus = network.get("content-script:CS-1")!.nexus;
+
+    const remote = await connectNexusStore(backgroundNexus, definition, {
+      target: {
+        descriptor: { context: "content-script" },
+        matcher: (id: Meta) =>
+          id.context === "content-script" && id.isActive === true,
+      },
+    });
+
+    await remote.actions.increment(1);
+    expect(remote.getState().count).toBe(1);
+
+    await cs1Nexus.updateIdentity({ isActive: false });
+
+    await vi.waitFor(() => {
+      expect(remote.getStatus().type).toBe("stale");
+    });
+    await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+  });
+
   it("safeConnectNexusStore returns ResultAsync", async () => {
     const definition = createCounterDefinition();
     const registration = provideNexusStore(definition);
@@ -621,6 +1467,105 @@ describe("state client runtime and connect APIs", () => {
     }
   });
 
+  it("connect path rejects non-object state payload without explicit validation schema", async () => {
+    const remoteResult = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (
+                next: (value: NexusStoreServiceContract<any, any>) => any,
+              ) =>
+                next({
+                  subscribe: vi.fn(async () => ({
+                    storeInstanceId: "store-invalid-state-shape",
+                    subscriptionId: "sub-invalid-state-shape",
+                    version: 0,
+                    state: 42,
+                  })),
+                  unsubscribe: vi.fn(async () => {}),
+                  dispatch: vi.fn(async () => ({
+                    type: "dispatch-result",
+                    committedVersion: 1,
+                    result: 0,
+                  })),
+                } as NexusStoreServiceContract<any, any>),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:invalid-state-shape"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      {},
+    );
+
+    expect(remoteResult.isErr()).toBe(true);
+    if (remoteResult.isErr()) {
+      expect(remoteResult.error).toBeInstanceOf(NexusStoreProtocolError);
+      expect(remoteResult.error.message).toMatch(/state payload/i);
+    }
+  });
+
+  it("connect path validates state and action result payloads when schemas are provided", async () => {
+    let onSync!: (event: unknown) => void;
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-validated-runtime",
+          subscriptionId: "sub-validated-runtime",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: "invalid-result",
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:validated-runtime"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+        validation: {
+          state: z.object({ count: z.number().int().nonnegative() }),
+          actionResults: {
+            increment: z.number().int().nonnegative(),
+          },
+        },
+      }),
+      {},
+    );
+
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+
+    onSync({
+      type: "snapshot",
+      storeInstanceId: "store-validated-runtime",
+      version: 2,
+      state: { count: -1 },
+    });
+
+    expect(remote.getStatus().type).toBe("disconnected");
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+  });
+
   it("handles callback-before-subscribe-return ordering without rollback", async () => {
     const events: Array<(event: any) => void> = [];
     const service = {
@@ -646,7 +1591,7 @@ describe("state client runtime and connect APIs", () => {
         committedVersion: 1,
         result: 1,
       })),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { increment(by: number): number }
     >;
@@ -695,7 +1640,7 @@ describe("state client runtime and connect APIs", () => {
         committedVersion: 2,
         result: 0,
       })),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { noop(): number }
     >;
@@ -801,7 +1746,7 @@ describe("state client runtime and connect APIs", () => {
         committedVersion: 1,
         result: 0,
       })),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { noop(): number }
     >;
@@ -882,7 +1827,7 @@ describe("state client runtime and connect APIs", () => {
           result: version,
         };
       }),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { increment(): number }
     >;
@@ -950,7 +1895,7 @@ describe("state client runtime and connect APIs", () => {
           result: "second",
         };
       }),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { first(): string; second(): string }
     >;
@@ -1056,6 +2001,123 @@ describe("state client runtime and connect APIs", () => {
     );
   });
 
+  it("times out action commit wait when committedVersion snapshot never arrives", async () => {
+    const service = {
+      subscribe: vi.fn(async (_callback: (event: unknown) => void) => {
+        return {
+          storeInstanceId: "store-missing-commit-snapshot",
+          subscriptionId: "sub-missing-commit-snapshot",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 2,
+        result: 2,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remoteEntity = new RemoteStoreEntity<
+      { count: number },
+      { increment(): number }
+    >(service, { count: 0 }, undefined, { actionCommitTimeoutMs: 30 });
+
+    const baseline = await service.subscribe((event) => {
+      remoteEntity.onSync(event);
+    });
+    remoteEntity.completeHandshake(baseline);
+
+    await expect(remoteEntity.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+    expect(remoteEntity.getStatus().type).toBe("disconnected");
+
+    await expect(remoteEntity.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+  });
+
+  it("safeConnectNexusStore subscribes and reacts to target-stale hook", async () => {
+    const cleanupDisconnect = vi.fn();
+    const cleanupTargetStale = vi.fn();
+    let emitTargetStale!: () => void;
+
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-target-stale-hook",
+        subscriptionId: "sub-target-stale-hook",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 1,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: vi.fn(
+        () => cleanupDisconnect,
+      ),
+      [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: vi.fn(
+        (callback: () => void) => {
+          emitTargetStale = callback;
+          return cleanupTargetStale;
+        },
+      ),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    > & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+      [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:target-stale-hook"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      {},
+    );
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) {
+      return;
+    }
+
+    const remote = result.value;
+    expect(remote.getStatus().type).toBe("ready");
+
+    expect(emitTargetStale).toBeTypeOf("function");
+    emitTargetStale();
+
+    expect(remote.getStatus().type).toBe("stale");
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+
+    expect(cleanupDisconnect).toHaveBeenCalledTimes(1);
+    expect(cleanupTargetStale).toHaveBeenCalledTimes(1);
+  });
+
   it("safeInvokeStoreAction preserves typed args/result and safe error union", async () => {
     type CounterState = { count: number };
     type CounterActions = {
@@ -1094,7 +2156,7 @@ describe("state client runtime and connect APIs", () => {
           result: { count: version },
         };
       }),
-    } satisfies NexusStoreServiceContract<CounterState, CounterActions>;
+    } as unknown as NexusStoreServiceContract<CounterState, CounterActions>;
 
     const remote = await connectNexusStore(
       {
@@ -1125,6 +2187,265 @@ describe("state client runtime and connect APIs", () => {
     >();
   });
 
+  it("safeInvokeStoreAction wraps unknown action errors as NexusStoreActionError", async () => {
+    const remoteStore = {
+      actions: {
+        increment: vi.fn(async () => {
+          throw "raw-error";
+        }),
+      },
+    } as unknown as {
+      actions: {
+        increment(by: number): Promise<number>;
+      };
+    };
+
+    const result = await safeInvokeStoreAction(
+      remoteStore as any,
+      "increment",
+      [1],
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreActionError);
+      expect(result.error.message).toBe("Store action failed.");
+      expect(result.error.cause).toBe("raw-error");
+    }
+  });
+
+  it("safeInvokeStoreAction captures throwy action property access", async () => {
+    const accessError = new Error("action-getter-throw");
+    const remoteStore = {
+      get actions() {
+        throw accessError;
+      },
+    } as unknown as {
+      actions: {
+        increment(by: number): Promise<number>;
+      };
+    };
+
+    const result = await safeInvokeStoreAction(
+      remoteStore as any,
+      "increment",
+      [1],
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreActionError);
+      expect(result.error.message).toBe("Store action failed.");
+      expect(result.error.cause).toBe(accessError);
+    }
+  });
+
+  it("safeInvokeStoreAction captures throwy action getter invocation", async () => {
+    const invokeError = new Error("action-invoke-throw");
+    const actions = {} as Record<string, unknown>;
+    Object.defineProperty(actions, "increment", {
+      get() {
+        throw invokeError;
+      },
+    });
+
+    const remoteStore = {
+      actions,
+    } as unknown as {
+      actions: {
+        increment(by: number): Promise<number>;
+      };
+    };
+
+    const result = await safeInvokeStoreAction(
+      remoteStore as any,
+      "increment",
+      [1],
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreActionError);
+      expect(result.error.message).toBe("Store action failed.");
+      expect(result.error.cause).toBe(invokeError);
+    }
+  });
+
+  it("remote action path captures sync dispatch throw and untrusted parse throws", async () => {
+    const dispatchThrow = new Error("dispatch-sync-throw");
+    const parseThrow = new Error("dispatch-parse-throw");
+    let dispatchCalls = 0;
+
+    const service = {
+      subscribe: vi.fn(async () => {
+        return {
+          storeInstanceId: "store-throwy-dispatch",
+          subscriptionId: "sub-throwy-dispatch",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(() => {
+        dispatchCalls += 1;
+        if (dispatchCalls === 1) {
+          throw dispatchThrow;
+        }
+
+        return Promise.resolve({
+          type: "dispatch-result",
+          get committedVersion() {
+            throw parseThrow;
+          },
+          result: 1,
+        });
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:throwy-dispatch-capture"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    await expect(remote.actions.increment()).rejects.toMatchObject({
+      name: "NexusStoreActionError",
+      cause: dispatchThrow,
+    } satisfies Partial<NexusStoreActionError>);
+
+    await expect(remote.actions.increment()).rejects.toMatchObject({
+      name: "NexusStoreProtocolError",
+      cause: parseThrow,
+    } satisfies Partial<NexusStoreProtocolError>);
+  });
+
+  it("keeps business errors with disconnect-like words as action errors", async () => {
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-business-disconnect-words",
+        subscriptionId: "sub-business-disconnect-words",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => {
+        throw new Error(
+          "business validation failed: connection quota exceeded",
+        );
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:business-disconnect-words"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    await expect(remote.actions.increment()).rejects.toMatchObject({
+      name: "NexusStoreActionError",
+      cause: expect.objectContaining({
+        message: "business validation failed: connection quota exceeded",
+      }),
+    } satisfies Partial<NexusStoreActionError>);
+    expect(remote.getStatus().type).toBe("ready");
+  });
+
+  it("does not terminalize handle for business errors that mention disconnect", async () => {
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-business-disconnect-wording",
+        subscriptionId: "sub-business-disconnect-wording",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => {
+        throw new Error(
+          "business rule rejected: disconnect from billing connection policy",
+        );
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:business-disconnect-wording"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    await expect(remote.actions.increment()).rejects.toMatchObject({
+      name: "NexusStoreActionError",
+      cause: expect.objectContaining({
+        message:
+          "business rule rejected: disconnect from billing connection policy",
+      }),
+    } satisfies Partial<NexusStoreActionError>);
+    expect(remote.getStatus().type).toBe("ready");
+  });
+
+  it("keeps structured disconnect classification for code-tagged transport errors", async () => {
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-coded-disconnect",
+        subscriptionId: "sub-coded-disconnect",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => {
+        throw Object.assign(new Error("transport channel dropped"), {
+          code: "E_STORE_DISCONNECTED",
+        });
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:coded-disconnect"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+    expect(remote.getStatus().type).toBe("disconnected");
+  });
+
   it("safeConnectNexusStore preserves handshake failure classification and cause", async () => {
     const disconnectedCause = new NexusStoreDisconnectedError(
       "socket dropped during subscribe",
@@ -1140,7 +2461,7 @@ describe("state client runtime and connect APIs", () => {
         committedVersion: 1,
         result: 0,
       })),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { noop(): number }
     >;
@@ -1184,7 +2505,7 @@ describe("state client runtime and connect APIs", () => {
         committedVersion: 1,
         result: 0,
       })),
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { noop(): number }
     >;
@@ -1211,6 +2532,60 @@ describe("state client runtime and connect APIs", () => {
     if (malformedResult.isErr()) {
       expect(malformedResult.error).toBeInstanceOf(NexusStoreProtocolError);
       expect(malformedResult.error.cause).toBeDefined();
+    }
+  });
+
+  it("safeConnectNexusStore classifies stale-during-handshake as disconnected", async () => {
+    const staleDuringHandshakeService = {
+      subscribe: vi.fn(async (onSync: (event: unknown) => void) => {
+        onSync({
+          type: "snapshot",
+          storeInstanceId: "store-stale-event",
+          version: 1,
+          state: { count: 1 },
+        });
+
+        return {
+          storeInstanceId: "store-baseline",
+          subscriptionId: "sub-stale-during-handshake",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (
+                next: (value: typeof staleDuringHandshakeService) => any,
+              ) => next(staleDuringHandshakeService),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:stale-during-handshake"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreDisconnectedError);
+      expect(result.error.message).toMatch(/stale/i);
     }
   });
 
@@ -1253,6 +2628,232 @@ describe("state client runtime and connect APIs", () => {
       expect(timedOut.error).toBeInstanceOf(NexusStoreConnectError);
       expect(timedOut.error.message).toMatch(/timed out/i);
     }
+  });
+
+  it("safeConnectNexusStore timeout cleans up late baseline and disconnect hook", async () => {
+    const baselineGate = deferred<{
+      storeInstanceId: string;
+      subscriptionId: string;
+      version: number;
+      state: { count: number };
+    }>();
+    const cleanupDisconnect = vi.fn();
+    const subscribeDisconnect = vi.fn(() => cleanupDisconnect);
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => baselineGate.promise),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: subscribeDisconnect,
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    > & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:handshake-timeout-cleanup"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      { timeout: 10 },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreConnectError);
+      expect(result.error.message).toMatch(/timed out/i);
+    }
+
+    baselineGate.resolve({
+      storeInstanceId: "store-timeout-cleanup",
+      subscriptionId: "sub-timeout-cleanup",
+      version: 0,
+      state: { count: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(cleanupDisconnect).toHaveBeenCalledTimes(1);
+      expect(unsubscribe).toHaveBeenCalledWith("sub-timeout-cleanup");
+    });
+  });
+
+  it("safeConnectNexusStore malformed baseline cleans up subscription and disconnect hook", async () => {
+    const cleanupDisconnect = vi.fn();
+    const subscribeDisconnect = vi.fn(() => cleanupDisconnect);
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-bad-baseline-cleanup",
+        subscriptionId: "sub-bad-baseline-cleanup",
+        version: "invalid",
+        state: { count: 0 },
+      })),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: subscribeDisconnect,
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    > & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:bad-baseline-cleanup"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      {},
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreProtocolError);
+    }
+
+    expect(unsubscribe).toHaveBeenCalledWith("sub-bad-baseline-cleanup");
+    expect(cleanupDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("safeConnectNexusStore classifies throwy baseline getters as protocol errors", async () => {
+    const parseThrow = new Error("baseline-getter-throw");
+    const cleanupDisconnect = vi.fn();
+    const subscribeDisconnect = vi.fn(() => cleanupDisconnect);
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-throwy-baseline",
+        subscriptionId: "sub-throwy-baseline",
+        get version() {
+          throw parseThrow;
+        },
+        state: { count: 0 },
+      })),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: subscribeDisconnect,
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    > & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:throwy-baseline-cleanup"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      {},
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreProtocolError);
+      expect(result.error.cause).toBe(parseThrow);
+    }
+
+    expect(unsubscribe).toHaveBeenCalledWith("sub-throwy-baseline");
+    expect(cleanupDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("safeConnectNexusStore early subscribe rejection cleans disconnect hook without unsubscribe leak", async () => {
+    const cleanupDisconnect = vi.fn();
+    const subscribeDisconnect = vi.fn(() => cleanupDisconnect);
+    const unsubscribe = vi.fn(async () => {});
+    const rejection = new Error("subscribe rejected early");
+    const service = {
+      subscribe: vi.fn(async () => {
+        throw rejection;
+      }),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: subscribeDisconnect,
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    > & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:early-reject-cleanup"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      {},
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreProtocolError);
+      expect(result.error.message).toBe("subscribe rejected early");
+      expect(result.error.cause).toBe(rejection);
+    }
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+    expect(cleanupDisconnect).toHaveBeenCalledTimes(1);
   });
 
   it("disconnect behavior composes with host cleanup capability", async () => {
@@ -1337,7 +2938,7 @@ describe("state client runtime and connect APIs", () => {
         emitDisconnect = callback;
         return () => undefined;
       },
-    } satisfies NexusStoreServiceContract<
+    } as unknown as NexusStoreServiceContract<
       { count: number },
       { increment(by: number): number }
     > & {
@@ -1367,5 +2968,107 @@ describe("state client runtime and connect APIs", () => {
     await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(
       NexusStoreDisconnectedError,
     );
+  });
+
+  it("remote action path classifies throwy snapshot getters as protocol disconnect", async () => {
+    const parseThrow = new Error("snapshot-getter-throw");
+    let onSync!: (event: unknown) => void;
+
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-throwy-snapshot",
+          subscriptionId: "sub-throwy-snapshot",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => {
+        onSync({
+          type: "snapshot",
+          get storeInstanceId() {
+            throw parseThrow;
+          },
+          version: 1,
+          state: { count: 1 },
+        });
+
+        return {
+          type: "dispatch-result",
+          committedVersion: 1,
+          result: 1,
+        };
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(by: number): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:throwy-snapshot-disconnect"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: (by: number) => by }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+    await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(
+      NexusStoreProtocolError,
+    );
+    expect(remote.getStatus().type).toBe("disconnected");
+  });
+});
+
+describe("state error normalization", () => {
+  it("normalizeNexusStoreError preserves existing store errors", () => {
+    const existing = new NexusStoreActionError("existing");
+    const normalized = normalizeNexusStoreError(existing);
+
+    expect(normalized).toBe(existing);
+  });
+
+  it("normalizeNexusStoreError adapts Error and unknown values", () => {
+    const error = new Error("boom-normalize");
+    const normalizedError = normalizeNexusStoreError(error);
+    expect(normalizedError).toBeInstanceOf(NexusStoreProtocolError);
+    expect(normalizedError.message).toBe("boom-normalize");
+    expect(normalizedError.cause).toBe(error);
+
+    const normalizedUnknown = normalizeNexusStoreError(42);
+    expect(normalizedUnknown).toBeInstanceOf(NexusStoreProtocolError);
+    expect(normalizedUnknown.message).toBe("Unknown store error");
+    expect(normalizedUnknown.cause).toBe(42);
+  });
+
+  it("normalizeNexusStoreError maps core disconnect-coded errors", () => {
+    const coreDisconnectLike = Object.assign(new Error("conn closed"), {
+      code: "E_CONN_CLOSED",
+    });
+
+    const normalized = normalizeNexusStoreError(coreDisconnectLike);
+    expect(normalized).toBeInstanceOf(NexusStoreDisconnectedError);
+    expect(normalized.message).toBe("conn closed");
+    expect(normalized.cause).toBe(coreDisconnectLike);
+  });
+
+  it("state error base carries code, context, and cause", () => {
+    const cause = new Error("cause");
+    const error = new NexusStoreError("store-error", "E_STORE_PROTOCOL", {
+      cause,
+      context: { operation: "subscribe" },
+    });
+
+    expect(error.code).toBe("E_STORE_PROTOCOL");
+    expect(error.context).toEqual({ operation: "subscribe" });
+    expect(error.cause).toBe(cause);
   });
 });

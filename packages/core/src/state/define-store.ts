@@ -6,6 +6,7 @@ import type { UserMetadata } from "@/types/identity";
 import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
+  NexusStoreValidationSchemas,
   StoreActionHelpers,
 } from "./types";
 import { createTargetCriteriaSchema } from "./target-schema";
@@ -26,6 +27,27 @@ export const DefineNexusStoreSchema = z.object({
       mode: z.literal("snapshot").optional(),
     })
     .optional(),
+  validation: z
+    .object({
+      state: z
+        .custom<{
+          safeParse: (value: unknown) => { success: boolean };
+        }>((value) => typeof value === "object" && value !== null && typeof (value as { safeParse?: unknown }).safeParse === "function")
+        .optional(),
+      actionResults: z
+        .record(
+          z.string(),
+          z.custom<{ safeParse: (value: unknown) => { success: boolean } }>(
+            (value) =>
+              typeof value === "object" &&
+              value !== null &&
+              typeof (value as { safeParse?: unknown }).safeParse ===
+                "function",
+          ),
+        )
+        .optional(),
+    })
+    .optional(),
 });
 
 export type DefineNexusStoreSchemaInput = z.input<
@@ -40,12 +62,13 @@ export type DefineNexusStoreOptions<
   D extends string = string,
 > = Omit<
   DefineNexusStoreSchemaInput,
-  "token" | "state" | "actions" | "defaultTarget"
+  "token" | "state" | "actions" | "defaultTarget" | "validation"
 > & {
   token: Token<NexusStoreServiceContract<TState, TActions>>;
   state: () => TState;
   actions: (helpers: StoreActionHelpers<TState>) => TActions;
   defaultTarget?: CreateOptions<U, M, D>["target"];
+  validation?: NexusStoreValidationSchemas<TState, TActions>;
 };
 
 const normalizeTokenDefaultTarget = <
@@ -93,5 +116,6 @@ export const defineNexusStore = <
     state: options.state,
     actions: options.actions,
     sync: options.sync,
+    validation: options.validation,
   };
 };

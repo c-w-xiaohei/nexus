@@ -7,8 +7,11 @@ import type {
   ActionResult,
   ConnectNexusStoreOptions,
   NexusStoreDefinition,
+  RemoteActions,
+  RemoteStore,
   RemoteStoreStatus,
 } from "./index";
+import { z } from "zod";
 
 describe("state protocol schemas", () => {
   it("requires subscribe baseline envelope fields", async () => {
@@ -65,6 +68,24 @@ describe("state protocol schemas", () => {
     expect(invalidArgs.success).toBe(false);
   });
 
+  it("validates dispatch result envelope", async () => {
+    const protocol = await import("./protocol");
+    const valid = protocol.DispatchResultEnvelopeSchema.safeParse({
+      type: "dispatch-result",
+      committedVersion: 1,
+      result: { count: 1 },
+    });
+    expect(valid.success).toBe(true);
+
+    const invalidCommittedVersion =
+      protocol.DispatchResultEnvelopeSchema.safeParse({
+        type: "dispatch-result",
+        committedVersion: "1",
+        result: { count: 1 },
+      });
+    expect(invalidCommittedVersion.success).toBe(false);
+  });
+
   it("provides schema boundary for connect options", async () => {
     const protocol = await import("./protocol");
     const valid = protocol.ConnectNexusStoreOptionsSchema.safeParse({
@@ -91,6 +112,9 @@ describe("state protocol schemas", () => {
     );
     expect(
       (state as Record<string, unknown>).DispatchRequestEnvelopeSchema,
+    ).toBe(undefined);
+    expect(
+      (state as Record<string, unknown>).DispatchResultEnvelopeSchema,
     ).toBe(undefined);
   });
 });
@@ -226,11 +250,11 @@ describe("state public types", () => {
     type CounterActions = { inc(by?: number): Promise<void> };
 
     expectTypeOf<
-      NexusStoreDefinition<CounterState, CounterActions>
-    >().toMatchTypeOf<{
-      state: () => CounterState;
-      actions: (helpers: unknown) => CounterActions;
-    }>();
+      NexusStoreDefinition<CounterState, CounterActions>["state"]
+    >().toEqualTypeOf<() => CounterState>();
+    expectTypeOf<
+      ReturnType<NexusStoreDefinition<CounterState, CounterActions>["actions"]>
+    >().toEqualTypeOf<CounterActions>();
 
     type HasDefaultTarget = "defaultTarget" extends keyof NexusStoreDefinition<
       CounterState,
@@ -240,6 +264,22 @@ describe("state public types", () => {
       : false;
 
     expectTypeOf<HasDefaultTarget>().toEqualTypeOf<false>();
+  });
+
+  it("types remote actions as promise-returning regardless of author action sync/async style", () => {
+    type CounterActions = {
+      increment(by: number): number;
+      reset(): Promise<void>;
+    };
+
+    expectTypeOf<RemoteActions<CounterActions>>().toMatchTypeOf<{
+      increment(by: number): Promise<number>;
+      reset(): Promise<void>;
+    }>();
+
+    expectTypeOf<
+      RemoteStore<{ count: number }, CounterActions>["actions"]
+    >().toEqualTypeOf<RemoteActions<CounterActions>>();
   });
 
   it("infers action argument and result types", () => {
@@ -294,5 +334,30 @@ describe("state public types", () => {
     expect(
       (state as Record<string, unknown>).NEXUS_MARK_REMOTE_STORE_STALE_SYMBOL,
     ).toBe(undefined);
+  });
+
+  it("supports optional validation schemas in store definitions", () => {
+    type CounterState = { count: number };
+    type CounterActions = {
+      increment(by: number): number;
+      reset(): Promise<void>;
+    };
+
+    expectTypeOf<
+      NonNullable<
+        NexusStoreDefinition<CounterState, CounterActions>["validation"]
+      >["state"]
+    >().toEqualTypeOf<z.ZodType<CounterState> | undefined>();
+    expectTypeOf<
+      NonNullable<
+        NexusStoreDefinition<CounterState, CounterActions>["validation"]
+      >["actionResults"]
+    >().toEqualTypeOf<
+      | {
+          increment?: z.ZodType<number>;
+          reset?: z.ZodType<void>;
+        }
+      | undefined
+    >();
   });
 });

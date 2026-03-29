@@ -18,14 +18,9 @@ export const provideNexusStore = <
 
   const implementation: NexusStoreServiceContract<TState, TActions> = {
     subscribe: async (onSync, invocation?: ServiceInvocationContext) => {
-      const baseline = await host.subscribe(onSync);
-      if (invocation?.sourceConnectionId) {
-        host.bindSubscriptionToConnection(
-          baseline.subscriptionId,
-          invocation.sourceConnectionId,
-        );
-      }
-      return baseline;
+      return host.subscribe(onSync, {
+        ownerConnectionId: host.resolveSubscriptionOwner(invocation),
+      });
     },
     unsubscribe: (subscriptionId) => host.unsubscribe(subscriptionId),
     dispatch: (action, args) => host.dispatch(action, args),
@@ -42,10 +37,11 @@ export const provideNexusStore = <
     [SERVICE_ON_DISCONNECT](connectionId: string): void;
   };
 
-  implementationWithHooks[SERVICE_INVOKE_START] = (sourceConnectionId) => {
-    return { sourceConnectionId };
+  implementationWithHooks[SERVICE_INVOKE_START] = (sourceConnectionId) =>
+    host.onInvokeStart(sourceConnectionId);
+  implementationWithHooks[SERVICE_INVOKE_END] = (invocationContext) => {
+    host.onInvokeEnd(invocationContext);
   };
-  implementationWithHooks[SERVICE_INVOKE_END] = () => undefined;
   implementationWithHooks[SERVICE_ON_DISCONNECT] = (connectionId) => {
     host.cleanupConnection(connectionId);
   };

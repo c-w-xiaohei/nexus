@@ -1,6 +1,7 @@
 import type { Token } from "@/api/token";
 import type { CreateOptions } from "@/api/types/config";
 import type { UserMetadata } from "@/types/identity";
+import type { ZodType } from "zod";
 import type {
   ConnectNexusStoreOptionsInput,
   DispatchResultEnvelope,
@@ -21,6 +22,22 @@ export type ActionResult<
 > = TActions[K] extends (...args: any[]) => infer TResult
   ? Awaited<TResult>
   : never;
+
+export type RemoteActions<TActions extends Record<string, ActionFunction>> = {
+  [K in keyof TActions]: (
+    ...args: Parameters<TActions[K]>
+  ) => Promise<Awaited<ReturnType<TActions[K]>>>;
+};
+
+export type NexusStoreValidationSchemas<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+> = {
+  state?: ZodType<TState>;
+  actionResults?: {
+    [K in keyof TActions]?: ZodType<ActionResult<TActions, K>>;
+  };
+};
 
 export interface StoreActionHelpers<TState extends object> {
   getState(): TState;
@@ -58,6 +75,7 @@ export interface NexusStoreDefinition<
   sync?: {
     mode?: "snapshot";
   };
+  validation?: NexusStoreValidationSchemas<TState, TActions>;
 }
 
 export type RemoteStoreStatus =
@@ -83,7 +101,7 @@ export interface RemoteStore<
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
   destroy(): void;
-  readonly actions: TActions;
+  readonly actions: RemoteActions<TActions>;
 }
 
 export interface ConnectNexusStoreOptions<

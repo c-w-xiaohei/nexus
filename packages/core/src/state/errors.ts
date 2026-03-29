@@ -12,6 +12,7 @@ export interface NexusStoreErrorOptions {
 export class NexusStoreError extends Error {
   public readonly code: NexusStoreErrorCode;
   public readonly context?: Record<string, unknown>;
+  public readonly cause?: unknown;
 
   constructor(
     message: string,
@@ -22,6 +23,11 @@ export class NexusStoreError extends Error {
     this.name = this.constructor.name;
     this.code = code;
     this.context = options.context;
+    this.cause = options.cause;
+
+    if (typeof Error.captureStackTrace === "function") {
+      Error.captureStackTrace(this, this.constructor);
+    }
   }
 }
 
@@ -52,6 +58,14 @@ export class NexusStoreProtocolError extends NexusStoreError {
 export const normalizeNexusStoreError = (error: unknown): NexusStoreError => {
   if (error instanceof NexusStoreError) {
     return error;
+  }
+
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "E_CONN_CLOSED"
+  ) {
+    return new NexusStoreDisconnectedError(error.message, { cause: error });
   }
 
   if (error instanceof Error) {

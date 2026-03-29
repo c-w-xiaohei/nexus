@@ -1,7 +1,7 @@
 import type { UserMetadata } from "../types/identity";
 import type { DispatchCallOptions } from "./engine";
 import type { ResourceManager } from "./resource-manager";
-import type { CallTarget } from "@/connection/types";
+import type { CallTarget, ResolveOptions } from "@/connection/types";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { Logger } from "@/logger";
 import type { ResultAsync } from "neverthrow";
@@ -24,6 +24,7 @@ const INTERNAL_PROXY_PROPERTIES = new Set([
  */
 export interface CreateProxyOptions<U extends UserMetadata> {
   target: CallTarget<U, any>;
+  staleTarget?: Pick<ResolveOptions<U, any>, "descriptor" | "matcher">;
   strategy?: "one" | "first" | "all" | "stream";
   timeout?: number;
   broadcastOptions?: {
@@ -73,6 +74,7 @@ export class ProxyFactory<U extends UserMetadata> {
   ) {
     this.releaseRegistry = new FinalizationRegistry(
       ({ resourceId, connectionId }) => {
+        this.resourceManager.releaseRemoteProxy(resourceId);
         this.engine.dispatchRelease(resourceId, connectionId);
       },
     );
@@ -235,12 +237,21 @@ export class ProxyFactory<U extends UserMetadata> {
     resourceId: string,
     sourceConnectionId: string,
   ): object {
+    let released = false;
+    const release = (): void => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.resourceManager.releaseRemoteProxy(resourceId);
+      this.engine.dispatchRelease(resourceId, sourceConnectionId);
+    };
+
     const rootProxy = this.createChainableProxy({
       basePath: [],
       thenableFromPathLength: 1,
       hasSetter: true,
-      onRelease: () =>
-        this.engine.dispatchRelease(resourceId, sourceConnectionId),
+      onRelease: release,
       buildCallOptions: (
         type: "GET" | "SET" | "APPLY",
         path: (string | number)[],

@@ -3,7 +3,14 @@ import {
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
 } from "../errors";
-import { ResultAsync, err, errAsync, ok, type Result } from "neverthrow";
+import {
+  Result,
+  ResultAsync,
+  err,
+  errAsync,
+  ok,
+  type Result as R,
+} from "neverthrow";
 import {
   DispatchResultEnvelopeSchema,
   SnapshotEnvelopeSchema,
@@ -12,8 +19,10 @@ import {
 import type {
   ActionArgs,
   ActionResult,
+  NexusStoreValidationSchemas,
   NexusStoreServiceContract,
   RemoteStore,
+  RemoteActions,
   RemoteStoreStatus,
 } from "../types";
 import { createMirrorStore, type MirrorStore } from "./mirror-store";
@@ -25,7 +34,14 @@ interface VersionWaiter {
   readonly isSatisfied: (version: number) => boolean;
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
+
+interface RemoteStoreEntityOptions {
+  readonly actionCommitTimeoutMs?: number;
+}
+
+const DEFAULT_ACTION_COMMIT_TIMEOUT_MS = 30000;
 
 const createDisconnectedError = (
   message: string,
@@ -33,18 +49,25 @@ const createDisconnectedError = (
 ): NexusStoreDisconnectedError =>
   new NexusStoreDisconnectedError(message, cause ? { cause } : undefined);
 
-const isDisconnectLikeError = (error: unknown): boolean => {
+const hasDisconnectErrorCode = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return code === "E_CONN_CLOSED" || code === "E_STORE_DISCONNECTED";
+};
+
+const isStructuredDisconnectError = (error: unknown): boolean => {
   if (error instanceof NexusStoreDisconnectedError) {
     return true;
   }
 
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const signature = `${error.name}:${error.message}`.toLowerCase();
-  return signature.includes("disconnect") || signature.includes("connection");
+  return hasDisconnectErrorCode(error);
 };
+
+const isObjectLike = (value: unknown): value is object =>
+  typeof value === "object" && value !== null;
 
 export class RemoteStoreEntity<
   TState extends object,
@@ -55,7 +78,9 @@ export class RemoteStoreEntity<
   }
 
   private readonly mirror: MirrorStore<TState>;
-  private readonly actionProxy: TActions;
+  private readonly actionProxy: RemoteActions<TActions>;
+  private readonly validation?: NexusStoreValidationSchemas<TState, TActions>;
+  private readonly actionCommitTimeoutMs: number;
   private status: RemoteStoreStatus = { type: "initializing" };
   private readonly pendingEvents: Array<{
     type: "snapshot";
@@ -74,12 +99,17 @@ export class RemoteStoreEntity<
   private unsubscribeRequested = false;
   private handshakeCompleted = false;
   private terminal = false;
-  private cleanupDisconnectSubscription: (() => void) | null = null;
+  private readonly transportCleanupCallbacks = new Set<() => void>();
 
   constructor(
     private readonly service: NexusStoreServiceContract<TState, TActions>,
     initialState: TState,
+    validation?: NexusStoreValidationSchemas<TState, TActions>,
+    options: RemoteStoreEntityOptions = {},
   ) {
+    this.validation = validation;
+    this.actionCommitTimeoutMs =
+      options.actionCommitTimeoutMs ?? DEFAULT_ACTION_COMMIT_TIMEOUT_MS;
     this.mirror = createMirrorStore({ initialState });
 
     this.actionProxy = new Proxy(
@@ -91,16 +121,16 @@ export class RemoteStoreEntity<
           }
 
           return (...args: unknown[]) =>
-            this.invokeAction(
+            this.invokeActionOrThrow(
               propertyKey as keyof TActions & string,
               args as any,
             );
         },
       },
-    ) as TActions;
+    ) as RemoteActions<TActions>;
   }
 
-  public get actions(): TActions {
+  public get actions(): RemoteActions<TActions> {
     return this.actionProxy;
   }
 
@@ -140,20 +170,13 @@ export class RemoteStoreEntity<
       void this.service.unsubscribe(this.subscriptionId).catch(() => undefined);
     }
 
-    if (this.cleanupDisconnectSubscription) {
-      this.cleanupDisconnectSubscription();
-      this.cleanupDisconnectSubscription = null;
-    }
+    this.runTransportCleanup();
 
     this.mirror.destroy();
   }
 
   public setDisconnectSubscriptionCleanup(cleanup: () => void): void {
-    if (this.cleanupDisconnectSubscription) {
-      this.cleanupDisconnectSubscription();
-    }
-
-    this.cleanupDisconnectSubscription = cleanup;
+    this.transportCleanupCallbacks.add(cleanup);
   }
 
   public onTransportDisconnect(message: string): void {
@@ -179,10 +202,7 @@ export class RemoteStoreEntity<
     this.rejectAllVersionWaiters(staleError);
     this.tryUnsubscribeBestEffort();
 
-    if (this.cleanupDisconnectSubscription) {
-      this.cleanupDisconnectSubscription();
-      this.cleanupDisconnectSubscription = null;
-    }
+    this.runTransportCleanup();
   }
 
   public onSync(event: unknown): void {
@@ -239,13 +259,13 @@ export class RemoteStoreEntity<
   public safeInvokeAction<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
-  ): Promise<ActionResult<TActions, K>> {
-    return this.invokeAction(action, args);
+  ): ResultAsync<ActionResult<TActions, K>, Error> {
+    return this.safeInvokeActionResult(action, args);
   }
 
   // ===== Action =====
 
-  private async invokeAction<K extends keyof TActions & string>(
+  private async invokeActionOrThrow<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
   ): Promise<ActionResult<TActions, K>> {
@@ -267,17 +287,37 @@ export class RemoteStoreEntity<
       readiness.isErr()
         ? errAsync(readiness.error)
         : ResultAsync.fromPromise(
-            this.service.dispatch(action, args),
+            Result.fromThrowable(
+              () => {
+                const dispatch = this.service.dispatch;
+                return dispatch(action, args);
+              },
+              (error) => error,
+            )().match(
+              (promise) => promise,
+              (error) => Promise.reject(error),
+            ),
             (error) => error,
           )
     )
       .andThen((dispatchResult) => {
-        const parsed = this.safeParseDispatchResult<K>(dispatchResult);
+        const parsed = Result.fromThrowable(
+          () => this.safeParseDispatchResult<K>(action, dispatchResult),
+          (error) => error,
+        )();
+
         if (parsed.isErr()) {
           return errAsync(parsed.error);
         }
 
-        return ResultAsync.fromSafePromise(Promise.resolve(parsed.value));
+        if (parsed.value.isErr()) {
+          return errAsync(parsed.value.error);
+        }
+
+        return ResultAsync.fromPromise(
+          Promise.resolve(parsed.value.value),
+          (error) => error,
+        );
       })
       .andThen((payload) =>
         ResultAsync.fromPromise(
@@ -388,10 +428,7 @@ export class RemoteStoreEntity<
     this.rejectAllVersionWaiters(error);
     this.tryUnsubscribeBestEffort();
 
-    if (this.cleanupDisconnectSubscription) {
-      this.cleanupDisconnectSubscription();
-      this.cleanupDisconnectSubscription = null;
-    }
+    this.runTransportCleanup();
   }
 
   private transitionToDisconnected(error: NexusStoreDisconnectedError): void {
@@ -409,10 +446,7 @@ export class RemoteStoreEntity<
     this.rejectAllVersionWaiters(error);
     this.tryUnsubscribeBestEffort();
 
-    if (this.cleanupDisconnectSubscription) {
-      this.cleanupDisconnectSubscription();
-      this.cleanupDisconnectSubscription = null;
-    }
+    this.runTransportCleanup();
   }
 
   // ===== Version Waiters =====
@@ -431,7 +465,30 @@ export class RemoteStoreEntity<
     }
 
     return new Promise<void>((resolve, reject) => {
-      this.versionWaiters.add({ isSatisfied, resolve, reject });
+      let waiter!: VersionWaiter;
+      const timer = setTimeout(() => {
+        this.versionWaiters.delete(waiter);
+        const timeoutError = new NexusStoreProtocolError(
+          `Committed snapshot not observed within ${this.actionCommitTimeoutMs}ms after dispatch acknowledgement.`,
+        );
+        this.transitionToProtocolError(timeoutError);
+        reject(timeoutError);
+      }, this.actionCommitTimeoutMs);
+
+      waiter = {
+        isSatisfied,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+        timer,
+      };
+
+      this.versionWaiters.add(waiter);
     });
   }
 
@@ -444,6 +501,7 @@ export class RemoteStoreEntity<
     for (const waiter of Array.from(this.versionWaiters)) {
       if (waiter.isSatisfied(currentVersion)) {
         this.versionWaiters.delete(waiter);
+        clearTimeout(waiter.timer);
         waiter.resolve();
       }
     }
@@ -452,7 +510,19 @@ export class RemoteStoreEntity<
   private rejectAllVersionWaiters(error: Error): void {
     for (const waiter of Array.from(this.versionWaiters)) {
       this.versionWaiters.delete(waiter);
+      clearTimeout(waiter.timer);
       waiter.reject(error);
+    }
+  }
+
+  private runTransportCleanup(): void {
+    for (const cleanup of Array.from(this.transportCleanupCallbacks)) {
+      this.transportCleanupCallbacks.delete(cleanup);
+      try {
+        cleanup();
+      } catch {
+        // best-effort cleanup only
+      }
     }
   }
 
@@ -474,7 +544,19 @@ export class RemoteStoreEntity<
     },
     NexusStoreProtocolError
   > {
-    const parsed = SnapshotEnvelopeSchema.safeParse(event);
+    const parsedResult = Result.fromThrowable(
+      () => SnapshotEnvelopeSchema.safeParse(event),
+      (error) => error,
+    )();
+    if (parsedResult.isErr()) {
+      return err(
+        new NexusStoreProtocolError("Invalid snapshot envelope.", {
+          cause: parsedResult.error,
+        }),
+      );
+    }
+
+    const parsed = parsedResult.value;
     if (!parsed.success) {
       return err(
         new NexusStoreProtocolError("Invalid snapshot envelope.", {
@@ -483,14 +565,20 @@ export class RemoteStoreEntity<
       );
     }
 
-    return ok(
-      parsed.data as {
-        type: "snapshot";
-        storeInstanceId: string;
-        version: number;
-        state: TState;
-      },
+    const validatedState = this.safeValidateState(
+      parsed.data.state,
+      "Invalid snapshot state payload.",
     );
+    if (validatedState.isErr()) {
+      return err(validatedState.error);
+    }
+
+    return ok({
+      type: "snapshot",
+      storeInstanceId: parsed.data.storeInstanceId,
+      version: parsed.data.version,
+      state: validatedState.value,
+    });
   }
 
   private safeParseBaseline(baseline: unknown): Result<
@@ -502,7 +590,19 @@ export class RemoteStoreEntity<
     },
     NexusStoreProtocolError
   > {
-    const parsed = SubscribeResultSchema.safeParse(baseline);
+    const parsedResult = Result.fromThrowable(
+      () => SubscribeResultSchema.safeParse(baseline),
+      (error) => error,
+    )();
+    if (parsedResult.isErr()) {
+      return err(
+        new NexusStoreProtocolError("Invalid subscribe baseline envelope.", {
+          cause: parsedResult.error,
+        }),
+      );
+    }
+
+    const parsed = parsedResult.value;
     if (!parsed.success) {
       return err(
         new NexusStoreProtocolError("Invalid subscribe baseline envelope.", {
@@ -511,19 +611,26 @@ export class RemoteStoreEntity<
       );
     }
 
-    return ok(
-      parsed.data as {
-        storeInstanceId: string;
-        subscriptionId: string;
-        version: number;
-        state: TState;
-      },
+    const validatedState = this.safeValidateState(
+      parsed.data.state,
+      "Invalid subscribe baseline state payload.",
     );
+    if (validatedState.isErr()) {
+      return err(validatedState.error);
+    }
+
+    return ok({
+      storeInstanceId: parsed.data.storeInstanceId,
+      subscriptionId: parsed.data.subscriptionId,
+      version: parsed.data.version,
+      state: validatedState.value,
+    });
   }
 
   private safeParseDispatchResult<K extends keyof TActions & string>(
+    action: K,
     dispatchResult: unknown,
-  ): Result<
+  ): R<
     {
       type: "dispatch-result";
       committedVersion: number;
@@ -531,8 +638,19 @@ export class RemoteStoreEntity<
     },
     NexusStoreProtocolError
   > {
-    const parsedDispatchResult =
-      DispatchResultEnvelopeSchema.safeParse(dispatchResult);
+    const parsedDispatchResultResult = Result.fromThrowable(
+      () => DispatchResultEnvelopeSchema.safeParse(dispatchResult),
+      (error) => error,
+    )();
+    if (parsedDispatchResultResult.isErr()) {
+      return err(
+        new NexusStoreProtocolError("Invalid dispatch result envelope.", {
+          cause: parsedDispatchResultResult.error,
+        }),
+      );
+    }
+
+    const parsedDispatchResult = parsedDispatchResultResult.value;
     if (!parsedDispatchResult.success) {
       return err(
         new NexusStoreProtocolError("Invalid dispatch result envelope.", {
@@ -541,17 +659,72 @@ export class RemoteStoreEntity<
       );
     }
 
-    return ok(
-      parsedDispatchResult.data as {
-        type: "dispatch-result";
-        committedVersion: number;
-        result: ActionResult<TActions, K>;
-      },
+    const validatedResult = this.safeValidateActionResult(
+      action,
+      parsedDispatchResult.data.result,
     );
+    if (validatedResult.isErr()) {
+      return err(validatedResult.error);
+    }
+
+    return ok({
+      type: "dispatch-result",
+      committedVersion: parsedDispatchResult.data.committedVersion,
+      result: validatedResult.value,
+    });
+  }
+
+  private safeValidateState(
+    state: unknown,
+    message: string,
+  ): Result<TState, NexusStoreProtocolError> {
+    const stateSchema = this.validation?.state;
+    if (stateSchema) {
+      const parsed = stateSchema.safeParse(state);
+      if (!parsed.success) {
+        return err(
+          new NexusStoreProtocolError(message, { cause: parsed.error }),
+        );
+      }
+
+      return ok(parsed.data);
+    }
+
+    if (!isObjectLike(state)) {
+      return err(
+        new NexusStoreProtocolError(message, {
+          cause: new TypeError("State payload must be a non-null object."),
+        }),
+      );
+    }
+
+    return ok(state as TState);
+  }
+
+  private safeValidateActionResult<K extends keyof TActions & string>(
+    action: K,
+    result: unknown,
+  ): Result<ActionResult<TActions, K>, NexusStoreProtocolError> {
+    const actionSchema = this.validation?.actionResults?.[action];
+    if (!actionSchema) {
+      return ok(result as ActionResult<TActions, K>);
+    }
+
+    const parsed = actionSchema.safeParse(result);
+    if (!parsed.success) {
+      return err(
+        new NexusStoreProtocolError(
+          `Invalid dispatch result payload for action "${action}".`,
+          { cause: parsed.error },
+        ),
+      );
+    }
+
+    return ok(parsed.data as ActionResult<TActions, K>);
   }
 
   private normalizeActionInvocationError(error: unknown): Error {
-    if (isDisconnectLikeError(error)) {
+    if (isStructuredDisconnectError(error)) {
       const disconnected = createDisconnectedError(
         "Store action disconnected before commit acknowledgement (unknown commit).",
         error,

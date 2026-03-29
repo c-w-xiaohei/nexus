@@ -70,4 +70,9 @@ export interface ConnectionManagerHandlers<
     sourceConnectionId: string,
   ): void | Promise<void>;
   onDisconnect(connectionId: string, identity?: U): void;
+  onIdentityUpdated?(
+    connectionId: string,
+    newIdentity: U,
+    oldIdentity: U,
+  ): void;
 }

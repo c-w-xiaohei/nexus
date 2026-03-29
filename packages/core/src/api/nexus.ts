@@ -431,6 +431,10 @@ export class Nexus<
               target: {
                 connectionId: connection.connectionId,
               },
+              staleTarget: {
+                descriptor: resolvedTarget.value.descriptor,
+                matcher: resolvedTarget.value.matcher,
+              },
               strategy: expects,
               timeout,
             };

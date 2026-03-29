@@ -22,6 +22,7 @@ export namespace ResourceManager {
       proxy: object,
       sourceConnectionId: string,
     ): void;
+    releaseRemoteProxy(resourceId: string): void;
     hasLocalResource(resourceId: string): boolean;
     countLocalResources(): number;
     countRemoteProxies(): number;
@@ -89,6 +90,11 @@ export namespace ResourceManager {
         `Registering remote proxy #${resourceId} from connection ${sourceConnectionId}.`,
       );
       remoteProxyRegistry.set(resourceId, { proxy, sourceConnectionId });
+    };
+
+    const releaseRemoteProxy = (resourceId: string): void => {
+      logger.debug(`Releasing remote proxy #${resourceId}`);
+      remoteProxyRegistry.delete(resourceId);
     };
 
     const hasLocalResource = (resourceId: string): boolean =>
@@ -159,6 +165,7 @@ export namespace ResourceManager {
       getLocalResource,
       releaseLocalResource,
       registerRemoteProxy,
+      releaseRemoteProxy,
       hasLocalResource,
       countLocalResources,
       countRemoteProxies,

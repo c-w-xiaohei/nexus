@@ -78,7 +78,6 @@ const markStoreStale = (target: RemoteStore<any, any>): void => {
   ];
   if (typeof marker === "function") {
     marker();
-    return;
   }
 
   markStoreAsAdapterStale(target);
@@ -142,7 +141,9 @@ export const useRemoteStore = <
     if (previousStore) {
       const previousStatus = previousStore.getStatus();
       if (
-        (previousStatus.type === "ready" || previousStatus.type === "stale") &&
+        (previousStatus.type === "ready" ||
+          previousStatus.type === "stale" ||
+          previousStatus.type === "disconnected") &&
         activeTargetKeyRef.current !== null &&
         activeTargetKeyRef.current !== targetKey
       ) {

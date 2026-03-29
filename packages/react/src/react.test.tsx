@@ -574,6 +574,78 @@ describe("react adapter", () => {
     });
   });
 
+  it("target change after disconnected state marks adapter stale immediately", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+
+    const firstStore = createFakeRemoteStore(
+      { count: 7 },
+      { type: "ready", storeInstanceId: "instance:handoff-old", version: 7 },
+    );
+    const secondStore = createFakeRemoteStore(
+      { count: 9 },
+      { type: "ready", storeInstanceId: "instance:handoff-new", version: 9 },
+    );
+
+    connectSpy
+      .mockResolvedValueOnce(firstStore)
+      .mockResolvedValueOnce(secondStore);
+
+    const wrapper = createWrapper(nexus);
+    const { result, rerender } = renderHook(
+      ({ remote }) =>
+        useStoreSelector(remote, (state) => state.count, {
+          fallback: -1,
+        }),
+      {
+        initialProps: {
+          remote: createRemoteResult(null, { type: "initializing" }),
+        },
+        wrapper,
+      },
+    );
+
+    const { result: remoteResult, rerender: rerenderRemote } = renderHook(
+      ({ target }) => useRemoteStore(definition, { target }),
+      {
+        initialProps: { target: { descriptor: "old" } },
+        wrapper,
+      },
+    );
+
+    await waitFor(() => {
+      expect(remoteResult.current.store).toBe(firstStore);
+      expect(remoteResult.current.status.type).toBe("ready");
+    });
+
+    rerender({ remote: remoteResult.current as any });
+    expect(result.current).toBe(7);
+
+    firstStore.setStatus({ type: "disconnected", lastKnownVersion: 7 });
+    rerender({ remote: remoteResult.current as any });
+
+    await waitFor(() => {
+      expect(result.current).toBe(7);
+    });
+
+    rerenderRemote({ target: { descriptor: "new" } });
+    rerender({ remote: remoteResult.current as any });
+
+    await waitFor(() => {
+      expect(result.current).toBe(-1);
+      expect(remoteResult.current.status.type).toBe("initializing");
+      expect(firstStore.getStatus().type).toBe("stale");
+    });
+
+    await waitFor(() => {
+      expect(remoteResult.current.store).toBe(secondStore);
+      expect(remoteResult.current.status.type).toBe("ready");
+    });
+  });
+
   it("useStoreSelector keeps last mirrored value after ready across reconnect initializing", () => {
     const store = createFakeRemoteStore(
       { count: 7 },

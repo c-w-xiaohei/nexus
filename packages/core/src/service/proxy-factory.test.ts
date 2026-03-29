@@ -3,6 +3,7 @@ import type { ProxyFactoryCallbacks } from "./proxy-factory";
 import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import { okAsync } from "neverthrow";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 
 // Mock the global FinalizationRegistry
 const mockFinalizationRegistryCallback = vi.fn();
@@ -202,6 +203,22 @@ describe("ProxyFactory", () => {
         path: ["someProp"],
         value: "new value",
       });
+    });
+
+    it("should unregister remote proxy on explicit release", () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-release",
+        "conn-5",
+      );
+
+      expect(resourceManager.countRemoteProxies()).toBe(1);
+      remoteObj[RELEASE_PROXY_SYMBOL]();
+
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
+        "res-release",
+        "conn-5",
+      );
+      expect(resourceManager.countRemoteProxies()).toBe(0);
     });
   });
 

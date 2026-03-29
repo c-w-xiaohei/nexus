@@ -1,10 +1,10 @@
 import type { NexusInstance } from "@/api/types";
 import {
+  Result,
   ResultAsync,
   err,
   errAsync,
   ok,
-  type Result,
   type ResultAsync as RA,
 } from "neverthrow";
 import {
@@ -24,7 +24,10 @@ import type {
   RemoteStore,
 } from "./types";
 import { RemoteStoreEntity } from "./client/remote-store";
-import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "@/types/symbols";
+import {
+  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+} from "@/types/symbols";
 
 type ActionFunction = (...args: any[]) => any;
 type SafeCreateNexusLike = Pick<NexusInstance<any, any>, "safeCreate">;
@@ -64,6 +67,43 @@ const withTimeout = async <T>(
   });
 };
 
+const extractSubscriptionId = (baseline: unknown): string | null => {
+  if (typeof baseline !== "object" || baseline === null) {
+    return null;
+  }
+
+  const maybeSubscriptionId = (baseline as { subscriptionId?: unknown })
+    .subscriptionId;
+  return typeof maybeSubscriptionId === "string" ? maybeSubscriptionId : null;
+};
+
+const normalizeConnectHandshakeError = (
+  error: unknown,
+):
+  | NexusStoreConnectError
+  | NexusStoreProtocolError
+  | NexusStoreDisconnectedError => {
+  if (
+    error instanceof NexusStoreConnectError ||
+    error instanceof NexusStoreProtocolError ||
+    error instanceof NexusStoreDisconnectedError
+  ) {
+    return error;
+  }
+
+  const normalized = normalizeNexusStoreError(error);
+  if (
+    normalized instanceof NexusStoreProtocolError ||
+    normalized instanceof NexusStoreDisconnectedError
+  ) {
+    return normalized;
+  }
+
+  return new NexusStoreConnectError("Store subscribe handshake failed.", {
+    cause: normalized,
+  });
+};
+
 export const safeConnectNexusStore = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
@@ -99,115 +139,262 @@ export const safeConnectNexusStore = <
             : {}),
         } as const);
 
-  return nexus
-    .safeCreate(definition.token, createOptions as any)
-    .mapErr(
-      (error) =>
-        new NexusStoreConnectError("Failed to create store proxy.", {
-          cause: error,
-        }),
-    )
-    .andThen((service) => {
-      const remote = new RemoteStoreEntity<TState, TActions>(
-        service as unknown as NexusStoreServiceContract<TState, TActions>,
-        definition.state(),
+  let safeCreateResult: RA<
+    NexusStoreServiceContract<TState, TActions>,
+    NexusStoreConnectError
+  >;
+
+  try {
+    safeCreateResult = nexus
+      .safeCreate(definition.token, createOptions as any)
+      .mapErr(
+        (error) =>
+          new NexusStoreConnectError("Failed to create store proxy.", {
+            cause: error,
+          }),
+      ) as RA<
+      NexusStoreServiceContract<TState, TActions>,
+      NexusStoreConnectError
+    >;
+  } catch (error) {
+    return errAsync(
+      new NexusStoreConnectError("Failed to create store proxy.", {
+        cause: error,
+      }),
+    );
+  }
+
+  return safeCreateResult.andThen((service) => {
+    const remoteResult = Result.fromThrowable(
+      () =>
+        new RemoteStoreEntity<TState, TActions>(
+          service as unknown as NexusStoreServiceContract<TState, TActions>,
+          definition.state(),
+          definition.validation,
+        ),
+      normalizeConnectHandshakeError,
+    )();
+    if (remoteResult.isErr()) {
+      return errAsync<
+        RemoteStore<TState, TActions>,
+        | NexusStoreConnectError
+        | NexusStoreProtocolError
+        | NexusStoreDisconnectedError
+      >(remoteResult.error);
+    }
+
+    const remote = remoteResult.value;
+
+    let handshakeFailed = false;
+    let baselineForFailedHandshakeCleanup: unknown | null = null;
+
+    const cleanupFailedHandshake = (): void => {
+      handshakeFailed = true;
+
+      const subscriptionId = extractSubscriptionId(
+        baselineForFailedHandshakeCleanup,
       );
-
-      const subscribeDisconnect = (
-        service as {
-          [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
-            callback: () => void,
-          ) => () => void;
+      if (subscriptionId) {
+        try {
+          void Promise.resolve(service.unsubscribe(subscriptionId)).catch(
+            () => undefined,
+          );
+        } catch {
+          // Best-effort cleanup only.
         }
-      )[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL];
-
-      if (typeof subscribeDisconnect === "function") {
-        const unsubscribeDisconnect = subscribeDisconnect(() => {
-          remote.onTransportDisconnect("Remote store connection disconnected.");
-        });
-        remote.setDisconnectSubscriptionCleanup(unsubscribeDisconnect);
       }
 
-      const safeValidateHandshakeStatus = (): Result<
+      remote.destroy();
+    };
+
+    const subscribeDisconnectResult = Result.fromThrowable(
+      () =>
+        (
+          service as {
+            [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
+              callback: () => void,
+            ) => unknown;
+          }
+        )[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL],
+      normalizeConnectHandshakeError,
+    )();
+    if (subscribeDisconnectResult.isErr()) {
+      cleanupFailedHandshake();
+      return errAsync<
         RemoteStore<TState, TActions>,
-        NexusStoreProtocolError | NexusStoreDisconnectedError
-      > => {
-        const status = remote.getStatus();
-        if (status.type === "disconnected") {
-          return err(
-            remote.getTerminalError() ??
-              new NexusStoreDisconnectedError(
-                "Remote store disconnected during initial handshake.",
-              ),
-          );
-        }
+        | NexusStoreConnectError
+        | NexusStoreProtocolError
+        | NexusStoreDisconnectedError
+      >(subscribeDisconnectResult.error);
+    }
 
-        if (status.type === "stale") {
-          return err(
-            remote.getTerminalError() ??
-              new NexusStoreProtocolError(
-                "Remote store became stale during initial handshake.",
-              ),
-          );
-        }
-
-        return ok(remote as RemoteStore<TState, TActions>);
-      };
-
-      return ResultAsync.fromPromise(
-        withTimeout(
-          (
-            service as unknown as NexusStoreServiceContract<TState, TActions>
-          ).subscribe((event) => {
-            remote.onSync(event);
+    const subscribeDisconnect = subscribeDisconnectResult.value;
+    if (typeof subscribeDisconnect === "function") {
+      const unsubscribeDisconnectResult = Result.fromThrowable(
+        () =>
+          subscribeDisconnect(() => {
+            remote.onTransportDisconnect(
+              "Remote store connection disconnected.",
+            );
           }),
-          validatedOptions.data.timeout ?? 0,
-          () =>
-            new NexusStoreConnectError("Store subscribe handshake timed out."),
-        ),
-        (error) => {
-          if (error instanceof NexusStoreConnectError) {
-            return error;
-          }
+        normalizeConnectHandshakeError,
+      )();
 
-          if (error instanceof NexusStoreProtocolError) {
-            return error;
-          }
+      if (unsubscribeDisconnectResult.isErr()) {
+        cleanupFailedHandshake();
+        return errAsync<
+          RemoteStore<TState, TActions>,
+          | NexusStoreConnectError
+          | NexusStoreProtocolError
+          | NexusStoreDisconnectedError
+        >(unsubscribeDisconnectResult.error);
+      }
 
-          if (error instanceof NexusStoreDisconnectedError) {
-            return error;
-          }
+      if (typeof unsubscribeDisconnectResult.value === "function") {
+        remote.setDisconnectSubscriptionCleanup(
+          unsubscribeDisconnectResult.value as () => void,
+        );
+      }
+    }
 
-          const normalized = normalizeNexusStoreError(error);
-          if (normalized instanceof NexusStoreDisconnectedError) {
-            return normalized;
+    const subscribeTargetStaleResult = Result.fromThrowable(
+      () =>
+        (
+          service as {
+            [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
+              callback: () => void,
+            ) => unknown;
           }
+        )[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL],
+      normalizeConnectHandshakeError,
+    )();
+    if (subscribeTargetStaleResult.isErr()) {
+      cleanupFailedHandshake();
+      return errAsync<
+        RemoteStore<TState, TActions>,
+        | NexusStoreConnectError
+        | NexusStoreProtocolError
+        | NexusStoreDisconnectedError
+      >(subscribeTargetStaleResult.error);
+    }
 
-          if (normalized instanceof NexusStoreProtocolError) {
-            return normalized;
+    const subscribeTargetStale = subscribeTargetStaleResult.value;
+    if (typeof subscribeTargetStale === "function") {
+      const unsubscribeTargetStaleResult = Result.fromThrowable(
+        () =>
+          subscribeTargetStale(() => {
+            remote.markStaleByTargetChange();
+          }),
+        normalizeConnectHandshakeError,
+      )();
+
+      if (unsubscribeTargetStaleResult.isErr()) {
+        cleanupFailedHandshake();
+        return errAsync<
+          RemoteStore<TState, TActions>,
+          | NexusStoreConnectError
+          | NexusStoreProtocolError
+          | NexusStoreDisconnectedError
+        >(unsubscribeTargetStaleResult.error);
+      }
+
+      if (typeof unsubscribeTargetStaleResult.value === "function") {
+        remote.setDisconnectSubscriptionCleanup(
+          unsubscribeTargetStaleResult.value as () => void,
+        );
+      }
+    }
+
+    const safeValidateHandshakeStatus = (): Result<
+      RemoteStore<TState, TActions>,
+      NexusStoreProtocolError | NexusStoreDisconnectedError
+    > => {
+      const status = remote.getStatus();
+      if (status.type === "disconnected") {
+        return err(
+          remote.getTerminalError() ??
+            new NexusStoreDisconnectedError(
+              "Remote store disconnected during initial handshake.",
+            ),
+        );
+      }
+
+      if (status.type === "stale") {
+        return err(
+          remote.getTerminalError() ??
+            new NexusStoreProtocolError(
+              "Remote store became stale during initial handshake.",
+            ),
+        );
+      }
+
+      return ok(remote as RemoteStore<TState, TActions>);
+    };
+
+    const subscribeCallResult = Result.fromThrowable(
+      () =>
+        (
+          service as unknown as NexusStoreServiceContract<TState, TActions>
+        ).subscribe((event) => {
+          remote.onSync(event);
+        }),
+      normalizeConnectHandshakeError,
+    )();
+
+    const subscribePromise = subscribeCallResult.match(
+      (promise) => Promise.resolve(promise),
+      (error) => Promise.reject(error),
+    );
+
+    const subscribePromiseWithLateCleanup = subscribePromise.then(
+      (baseline) => {
+        if (handshakeFailed) {
+          const lateSubscriptionId = extractSubscriptionId(baseline);
+          if (lateSubscriptionId) {
+            try {
+              void Promise.resolve(
+                service.unsubscribe(lateSubscriptionId),
+              ).catch(() => undefined);
+            } catch {
+              // Best-effort cleanup only.
+            }
           }
+        }
 
-          return new NexusStoreConnectError(
-            "Store subscribe handshake failed.",
-            {
-              cause: normalized,
-            },
-          );
-        },
-      )
-        .map((baseline) => {
-          remote.completeHandshake(baseline);
-          return baseline;
-        })
-        .andThen(() => {
-          const validated = safeValidateHandshakeStatus();
-          if (validated.isErr()) {
-            return errAsync(validated.error);
-          }
+        return baseline;
+      },
+    );
 
-          return ResultAsync.fromSafePromise(Promise.resolve(validated.value));
-        });
-    });
+    return ResultAsync.fromPromise(
+      withTimeout(
+        subscribePromiseWithLateCleanup,
+        validatedOptions.data.timeout ?? 0,
+        () =>
+          new NexusStoreConnectError("Store subscribe handshake timed out."),
+      ),
+      normalizeConnectHandshakeError,
+    )
+      .map((baseline) => {
+        baselineForFailedHandshakeCleanup = baseline;
+        remote.completeHandshake(baseline);
+        return baseline;
+      })
+      .andThen(() => {
+        const validated = safeValidateHandshakeStatus();
+        if (validated.isErr()) {
+          return errAsync(validated.error);
+        }
+
+        return ResultAsync.fromPromise(
+          Promise.resolve(validated.value),
+          normalizeConnectHandshakeError,
+        );
+      })
+      .mapErr((error) => {
+        cleanupFailedHandshake();
+        return error;
+      });
+  });
 };
 
 export const connectNexusStore = async <
@@ -247,20 +434,37 @@ export const safeInvokeStoreAction = <
   action: K,
   args: ActionArgs<TActions, K>,
 ): RA<ActionResult<TActions, K>, SafeActionError> =>
-  ResultAsync.fromPromise(remoteStore.actions[action](...args), (error) => {
-    if (error instanceof NexusStoreDisconnectedError) {
-      return error;
-    }
+  ResultAsync.fromPromise(
+    Result.fromThrowable(
+      () => {
+        const actions = remoteStore.actions;
+        const invoke = actions[action] as (
+          ...invokeArgs: ActionArgs<TActions, K>
+        ) => Promise<ActionResult<TActions, K>>;
+        return invoke(...args);
+      },
+      (error) => error,
+    )().match(
+      (promise) => promise,
+      (error) => Promise.reject(error),
+    ),
+    (error) => {
+      if (error instanceof NexusStoreDisconnectedError) {
+        return error;
+      }
 
-    if (error instanceof NexusStoreProtocolError) {
-      return error;
-    }
+      if (error instanceof NexusStoreProtocolError) {
+        return error;
+      }
 
-    if (error instanceof NexusStoreActionError) {
-      return error;
-    }
+      if (error instanceof NexusStoreActionError) {
+        return error;
+      }
 
-    return new NexusStoreActionError("Store action failed.", { cause: error });
-  });
+      return new NexusStoreActionError("Store action failed.", {
+        cause: error,
+      });
+    },
+  );
 
 export type SafeInvokeStoreActionError = SafeActionError;
