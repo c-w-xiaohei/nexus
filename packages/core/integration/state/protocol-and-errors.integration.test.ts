@@ -15,13 +15,13 @@ import {
   provideNexusStore,
 } from "../../src/state";
 
-describe("Nexus State E2E: Protocol and Error Classification", () => {
+describe("Nexus State Integration: Protocol and Error Classification", () => {
   it("classifies malformed baseline and handshake timeout at L4", async () => {
     type CounterState = { count: number };
     type CounterActions = { noop(): number };
 
     const definition = defineNexusStore<CounterState, CounterActions>({
-      token: new Token("state:counter:handshake-classification:e2e"),
+      token: new Token("state:counter:handshake-classification:integration"),
       state: () => ({ count: 0 }),
       actions: () => ({ noop: () => 0 }),
     });
@@ -130,7 +130,7 @@ describe("Nexus State E2E: Protocol and Error Classification", () => {
     });
 
     const counterStore = defineNexusStore<CounterState, CounterActions>({
-      token: new Token("state:counter:inflight-disconnect:e2e"),
+      token: new Token("state:counter:inflight-disconnect:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
         async increment(by: number) {

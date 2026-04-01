@@ -21,7 +21,7 @@ import {
 } from "../fixtures";
 import { Token } from "../../src/api/token";
 
-describe("Nexus L4 E2E: Target Resolution and Discovery", () => {
+describe("Nexus L4 Integration: Target Resolution and Discovery", () => {
   let world: IssueCompanionWorld;
 
   beforeEach(async () => {

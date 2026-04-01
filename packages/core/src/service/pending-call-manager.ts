@@ -107,6 +107,7 @@ export namespace PendingCallManager {
     readonly messageId: MessageId;
     readonly isBroadcast: boolean;
     readonly targetConnectionIds: string[];
+    readonly respondedConnectionIds: Set<string>;
     expectedResponses: number;
     readonly timeoutHandle: ReturnType<typeof setTimeout>;
   }
@@ -269,6 +270,31 @@ export namespace PendingCallManager {
         return;
       }
 
+      if (!isTimeout) {
+        if (!sourceConnectionId) {
+          logger.warn(
+            `Ignoring response for call #${id} without source connection id.`,
+          );
+          return;
+        }
+
+        if (!pending.targetConnectionIds.includes(sourceConnectionId)) {
+          logger.warn(
+            `Ignoring response for call #${id} from unexpected connection ${sourceConnectionId}.`,
+          );
+          return;
+        }
+
+        if (pending.respondedConnectionIds.has(sourceConnectionId)) {
+          logger.warn(
+            `Ignoring duplicate response for call #${id} from connection ${sourceConnectionId}.`,
+          );
+          return;
+        }
+
+        pending.respondedConnectionIds.add(sourceConnectionId);
+      }
+
       logger.debug(
         `Handling response for call #${id}. From: ${
           sourceConnectionId ?? "internal"
@@ -312,6 +338,7 @@ export namespace PendingCallManager {
           messageId,
           isBroadcast,
           targetConnectionIds: sentConnectionIds,
+          respondedConnectionIds: new Set(),
           iteratorController: controller,
           receivedResponses: 0,
           expectedResponses: sentConnectionIds.length,
@@ -339,6 +366,7 @@ export namespace PendingCallManager {
         messageId,
         isBroadcast,
         targetConnectionIds: sentConnectionIds,
+        respondedConnectionIds: new Set(),
         resolve: resolveCall,
         reject: rejectCall,
         promise,
@@ -384,7 +412,11 @@ export namespace PendingCallManager {
           continue;
         }
 
-        pending.expectedResponses -= 1;
+        const alreadyResponded =
+          pending.respondedConnectionIds.has(connectionId);
+        if (!alreadyResponded) {
+          pending.expectedResponses -= 1;
+        }
 
         if (pending.strategy === "stream") {
           if (pending.receivedResponses >= pending.expectedResponses) {

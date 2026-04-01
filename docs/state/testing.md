@@ -14,7 +14,10 @@ Use focused Nexus State runtime tests when you want to verify:
 
 Current examples live in:
 
-- `packages/core/src/state/react-agnostic.test.ts`
+- `packages/core/src/state/state-host-runtime.test.ts`
+- `packages/core/src/state/state-provide-store.test.ts`
+- `packages/core/src/state/state-client-runtime.test.ts`
+- `packages/core/src/state/state-errors.test.ts`
 - `packages/core/src/state/state.test.ts`
 
 ## 2. React Adapter Tests
@@ -31,11 +34,11 @@ Current examples live in:
 
 - `packages/react/src/react.test.tsx`
 
-## 3. Multi-Context E2E Tests
+## 3. Multi-Context Integration Tests
 
 This is the most important level for Nexus State cross-context correctness.
 
-Use E2E tests when you need to prove:
+Use integration tests when you need to prove:
 
 - one context hosts the store
 - multiple isolated contexts connect to it
@@ -45,7 +48,9 @@ Use E2E tests when you need to prove:
 
 Current examples live in:
 
-- `packages/core/src/api/e2e.test.ts`
+- `packages/core/integration/state/lifecycle-and-cleanup.integration.test.ts`
+- `packages/core/integration/state/protocol-and-errors.integration.test.ts`
+- `packages/core/integration/state/targeting-and-handoff.integration.test.ts`
 
 ## A Small Example Test
 
@@ -78,9 +83,9 @@ When adding new Nexus State behavior:
 
 1. add a focused state/runtime test first
 2. add a React test if the behavior affects hooks
-3. add or extend multi-context e2e only for user-visible cross-context semantics
+3. add or extend multi-context integration tests only for user-visible cross-context semantics
 
-## Good E2E Questions
+## Good Integration Questions
 
 Ask questions like:
 

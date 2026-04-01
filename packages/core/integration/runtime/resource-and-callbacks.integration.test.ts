@@ -13,7 +13,7 @@ import {
   teardownIssueCompanionWorld,
 } from "../fixtures";
 
-describe("Nexus L4 E2E: Resource and Callback Lifecycles", () => {
+describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   let world: IssueCompanionWorld;
 
   beforeEach(async () => {

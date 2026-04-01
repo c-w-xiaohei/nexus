@@ -86,7 +86,7 @@ Cleanup happens in more than one place:
 - local listeners are cleaned up on `destroy()`
 - terminal client states do best-effort `unsubscribe()`
 - host-side disconnect cleanup removes connection-owned subscriptions
-- final multi-context e2e verifies host-side cleanup behavior
+- final multi-context integration test verifies host-side cleanup behavior
 
 ## Replacement vs Recovery
 

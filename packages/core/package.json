@@ -45,6 +45,7 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest run",
+    "test:integration:file": "vitest run",
     "smoke:state-boundary": "node ./scripts/state-boundary-smoke.mjs",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint . --ext .ts",

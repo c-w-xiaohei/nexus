@@ -1,3 +1,9 @@
+/**
+ * These tests exercise the state client runtime and connect APIs directly.
+ * They stay under `src/state` because they validate core runtime semantics,
+ * handshake behavior, and error classification without going through the
+ * higher-level package integration scenarios in `packages/core/integration`.
+ */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { errAsync } from "neverthrow";
 import { z } from "zod";
@@ -9,15 +15,9 @@ import {
   NexusStoreActionError,
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-  NexusStoreError,
   normalizeNexusStoreError,
 } from "./errors";
 import { provideNexusStore } from "./provide-store";
-import { createStoreHost } from "./host/store-host";
-import {
-  SERVICE_INVOKE_START,
-  SERVICE_ON_DISCONNECT,
-} from "../service/service-invocation-hooks";
 import type { NexusStoreServiceContract } from "./types";
 import {
   connectNexusStore,
@@ -28,7 +28,6 @@ import { RemoteStoreEntity } from "./client/remote-store";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-  RELEASE_PROXY_SYMBOL,
 } from "../types/symbols";
 
 const createCounterDefinition = () =>
@@ -60,765 +59,6 @@ const deferred = <T>() => {
 
   return { promise, resolve, reject };
 };
-
-describe("state host runtime baseline handshake", () => {
-  it("creates initial versioned snapshot via subscribe baseline", async () => {
-    const host = createStoreHost(createCounterDefinition());
-
-    const baseline = await host.subscribe(() => {});
-
-    expect(baseline.storeInstanceId).toMatch(/^store-instance:/);
-    expect(baseline.subscriptionId).toMatch(/^store-subscription:/);
-    expect(baseline.version).toBe(0);
-    expect(baseline.state).toEqual({ count: 0 });
-  });
-
-  it("multiple subscribers observe same monotonic version stream", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const leftEvents: Array<{ version: number; count: number }> = [];
-    const rightEvents: Array<{ version: number; count: number }> = [];
-
-    await host.subscribe((event) => {
-      leftEvents.push({ version: event.version, count: event.state.count });
-    });
-    await host.subscribe((event) => {
-      rightEvents.push({ version: event.version, count: event.state.count });
-    });
-
-    await host.dispatch("increment", [1]);
-    await host.dispatch("increment", [2]);
-
-    expect(leftEvents).toEqual([
-      { version: 1, count: 1 },
-      { version: 2, count: 3 },
-    ]);
-    expect(rightEvents).toEqual([
-      { version: 1, count: 1 },
-      { version: 2, count: 3 },
-    ]);
-  });
-
-  it("unsubscribe and destroy of one subscriber does not affect others", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const left = vi.fn();
-    const right = vi.fn();
-
-    const leftBaseline = await host.subscribe(left);
-    await host.subscribe(right);
-
-    await host.unsubscribe(leftBaseline.subscriptionId);
-    await host.dispatch("increment", [1]);
-
-    expect(left).not.toHaveBeenCalled();
-    expect(right).toHaveBeenCalledTimes(1);
-
-    host.destroy();
-    await expect(host.dispatch("increment", [1])).rejects.toThrow();
-  });
-
-  it("isolates and drops a subscriber that throws", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const unstable = vi.fn(() => {
-      throw new Error("listener-failed");
-    });
-    const stable = vi.fn();
-
-    await host.subscribe(unstable);
-    await host.subscribe(stable);
-
-    await host.dispatch("increment", [1]);
-    await host.dispatch("increment", [1]);
-
-    expect(unstable).toHaveBeenCalledTimes(1);
-    expect(stable).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears disconnected owner marker once invocation ends", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const invocation = host.onInvokeStart("conn-owner-marker");
-
-    host.cleanupConnection("conn-owner-marker");
-
-    await expect(
-      host.subscribe(() => undefined, {
-        ownerConnectionId: "conn-owner-marker",
-      }),
-    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
-
-    host.onInvokeEnd(invocation);
-
-    await expect(
-      host.subscribe(() => undefined, {
-        ownerConnectionId: "conn-owner-marker",
-      }),
-    ).resolves.toMatchObject({
-      version: 0,
-      state: { count: 0 },
-    });
-  });
-
-  it("destroy clears invocation and disconnect owner bookkeeping maps", () => {
-    const host = createStoreHost(createCounterDefinition());
-    const invocation = host.onInvokeStart("conn-destroy-cleanup");
-
-    host.cleanupConnection("conn-destroy-cleanup");
-    host.onInvokeEnd(invocation);
-
-    host.destroy();
-
-    const runtime = host as any;
-    expect(runtime.disconnectedConnections.size).toBe(0);
-    expect(runtime.activeInvocationsByConnection.size).toBe(0);
-  });
-});
-
-describe("state host runtime dispatch semantics", () => {
-  it("rejects non-object initial state payload at host boundary", () => {
-    const definition = defineNexusStore({
-      token: new Token("state:counter:invalid-initial-state"),
-      state: () => 123 as unknown as { count: number },
-      actions: () => ({ noop: () => 0 }),
-    });
-
-    expect(() => createStoreHost(definition)).toThrowError(
-      NexusStoreProtocolError,
-    );
-  });
-
-  it("covers host missing-subscription cleanup branches", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const removedListener = vi.fn();
-    const siblingListener = vi.fn();
-
-    const removed = await host.subscribe(removedListener, {
-      ownerConnectionId: "conn-a",
-    });
-
-    const sibling = await host.subscribe(siblingListener, {
-      ownerConnectionId: "conn-b",
-    });
-
-    await host.unsubscribe("missing-subscription");
-    await host.unsubscribe(removed.subscriptionId);
-
-    await host.dispatch("increment", [1]);
-
-    expect(removedListener).not.toHaveBeenCalled();
-    expect(siblingListener).toHaveBeenCalledTimes(1);
-
-    const dangling = await host.subscribe(() => {});
-    (host as any).subscriptions.set(dangling.subscriptionId, {
-      onSync: vi.fn(),
-      ownerConnectionId: "conn-ghost",
-    });
-    await host.unsubscribe(dangling.subscriptionId);
-
-    await host.unsubscribe(sibling.subscriptionId);
-  });
-
-  it("releases subscribe callback proxies on unsubscribe and destroy", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const releaseLeft = vi.fn();
-    const releaseRight = vi.fn();
-
-    const leftListener = Object.assign(vi.fn(), {
-      [RELEASE_PROXY_SYMBOL]: releaseLeft,
-    });
-    const rightListener = Object.assign(vi.fn(), {
-      [RELEASE_PROXY_SYMBOL]: releaseRight,
-    });
-
-    const left = await host.subscribe(leftListener);
-    await host.subscribe(rightListener);
-
-    await host.unsubscribe(left.subscriptionId);
-    expect(releaseLeft).toHaveBeenCalledTimes(1);
-    expect(releaseRight).toHaveBeenCalledTimes(0);
-
-    host.destroy();
-    expect(releaseLeft).toHaveBeenCalledTimes(1);
-    expect(releaseRight).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects subscribe for already disconnected owner and unknown action dispatch", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const invocation = host.onInvokeStart("conn-stale-owner");
-
-    host.cleanupConnection("conn-stale-owner");
-    await expect(
-      host.subscribe(() => undefined, {
-        ownerConnectionId: "conn-stale-owner",
-      }),
-    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
-    host.onInvokeEnd(invocation);
-
-    await expect(
-      host.dispatch("missingAction" as any, []),
-    ).rejects.toBeInstanceOf(NexusStoreProtocolError);
-  });
-
-  it("supports functional setState updater actions", async () => {
-    const host = createStoreHost(
-      defineNexusStore({
-        token: new Token("state:counter:functional-set-state"),
-        state: () => ({ count: 0 }),
-        actions: ({ getState, setState }) => ({
-          increment() {
-            setState((current) => ({ count: current.count + 1 }));
-            return getState().count;
-          },
-        }),
-      }),
-    );
-
-    await expect(host.dispatch("increment", [])).resolves.toMatchObject({
-      committedVersion: 1,
-      result: 1,
-    });
-  });
-
-  it("dispatch advances version monotonically", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const baseline = await host.subscribe(() => {});
-
-    expect(baseline.version).toBe(0);
-    await host.dispatch("increment", [1]);
-    await host.dispatch("increment", [1]);
-
-    const after = await host.subscribe(() => {});
-    expect(after.version).toBe(2);
-    expect(after.state.count).toBe(2);
-  });
-
-  it("host business error path does not corrupt versioned state", async () => {
-    const host = createStoreHost(createCounterDefinition());
-    const baseline = await host.subscribe(() => {});
-
-    expect(baseline.version).toBe(0);
-    await expect(host.dispatch("explode", [])).rejects.toMatchObject({
-      name: "NexusStoreActionError",
-      cause: expect.objectContaining({ message: "boom" }),
-    } satisfies Partial<NexusStoreActionError>);
-    await expect(host.dispatch("mutateThenExplode", [])).rejects.toMatchObject({
-      name: "NexusStoreActionError",
-      cause: expect.objectContaining({ message: "boom-after-mutate" }),
-    } satisfies Partial<NexusStoreActionError>);
-
-    const after = await host.subscribe(() => {});
-    expect(after.version).toBe(0);
-    expect(after.state).toEqual({ count: 0 });
-  });
-
-  it("host rollback is transactional for nested in-place mutation through getState", async () => {
-    const definition = defineNexusStore({
-      token: new Token("state:counter:host-rollback-nested-inplace"),
-      state: () => ({ nested: { count: 0 } }),
-      actions: ({ getState }) => ({
-        mutateNestedThenThrow() {
-          getState().nested.count += 1;
-          throw new Error("nested-mutate-failed");
-        },
-      }),
-    });
-
-    const host = createStoreHost(definition);
-    const before = await host.subscribe(() => {});
-
-    await expect(
-      host.dispatch("mutateNestedThenThrow", []),
-    ).rejects.toMatchObject({
-      name: "NexusStoreActionError",
-      cause: expect.objectContaining({ message: "nested-mutate-failed" }),
-    } satisfies Partial<NexusStoreActionError>);
-
-    const after = await host.subscribe(() => {});
-    expect(after.version).toBe(before.version);
-    expect(after.state).toEqual({ nested: { count: 0 } });
-  });
-
-  it("serializes overlapping async dispatches without losing updates", async () => {
-    const firstGate = deferred<void>();
-
-    const definition = defineNexusStore({
-      token: new Token("state:counter:host-dispatch-serialization"),
-      state: () => ({ count: 0 }),
-      actions: ({ getState, setState }) => ({
-        async addAfter(by: number, gate: Promise<void>) {
-          const base = getState().count;
-          await gate;
-          setState({ count: base + by });
-          return getState().count;
-        },
-      }),
-    });
-
-    const host = createStoreHost(definition);
-
-    const first = host.dispatch("addAfter", [1, firstGate.promise]);
-    const second = host.dispatch("addAfter", [2, Promise.resolve()]);
-
-    firstGate.resolve();
-
-    await expect(first).resolves.toMatchObject({
-      type: "dispatch-result",
-      committedVersion: 1,
-      result: 1,
-    });
-    await expect(second).resolves.toMatchObject({
-      type: "dispatch-result",
-      committedVersion: 2,
-      result: 3,
-    });
-
-    const after = await host.subscribe(() => {});
-    expect(after.version).toBe(2);
-    expect(after.state).toEqual({ count: 3 });
-  });
-
-  it("rejects invalid dispatch request envelope at runtime boundary", async () => {
-    const host = createStoreHost(createCounterDefinition());
-
-    await expect(
-      host.dispatch("increment", "not-array" as unknown as [number]),
-    ).rejects.toBeInstanceOf(NexusStoreProtocolError);
-  });
-
-  it("validates host action result payload when author provides schema", async () => {
-    const host = createStoreHost(
-      defineNexusStore({
-        token: new Token("state:counter:host-action-result-validation"),
-        state: () => ({ count: 0 }),
-        actions: ({ getState, setState }) => ({
-          increment(by: number) {
-            setState({ count: getState().count + by });
-            return "invalid" as unknown as number;
-          },
-        }),
-        validation: {
-          actionResults: {
-            increment: z.number(),
-          },
-        },
-      }),
-    );
-
-    const before = await host.subscribe(() => {});
-    await expect(host.dispatch("increment", [1])).rejects.toBeInstanceOf(
-      NexusStoreProtocolError,
-    );
-    const after = await host.subscribe(() => {});
-    expect(after.version).toBe(before.version);
-    expect(after.state).toEqual(before.state);
-  });
-});
-
-describe("provideNexusStore", () => {
-  it("translates store definition to ordinary ServiceRegistration", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-
-    expect(registration.token).toBe(definition.token);
-    expect(typeof registration.implementation.subscribe).toBe("function");
-    expect(typeof registration.implementation.unsubscribe).toBe("function");
-    expect(typeof registration.implementation.dispatch).toBe("function");
-
-    const baseline = await registration.implementation.subscribe(() => {});
-    expect(baseline.version).toBe(0);
-
-    await registration.implementation.dispatch("increment", [3]);
-    const after = await registration.implementation.subscribe(() => {});
-    expect(after.version).toBe(1);
-    expect(after.state.count).toBe(3);
-  });
-
-  it("cleans orphan subscriptions on disconnect through layer3 runtime", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-
-    expect(
-      (registration.implementation as { [SERVICE_ON_DISCONNECT]?: unknown })[
-        SERVICE_ON_DISCONNECT
-      ],
-    ).toBeTypeOf("function");
-
-    const setup = await createL3Endpoints(
-      {
-        meta: { id: "host" },
-        services: {
-          [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
-              object,
-              any
-            >,
-        },
-      },
-      {
-        meta: { id: "client" },
-      },
-    );
-
-    const storeProxy = (
-      setup.clientEngine as any
-    ).proxyFactory.createServiceProxy(definition.token.id, {
-      target: {
-        connectionId: (setup.clientConnection as { connectionId: string })
-          .connectionId,
-      },
-    }) as NexusStoreServiceContract<
-      { count: number },
-      { increment(by: number): number }
-    >;
-
-    const disconnectedListener = vi.fn();
-    const localListener = vi.fn();
-
-    await registration.implementation.subscribe(localListener);
-    await storeProxy.subscribe(disconnectedListener);
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(disconnectedListener).toHaveBeenCalledTimes(1);
-      expect(localListener).toHaveBeenCalledTimes(1);
-    });
-
-    (setup.clientConnection as { close(): void }).close();
-
-    await vi.waitFor(() => {
-      expect(
-        Array.from((setup.hostCm as any).connections.values()),
-      ).toHaveLength(0);
-    });
-
-    await expect(
-      registration.implementation.dispatch("increment", [1]),
-    ).resolves.toMatchObject({ result: 2, committedVersion: 2 });
-
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(2);
-      expect(disconnectedListener).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("exposes explicit invocation context shape for subscribe binding", () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-
-    const hooks = registration.implementation as {
-      [SERVICE_INVOKE_START]?: (sourceConnectionId: string) => unknown;
-    };
-
-    const context = hooks[SERVICE_INVOKE_START]?.("conn-ctx-shape");
-    expect(context).toEqual({ sourceConnectionId: "conn-ctx-shape" });
-  });
-
-  it("binds async subscribe ownership through hook path and cleans via disconnect hook", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-
-    const setup = await createL3Endpoints(
-      {
-        meta: { id: "host" },
-        services: {
-          [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
-              object,
-              any
-            >,
-        },
-      },
-      {
-        meta: { id: "client" },
-      },
-    );
-
-    const clientConnectionId = (
-      setup.clientConnection as { connectionId: string }
-    ).connectionId;
-    const storeProxy = (
-      setup.clientEngine as any
-    ).proxyFactory.createServiceProxy(definition.token.id, {
-      target: {
-        connectionId: clientConnectionId,
-      },
-    }) as NexusStoreServiceContract<
-      { count: number },
-      { increment(by: number): number }
-    >;
-
-    const remoteListener = vi.fn();
-    const localListener = vi.fn();
-
-    await registration.implementation.subscribe(localListener);
-    await storeProxy.subscribe(remoteListener);
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(1);
-      expect(remoteListener).toHaveBeenCalledTimes(1);
-    });
-
-    (
-      registration.implementation as {
-        [SERVICE_ON_DISCONNECT](connectionId: string): void;
-      }
-    )[SERVICE_ON_DISCONNECT](clientConnectionId);
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(2);
-      expect(remoteListener).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("binds ownership correctly for overlapping async subscribes from different connections", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-    const subscribeBarrier = deferred<void>();
-    const localListener = vi.fn();
-
-    await registration.implementation.subscribe(localListener);
-
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
-    );
-    registration.implementation.subscribe = async (onSync: any) => {
-      await subscribeBarrier.promise;
-      return originalSubscribe(onSync);
-    };
-
-    const network = await createStarNetwork<
-      { context: string },
-      { from: string }
-    >({
-      center: {
-        meta: { context: "background" },
-        services: {
-          [definition.token.id]: registration.implementation,
-        },
-      },
-      leaves: [
-        {
-          meta: { context: "popup-a" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
-        },
-        {
-          meta: { context: "popup-b" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
-        },
-      ],
-    });
-
-    const popupA = network.get("popup-a")!.nexus;
-    const popupB = network.get("popup-b")!.nexus;
-
-    const connectA = connectNexusStore(popupA, definition, {
-      target: { descriptor: { context: "background" } },
-    });
-    const connectB = connectNexusStore(popupB, definition, {
-      target: { descriptor: { context: "background" } },
-    });
-
-    subscribeBarrier.resolve();
-
-    const [remoteA, remoteB] = await Promise.all([connectA, connectB]);
-    const listenerA = vi.fn();
-    const listenerB = vi.fn();
-    const unsubscribeA = remoteA.subscribe(listenerA);
-    const unsubscribeB = remoteB.subscribe(listenerB);
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(1);
-      expect(listenerA).toHaveBeenCalledTimes(1);
-      expect(listenerB).toHaveBeenCalledTimes(1);
-    });
-
-    const popupACm = (popupA as any).connectionManager;
-    const popupAConnection = Array.from(
-      (popupACm as any).connections.values(),
-    )[0] as {
-      close(): void;
-    };
-    popupAConnection.close();
-
-    await vi.waitFor(() => {
-      expect((popupACm as any).connections.size).toBe(0);
-    });
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(2);
-      expect(listenerA).toHaveBeenCalledTimes(1);
-      expect(listenerB).toHaveBeenCalledTimes(2);
-    });
-
-    const popupBCm = (popupB as any).connectionManager;
-    const popupBConnection = Array.from(
-      (popupBCm as any).connections.values(),
-    )[0] as {
-      close(): void;
-    };
-    popupBConnection.close();
-
-    await vi.waitFor(() => {
-      expect((popupBCm as any).connections.size).toBe(0);
-    });
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(3);
-      expect(listenerA).toHaveBeenCalledTimes(1);
-      expect(listenerB).toHaveBeenCalledTimes(2);
-    });
-
-    unsubscribeA();
-    unsubscribeB();
-    remoteA.destroy();
-    remoteB.destroy();
-  });
-
-  it("cleans remote subscription on real disconnect after async subscribe path", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-    const subscribeGate = deferred<void>();
-    const localListener = vi.fn();
-
-    await registration.implementation.subscribe(localListener);
-
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
-    );
-    registration.implementation.subscribe = async (onSync: any) => {
-      await subscribeGate.promise;
-      return originalSubscribe(onSync);
-    };
-
-    const setup = await createL3Endpoints(
-      {
-        meta: { id: "host" },
-        services: {
-          [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
-              object,
-              any
-            >,
-        },
-      },
-      {
-        meta: { id: "client" },
-      },
-    );
-
-    const storeProxy = (
-      setup.clientEngine as any
-    ).proxyFactory.createServiceProxy(definition.token.id, {
-      target: {
-        connectionId: (setup.clientConnection as { connectionId: string })
-          .connectionId,
-      },
-    }) as NexusStoreServiceContract<
-      { count: number },
-      { increment(by: number): number }
-    >;
-
-    const remoteListener = vi.fn();
-
-    const subscribePromise = storeProxy.subscribe(remoteListener);
-    subscribeGate.resolve();
-    await subscribePromise;
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(1);
-      expect(remoteListener).toHaveBeenCalledTimes(1);
-    });
-
-    (setup.clientConnection as { close(): void }).close();
-
-    await vi.waitFor(() => {
-      expect(
-        Array.from((setup.hostCm as any).connections.values()),
-      ).toHaveLength(0);
-    });
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(2);
-      expect(remoteListener).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("rejects late subscribe completion when connection already disconnected", async () => {
-    const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
-    const subscribeGate = deferred<void>();
-    const localListener = vi.fn();
-
-    await registration.implementation.subscribe(localListener);
-
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
-    );
-    registration.implementation.subscribe = async (
-      onSync: any,
-      invocation: any,
-    ) => {
-      await subscribeGate.promise;
-      return originalSubscribe(onSync, invocation);
-    };
-
-    const setup = await createL3Endpoints(
-      {
-        meta: { id: "host" },
-        services: {
-          [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
-              object,
-              any
-            >,
-        },
-      },
-      {
-        meta: { id: "client" },
-      },
-    );
-
-    const storeProxy = (
-      setup.clientEngine as any
-    ).proxyFactory.createServiceProxy(definition.token.id, {
-      target: {
-        connectionId: (setup.clientConnection as { connectionId: string })
-          .connectionId,
-      },
-    }) as NexusStoreServiceContract<
-      { count: number },
-      { increment(by: number): number }
-    >;
-
-    const remoteListener = vi.fn();
-    const pendingSubscribe = storeProxy.subscribe(remoteListener);
-
-    (setup.clientConnection as { close(): void }).close();
-    await vi.waitFor(() => {
-      expect(
-        Array.from((setup.hostCm as any).connections.values()),
-      ).toHaveLength(0);
-    });
-
-    subscribeGate.resolve();
-    await expect(
-      pendingSubscribe.catch((error) => {
-        throw normalizeNexusStoreError(error);
-      }),
-    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
-
-    await registration.implementation.dispatch("increment", [1]);
-    await vi.waitFor(() => {
-      expect(localListener).toHaveBeenCalledTimes(1);
-      expect(remoteListener).toHaveBeenCalledTimes(0);
-    });
-  });
-});
 
 describe("state client runtime and connect APIs", () => {
   it("safeConnectNexusStore maps disconnect-hook getter errors with normalization branches", async () => {
@@ -1788,6 +1028,77 @@ describe("state client runtime and connect APIs", () => {
     remote.destroy();
     remote.destroy();
     expect(remote.getStatus().type).toBe("destroyed");
+  });
+
+  it("terminal stale/disconnected transitions stop serving future snapshots without explicit mirror destroy", async () => {
+    let onSync!: (event: {
+      type: "snapshot";
+      storeInstanceId: string;
+      version: number;
+      state: { count: number };
+    }) => void;
+
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-terminal-state",
+          subscriptionId: "sub-terminal-state",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 1,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-state-no-mirror-destroy"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    const observed: number[] = [];
+    remote.subscribe((snapshot) => {
+      observed.push(snapshot.count);
+    });
+
+    onSync({
+      type: "snapshot",
+      storeInstanceId: "store-terminal-state",
+      version: 1,
+      state: { count: 1 },
+    });
+    expect(observed).toEqual([1]);
+    expect(remote.getState()).toEqual({ count: 1 });
+
+    (
+      remote as RemoteStoreEntity<{ count: number }, { increment(): number }>
+    ).onTransportDisconnect("forced disconnect");
+    expect(remote.getStatus().type).toBe("disconnected");
+
+    onSync({
+      type: "snapshot",
+      storeInstanceId: "store-terminal-state",
+      version: 2,
+      state: { count: 2 },
+    });
+
+    expect(observed).toEqual([1]);
+    expect(remote.getState()).toEqual({ count: 1 });
   });
 
   it("await remote actions resolves only after mirror observes committed version", async () => {
@@ -3025,50 +2336,5 @@ describe("state client runtime and connect APIs", () => {
       NexusStoreProtocolError,
     );
     expect(remote.getStatus().type).toBe("disconnected");
-  });
-});
-
-describe("state error normalization", () => {
-  it("normalizeNexusStoreError preserves existing store errors", () => {
-    const existing = new NexusStoreActionError("existing");
-    const normalized = normalizeNexusStoreError(existing);
-
-    expect(normalized).toBe(existing);
-  });
-
-  it("normalizeNexusStoreError adapts Error and unknown values", () => {
-    const error = new Error("boom-normalize");
-    const normalizedError = normalizeNexusStoreError(error);
-    expect(normalizedError).toBeInstanceOf(NexusStoreProtocolError);
-    expect(normalizedError.message).toBe("boom-normalize");
-    expect(normalizedError.cause).toBe(error);
-
-    const normalizedUnknown = normalizeNexusStoreError(42);
-    expect(normalizedUnknown).toBeInstanceOf(NexusStoreProtocolError);
-    expect(normalizedUnknown.message).toBe("Unknown store error");
-    expect(normalizedUnknown.cause).toBe(42);
-  });
-
-  it("normalizeNexusStoreError maps core disconnect-coded errors", () => {
-    const coreDisconnectLike = Object.assign(new Error("conn closed"), {
-      code: "E_CONN_CLOSED",
-    });
-
-    const normalized = normalizeNexusStoreError(coreDisconnectLike);
-    expect(normalized).toBeInstanceOf(NexusStoreDisconnectedError);
-    expect(normalized.message).toBe("conn closed");
-    expect(normalized.cause).toBe(coreDisconnectLike);
-  });
-
-  it("state error base carries code, context, and cause", () => {
-    const cause = new Error("cause");
-    const error = new NexusStoreError("store-error", "E_STORE_PROTOCOL", {
-      cause,
-      context: { operation: "subscribe" },
-    });
-
-    expect(error.code).toBe("E_STORE_PROTOCOL");
-    expect(error.context).toEqual({ operation: "subscribe" });
-    expect(error.cause).toBe(cause);
   });
 });

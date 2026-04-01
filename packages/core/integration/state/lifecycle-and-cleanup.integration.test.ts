@@ -11,12 +11,18 @@ import {
   connectNexusStore,
   defineNexusStore,
   provideNexusStore,
+  type NexusStoreServiceContract,
 } from "../../src/state";
 
-describe("Nexus State E2E: Lifecycle and Cleanup", () => {
+describe("Nexus State Integration: Lifecycle and Cleanup", () => {
   it("connects remote store over ordinary service path and handles disconnect", async () => {
     const counterStore = defineNexusStore({
-      token: new Token("state:counter:e2e"),
+      token: new Token<
+        NexusStoreServiceContract<
+          { count: number },
+          { increment(by: number): number }
+        >
+      >("state:counter:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
         increment(by: number) {
@@ -71,7 +77,12 @@ describe("Nexus State E2E: Lifecycle and Cleanup", () => {
 
   it("synchronizes state across isolated contexts, fans out updates, and cleans disconnected subscribers", async () => {
     const counterStore = defineNexusStore({
-      token: new Token("state:counter:multi-context"),
+      token: new Token<
+        NexusStoreServiceContract<
+          { count: number },
+          { increment(by: number): number }
+        >
+      >("state:counter:multi-context"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
         increment(by: number) {
@@ -286,7 +297,7 @@ describe("Nexus State E2E: Lifecycle and Cleanup", () => {
     type CounterActions = { increment(by: number): number };
 
     const definition = defineNexusStore<CounterState, CounterActions>({
-      token: new Token("state:counter:stale-instance:e2e"),
+      token: new Token("state:counter:stale-instance:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
         increment(by: number) {
@@ -415,13 +426,207 @@ describe("Nexus State E2E: Lifecycle and Cleanup", () => {
       target: { descriptor: { context: "background" } },
     });
 
+    const seenCounts: number[] = [];
+    const stop = remote.subscribe((snapshot) => {
+      seenCounts.push(snapshot.count);
+    });
+
+    await remote.actions.increment(1);
+    await vi.waitFor(() => {
+      expect(seenCounts).toEqual([1]);
+    });
+
     expect(remote.getStatus().type).toBe("ready");
     await staleService.replaceHostInstance();
+    await staleService.dispatch("increment", [5]);
+
+    await vi.waitFor(() => {
+      expect(remote.getStatus().type).toBe("stale");
+    });
+
+    await staleService.dispatch("increment", [5]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(remote.getState().count).toBe(1);
+    expect(seenCounts).toEqual([1]);
+
     await expect(remote.actions.increment(1)).rejects.toMatchObject({
       name: "NexusStoreDisconnectedError",
     });
-    expect(remote.getStatus().type).toBe("stale");
-    await expect(remote.actions.increment(1)).rejects.toMatchObject({
+
+    stop();
+  });
+
+  it("keeps one remote usable while sibling remote is stale after host replacement", async () => {
+    type CounterState = { count: number };
+    type CounterActions = { increment(by: number): number };
+
+    const definition = defineNexusStore<CounterState, CounterActions>({
+      token: new Token("state:counter:sibling-stale-isolation:integration"),
+      state: () => ({ count: 0 }),
+      actions: ({ getState, setState }) => ({
+        increment(by: number) {
+          setState({ count: getState().count + by });
+          return getState().count;
+        },
+      }),
+    });
+
+    const createHostService = () =>
+      provideNexusStore(definition)
+        .implementation as CounterActions extends Record<
+        string,
+        (...args: any[]) => any
+      >
+        ? {
+            subscribe(
+              onSync: (event: {
+                type: "snapshot";
+                storeInstanceId: string;
+                version: number;
+                state: CounterState;
+              }) => void,
+              invocation?: unknown,
+            ): Promise<{
+              storeInstanceId: string;
+              subscriptionId: string;
+              version: number;
+              state: CounterState;
+            }>;
+            unsubscribe(subscriptionId: string): Promise<void>;
+            dispatch(
+              action: "increment",
+              args: [number],
+            ): Promise<{
+              type: "dispatch-result";
+              committedVersion: number;
+              result: number;
+            }>;
+          }
+        : never;
+
+    let activeHost = createHostService();
+    const callbacksByClientSubscription = new Map<
+      string,
+      (event: {
+        type: "snapshot";
+        storeInstanceId: string;
+        version: number;
+        state: CounterState;
+      }) => void
+    >();
+    const hostSubscriptionByClientSubscription = new Map<string, string>();
+    let clientSubscriptionSeq = 0;
+
+    const staleService = {
+      async subscribe(
+        onSync: (event: {
+          type: "snapshot";
+          storeInstanceId: string;
+          version: number;
+          state: CounterState;
+        }) => void,
+        invocation?: unknown,
+      ) {
+        const baseline = await activeHost.subscribe(onSync, invocation);
+        const clientSubscriptionId = `client-sub:${++clientSubscriptionSeq}`;
+        callbacksByClientSubscription.set(clientSubscriptionId, onSync);
+        hostSubscriptionByClientSubscription.set(
+          clientSubscriptionId,
+          baseline.subscriptionId,
+        );
+        return {
+          ...baseline,
+          subscriptionId: clientSubscriptionId,
+        };
+      },
+      async unsubscribe(subscriptionId: string) {
+        const hostSubscriptionId =
+          hostSubscriptionByClientSubscription.get(subscriptionId);
+        callbacksByClientSubscription.delete(subscriptionId);
+        hostSubscriptionByClientSubscription.delete(subscriptionId);
+        if (hostSubscriptionId) {
+          await activeHost.unsubscribe(hostSubscriptionId);
+        }
+      },
+      async dispatch(action: "increment", args: [number]) {
+        return activeHost.dispatch(action, args);
+      },
+      async replaceHostInstance() {
+        const nextHost = createHostService();
+        for (const [
+          clientSubscriptionId,
+          callback,
+        ] of callbacksByClientSubscription) {
+          const baseline = await nextHost.subscribe(callback);
+          hostSubscriptionByClientSubscription.set(
+            clientSubscriptionId,
+            baseline.subscriptionId,
+          );
+        }
+        activeHost = nextHost;
+      },
+    };
+
+    const network = await createStarNetwork<
+      { context: "background" | "popup-a" | "popup-b" },
+      { from: string }
+    >({
+      center: {
+        meta: { context: "background" },
+        services: {
+          [definition.token.id]: staleService,
+        },
+      },
+      leaves: [
+        {
+          meta: { context: "popup-a" },
+          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        },
+        {
+          meta: { context: "popup-b" },
+          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        },
+      ],
+    });
+
+    const popupA = network.get("popup-a")!.nexus;
+    const popupB = network.get("popup-b")!.nexus;
+
+    const staleRemote = await connectNexusStore(popupA, definition, {
+      target: { descriptor: { context: "background" } },
+    });
+    const freshRemote = await connectNexusStore(popupB, definition, {
+      target: { descriptor: { context: "background" } },
+    });
+
+    await staleRemote.actions.increment(1);
+    await vi.waitFor(() => {
+      expect(staleRemote.getState().count).toBe(1);
+      expect(freshRemote.getState().count).toBe(1);
+    });
+
+    await staleService.replaceHostInstance();
+    await staleService.dispatch("increment", [5]);
+
+    await vi.waitFor(() => {
+      expect(staleRemote.getStatus().type).toBe("stale");
+    });
+    await vi.waitFor(() => {
+      expect(freshRemote.getStatus().type).toBe("stale");
+    });
+
+    const replacementRemote = await connectNexusStore(popupB, definition, {
+      target: { descriptor: { context: "background" } },
+    });
+
+    await expect(replacementRemote.actions.increment(2)).resolves.toBe(7);
+    expect(replacementRemote.getState().count).toBe(7);
+
+    await expect(staleRemote.actions.increment(1)).rejects.toMatchObject({
+      name: "NexusStoreDisconnectedError",
+    });
+
+    await expect(freshRemote.actions.increment(1)).rejects.toMatchObject({
       name: "NexusStoreDisconnectedError",
     });
   });

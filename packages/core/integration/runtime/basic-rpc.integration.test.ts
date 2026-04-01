@@ -12,7 +12,7 @@ import {
   teardownIssueCompanionWorld,
 } from "../fixtures";
 
-describe("Nexus L4 E2E: Basic RPC", () => {
+describe("Nexus L4 Integration: Basic RPC", () => {
   let world: IssueCompanionWorld;
 
   beforeEach(async () => {

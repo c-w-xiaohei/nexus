@@ -5,6 +5,7 @@ import { createStarNetwork } from "../src/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "../src/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "../src/types/symbols";
 import { LogicalConnection } from "../src/connection/logical-connection";
+import type { NexusMessage } from "../src/types/message";
 
 export type AppUserMeta =
   | { context: "background"; version: string }
@@ -276,6 +277,43 @@ export function closeAllConnections(
       (connection as LogicalConnection<any, any>).close();
     }
   }
+}
+
+export function listLogicalConnections(instance: {
+  nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
+}): Array<LogicalConnection<any, any>> {
+  const cm = (instance.nexus as any).connectionManager;
+  if (!cm) {
+    return [];
+  }
+  return Array.from((cm as any).connections.values()) as Array<
+    LogicalConnection<any, any>
+  >;
+}
+
+export function findLogicalConnection(
+  instance: { nexus: NexusInstance<AppUserMeta, AppPlatformMeta> },
+  predicate: (connection: LogicalConnection<any, any>) => boolean,
+): LogicalConnection<any, any> | undefined {
+  return listLogicalConnections(instance).find(predicate);
+}
+
+export async function injectIncomingMessage(
+  instance: { nexus: NexusInstance<AppUserMeta, AppPlatformMeta> },
+  sourceConnectionId: string,
+  message: NexusMessage,
+): Promise<void> {
+  const engine = (instance.nexus as any).engine;
+  if (!engine) {
+    throw new Error("Engine not initialized for integration fixture.");
+  }
+
+  await engine.safeOnMessage(message, sourceConnectionId).match(
+    () => undefined,
+    (error: Error) => {
+      throw error;
+    },
+  );
 }
 
 export function teardownIssueCompanionWorld(world?: IssueCompanionWorld) {

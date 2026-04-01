@@ -77,7 +77,7 @@ const markStoreStale = (target: RemoteStore<any, any>): void => {
     MARK_REMOTE_STORE_STALE_SYMBOL
   ];
   if (typeof marker === "function") {
-    marker();
+    marker.call(target);
   }
 
   markStoreAsAdapterStale(target);

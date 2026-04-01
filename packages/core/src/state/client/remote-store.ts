@@ -725,6 +725,13 @@ export class RemoteStoreEntity<
 
   private normalizeActionInvocationError(error: unknown): Error {
     if (isStructuredDisconnectError(error)) {
+      if (
+        this.status.type === "stale" &&
+        this.terminalActionError instanceof NexusStoreDisconnectedError
+      ) {
+        return this.terminalActionError;
+      }
+
       const disconnected = createDisconnectedError(
         "Store action disconnected before commit acknowledgement (unknown commit).",
         error,

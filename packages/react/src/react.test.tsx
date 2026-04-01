@@ -140,14 +140,13 @@ describe("react adapter", () => {
     expect(typeof stateModule.NexusStoreProtocolError).toBe("function");
   });
 
-  it("built package entrypoint is consumable", async () => {
-    const builtEntry = "../dist/index.mjs";
-    const built = await import(builtEntry);
+  it("source entrypoint re-exports the public React hooks", async () => {
+    const entry = await import("./index");
 
-    expect(typeof built.NexusProvider).toBe("function");
-    expect(typeof built.useNexus).toBe("function");
-    expect(typeof built.useRemoteStore).toBe("function");
-    expect(typeof built.useStoreSelector).toBe("function");
+    expect(typeof entry.NexusProvider).toBe("function");
+    expect(typeof entry.useNexus).toBe("function");
+    expect(typeof entry.useRemoteStore).toBe("function");
+    expect(typeof entry.useStoreSelector).toBe("function");
   });
 
   it("NexusProvider exposes nexus instance", () => {
@@ -431,6 +430,115 @@ describe("react adapter", () => {
         expect(result.current.status.cause).toBeInstanceOf(Error);
       }
     });
+  });
+
+  it("normalizes non-Error connect rejection to Error", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+
+    connectSpy.mockRejectedValueOnce("plain-failure");
+
+    const wrapper = createWrapper(nexus);
+    const { result } = renderHook(
+      () => useRemoteStore(definition, { target: { descriptor: "bg" } }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status.type).toBe("disconnected");
+      expect(result.current.error).toBeInstanceOf(Error);
+      expect(result.current.error?.message).toBe("plain-failure");
+      if (result.current.status.type === "disconnected") {
+        expect(result.current.status.cause).toBeInstanceOf(Error);
+      }
+    });
+  });
+
+  it("destroys active store on hook unmount after successful connect", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+
+    const remote = createFakeRemoteStore(
+      { count: 3 },
+      { type: "ready", storeInstanceId: "instance:umount", version: 3 },
+    );
+    const destroySpy = vi.spyOn(remote, "destroy");
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const wrapper = createWrapper(nexus);
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { descriptor: "bg" } }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status.type).toBe("ready");
+      expect(result.current.store).toBe(remote);
+    });
+
+    unmount();
+
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(remote.getStatus().type).toBe("destroyed");
+  });
+
+  it("uses store-bound stale marker during target handoff", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+
+    const markerStore = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:marker-old", version: 1 },
+    ) as FakeRemoteStore<CounterState> & { staleMarkerCalls?: number };
+    markerStore.staleMarkerCalls = 0;
+
+    const markerSymbol = Symbol.for("nexus.state.remote-store.mark-stale");
+    markerStore[markerSymbol] = function markStale(this: {
+      staleMarkerCalls?: number;
+    }) {
+      this.staleMarkerCalls = (this.staleMarkerCalls ?? 0) + 1;
+    };
+
+    const nextStore = createFakeRemoteStore(
+      { count: 2 },
+      { type: "ready", storeInstanceId: "instance:marker-new", version: 2 },
+    );
+
+    connectSpy
+      .mockResolvedValueOnce(markerStore)
+      .mockResolvedValueOnce(nextStore);
+
+    const wrapper = createWrapper(nexus);
+    const { result, rerender } = renderHook(
+      ({ target }) => useRemoteStore(definition, { target }),
+      {
+        initialProps: { target: { descriptor: "old" } },
+        wrapper,
+      },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status.type).toBe("ready");
+      expect(result.current.store).toBe(markerStore);
+    });
+
+    rerender({ target: { descriptor: "new" } });
+
+    await waitFor(() => {
+      expect(result.current.status.type).toBe("ready");
+      expect(result.current.store).toBe(nextStore);
+    });
+
+    expect(markerStore.staleMarkerCalls).toBe(1);
   });
 
   it("failed reconnect reports disconnected and keeps last selected value", async () => {

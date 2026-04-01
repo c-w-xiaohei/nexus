@@ -19,7 +19,7 @@ import type {
   IUserService,
 } from "../fixtures";
 
-describe("Nexus L4 E2E: Service Bootstrapping", () => {
+describe("Nexus L4 Integration: Service Bootstrapping", () => {
   it("should use a factory for dependency injection", async () => {
     DecoratorRegistry.clear();
 

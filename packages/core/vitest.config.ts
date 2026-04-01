@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     dangerouslyIgnoreUnhandledErrors: true,
     environment: "node", // 或 'jsdom' 如果需要
+    include: ["src/**/*.test.ts", "integration/**/*.integration.test.ts"],
     coverage: {
       provider: "v8", // 或 'istanbul'
       reporter: ["text", "json", "html"],
