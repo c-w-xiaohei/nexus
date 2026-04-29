@@ -37,7 +37,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: "pnpm"
           # Configure npm registry for publishing
           registry-url: "https://registry.npmjs.org"
@@ -47,17 +47,6 @@ jobs:
 
       - name: Build Packages
         run: pnpm build
-
-      - name: Diagnose npm publishing auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm --version
-          npm whoami --registry=https://registry.npmjs.org
-          npm config get registry
-          npm config get access
-          npm config get provenance
-          npm access list packages nexus-js --json --registry=https://registry.npmjs.org
 
       - name: Create Release Pull Request or Publish to npm
         id: changesets
@@ -70,8 +59,9 @@ jobs:
           publish: pnpm changeset publish
           github-token: ${{ secrets.BOT_TOKEN }}
         env:
-          # GITHUB_TOKEN is automatically provided by GitHub Actions
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Expose the same token to subprocesses that read GITHUB_TOKEN directly.
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
           # NPM_TOKEN must be configured as a repository secret
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_LOGLEVEL: verbose
+          # setup-node writes npm auth using NODE_AUTH_TOKEN.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
