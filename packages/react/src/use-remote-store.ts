@@ -17,6 +17,7 @@ const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
 );
 
 type ActionFunction = (...args: any[]) => any;
+type MatcherFunction = (...args: unknown[]) => unknown;
 
 export interface UseRemoteStoreResult<
   TState extends object,
@@ -29,7 +30,7 @@ export interface UseRemoteStoreResult<
 
 const INITIALIZING_STATUS: RemoteStoreStatus = { type: "initializing" };
 
-const matcherIdentityMap = new WeakMap<Function, string>();
+const matcherIdentityMap = new WeakMap<MatcherFunction, string>();
 let matcherIdentitySequence = 0;
 
 const toMatcherKey = (matcher: unknown): string | null => {
@@ -45,13 +46,14 @@ const toMatcherKey = (matcher: unknown): string | null => {
     return null;
   }
 
-  const existing = matcherIdentityMap.get(matcher);
+  const matcherFn = matcher as MatcherFunction;
+  const existing = matcherIdentityMap.get(matcherFn);
   if (existing) {
     return existing;
   }
 
   const next = `fn:${++matcherIdentitySequence}`;
-  matcherIdentityMap.set(matcher, next);
+  matcherIdentityMap.set(matcherFn, next);
   return next;
 };
 
