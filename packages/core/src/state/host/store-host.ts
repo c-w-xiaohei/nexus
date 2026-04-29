@@ -65,12 +65,23 @@ interface StoreCell<TState extends object> {
 }
 
 let subscriptionSequence = 0;
+let storeInstanceSequence = 0;
+
+const createStoreInstanceId = (): string => {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (randomUuid) {
+    return `store-instance:${randomUuid}`;
+  }
+
+  storeInstanceSequence += 1;
+  return `store-instance:fallback-${storeInstanceSequence}`;
+};
 
 class StoreHostEntity<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
 > implements StoreHostRuntime<TState, TActions> {
-  private readonly storeInstanceId = `store-instance:${globalThis.crypto.randomUUID()}`;
+  private readonly storeInstanceId = createStoreInstanceId();
   private version = 0;
   private destroyed = false;
   private dispatchChain: Promise<void> = Promise.resolve();

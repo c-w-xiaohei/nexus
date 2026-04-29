@@ -47,6 +47,27 @@ const deferred = <T>() => {
 };
 
 describe("state host runtime baseline handshake", () => {
+  it("creates store instance ids even when crypto.randomUUID is unavailable", async () => {
+    const originalCrypto = globalThis.crypto;
+
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: undefined,
+    });
+
+    try {
+      const host = createStoreHost(createCounterDefinition());
+      const baseline = await host.subscribe(() => {});
+
+      expect(baseline.storeInstanceId).toMatch(/^store-instance:/);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: originalCrypto,
+      });
+    }
+  });
+
   it("creates initial versioned snapshot via subscribe baseline", async () => {
     const host = createStoreHost(createCounterDefinition());
 
