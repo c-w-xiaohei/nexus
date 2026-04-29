@@ -111,11 +111,10 @@ importers:
         version: 4.0.18(jsdom@26.1.0)
 
   packages/react:
-    dependencies:
+    devDependencies:
       '@nexus-js/core':
         specifier: workspace:*
         version: link:../core
-    devDependencies:
       '@testing-library/react':
         specifier: 16.3.0
         version: 16.3.0(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.24))(@types/react@18.3.24)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
