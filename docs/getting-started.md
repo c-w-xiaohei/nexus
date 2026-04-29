@@ -193,6 +193,13 @@ const value = await remote.ping("hello");
 console.log(value);
 ```
 
+Important lifecycle note:
+
+- a raw `nexus.create()` unicast proxy is bound to the resolved remote session
+- target handoff changes future `nexus.create(...)` resolution, not an already-created raw proxy
+- replace an existing raw proxy only when its own bound session/connection ends, by calling `nexus.create(...)` again for the new session
+- higher-layer app code can automate this, but the raw proxy does not silently heal in place
+
 Why is `target` usually needed?
 
 Because Nexus has to decide where the proxy should connect. It resolves target intent in this order:

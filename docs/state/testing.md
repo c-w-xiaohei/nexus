@@ -45,10 +45,13 @@ Use integration tests when you need to prove:
 - updates fan out correctly
 - a disconnected context stops receiving updates
 - host-side cleanup removes orphaned remote resources/subscriptions
+- reconnect paths rebuild handles/resources explicitly instead of reusing terminal ones
+- restart/session-loss paths require explicit reacquire/rebuild semantics
 
 Current examples live in:
 
 - `packages/core/integration/state/lifecycle-and-cleanup.integration.test.ts`
+- `packages/core/integration/state/background-restart.integration.test.ts`
 - `packages/core/integration/state/protocol-and-errors.integration.test.ts`
 - `packages/core/integration/state/targeting-and-handoff.integration.test.ts`
 
@@ -93,5 +96,6 @@ Ask questions like:
 - Does a disconnected client stop receiving snapshots?
 - Do surviving clients continue to progress after one context is torn down?
 - Does the disconnected handle reject actions explicitly?
+- After session replacement, does the app rebuild with a new handle instead of relying on silent healing?
 
 Those questions are more valuable than testing internal bookkeeping alone.

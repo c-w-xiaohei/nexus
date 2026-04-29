@@ -35,6 +35,46 @@ The core Nexus model is:
 
 This gives local-like API ergonomics while preserving explicit cross-context boundaries.
 
+## Session-Bound Proxies And Connection-Bound References
+
+Nexus handles are intentionally scoped to runtime lifecycle boundaries.
+
+- `nexus.create()` returns a unicast proxy bound to the resolved remote session
+- `nexus.ref()` returns a local wrapper for reference passing; the connection-bound transient capability is the remote resource proxy materialized after transport crossing
+
+These are not immortal objects.
+
+If the remote session is replaced or the connection is lost:
+
+- existing `create()` proxies should be treated as invalid for new work
+- existing remote resource capabilities reached via refs are transient and should be reacquired on a new connection
+
+Target handoff does not mutate existing raw handles.
+
+- an already-created raw `nexus.create()` proxy stays pinned to the live session/connection it resolved at creation time
+- a remote capability proxy materialized from `nexus.ref()` crossing also stays pinned to that same original connection scope
+- later matcher/identity changes can change which endpoint future targeting resolves to, but they do not auto-retarget already-created raw handles
+
+Nexus keeps these boundaries explicit so applications can reason about ownership, cleanup, and failure behavior without hidden rebinding.
+
+## Raw Core vs Higher-Layer Rebuild
+
+Raw core handles and higher-layer orchestration have different jobs.
+
+- raw core: `create()` proxies and remote capabilities are lifecycle-scoped and become invalid across session/connection replacement
+- higher layers (state orchestration, React hooks, app services): detect lifecycle boundaries and build replacement handles
+
+Higher-layer rebuild does not mean raw handles auto-heal. It means your app creates new handles/capabilities for new lifecycle scopes.
+
+Concrete transient capability reacquire example:
+
+1. Context A calls a service method and receives a callback/reference wrapper via `nexus.ref()` semantics.
+2. Context B uses that remote callback capability while the current connection is alive.
+3. The connection drops and re-establishes with a new identity/scope.
+4. Context A must pass a fresh ref/callback again so Context B obtains a new remote capability proxy for the new connection.
+
+Reusing the old capability after step 3 is not valid.
+
 ## Startup And Configuration
 
 Before you can create useful proxies, the current context must be configured.
@@ -140,6 +180,8 @@ Examples:
 Nexus uses identity updates to keep targeting and connection lifecycle behavior correct over time.
 
 This is why `updateIdentity()` exists as part of the public product API: if a context changes meaningfully over time, Nexus needs updated identity information to keep routing and lifecycle decisions correct.
+
+At the application layer, reconnect usually means rebuilding session-bound handles after identity or connection changes. Higher-layer code may automate that rebuild flow, but raw core handles do not silently heal across session replacement.
 
 ## Product Capability Layers
 

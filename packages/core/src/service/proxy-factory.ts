@@ -5,6 +5,7 @@ import type { CallTarget, ResolveOptions } from "@/connection/types";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { Logger } from "@/logger";
 import type { ResultAsync } from "neverthrow";
+import { NexusResourceError } from "@/errors/resource-errors";
 
 type ReleaseContext = {
   resourceId: string;
@@ -108,6 +109,13 @@ export class ProxyFactory<U extends UserMetadata> {
   }
 
   private createChainableProxy(config: ChainableProxyConfig): any {
+    const toRejectedPromise = (error: unknown): Promise<never> =>
+      Promise.reject(
+        error instanceof globalThis.Error
+          ? error
+          : new globalThis.Error(String(error)),
+      );
+
     const createProxy = (path: (string | number)[]): any => {
       return new Proxy(() => {}, {
         get: (_target, prop, receiver) => {
@@ -116,9 +124,15 @@ export class ProxyFactory<U extends UserMetadata> {
               return undefined;
             }
 
-            const result = this.engine.safeDispatchCall(
-              config.buildCallOptions("GET", path),
-            );
+            let result: ResultAsync<any, globalThis.Error>;
+            try {
+              result = this.engine.safeDispatchCall(
+                config.buildCallOptions("GET", path),
+              );
+            } catch (error) {
+              const rejected = toRejectedPromise(error);
+              return rejected.then.bind(rejected);
+            }
             const unwrapped = this.unwrapResultAsync(result);
             return unwrapped.then.bind(unwrapped);
           }
@@ -139,30 +153,42 @@ export class ProxyFactory<U extends UserMetadata> {
 
           return createProxy([...path, prop as string]);
         },
-        apply: (_target, _thisArg, args) =>
-          this.trackFireAndForget(
-            this.unwrapResultAsync(
-              this.engine.safeDispatchCall(
-                config.buildCallOptions("APPLY", path, { args }),
+        apply: (_target, _thisArg, args) => {
+          try {
+            return this.trackFireAndForget(
+              this.unwrapResultAsync(
+                this.engine.safeDispatchCall(
+                  config.buildCallOptions("APPLY", path, { args }),
+                ),
               ),
-            ),
-          ),
+            );
+          } catch (error) {
+            return this.trackFireAndForget(toRejectedPromise(error));
+          }
+        },
         ...(config.hasSetter
           ? {
               set: (_target: any, prop: string | symbol, value: any) => {
-                this.trackFireAndForget(
-                  this.unwrapResultAsync(
-                    this.engine.safeDispatchCall(
-                      config.buildCallOptions(
-                        "SET",
-                        [...path, prop as string],
-                        {
-                          value,
-                        },
+                try {
+                  this.trackFireAndForget(
+                    this.unwrapResultAsync(
+                      this.engine.safeDispatchCall(
+                        config.buildCallOptions(
+                          "SET",
+                          [...path, prop as string],
+                          {
+                            value,
+                          },
+                        ),
                       ),
                     ),
-                  ),
-                );
+                  );
+                } catch (error) {
+                  if (error instanceof NexusResourceError) {
+                    throw error;
+                  }
+                  this.trackFireAndForget(toRejectedPromise(error));
+                }
                 return true;
               },
             }
@@ -238,6 +264,16 @@ export class ProxyFactory<U extends UserMetadata> {
     sourceConnectionId: string,
   ): object {
     let released = false;
+    const assertActive = (): void => {
+      if (released) {
+        throw new NexusResourceError(
+          `Remote resource proxy "${resourceId}" has been released and is no longer usable.`,
+          "E_RESOURCE_ACCESS_DENIED",
+          { resourceId, connectionId: sourceConnectionId },
+        );
+      }
+    };
+
     const release = (): void => {
       if (released) {
         return;
@@ -257,6 +293,8 @@ export class ProxyFactory<U extends UserMetadata> {
         path: (string | number)[],
         extra?: { args?: any[]; value?: any },
       ): DispatchCallOptions => {
+        assertActive();
+
         switch (type) {
           case "GET":
             return {

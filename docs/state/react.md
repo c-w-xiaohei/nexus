@@ -58,6 +58,7 @@ type UseRemoteStoreResult<TState, TActions> = {
 - before first ready: `store` may be `null`
 - on target replacement: the old handle becomes stale internally, while the hook result moves back through replacement setup with `store: null`
 - failed connect or replacement attempts are explicit, not disguised as ongoing initialization
+- raw handles do not auto-heal; hook behavior is orchestration that may acquire a replacement handle
 
 ## Loading And Error UI
 
@@ -115,6 +116,56 @@ Treat those as explicit Nexus State lifecycle signals.
 - `stale` means the old handle no longer matches the target semantics you asked for
 
 In practice, React code usually responds by rendering fallback UI and letting `useRemoteStore()` create a replacement handle path when inputs change.
+
+This is higher-layer rebuild behavior. It should not be interpreted as raw handle auto-healing: old terminal handles remain terminal.
+
+For same-target session loss, do not assume guaranteed automatic retry/rebuild from the hook alone. Reacquisition is guaranteed only when the consumer remounts, hook inputs change, or your app explicitly orchestrates a rebuild trigger.
+
+### Same-target session loss pattern (explicit reacquire)
+
+If your app must stay on the same target (for example `{ context: "background" }`) after a restart/session-loss event, reacquire by remounting the `useRemoteStore()` consumer and letting the hook create a new handle.
+
+```tsx
+function CounterBoundary() {
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+
+  return (
+    <CounterRemote
+      key={`background-${sessionEpoch}`}
+      onReconnect={() => setSessionEpoch((value) => value + 1)}
+    />
+  );
+}
+
+function CounterRemote({ onReconnect }: { onReconnect(): void }) {
+  const remote = useRemoteStore(counterStore, {
+    target: { descriptor: { context: "background" } },
+  });
+
+  const count = useStoreSelector(remote, (state) => state.count, {
+    fallback: 0,
+  });
+
+  if (remote.status.type === "disconnected" || remote.status.type === "stale") {
+    return (
+      <div>
+        <p>Session lost. Reconnect to rebuild store handle.</p>
+        <button onClick={onReconnect}>Reconnect</button>
+      </div>
+    );
+  }
+
+  if (!remote.store || remote.status.type !== "ready") {
+    return <span>Loading...</span>;
+  }
+
+  return (
+    <button onClick={() => remote.store.actions.increment(1)}>{count}</button>
+  );
+}
+```
+
+This preserves the raw core rule (old handle is terminal) while giving React a concrete orchestration path for same-target rebuilds.
 
 ## Example
 

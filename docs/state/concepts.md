@@ -79,6 +79,26 @@ Nexus State makes the remote nature explicit without forcing you to hand-write s
 
 The important point is that `disconnected` and `stale` are not silent. They are observable states.
 
+## Headless Core vs Hook-Level Lifecycle
+
+Keep these two layers separate:
+
+- headless core (`connectNexusStore` / `RemoteStore`)
+- React hook orchestration (`useRemoteStore` and selector hooks)
+
+Headless core behavior:
+
+- initial connect failure means `connectNexusStore(...)` rejects (or safe API returns `Err`)
+- no `RemoteStore` instance exists from that failed attempt
+- once a `RemoteStore` reaches a terminal state (`disconnected`, `stale`, `destroyed`), replacement means creating a new instance
+
+Hook-level behavior:
+
+- hooks expose UI-oriented lifecycle (`status`, `store`, `error`) during initial load and replacement
+- hook code can keep rendering continuity while replacement is in progress
+- same-target session loss does not imply guaranteed automatic retry/rebuild unless the app remounts, changes hook inputs, or explicitly orchestrates reconnect
+- this is higher-layer orchestration, not in-place healing of a terminal raw handle
+
 ## Stale vs Disconnected
 
 These are different failures in Nexus State.
@@ -141,3 +161,10 @@ If a handle becomes:
 that instance is terminal.
 
 Recovery means creating a new handle, not reviving the old one in place.
+
+This lines up with core semantics:
+
+- raw `nexus.create()` proxies are session-bound
+- `nexus.ref()` capabilities are connection-bound transient resources
+
+Higher-level state or React orchestration can trigger rebuild flows, but those flows create replacement handles rather than healing terminal ones.

@@ -79,6 +79,12 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - performs one setup step that establishes the initial snapshot and subscription together
 - initializes the local mirror from the baseline
 
+Lifecycle boundary:
+
+- the returned `RemoteStore` is a session-bound handle
+- if the underlying session is replaced, create a new handle with `connectNexusStore(...)`
+- terminal handles are not revived in place
+
 ## `safeConnectNexusStore()`
 
 Safe variant of `connectNexusStore()`.
@@ -118,6 +124,8 @@ Primary capabilities:
 - `getStatus()`
 - `destroy()`
 - `actions.*`
+
+`RemoteStore` is connection/session-scoped by design. Treat `disconnected`, `stale`, and `destroyed` as explicit lifecycle boundaries that require replacement, not in-place healing.
 
 ### Example
 

@@ -35,6 +35,24 @@ The public disconnected status carries:
 - `lastKnownVersion`
 - optional `cause`
 
+## Initial Connect Failure vs Reconnect Failure
+
+Distinguish headless core semantics from hook-level behavior.
+
+Headless core (`connectNexusStore` / `safeConnectNexusStore`):
+
+- initial connect failure happens before a usable `RemoteStore` exists
+- throw-style: `connectNexusStore(...)` rejects with connect-oriented error
+- safe-style: `safeConnectNexusStore(...)` returns `Err`
+
+After a `RemoteStore` exists, later transport loss or replacement-attempt failure transitions that instance to terminal lifecycle (`disconnected` / `stale`) and you rebuild by creating a new instance.
+
+Hook layer (`useRemoteStore`):
+
+- exposes status/error fields suitable for rendering initial loading, failure, and replacement progress
+- may retain UI continuity during replacement setup
+- still does not revive terminal raw handles in place
+
 ## `stale`
 
 Use this when the handle itself is no longer the right handle.
@@ -42,7 +60,11 @@ Use this when the handle itself is no longer the right handle.
 Typical causes:
 
 - target change in the React adapter
-- store instance mismatch that is surfaced through the same public stale shape
+- target-semantics drift or handoff (for example, "active tab" now refers to a different tab)
+
+Do not use `stale` for same-target session replacement.
+
+If the same target's background/session is restarted and the old handle loses its backing connection, that old handle is `disconnected`.
 
 Stale is not the same thing as disconnected.
 
@@ -98,6 +120,13 @@ These are different ideas:
 Nexus State supports replacement.
 
 It does not treat a terminal `RemoteStore` instance as something that silently recovers in place.
+
+The same distinction applies to raw core handles:
+
+- `nexus.create()` unicast proxies are session-bound
+- `nexus.ref()` resources are connection-bound transient capabilities
+
+If session/connection identity changes, applications should reacquire handles/capabilities instead of expecting old ones to heal.
 
 ## Error Types
 

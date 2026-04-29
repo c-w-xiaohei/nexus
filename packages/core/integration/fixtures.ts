@@ -74,6 +74,7 @@ export interface IContentScriptService {
   getTimelineProcessor(): Promise<TimelineProcessor>;
   refresh(): Promise<void>;
   getTitle(): Promise<string>;
+  bumpSessionCounter(): Promise<number>;
 }
 
 export interface ISettingsService {
@@ -150,6 +151,8 @@ export class BackgroundServiceImpl implements IBackgroundService {
 }
 
 export class ContentScriptServiceImpl implements IContentScriptService {
+  private sessionCounter = 0;
+
   constructor(private meta: ContentScriptMeta) {}
 
   async highlightUser(user: string): Promise<boolean> {
@@ -170,6 +173,11 @@ export class ContentScriptServiceImpl implements IContentScriptService {
 
   async getTitle(): Promise<string> {
     return `Issue ${this.meta.issueId} - My Test Project`;
+  }
+
+  async bumpSessionCounter(): Promise<number> {
+    this.sessionCounter += 1;
+    return this.sessionCounter;
   }
 }
 

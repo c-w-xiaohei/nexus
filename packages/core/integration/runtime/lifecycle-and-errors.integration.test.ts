@@ -90,6 +90,39 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     );
   });
 
+  it("keeps old unicast create() proxy session-bound after replacement connection appears", async () => {
+    const oldApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { descriptor: { context: "content-script", issueId: "CS1" } },
+        expects: "one",
+      },
+    );
+    await expect(oldApi.getTitle()).resolves.toContain("CS1");
+
+    const oldConnection = findLogicalConnection(
+      world.background,
+      (connection) =>
+        connection.remoteIdentity?.context === "content-script" &&
+        connection.remoteIdentity?.issueId === "CS1",
+    );
+    expect(oldConnection).toBeDefined();
+    oldConnection!.close();
+
+    const freshApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { descriptor: { context: "content-script", issueId: "CS1" } },
+        expects: "one",
+      },
+    );
+
+    await expect(freshApi.getTitle()).resolves.toContain("CS1");
+    await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
+      CallProcessor.Error.Disconnected,
+    );
+  });
+
   it("should auto-cleanup resources on the host when a client disconnects", async () => {
     const bgApi = await world.cs1.nexus.create(BackgroundServiceToken, {
       target: { descriptor: { context: "background" } },
@@ -359,6 +392,48 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
     releaseCs2Response();
     await expect(callPromise).resolves.toBe("Issue CS2 - My Test Project");
+  });
+
+  it("keeps old and fresh unicast proxies session-bound during replacement overlap", async () => {
+    const logicalTarget = (id: AppUserMeta) =>
+      id.context === "content-script" && id.isActive;
+
+    const oldApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { matcher: logicalTarget },
+        expects: "first",
+      },
+    );
+
+    await expect(oldApi.bumpSessionCounter()).resolves.toBe(1);
+
+    await world.cs1.nexus.updateIdentity({ isActive: false });
+    await world.cs2.nexus.updateIdentity({ isActive: true });
+
+    await vi.waitFor(async () => {
+      const candidate = await world.background.nexus.create(
+        ContentScriptServiceToken,
+        {
+          target: { matcher: logicalTarget },
+          expects: "first",
+        },
+      );
+      await expect(candidate.getTitle()).resolves.toContain("CS2");
+    });
+
+    const freshApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { matcher: logicalTarget },
+        expects: "first",
+      },
+    );
+
+    await expect(freshApi.bumpSessionCounter()).resolves.toBe(1);
+
+    await expect(oldApi.bumpSessionCounter()).resolves.toBe(2);
+    await expect(freshApi.bumpSessionCounter()).resolves.toBe(2);
   });
 
   it("should ignore duplicate responses from the same valid target connection", async () => {
