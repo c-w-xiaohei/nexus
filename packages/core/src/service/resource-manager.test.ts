@@ -125,5 +125,14 @@ describe("ResourceManager", () => {
       expect(resourceManager.getLocalResource(localResId1)).toBeDefined();
       expect(resourceManager.getLocalResource(localResId2)).toBeDefined();
     });
+
+    it("should release a remote proxy explicitly without disconnect cleanup", () => {
+      const initialProxyCount = resourceManager.countRemoteProxies();
+      resourceManager.registerRemoteProxy("remote-res-X", mockProxy, "conn-X");
+
+      expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount + 1);
+      resourceManager.releaseRemoteProxy("remote-res-X");
+      expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount);
+    });
   });
 });

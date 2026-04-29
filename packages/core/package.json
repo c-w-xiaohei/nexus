@@ -25,6 +25,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./state": {
+      "types": "./dist/state/index.d.ts",
+      "import": "./dist/state/index.mjs",
+      "require": "./dist/state/index.js"
     }
   },
   "main": "./dist/index.js",
@@ -40,6 +45,8 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest run",
+    "test:integration:file": "vitest run",
+    "smoke:state-boundary": "node ./scripts/state-boundary-smoke.mjs",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit"
@@ -57,6 +64,7 @@
   "dependencies": {
     "es-toolkit": "1.44.0",
     "neverthrow": "8.2.0",
+    "zustand": "5.0.8",
     "zod": "4.3.6"
   }
 }

@@ -48,11 +48,30 @@ export default tseslint.config(
     },
   },
 
+  // Environment for 'react' package (browser runtime, node build config)
+  {
+    files: ["packages/react/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
+
   // Vitest config
   {
     files: ["**/*.test.ts"],
     plugins: { vitest },
-    rules: vitest.configs.recommended.rules,
+    rules: {
+      ...vitest.configs.recommended.rules,
+      "vitest/expect-expect": [
+        "error",
+        {
+          assertFunctionNames: ["expect", "expectTypeOf"],
+        },
+      ],
+    },
   },
 
   // Prettier config must be last

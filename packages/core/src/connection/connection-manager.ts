@@ -661,6 +661,7 @@ export class ConnectionManager<
       oldIdentity,
       newIdentity,
     );
+    this.handlers.onIdentityUpdated?.(connectionId, newIdentity, oldIdentity);
   }
 }
 

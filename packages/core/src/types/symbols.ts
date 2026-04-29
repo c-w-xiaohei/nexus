@@ -3,3 +3,11 @@
  * 使用 Symbol 可以避免与远程对象的属性名发生冲突。
  */
 export const RELEASE_PROXY_SYMBOL = Symbol.for("nexus.proxy.release");
+
+export const NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL = Symbol.for(
+  "nexus.connection.subscribe-disconnect",
+);
+
+export const NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL = Symbol.for(
+  "nexus.connection.subscribe-target-stale",
+);

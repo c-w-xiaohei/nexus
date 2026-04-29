@@ -13,6 +13,12 @@ import { get, set } from "es-toolkit/compat";
 import type { MessageHandlerFn, HandlerContext } from "./types";
 import { ResourceManager } from "../resource-manager";
 import { Result, ResultAsync, err, errAsync, ok, okAsync } from "neverthrow";
+import {
+  type ServiceInvocationContext,
+  isServiceWithHooks,
+  SERVICE_INVOKE_END,
+  SERVICE_INVOKE_START,
+} from "../service-invocation-hooks";
 
 type MessageResourceErrorCode =
   | "E_RESOURCE_NOT_FOUND"
@@ -264,6 +270,11 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           );
         }
 
+        const invocationContext: ServiceInvocationContext | undefined =
+          !resourceId && isServiceWithHooks(parent ?? target)
+            ? parent?.[SERVICE_INVOKE_START]?.(sourceConnectionId)
+            : undefined;
+
         const revivedArgsResult = payloadProcessor.safeRevive(
           args,
           sourceConnectionId,
@@ -274,9 +285,20 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
         }
 
         return ResultAsync.fromPromise(
-          Promise.resolve().then(() =>
-            target.apply(parent, revivedArgsResult.value),
-          ),
+          Promise.resolve().then(async () => {
+            try {
+              const invokeArgs =
+                typeof invocationContext === "undefined"
+                  ? revivedArgsResult.value
+                  : [...revivedArgsResult.value, invocationContext];
+
+              return await target.apply(parent, invokeArgs);
+            } finally {
+              if (!resourceId && isServiceWithHooks(parent ?? target)) {
+                parent?.[SERVICE_INVOKE_END]?.(invocationContext);
+              }
+            }
+          }),
           toError,
         );
       },

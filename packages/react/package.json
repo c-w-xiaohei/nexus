@@ -1,0 +1,61 @@
+{
+  "name": "@nexus-js/react",
+  "version": "0.1.1",
+  "description": "React adapter for Nexus state hooks",
+  "private": false,
+  "license": "MIT",
+  "author": "Carson Yu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c-w-xiaohei/nexus.git",
+    "directory": "packages/react"
+  },
+  "keywords": [
+    "nexus",
+    "react",
+    "state",
+    "cross-context"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "test:integration:file": "vitest run",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@nexus-js/core": "^0.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@nexus-js/core": "workspace:*",
+    "@testing-library/react": "16.3.0",
+    "@types/react": "18.3.24",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react-swc": "4.2.3",
+    "eslint": "9.39.2",
+    "jsdom": "26.1.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.1",
+    "vite-plugin-dts": "4.5.4",
+    "vitest": "4.0.18"
+  }
+}

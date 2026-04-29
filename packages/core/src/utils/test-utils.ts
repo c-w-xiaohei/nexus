@@ -246,7 +246,7 @@ export async function createL3Endpoints<
 
 /**
  * A comprehensive test utility for creating a fully interconnected star-topology
- * network of Nexus instances for E2E testing.
+ * network of Nexus instances for integration testing.
  *
  * @param config The network configuration, specifying a center and multiple leaves.
  * @returns A promise that resolves to a map of endpoint names to their nexus instances.

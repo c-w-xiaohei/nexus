@@ -143,6 +143,17 @@ export namespace NexusKernelBuilder {
           onDisconnect: (connectionId: string) => {
             engineRef.current?.onDisconnect(connectionId);
           },
+          onIdentityUpdated: (connectionId, newIdentity, oldIdentity) => {
+            if (JSON.stringify(newIdentity) === JSON.stringify(oldIdentity)) {
+              return;
+            }
+
+            engineRef.current?.onConnectionTargetStale(
+              connectionId,
+              newIdentity,
+              oldIdentity,
+            );
+          },
         };
 
         const resolvedConnectTo: NonNullable<

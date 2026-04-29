@@ -9,6 +9,7 @@ export namespace ResourceManager {
   export interface Runtime {
     registerExposedService(name: string, service: object): void;
     getExposedService(name: string): object | undefined;
+    listExposedServices(): readonly object[];
     registerLocalResource(
       target: object,
       ownerConnectionId: string,
@@ -21,6 +22,7 @@ export namespace ResourceManager {
       proxy: object,
       sourceConnectionId: string,
     ): void;
+    releaseRemoteProxy(resourceId: string): void;
     hasLocalResource(resourceId: string): boolean;
     countLocalResources(): number;
     countRemoteProxies(): number;
@@ -48,6 +50,9 @@ export namespace ResourceManager {
 
     const getExposedService = (name: string): object | undefined =>
       exposedServices.get(name);
+
+    const listExposedServices = (): readonly object[] =>
+      Array.from(exposedServices.values());
 
     const registerLocalResource = (
       target: object,
@@ -85,6 +90,11 @@ export namespace ResourceManager {
         `Registering remote proxy #${resourceId} from connection ${sourceConnectionId}.`,
       );
       remoteProxyRegistry.set(resourceId, { proxy, sourceConnectionId });
+    };
+
+    const releaseRemoteProxy = (resourceId: string): void => {
+      logger.debug(`Releasing remote proxy #${resourceId}`);
+      remoteProxyRegistry.delete(resourceId);
     };
 
     const hasLocalResource = (resourceId: string): boolean =>
@@ -150,10 +160,12 @@ export namespace ResourceManager {
     const runtime: Runtime = {
       registerExposedService,
       getExposedService,
+      listExposedServices,
       registerLocalResource,
       getLocalResource,
       releaseLocalResource,
       registerRemoteProxy,
+      releaseRemoteProxy,
       hasLocalResource,
       countLocalResources,
       countRemoteProxies,

@@ -17,6 +17,14 @@ import { PendingCallManager } from "./pending-call-manager";
 import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import {
+  isServiceWithHooks,
+  SERVICE_ON_DISCONNECT,
+} from "./service-invocation-hooks";
+import {
+  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+} from "@/types/symbols";
+import {
   err,
   errAsync,
   ok,
@@ -32,6 +40,14 @@ type DispatchCallBase = {
   strategy?: "one" | "first" | "all" | "stream";
   timeout?: number;
   proxyOptions?: CreateProxyOptions<any>;
+};
+
+type TargetStaleSubscription<U extends UserMetadata> = {
+  readonly callback: () => void;
+  readonly staleTarget?: {
+    readonly descriptor?: Partial<U>;
+    readonly matcher?: (identity: U) => boolean;
+  };
 };
 
 type DispatchGetCallOptions = DispatchCallBase & {
@@ -80,6 +96,11 @@ export class Engine<
   private readonly callProcessor: CallProcessor.Runtime;
 
   private messageIdSeq = 1;
+  private readonly disconnectListeners = new Map<string, Set<() => void>>();
+  private readonly targetStaleListeners = new Map<
+    string,
+    Set<TargetStaleSubscription<U>>
+  >();
 
   constructor(
     private readonly connectionManagerState: ConnectionManager<U, P>,
@@ -133,7 +154,69 @@ export class Engine<
     serviceName: string,
     options: CreateProxyOptions<U>,
   ): T {
-    return this.proxyFactory.createServiceProxy(serviceName, options);
+    const proxy = this.proxyFactory.createServiceProxy(
+      serviceName,
+      options,
+    ) as T & {
+      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
+        callback: () => void,
+      ) => () => void;
+      [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
+        callback: () => void,
+      ) => () => void;
+    };
+
+    if ("connectionId" in options.target) {
+      const connectionId = options.target.connectionId;
+
+      proxy[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL] = (callback) => {
+        let listeners = this.disconnectListeners.get(connectionId);
+        if (!listeners) {
+          listeners = new Set();
+          this.disconnectListeners.set(connectionId, listeners);
+        }
+
+        listeners.add(callback);
+        return () => {
+          const current = this.disconnectListeners.get(connectionId);
+          if (!current) {
+            return;
+          }
+
+          current.delete(callback);
+          if (current.size === 0) {
+            this.disconnectListeners.delete(connectionId);
+          }
+        };
+      };
+
+      proxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL] = (callback) => {
+        let listeners = this.targetStaleListeners.get(connectionId);
+        if (!listeners) {
+          listeners = new Set();
+          this.targetStaleListeners.set(connectionId, listeners);
+        }
+
+        const entry: TargetStaleSubscription<U> = {
+          callback,
+          staleTarget: options.staleTarget,
+        };
+        listeners.add(entry);
+        return () => {
+          const current = this.targetStaleListeners.get(connectionId);
+          if (!current) {
+            return;
+          }
+
+          current.delete(entry);
+          if (current.size === 0) {
+            this.targetStaleListeners.delete(connectionId);
+          }
+        };
+      };
+    }
+
+    return proxy;
   }
 
   public registerServices(services: Record<string, object>): void {
@@ -243,7 +326,127 @@ export class Engine<
   }
 
   public onDisconnect(connectionId: string): void {
+    const listeners = this.disconnectListeners.get(connectionId);
+    if (listeners) {
+      for (const listener of Array.from(listeners)) {
+        try {
+          listener();
+        } catch {
+          // listener isolation
+        }
+      }
+      this.disconnectListeners.delete(connectionId);
+    }
+
+    for (const service of this.resourceManager.listExposedServices()) {
+      if (isServiceWithHooks(service)) {
+        service[SERVICE_ON_DISCONNECT]?.(connectionId);
+      }
+    }
+
     this.resourceManager.cleanupConnection(connectionId);
     this.pendingCallManager.onDisconnect(connectionId);
   }
+
+  public onConnectionTargetStale(
+    connectionId: string,
+    newIdentity: U,
+    oldIdentity: U,
+  ): void {
+    const listeners = this.targetStaleListeners.get(connectionId);
+    if (!listeners) {
+      return;
+    }
+
+    const staleEntries: TargetStaleSubscription<U>[] = [];
+
+    for (const entry of Array.from(listeners)) {
+      if (
+        shouldMarkTargetStale({
+          staleTarget: entry.staleTarget,
+          newIdentity,
+          oldIdentity,
+        })
+      ) {
+        staleEntries.push(entry);
+      }
+    }
+
+    for (const entry of staleEntries) {
+      try {
+        entry.callback();
+      } catch {
+        // listener isolation
+      }
+      listeners.delete(entry);
+    }
+
+    if (listeners.size === 0) {
+      this.targetStaleListeners.delete(connectionId);
+    }
+  }
+}
+
+function shouldMarkTargetStale<U extends UserMetadata>(input: {
+  readonly staleTarget?: {
+    readonly descriptor?: Partial<U>;
+    readonly matcher?: (identity: U) => boolean;
+  };
+  readonly newIdentity: U;
+  readonly oldIdentity: U;
+}): boolean {
+  const { staleTarget, newIdentity, oldIdentity } = input;
+
+  if (!staleTarget) {
+    return true;
+  }
+
+  const wasMatching = isIdentityMatchingTarget(oldIdentity, staleTarget);
+  const isStillMatching = isIdentityMatchingTarget(newIdentity, staleTarget);
+
+  return wasMatching && !isStillMatching;
+}
+
+function isIdentityMatchingTarget<U extends UserMetadata>(
+  identity: U,
+  target: {
+    readonly descriptor?: Partial<U>;
+    readonly matcher?: (identity: U) => boolean;
+  },
+): boolean {
+  if (target.matcher && !target.matcher(identity)) {
+    return false;
+  }
+
+  if (target.descriptor && !isDeepMatch(identity, target.descriptor)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isDeepMatch(target: any, source: any): boolean {
+  if (target === source) {
+    return true;
+  }
+
+  if (
+    source === null ||
+    typeof source !== "object" ||
+    target === null ||
+    typeof target !== "object"
+  ) {
+    return target === source;
+  }
+
+  for (const key of Object.keys(source)) {
+    if (
+      !Object.prototype.hasOwnProperty.call(target, key) ||
+      !isDeepMatch(target[key], source[key])
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }

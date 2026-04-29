@@ -3,6 +3,8 @@ import type { ProxyFactoryCallbacks } from "./proxy-factory";
 import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import { okAsync } from "neverthrow";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
+import { NexusResourceError } from "@/errors/resource-errors";
 
 // Mock the global FinalizationRegistry
 const mockFinalizationRegistryCallback = vi.fn();
@@ -202,6 +204,51 @@ describe("ProxyFactory", () => {
         path: ["someProp"],
         value: "new value",
       });
+    });
+
+    it("should unregister remote proxy on explicit release", () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-release",
+        "conn-5",
+      );
+
+      expect(resourceManager.countRemoteProxies()).toBe(1);
+      remoteObj[RELEASE_PROXY_SYMBOL]();
+
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
+        "res-release",
+        "conn-5",
+      );
+      expect(resourceManager.countRemoteProxies()).toBe(0);
+    });
+
+    it("should reject calls after explicit release", async () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-release-guard",
+        "conn-6",
+      );
+
+      remoteObj[RELEASE_PROXY_SYMBOL]();
+
+      await expect(remoteObj.run()).rejects.toThrow(/released/i);
+      await expect(remoteObj.someProp).rejects.toThrow(/released/i);
+    });
+
+    it("should throw a typed resource error on property assignment after explicit release", () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-release-set-guard",
+        "conn-7",
+      );
+
+      remoteObj[RELEASE_PROXY_SYMBOL]();
+
+      expect(() => {
+        remoteObj.someProp = "new value";
+      }).toThrow(NexusResourceError);
+      expect(() => {
+        remoteObj.someProp = "new value";
+      }).toThrow(/released/i);
+      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
     });
   });
 
