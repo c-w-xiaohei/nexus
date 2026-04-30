@@ -66,7 +66,7 @@ export function createMockPortPair(): [IPort, IPort] {
  *               for features like `connectTo`.
  * @returns An object containing the created `manager`, its `mockEndpoint`, and `handlers`.
  */
-export function createConnectionManagerStack<
+export async function createConnectionManagerStack<
   U extends object,
   P extends object & { from?: string },
 >(
@@ -90,7 +90,7 @@ export function createConnectionManagerStack<
     onDisconnect: vi.fn(),
   };
   const manager = new ConnectionManager(config, transport, handlers, meta);
-  const initResult = manager.safeInitialize();
+  const initResult = await manager.safeInitialize();
   if (initResult.isErr()) {
     throw initResult.error;
   }
@@ -165,7 +165,12 @@ export async function createL3Endpoints<
     meta: hostSetup.meta,
   });
   const hostEngine = new Engine(hostStack.connectionManager, {
-    services: hostSetup.services,
+    services: Object.fromEntries(
+      Object.entries(hostSetup.services).map(([name, implementation]) => [
+        name,
+        { implementation },
+      ]),
+    ),
   });
   hostStack.handlers.onMessage = (msg, connId) =>
     hostEngine.safeOnMessage(msg, connId).match(
@@ -204,11 +209,11 @@ export async function createL3Endpoints<
   );
 
   // --- Establish Connection ---
-  const hostInitResult = hostStack.connectionManager.safeInitialize();
+  const hostInitResult = await hostStack.connectionManager.safeInitialize();
   if (hostInitResult.isErr()) {
     throw hostInitResult.error;
   }
-  const clientInitResult = clientStack.connectionManager.safeInitialize();
+  const clientInitResult = await clientStack.connectionManager.safeInitialize();
   if (clientInitResult.isErr()) {
     throw clientInitResult.error;
   }

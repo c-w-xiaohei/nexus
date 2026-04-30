@@ -93,6 +93,68 @@ describe("PayloadProcessor", () => {
       );
     });
 
+    it("should preserve service policy when sanitizing a Function returned from a service", () => {
+      const myFunc = () => {};
+      const servicePolicy = { canCall: vi.fn(() => false) };
+      resourceManager.registerExposedService(
+        "vault",
+        { getCallback: () => myFunc },
+        servicePolicy,
+      );
+
+      const result = unwrap(
+        payloadProcessor.safeSanitizeFromService(
+          [myFunc],
+          mockConnectionId,
+          "vault",
+        ),
+      );
+
+      expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
+        myFunc,
+        mockConnectionId,
+        LocalResourceType.FUNCTION,
+        "vault",
+        servicePolicy,
+      );
+      expect(result[0]).toBe(
+        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+      );
+    });
+
+    it("should preserve an explicit undefined service policy snapshot", () => {
+      const myFunc = () => {};
+      const laterPolicy = { canCall: vi.fn(() => false) };
+      resourceManager.registerExposedService("vault", {
+        getCallback: () => myFunc,
+      });
+
+      const result = unwrap(
+        payloadProcessor.safeSanitizeFromService(
+          [myFunc],
+          mockConnectionId,
+          "vault",
+          undefined,
+        ),
+      );
+
+      resourceManager.registerExposedService(
+        "vault",
+        { getCallback: () => myFunc },
+        laterPolicy,
+      );
+      expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
+        myFunc,
+        mockConnectionId,
+        LocalResourceType.FUNCTION,
+        "vault",
+        undefined,
+      );
+      expect(result[0]).toBe(
+        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+      );
+    });
+
     it("should convert a RefWrapper object to RESOURCE placeholder", () => {
       const myObject = { id: 1 };
       const refWrapper = { [REF_WRAPPER_SYMBOL]: true, target: myObject };
@@ -251,6 +313,23 @@ describe("PayloadProcessor", () => {
       )[0];
       expect(arrResult).toEqual([1, "test", mockProxyObject]);
       expect(objResult).toEqual({ a: 1, b: "test", c: mockProxyObject });
+    });
+
+    it("should not let revived __proto__ payload create inherited properties", () => {
+      const payload = JSON.parse(
+        '{"safe":true,"__proto__":{"polluted":"owned"}}',
+      );
+
+      const result = unwrap(
+        payloadProcessor.safeRevive([payload], mockConnectionId),
+      )[0];
+
+      expect(result.safe).toBe(true);
+      expect(result.polluted).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(
+        true,
+      );
+      expect(Object.getPrototypeOf(result)).toBeNull();
     });
   });
 });

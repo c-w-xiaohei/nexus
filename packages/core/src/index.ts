@@ -19,9 +19,12 @@ export type {
 export type { IPort, IEndpoint } from "@/transport";
 export type {
   NexusConfig,
+  NexusAuthorizationPolicy,
+  ConnectionAuthContext,
   EndpointConfig,
   ServiceRegistration,
   AuthorizationPolicy,
+  ServiceCallAuthContext,
   CreateOptions,
   CreateMulticastOptions,
   TargetCriteria,

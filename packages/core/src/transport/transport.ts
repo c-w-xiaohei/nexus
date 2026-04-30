@@ -9,9 +9,24 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "../errors/transport-errors";
-import { err, errAsync, ok, ResultAsync, type Result } from "neverthrow";
+import { errAsync, ResultAsync } from "neverthrow";
 
 export namespace Transport {
+  const shouldUseBinarySerializer = <U extends object, P extends object>(
+    endpoint: IEndpoint<U, P>,
+  ): boolean => {
+    const capabilities = endpoint.capabilities;
+    if (!capabilities) {
+      return false;
+    }
+
+    if (typeof capabilities.binaryPackets === "boolean") {
+      return capabilities.binaryPackets;
+    }
+
+    return capabilities.supportsTransferables === true;
+  };
+
   export interface Context<U extends object, P extends object> {
     readonly endpoint: IEndpoint<U, P>;
     readonly serializer: ISerializer;
@@ -21,7 +36,7 @@ export namespace Transport {
     endpoint: IEndpoint<U, P>,
   ): Context<U, P> => ({
     endpoint,
-    serializer: endpoint.capabilities?.supportsTransferables
+    serializer: shouldUseBinarySerializer(endpoint)
       ? BinarySerializer.serializer
       : JsonSerializer.serializer,
   });
@@ -34,40 +49,36 @@ export namespace Transport {
       ) => PortProcessor.Context,
       platformMetadata?: P,
     ) => void,
-  ): Result<void, NexusEndpointListenError> => {
+  ): ResultAsync<void, NexusEndpointListenError> => {
     if (!context.endpoint.listen) {
       console.warn(
         "Nexus DEV: `listen` called on an endpoint that does not support it.",
       );
-      return ok(undefined);
+      return ResultAsync.fromSafePromise(Promise.resolve(undefined));
     }
 
     try {
-      context.endpoint.listen((port: IPort, platformMetadata?: P) => {
-        const createProcessor = (
-          handlers: PortProcessorHandlers,
-        ): PortProcessor.Context =>
-          PortProcessor.create(port, context.serializer, handlers);
-        try {
-          onConnect(createProcessor, platformMetadata);
-        } catch (error) {
-          console.error(
-            "Nexus DEV: unhandled error in Transport.safeListen onConnect callback",
-            error,
-          );
-        }
-      });
-      return ok(undefined);
-    } catch (error) {
-      return err(
-        new NexusEndpointListenError(
-          `Failed to start endpoint listener: ${error instanceof Error ? error.message : String(error)}`,
-          {
-            endpointType: "endpoint",
-            originalError: error,
-          },
-        ),
+      const listenResult = context.endpoint.listen(
+        (port: IPort, platformMetadata?: P) => {
+          const createProcessor = (
+            handlers: PortProcessorHandlers,
+          ): PortProcessor.Context =>
+            PortProcessor.create(port, context.serializer, handlers);
+          try {
+            onConnect(createProcessor, platformMetadata);
+          } catch (error) {
+            console.error(
+              "Nexus DEV: unhandled error in Transport.safeListen onConnect callback",
+              error,
+            );
+          }
+        },
       );
+      return ResultAsync.fromPromise(Promise.resolve(listenResult), (error) =>
+        createListenError(error),
+      ).map(() => undefined);
+    } catch (error) {
+      return errAsync(createListenError(error));
     }
   };
 
@@ -124,3 +135,12 @@ export namespace Transport {
     ]);
   };
 }
+
+const createListenError = (error: unknown): NexusEndpointListenError =>
+  new NexusEndpointListenError(
+    `Failed to start endpoint listener: ${error instanceof Error ? error.message : String(error)}`,
+    {
+      endpointType: "endpoint",
+      originalError: error,
+    },
+  );

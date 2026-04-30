@@ -1,8 +1,4 @@
-import type {
-  UserMetadata,
-  PlatformMetadata,
-  ConnectionContext,
-} from "@/types/identity";
+import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { IEndpoint } from "@/transport";
 import type { Token } from "../token";
 
@@ -135,38 +131,51 @@ export interface EndpointConfig<
  * 授权策略，用于精细化控制连接和调用权限。
  * @template U 用户元数据类型
  */
-export interface AuthorizationPolicy<
+export interface ConnectionAuthContext<
+  U extends UserMetadata,
+  P extends PlatformMetadata,
+> {
+  readonly localIdentity: U;
+  readonly remoteIdentity: U;
+  readonly platform: P;
+  readonly direction: "incoming" | "outgoing";
+}
+
+export interface ServiceCallAuthContext<
+  U extends UserMetadata,
+  P extends PlatformMetadata,
+> {
+  readonly localIdentity: U;
+  readonly remoteIdentity: U;
+  readonly platform: P;
+  readonly connectionId: string;
+  readonly serviceName: string;
+  readonly path: (string | number)[];
+  readonly operation: "GET" | "SET" | "APPLY";
+}
+
+export interface NexusAuthorizationPolicy<
   U extends UserMetadata,
   P extends PlatformMetadata = PlatformMetadata,
 > {
-  /**
-   * 判断一个远程端点是否有权限连接。
-   * @param identity 对方的身份声明
-   * @param context 本次连接的上下文（包含平台信息）
-   */
-  canConnect(
-    identity: U,
-    context: ConnectionContext<P>,
-  ): boolean | Promise<boolean>;
-
-  /**
-   * 判断调用者是否有权限调用目标方法。
-   * @param callerIdentity 调用者的身份
-   * @param serviceName 目标服务名
-   * @param methodName 目标方法名
-   */
-  canCall(
-    callerIdentity: U,
-    serviceName: string,
-    methodName: string,
-  ): boolean | Promise<boolean>;
+  canConnect?(context: ConnectionAuthContext<U, P>): boolean | Promise<boolean>;
+  canCall?(context: ServiceCallAuthContext<U, P>): boolean | Promise<boolean>;
 }
+
+export type AuthorizationPolicy<
+  U extends UserMetadata,
+  P extends PlatformMetadata = PlatformMetadata,
+> = NexusAuthorizationPolicy<U, P>;
 
 /**
  * 编程式服务注册的配置项。
  * @template T 服务的接口类型
  */
-export interface ServiceRegistration<T> {
+export interface ServiceRegistration<
+  T,
+  U extends UserMetadata = UserMetadata,
+  P extends PlatformMetadata = PlatformMetadata,
+> {
   /**
    * 标识服务的 Token。
    */
@@ -180,7 +189,7 @@ export interface ServiceRegistration<T> {
   /**
    * （可选）为此服务指定一个独立的授权策略。
    */
-  policy?: AuthorizationPolicy<UserMetadata, PlatformMetadata>;
+  policy?: AuthorizationPolicy<U, P>;
 }
 
 /**
@@ -209,7 +218,7 @@ export interface NexusConfig<
    * （可选）编程式注册服务列表。
    * @see ServiceRegistration
    */
-  services?: ServiceRegistration<object>[];
+  services?: ServiceRegistration<object, U, P>[];
 
   /**
    * （可选）注册命名匹配器，用于在 `create` 方法中复用。
@@ -226,5 +235,5 @@ export interface NexusConfig<
   /**
    * （可选）定义全局的授权策略。
    */
-  policy?: AuthorizationPolicy<U>;
+  policy?: NexusAuthorizationPolicy<U, P>;
 }

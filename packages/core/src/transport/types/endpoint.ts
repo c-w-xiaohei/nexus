@@ -17,7 +17,9 @@ export interface IEndpoint<U extends object, P extends object> {
    *                  The implementation must call this with a wrapped `IPort`
    *                  instance when a new physical connection is established.
    */
-  listen?(onConnect: (port: IPort, platformMetadata?: P) => void): void;
+  listen?(
+    onConnect: (port: IPort, platformMetadata?: P) => void,
+  ): void | Promise<unknown>;
 
   /**
    * (Optional) Actively initiates a connection to a target.
@@ -30,12 +32,23 @@ export interface IEndpoint<U extends object, P extends object> {
 
   /**
    * (Optional) Identifies the environmental features supported by this Endpoint.
-   * @default { supportsTransferables: false }
+   * @default { binaryPackets: false, transferables: false }
    */
   capabilities?: {
     /**
+     * Whether this endpoint can exchange binary protocol packets.
+     */
+    binaryPackets?: boolean;
+
+    /**
      * Whether `postMessage` in this environment supports `Transferable` objects.
      */
-    supportsTransferables: boolean;
+    transferables?: boolean;
+
+    /**
+     * @deprecated Use `binaryPackets`/`transferables` instead.
+     * Whether `postMessage` in this environment supports `Transferable` objects.
+     */
+    supportsTransferables?: boolean;
   };
 }

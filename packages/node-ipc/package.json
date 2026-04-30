@@ -1,0 +1,57 @@
+{
+  "name": "@nexus-js/node-ipc",
+  "version": "0.1.1",
+  "description": "Node IPC adapter for Nexus framework",
+  "private": false,
+  "license": "MIT",
+  "author": "Carson Yu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c-w-xiaohei/nexus.git",
+    "directory": "packages/node-ipc"
+  },
+  "keywords": [
+    "nexus",
+    "node",
+    "ipc",
+    "unix-socket"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nexus-js/core": "workspace:*",
+    "neverthrow": "8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.2",
+    "typescript": "5.9.3",
+    "vite": "7.3.1",
+    "vite-plugin-dts": "4.5.4",
+    "vitest": "4.0.18"
+  },
+  "peerDependencies": {
+    "@nexus-js/core": "^0.1.1"
+  }
+}

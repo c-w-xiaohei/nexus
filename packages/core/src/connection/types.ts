@@ -4,6 +4,7 @@ import type {
   ConnectionContext,
 } from "../types/identity";
 import type { NexusMessage } from "../types/message";
+import type { NexusAuthorizationPolicy } from "../api/types/config";
 
 export enum ConnectionStatus {
   INITIALIZING,
@@ -55,10 +56,11 @@ export type ConnectToTarget<U extends UserMetadata> =
 
 export interface ConnectionManagerConfig<
   U extends UserMetadata,
-  _P extends PlatformMetadata,
+  P extends PlatformMetadata,
 > {
   connectTo?: ConnectToTarget<U>[];
-  // policy: IConnectionPolicy<U, P>;
+  policy?: NexusAuthorizationPolicy<U, P>;
+  handshakeTimeoutMs?: number;
 }
 
 export interface ConnectionManagerHandlers<

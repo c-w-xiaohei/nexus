@@ -25,7 +25,7 @@ export default tseslint.config(
 
   // Environment for 'core' package (hybrid node/browser/worker)
   {
-    files: ["packages/core/**/*.ts"],
+    files: ["packages/core/**/*.{ts,mjs}"],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -55,6 +55,17 @@ export default tseslint.config(
       globals: {
         ...globals.browser,
         ...globals.node,
+      },
+    },
+  },
+
+  // Environment for 'node-ipc' package (Node runtime and tests)
+  {
+    files: ["packages/node-ipc/**/*.ts"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        NodeJS: "readonly",
       },
     },
   },

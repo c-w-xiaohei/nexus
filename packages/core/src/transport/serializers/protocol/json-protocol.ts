@@ -21,7 +21,7 @@ const definePacketStructure = <
     > extends true
       ? unknown // If keys match, allow any type (the original T[K] will pass).
       : never; // If they don't match, this property's type becomes `never`.
-  }
+  },
 ): T => structure;
 
 /**
@@ -53,6 +53,7 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
     "assigns",
   ],
   [Message.NexusMessageType.HANDSHAKE_ACK]: ["type", "id", "metadata"],
+  [Message.NexusMessageType.HANDSHAKE_READY]: ["type", "id"],
   [Message.NexusMessageType.HANDSHAKE_REJECT]: ["type", "id", "error"],
   [Message.NexusMessageType.IDENTITY_UPDATE]: ["type", "id", "updates"],
   // Layer 1

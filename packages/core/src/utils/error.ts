@@ -39,7 +39,10 @@ function toSerializedErrorInternal(
   if (error instanceof Error) {
     return {
       name: error.name,
-      code: "E_UNKNOWN",
+      code:
+        typeof (error as Error & { code?: unknown }).code === "string"
+          ? (error as Error & { code: string }).code
+          : "E_UNKNOWN",
       message: error.message,
       stack: error.stack,
       cause: serializeCause((error as Error & { cause?: unknown }).cause, seen),

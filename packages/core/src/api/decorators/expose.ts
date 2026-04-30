@@ -31,7 +31,7 @@ const ExposeOptionsSchema = z
     policy: z
       .custom<
         AuthorizationPolicy<UserMetadata, PlatformMetadata>
-      >((value) => typeof value === "object" && value !== null && typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canConnect === "function" && typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canCall === "function")
+      >((value) => typeof value === "object" && value !== null && ((value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canConnect === undefined || typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canConnect === "function") && ((value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canCall === undefined || typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canCall === "function"))
       .optional(),
     factory: z
       .custom<ExposeOptions["factory"]>((value) => typeof value === "function")

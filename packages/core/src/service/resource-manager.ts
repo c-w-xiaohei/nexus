@@ -3,19 +3,36 @@ import {
   LocalResourceType,
   RemoteProxyRecord,
 } from "./types";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { Logger } from "@/logger";
 
 export namespace ResourceManager {
+  export interface ExposedServiceRecord {
+    readonly service: object;
+    readonly policy?: NexusAuthorizationPolicy<any, any>;
+  }
+
   export interface Runtime {
-    registerExposedService(name: string, service: object): void;
+    registerExposedService(
+      name: string,
+      service: object,
+      policy?: NexusAuthorizationPolicy<any, any>,
+    ): void;
     getExposedService(name: string): object | undefined;
+    getExposedServiceRecord(name: string): ExposedServiceRecord | undefined;
     listExposedServices(): readonly object[];
     registerLocalResource(
       target: object,
       ownerConnectionId: string,
       type: LocalResourceType,
+      serviceName?: string,
+      servicePolicy?: NexusAuthorizationPolicy<any, any>,
     ): string;
     getLocalResource(resourceId: string): LocalResourceRecord | undefined;
+    getLocalResourceServiceName(resourceId: string): string | undefined;
+    getLocalResourceServicePolicy(
+      resourceId: string,
+    ): NexusAuthorizationPolicy<any, any> | undefined;
     releaseLocalResource(resourceId: string): void;
     registerRemoteProxy(
       resourceId: string,
@@ -33,31 +50,41 @@ export namespace ResourceManager {
 
   export const create = (): Runtime => {
     const logger = new Logger("L3 --- ResourceManager");
-    const exposedServices = new Map<string, object>();
+    const exposedServices = new Map<string, ExposedServiceRecord>();
     const localResourceRegistry = new Map<string, LocalResourceRecord>();
     const remoteProxyRegistry = new Map<string, RemoteProxyRecord>();
     let resourceIdSeq = 1;
 
-    const registerExposedService = (name: string, service: object): void => {
+    const registerExposedService = (
+      name: string,
+      service: object,
+      policy?: NexusAuthorizationPolicy<any, any>,
+    ): void => {
       if (exposedServices.has(name)) {
         const message = `Service with name "${name}" is already registered. Overwriting.`;
         logger.warn(message);
         console.warn(`Nexus L3: ${message}`);
       }
       logger.debug(`Registered exposed service: "${name}"`, service);
-      exposedServices.set(name, service);
+      exposedServices.set(name, { service, policy });
     };
 
     const getExposedService = (name: string): object | undefined =>
-      exposedServices.get(name);
+      exposedServices.get(name)?.service;
+
+    const getExposedServiceRecord = (
+      name: string,
+    ): ExposedServiceRecord | undefined => exposedServices.get(name);
 
     const listExposedServices = (): readonly object[] =>
-      Array.from(exposedServices.values());
+      Array.from(exposedServices.values(), ({ service }) => service);
 
     const registerLocalResource = (
       target: object,
       ownerConnectionId: string,
       type: LocalResourceType,
+      serviceName?: string,
+      servicePolicy?: NexusAuthorizationPolicy<any, any>,
     ): string => {
       const resourceId = `res-${resourceIdSeq++}`;
       logger.debug(
@@ -68,6 +95,8 @@ export namespace ResourceManager {
         target,
         ownerConnectionId,
         type,
+        serviceName,
+        servicePolicy,
       });
       return resourceId;
     };
@@ -75,6 +104,17 @@ export namespace ResourceManager {
     const getLocalResource = (
       resourceId: string,
     ): LocalResourceRecord | undefined => localResourceRegistry.get(resourceId);
+
+    const getLocalResourceServiceName = (
+      resourceId: string,
+    ): string | undefined => localResourceRegistry.get(resourceId)?.serviceName;
+
+    const getLocalResourceServicePolicy = (
+      resourceId: string,
+    ): NexusAuthorizationPolicy<any, any> | undefined =>
+      localResourceRegistry.get(resourceId)?.servicePolicy as
+        | NexusAuthorizationPolicy<any, any>
+        | undefined;
 
     const releaseLocalResource = (resourceId: string): void => {
       logger.debug(`Releasing local resource #${resourceId}`);
@@ -160,9 +200,12 @@ export namespace ResourceManager {
     const runtime: Runtime = {
       registerExposedService,
       getExposedService,
+      getExposedServiceRecord,
       listExposedServices,
       registerLocalResource,
       getLocalResource,
+      getLocalResourceServiceName,
+      getLocalResourceServicePolicy,
       releaseLocalResource,
       registerRemoteProxy,
       releaseRemoteProxy,

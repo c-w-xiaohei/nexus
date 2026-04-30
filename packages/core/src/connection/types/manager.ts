@@ -1,11 +1,12 @@
 import type { NexusMessage } from "../../types/message";
+import type { NexusAuthorizationPolicy } from "../../api/types/config";
 
 /**
  * Configuration for the ConnectionManager.
  */
 export interface ConnectionManagerConfig<U extends object, P extends object> {
-  /** The security policy for incoming connections. */
-  // policy: IAuthorizationPolicy<U, P>;
+  /** The security policy for connections. */
+  policy?: NexusAuthorizationPolicy<U, P>;
   /** A list of targets to connect to upon initialization. */
   connectTo?: ResolveOptions<U, P>[];
 }

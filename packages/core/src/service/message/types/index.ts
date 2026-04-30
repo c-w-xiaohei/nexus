@@ -3,6 +3,7 @@ import type { PlatformMetadata, UserMetadata } from "@/types/identity";
 import type { MessageHandlerCallbacks } from "../../engine";
 import type { PayloadProcessor } from "../../payload/payload-processor";
 import type { ResourceManager } from "../../resource-manager";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 /**
  * The shared context object available to all message handlers.
@@ -15,6 +16,14 @@ export interface HandlerContext<
   readonly engine: MessageHandlerCallbacks<U>;
   readonly resourceManager: ResourceManager.Runtime;
   readonly payloadProcessor: PayloadProcessor.Runtime<U, P>;
+  policy?: NexusAuthorizationPolicy<U, P>;
+  getConnectionAuthContext?: (connectionId: string) =>
+    | {
+        readonly localIdentity: U;
+        readonly remoteIdentity: U;
+        readonly platform: P;
+      }
+    | undefined;
 }
 
 /**

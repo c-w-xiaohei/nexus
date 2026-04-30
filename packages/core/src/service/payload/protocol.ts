@@ -65,11 +65,19 @@ export const SANITIZER_TABLE_CONFIG = new Map<
   [
     ValueType.FUNCTION,
     (processor, value, context) => {
-      const resourceId = processor.resourceManager.registerLocalResource(
-        value,
-        context.targetConnectionId,
-        LocalResourceType.FUNCTION,
-      );
+      const resourceId = context.serviceName
+        ? processor.resourceManager.registerLocalResource(
+            value,
+            context.targetConnectionId,
+            LocalResourceType.FUNCTION,
+            context.serviceName,
+            context.servicePolicy,
+          )
+        : processor.resourceManager.registerLocalResource(
+            value,
+            context.targetConnectionId,
+            LocalResourceType.FUNCTION,
+          );
       return new Placeholder(PlaceholderType.RESOURCE, resourceId);
     },
   ],

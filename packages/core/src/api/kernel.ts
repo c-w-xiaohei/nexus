@@ -194,6 +194,7 @@ export namespace NexusKernelBuilder {
         const cmConfig: ConnectionManagerConfig<U, P> = {
           connectTo:
             resolvedConnectTo.length > 0 ? resolvedConnectTo : undefined,
+          policy: finalConfig.policy,
         };
 
         const transport = Transport.create(finalConfig.endpoint.implementation);
@@ -205,18 +206,35 @@ export namespace NexusKernelBuilder {
           finalConfig.endpoint.meta,
         );
 
-        const servicesForEngine: { services?: Record<string, object> } = {};
+        const servicesForEngine: {
+          services?: Record<
+            string,
+            {
+              implementation: object;
+              policy?: ServiceRegistration<object>["policy"];
+            }
+          >;
+        } = {};
         if (finalConfig.services) {
           servicesForEngine.services = finalConfig.services.reduce(
-            (acc: Record<string, object>, reg: ServiceRegistration<object>) => {
-              acc[reg.token.id] = reg.implementation;
+            (
+              acc: NonNullable<typeof servicesForEngine.services>,
+              reg: ServiceRegistration<object>,
+            ) => {
+              acc[reg.token.id] = {
+                implementation: reg.implementation,
+                policy: reg.policy,
+              };
               return acc;
             },
             {},
           );
         }
 
-        const engine = new Engine(connectionManager, servicesForEngine);
+        const engine = new Engine<U, P>(connectionManager, {
+          ...servicesForEngine,
+          policy: finalConfig.policy,
+        });
         engineRef.current = engine;
 
         return okAsync({ engine, connectionManager });

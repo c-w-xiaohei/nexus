@@ -60,7 +60,7 @@ describe("LogicalConnection", () => {
       onClosed: vi.fn(),
       onMessage: vi.fn(),
       onIdentityUpdated: vi.fn(),
-      verify: vi.fn(), // Not used on client-side
+      verify: vi.fn().mockResolvedValue(true),
     };
     mockHostHandlers = {
       onVerified: vi.fn(),
@@ -176,6 +176,145 @@ describe("LogicalConnection", () => {
   });
 
   describe("Rejected Handshake (A2)", () => {
+    it("should ignore passive HANDSHAKE_READY while verification is still pending", async () => {
+      let resolveVerify!: (allowed: boolean) => void;
+      (mockHostHandlers.verify as Mock).mockReturnValue(
+        new Promise<boolean>((resolve) => {
+          resolveVerify = resolve;
+        }),
+      );
+
+      void hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 77,
+        metadata: clientMeta,
+      });
+
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
+      });
+
+      const readyBeforeVerify = hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_READY,
+        id: 77,
+      });
+
+      expect(hostConnection.isReady()).toBe(false);
+      expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+
+      resolveVerify(false);
+      expect((await readyBeforeVerify).isOk()).toBe(true);
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
+        expect(hostConnection.isReady()).toBe(false);
+        expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    it("should ignore passive HANDSHAKE_READY with the wrong handshake id", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(true);
+
+      await hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 88,
+        metadata: clientMeta,
+      });
+
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
+      });
+
+      const wrongReady = await hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_READY,
+        id: 89,
+      });
+
+      expect(wrongReady.isOk()).toBe(true);
+      expect(hostConnection.isReady()).toBe(false);
+      expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    it("should not expose ready state when handshake verification rejects", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(false);
+
+      await hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 99,
+        metadata: clientMeta,
+      });
+
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
+        expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+        expect(hostConnection.isReady()).toBe(false);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    it("should reject the active side when ACK verification fails", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(true);
+      (mockClientHandlers.verify as Mock).mockResolvedValue(false);
+
+      clientConnection.initiateHandshake(clientMeta);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledWith(
+          hostMeta,
+          expect.objectContaining<Partial<ConnectionContext<TestPlatformMeta>>>(
+            {
+              platform: hostPlatformMeta,
+              connectionId: "conn-client",
+            },
+          ),
+        );
+        expect(mockClientHandlers.onVerified).not.toHaveBeenCalled();
+        expect(clientConnection.isReady()).toBe(false);
+      });
+
+      expect(clientConnection.handshakeRejectionError).toEqual(
+        expect.objectContaining({ code: "E_AUTH_CONNECT_DENIED" }),
+      );
+    });
+
+    it("should ignore active HANDSHAKE_ACK with the wrong handshake id", async () => {
+      (mockClientHandlers.verify as Mock).mockResolvedValue(true);
+
+      const startResult = clientConnection.initiateHandshake(clientMeta);
+      expect(startResult.isOk()).toBe(true);
+
+      const wrongAck = await clientConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: 999,
+        metadata: hostMeta,
+      });
+
+      expect(wrongAck.isOk()).toBe(true);
+      expect(mockClientHandlers.verify).not.toHaveBeenCalled();
+      expect(mockClientHandlers.onVerified).not.toHaveBeenCalled();
+      expect(clientConnection.isReady()).toBe(false);
+    });
+
+    it("should not mark the passive side verified when active ACK verification fails", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(true);
+      (mockClientHandlers.verify as Mock).mockResolvedValue(false);
+
+      clientConnection.initiateHandshake(clientMeta);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledOnce();
+        expect(mockClientHandlers.onVerified).not.toHaveBeenCalled();
+        expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+        expect(clientConnection.isReady()).toBe(false);
+        expect(hostConnection.isReady()).toBe(false);
+      });
+
+      expect(clientConnection.handshakeRejectionError).toEqual(
+        expect.objectContaining({ code: "E_AUTH_CONNECT_DENIED" }),
+      );
+    });
+
     it("should close the connection when host rejects the handshake", async () => {
       // Arrange: Host policy rejects the connection
       (mockHostHandlers.verify as Mock).mockResolvedValue(false);
@@ -254,6 +393,40 @@ describe("LogicalConnection", () => {
         expect(clientConnection.remoteIdentity).toEqual(assignmentMeta);
       });
     });
+
+    it("should verify a christening handshake against the pre-assignment local identity", async () => {
+      const assignmentMeta: TestUserMeta = { context: "worker", id: 99 };
+      (mockHostHandlers.verify as Mock).mockImplementationOnce(
+        (_identity: TestUserMeta) => hostConnection.localIdentity === hostMeta,
+      );
+
+      clientConnection.initiateHandshake(clientMeta, assignmentMeta);
+
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.verify).toHaveBeenCalledWith(
+          clientMeta,
+          expect.any(Object),
+        );
+        expect(hostConnection.localIdentity).toEqual(assignmentMeta);
+        expect(mockHostHandlers.onVerified).toHaveBeenCalledOnce();
+      });
+    });
+
+    it("should not commit assigned metadata when christening authorization fails", async () => {
+      const assignmentMeta: TestUserMeta = { context: "attacker", id: 666 };
+      (mockHostHandlers.verify as Mock).mockResolvedValueOnce(false);
+
+      await hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 444,
+        metadata: clientMeta,
+        assigns: assignmentMeta,
+      });
+
+      expect(hostConnection.localIdentity).toEqual(hostMeta);
+      expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
   });
 
   describe("Post-Handshake Communication", () => {
@@ -303,6 +476,47 @@ describe("LogicalConnection", () => {
           "conn-client",
         );
       });
+    });
+
+    it("should forward a response while an earlier service message is still running", async () => {
+      let resolveService!: () => void;
+      const applyMessage: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 124,
+        resourceId: null,
+        path: ["service", "call"],
+        args: [],
+      };
+      const responseMessage = {
+        type: NexusMessageType.RES,
+        id: 125,
+        result: "callback-result",
+      } as const;
+      (mockHostHandlers.onMessage as Mock).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveService = resolve;
+          }),
+      );
+
+      clientConnection.sendMessage(applyMessage);
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.onMessage).toHaveBeenCalledWith(
+          applyMessage,
+          "conn-host",
+        );
+      });
+
+      clientConnection.sendMessage(responseMessage);
+
+      await vi.waitFor(() => {
+        expect(mockHostHandlers.onMessage).toHaveBeenCalledWith(
+          responseMessage,
+          "conn-host",
+        );
+      });
+      expect(mockHostHandlers.onMessage).toHaveBeenCalledTimes(2);
+      resolveService();
     });
 
     it("should notify both sides with valid identities on active disconnect", async () => {
@@ -374,6 +588,32 @@ describe("LogicalConnection", () => {
       });
     });
 
+    it("should close and reject identity updates denied by connection authorization", async () => {
+      (mockClientHandlers.verify as Mock).mockResolvedValueOnce(false);
+      const updateMessage: IdentityUpdateMessage = {
+        type: NexusMessageType.IDENTITY_UPDATE,
+        id: null,
+        updates: { context: "admin" },
+      };
+
+      hostConnection.sendMessage(updateMessage);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledWith(
+          { ...hostMeta, context: "admin" },
+          expect.objectContaining<Partial<ConnectionContext<TestPlatformMeta>>>(
+            {
+              platform: hostPlatformMeta,
+              connectionId: "conn-client",
+            },
+          ),
+        );
+        expect(clientConnection.remoteIdentity).toEqual(hostMeta);
+        expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
+        expect(clientConnection.isReady()).toBe(false);
+      });
+    });
+
     it("should ignore identity updates if connection is not ready", async () => {
       // Arrange: Create a new connection that has not completed handshake
       const freshConnection = new LogicalConnection(
@@ -404,6 +644,156 @@ describe("LogicalConnection", () => {
       // Assert
       expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
       expect(freshConnection.remoteIdentity).toBeUndefined();
+    });
+
+    it("should apply concurrent identity updates in transport order when verification resolves out of order", async () => {
+      let resolveFirstVerify: ((value: boolean) => void) | undefined;
+      (mockClientHandlers.verify as Mock).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstVerify = resolve;
+          }),
+      );
+      (mockClientHandlers.verify as Mock).mockResolvedValueOnce(true);
+
+      hostConnection.sendMessage({
+        type: NexusMessageType.IDENTITY_UPDATE,
+        id: null,
+        updates: { id: 10 },
+      });
+      hostConnection.sendMessage({
+        type: NexusMessageType.IDENTITY_UPDATE,
+        id: null,
+        updates: { context: "latest" },
+      });
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledTimes(1);
+      });
+      expect(clientConnection.remoteIdentity).toEqual(hostMeta);
+
+      resolveFirstVerify?.(true);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledTimes(2);
+        expect(clientConnection.remoteIdentity).toEqual({
+          ...hostMeta,
+          id: 10,
+          context: "latest",
+        });
+      });
+      expect(mockClientHandlers.onIdentityUpdated).toHaveBeenNthCalledWith(
+        1,
+        "conn-client",
+        { ...hostMeta, id: 10 },
+        hostMeta,
+      );
+      expect(mockClientHandlers.onIdentityUpdated).toHaveBeenNthCalledWith(
+        2,
+        "conn-client",
+        { ...hostMeta, id: 10, context: "latest" },
+        { ...hostMeta, id: 10 },
+      );
+    });
+
+    it("should forward service messages only after earlier identity update authorization completes", async () => {
+      let resolveVerify: ((value: boolean) => void) | undefined;
+      (mockClientHandlers.verify as Mock).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveVerify = resolve;
+          }),
+      );
+      const updateMessage: IdentityUpdateMessage = {
+        type: NexusMessageType.IDENTITY_UPDATE,
+        id: null,
+        updates: { id: 42 },
+      };
+      const applyMessage: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 456,
+        resourceId: null,
+        path: ["secure", "read"],
+        args: [],
+      };
+
+      hostConnection.sendMessage(updateMessage);
+      hostConnection.sendMessage(applyMessage);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledOnce();
+      });
+      expect(mockClientHandlers.onMessage).not.toHaveBeenCalled();
+
+      resolveVerify?.(true);
+
+      await vi.waitFor(() => {
+        expect(clientConnection.remoteIdentity).toEqual({
+          ...hostMeta,
+          id: 42,
+        });
+        expect(mockClientHandlers.onMessage).toHaveBeenCalledWith(
+          applyMessage,
+          "conn-client",
+        );
+      });
+    });
+
+    it("should forward responses while an earlier identity update authorization is pending", async () => {
+      let resolveVerify: ((value: boolean) => void) | undefined;
+      (mockClientHandlers.verify as Mock).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveVerify = resolve;
+          }),
+      );
+      const updateMessage: IdentityUpdateMessage = {
+        type: NexusMessageType.IDENTITY_UPDATE,
+        id: null,
+        updates: { id: 43 },
+      };
+      const responseMessage = {
+        type: NexusMessageType.RES,
+        id: 457,
+        result: "callback-result",
+      } as const;
+
+      hostConnection.sendMessage(updateMessage);
+      hostConnection.sendMessage(responseMessage);
+
+      await vi.waitFor(() => {
+        expect(mockClientHandlers.verify).toHaveBeenCalledOnce();
+        expect(mockClientHandlers.onMessage).toHaveBeenCalledWith(
+          responseMessage,
+          "conn-client",
+        );
+      });
+      expect(clientConnection.remoteIdentity).toEqual(hostMeta);
+
+      resolveVerify?.(true);
+      await vi.waitFor(() => {
+        expect(clientConnection.remoteIdentity).toEqual({
+          ...hostMeta,
+          id: 43,
+        });
+      });
+    });
+
+    it("should return an error result when forwarded message handling rejects", async () => {
+      const error = new Error("handler rejected");
+      (mockClientHandlers.onMessage as Mock).mockRejectedValueOnce(error);
+
+      const result = await clientConnection.safeHandleMessage({
+        type: NexusMessageType.RES,
+        id: 458,
+        result: "callback-result",
+      });
+
+      expect(result.isErr()).toBe(true);
+      result.match(
+        () => undefined,
+        (actual) => expect(actual).toBe(error),
+      );
     });
   });
 });

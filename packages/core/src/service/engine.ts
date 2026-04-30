@@ -32,6 +32,7 @@ import {
   type Result,
   type ResultAsync,
 } from "neverthrow";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 type DispatchCallBase = {
   target: CallTarget<any, any>;
@@ -94,6 +95,7 @@ export class Engine<
   private readonly messageHandler: MessageHandler.Runtime;
   private readonly pendingCallManager: PendingCallManager.Runtime;
   private readonly callProcessor: CallProcessor.Runtime;
+  private readonly policy?: NexusAuthorizationPolicy<U, P>;
 
   private messageIdSeq = 1;
   private readonly disconnectListeners = new Map<string, Set<() => void>>();
@@ -104,8 +106,15 @@ export class Engine<
 
   constructor(
     private readonly connectionManagerState: ConnectionManager<U, P>,
-    config: { services?: Record<string, object> } = {},
+    config: {
+      services?: Record<
+        string,
+        { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+      >;
+      policy?: NexusAuthorizationPolicy<U, P>;
+    } = {},
   ) {
+    this.policy = config.policy;
     this.resourceManager = ResourceManager.create();
 
     if (config.services) {
@@ -134,6 +143,9 @@ export class Engine<
       },
       resourceManager: this.resourceManager,
       payloadProcessor: this.payloadProcessor,
+      policy: this.policy,
+      getConnectionAuthContext: (connectionId) =>
+        this.connectionManagerState.getConnectionAuthSnapshot(connectionId),
     });
     this.callProcessor = CallProcessor.create({
       nextMessageId: () => this.nextMessageId(),
@@ -219,9 +231,18 @@ export class Engine<
     return proxy;
   }
 
-  public registerServices(services: Record<string, object>): void {
-    for (const [name, service] of Object.entries(services)) {
-      this.resourceManager.registerExposedService(name, service);
+  public registerServices(
+    services: Record<
+      string,
+      { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+    >,
+  ): void {
+    for (const [name, registration] of Object.entries(services)) {
+      this.resourceManager.registerExposedService(
+        name,
+        registration.implementation,
+        registration.policy,
+      );
     }
   }
 

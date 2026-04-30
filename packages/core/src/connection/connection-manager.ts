@@ -23,8 +23,11 @@ import { ResultAsync, err, errAsync, ok, type Result } from "neverthrow";
 
 type ConnectionManagerErrorCode =
   | "E_HANDSHAKE_FAILED"
+  | "E_AUTH_CONNECT_DENIED"
   | "E_USAGE_INVALID"
   | "E_UNKNOWN";
+
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 type ConnectionManagerErrorOptions = {
   readonly context?: Record<string, unknown>;
@@ -53,6 +56,13 @@ export class ConnectionManagerHandshakeFailedError extends ConnectionManagerErro
   constructor(message: string, options: ConnectionManagerErrorOptions = {}) {
     super(message, "E_HANDSHAKE_FAILED", options);
     this.name = "ConnectionManagerHandshakeFailedError";
+  }
+}
+
+export class ConnectionManagerAuthorizationDeniedError extends ConnectionManagerError {
+  constructor(message: string, options: ConnectionManagerErrorOptions = {}) {
+    super(message, "E_AUTH_CONNECT_DENIED", options);
+    this.name = "ConnectionManagerAuthorizationDeniedError";
   }
 }
 
@@ -103,6 +113,10 @@ export class ConnectionManager<
   private nextConnectionOrdinal = 1;
   private nextMessageOrdinal = 1;
   private initialized = false;
+  private initializationInFlight: ResultAsync<
+    void,
+    ConnectionManagerError
+  > | null = null;
 
   constructor(
     private readonly config: ConnectionManagerConfig<U, P>,
@@ -112,18 +126,27 @@ export class ConnectionManager<
   ) {}
 
   public get connections(): ReadonlyMap<string, LogicalConnection<U, P>> {
-    return this.connectionsMap;
+    return new Map(this.connectionsMap);
   }
 
   public get serviceGroups(): ReadonlyMap<string, ReadonlySet<string>> {
-    return this.serviceGroupsMap;
+    return new Map(
+      Array.from(this.serviceGroupsMap, ([groupName, connectionIds]) => [
+        groupName,
+        new Set(connectionIds),
+      ]),
+    );
   }
 
-  public safeInitialize(): Result<void, ConnectionManagerError> {
+  public safeInitialize(): ResultAsync<void, ConnectionManagerError> {
     if (this.initialized) {
-      return ok(undefined);
+      return ResultAsync.fromSafePromise(Promise.resolve(undefined));
     }
-    const listenResult = Transport.safeListen(
+    if (this.initializationInFlight) {
+      return this.initializationInFlight;
+    }
+
+    this.initializationInFlight = Transport.safeListen(
       this.transport,
       (createProcessor, platformMetadata) => {
         const connectionId = this.allocateConnectionId();
@@ -148,22 +171,26 @@ export class ConnectionManager<
           },
         );
       },
-    );
-
-    if (listenResult.isErr()) {
-      return err(
-        connectionManagerErrorFromUnknown(listenResult.error, {
+    )
+      .mapErr((error) =>
+        connectionManagerErrorFromUnknown(error, {
           message: "Failed to start connection manager listener",
         }),
-      );
-    }
+      )
+      .map(() => {
+        this.initialized = true;
+        // Pre-warm is asynchronous fire-and-forget. This method returns once
+        // listener activation succeeds (or fails with Result error).
+        this.preWarmConnections();
+      })
+      .andTee(() => {
+        this.initializationInFlight = null;
+      })
+      .orTee(() => {
+        this.initializationInFlight = null;
+      });
 
-    this.initialized = true;
-    // Pre-warm is asynchronous fire-and-forget. This method returns once
-    // listener activation succeeds (or fails with Result error).
-    this.preWarmConnections();
-
-    return ok(undefined);
+    return this.initializationInFlight;
   }
 
   public safeResolveConnection(
@@ -223,6 +250,9 @@ export class ConnectionManager<
 
     try {
       this.localUserMetadata = { ...this.localUserMetadata, ...updates };
+      for (const connection of this.connectionsMap.values()) {
+        connection.updateLocalIdentity(updates);
+      }
       const broadcastResult = broadcastIdentityUpdate(
         this.connectionsMap,
         updates,
@@ -362,7 +392,10 @@ export class ConnectionManager<
     let disconnectedBeforeReady = false;
     let protocolErrorBeforeReady: unknown = null;
 
-    const logicalHandlers = this.createLogicalHandlers(connectionRef);
+    const logicalHandlers = this.createLogicalHandlers(
+      connectionRef,
+      "incoming",
+    );
     const portHandlers = this.createPortHandlers({
       connectionId: input.connectionId,
       direction: "incoming",
@@ -383,9 +416,24 @@ export class ConnectionManager<
       portProcessor,
       logicalHandlers,
     );
+    const handshakeTimeout = setTimeout(() => {
+      if (!connection.isReady()) {
+        connection.close();
+      }
+    }, this.config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS);
 
     connectionRef.current = connection;
-    this.connectionsMap.set(input.connectionId, connection);
+    const clearIncomingHandshakeTimeout = () => clearTimeout(handshakeTimeout);
+    const originalOnVerified = logicalHandlers.onVerified;
+    logicalHandlers.onVerified = (connInfo) => {
+      clearIncomingHandshakeTimeout();
+      originalOnVerified(connInfo);
+    };
+    const originalOnClosed = logicalHandlers.onClosed;
+    logicalHandlers.onClosed = (connInfo) => {
+      clearIncomingHandshakeTimeout();
+      originalOnClosed(connInfo);
+    };
 
     if (protocolErrorBeforeReady) {
       this.logger.error(
@@ -425,22 +473,52 @@ export class ConnectionManager<
     let disconnectedBeforeReady = false;
     let protocolErrorBeforeReady: unknown = null;
     const handshake = createDeferred<LogicalConnection<U, P>>();
+    const handshakeTimeout = setTimeout(() => {
+      connectionRef.current?.close();
+      handshake.reject(
+        new ConnectionManagerHandshakeFailedError(
+          `Connection ${connectionId} timed out during handshake.`,
+          { context: { connectionId } },
+        ),
+      );
+    }, this.config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    handshake.promise.then(
+      () => clearTimeout(handshakeTimeout),
+      () => clearTimeout(handshakeTimeout),
+    );
 
-    const logicalHandlers = this.createLogicalHandlers(connectionRef, {
-      onVerified: (connection) => {
-        handshake.resolve(connection);
+    const logicalHandlers = this.createLogicalHandlers(
+      connectionRef,
+      "outgoing",
+      {
+        onVerified: (connection) => {
+          handshake.resolve(connection);
+        },
+        onClosed: (connInfo) => {
+          if (!connInfo.identity) {
+            const rejection = connectionRef.current?.handshakeRejectionError;
+            handshake.reject(
+              (rejection as (Error & { code?: string }) | undefined)?.code ===
+                "E_AUTH_CONNECT_DENIED"
+                ? new ConnectionManagerAuthorizationDeniedError(
+                    "Connection rejected by authorization policy.",
+                    {
+                      context: { connectionId: connInfo.connectionId },
+                      cause: rejection,
+                    },
+                  )
+                : new ConnectionManagerHandshakeFailedError(
+                    `Connection ${connInfo.connectionId} failed to establish. The remote endpoint may have rejected the connection or is unavailable.`,
+                    {
+                      context: { connectionId: connInfo.connectionId },
+                      cause: rejection,
+                    },
+                  ),
+            );
+          }
+        },
       },
-      onClosed: (connInfo) => {
-        if (!connInfo.identity) {
-          handshake.reject(
-            new ConnectionManagerHandshakeFailedError(
-              `Connection ${connInfo.connectionId} failed to establish. The remote endpoint may have rejected the connection or is unavailable.`,
-              { context: { connectionId: connInfo.connectionId } },
-            ),
-          );
-        }
-      },
-    });
+    );
 
     const portHandlers = this.createPortHandlers({
       connectionId,
@@ -479,7 +557,6 @@ export class ConnectionManager<
     );
 
     connectionRef.current = connection;
-    this.connectionsMap.set(connectionId, connection);
 
     if (protocolErrorBeforeReady) {
       this.logger.error(
@@ -535,6 +612,7 @@ export class ConnectionManager<
 
   private createLogicalHandlers(
     connectionRef: { current: LogicalConnection<U, P> | null },
+    direction: "incoming" | "outgoing",
     overrides: LogicalHandlersOverrides<U, P> = {},
   ) {
     return {
@@ -558,8 +636,25 @@ export class ConnectionManager<
         newIdentity: U,
         oldIdentity: U,
       ) => this.onIdentityUpdated(connectionId, newIdentity, oldIdentity),
-      verify: (_identity: U, _context: ConnectionContext<P>) =>
-        Promise.resolve(true),
+      verify: async (identity: U, context: ConnectionContext<P>) => {
+        const canConnect = this.config.policy?.canConnect;
+        if (!canConnect) {
+          return true;
+        }
+
+        try {
+          const allowed = await canConnect({
+            localIdentity:
+              connectionRef.current?.localIdentity ?? this.localUserMetadata,
+            remoteIdentity: identity,
+            platform: context.platform,
+            direction,
+          });
+          return allowed === true;
+        } catch {
+          return false;
+        }
+      },
     };
   }
 
@@ -625,6 +720,26 @@ export class ConnectionManager<
     );
 
     registerGroups(this.serviceGroupsMap, connectionId, identity.groups ?? []);
+    this.connectionsMap.set(connectionId, connection);
+  }
+
+  public getConnectionAuthSnapshot(connectionId: string):
+    | {
+        readonly localIdentity: U;
+        readonly remoteIdentity: U;
+        readonly platform: P;
+      }
+    | undefined {
+    const connection = this.connectionsMap.get(connectionId);
+    if (!connection?.remoteIdentity) {
+      return undefined;
+    }
+
+    return {
+      localIdentity: connection.localIdentity,
+      remoteIdentity: connection.remoteIdentity,
+      platform: connection.context.platform,
+    };
   }
 
   private onConnectionClosed(connInfo: {
@@ -682,9 +797,18 @@ type LogicalHandlersOverrides<
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
+  let settled = false;
   const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
+    resolve = (value) => {
+      if (settled) return;
+      settled = true;
+      res(value);
+    };
+    reject = (error) => {
+      if (settled) return;
+      settled = true;
+      rej(error);
+    };
   });
   return { promise, resolve, reject };
 }

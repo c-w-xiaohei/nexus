@@ -14,8 +14,9 @@ Nexus provides one programming model across multiple JavaScript execution contex
 - `@nexus-js/core` contains the core transport-agnostic API and runtime
 - Adapter packages provide platform-specific endpoint setup and conventions
 - `@nexus-js/chrome` is the dedicated adapter for Chrome extension contexts
+- `@nexus-js/node-ipc` is the local Node process adapter for Linux filesystem Unix sockets
 
-Today, the repository ships a first-party Chrome adapter. Other environments use the core model plus custom endpoint wiring.
+Today, the repository ships first-party Chrome and Node IPC adapters. Other environments use the core model plus custom endpoint wiring.
 
 ## Choosing A Platform Entry
 
@@ -49,6 +50,25 @@ If you use the decorator path directly, remember that decorator registrations ar
 
 Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
 
+### Local Node Daemon / CLI
+
+Use:
+
+- `@nexus-js/core`
+- `@nexus-js/node-ipc`
+
+This path targets one local daemon process and one or more local Node clients. The adapter maps Nexus daemon descriptors to Unix socket paths, applies optional shared-secret pre-auth, frames binary L1 packets over the socket stream, and then lets core `policy.canConnect` / `policy.canCall` make authorization decisions.
+
+Important behavior:
+
+- Default socket paths resolve to `$XDG_RUNTIME_DIR/nexus/<appId>/<instance>.sock` or `/tmp/nexus-<uid>/<appId>/<instance>.sock` when `XDG_RUNTIME_DIR` is absent.
+- Custom address resolvers can override that mapping, but a resolver returning `null` is an explicit address failure.
+- Runtime directories should be user-private, and stale socket cleanup must not unlink a live daemon socket.
+- Platform metadata currently reports adapter facts such as socket address and shared-secret auth status. It does not claim OS-verified peer `pid`, `uid`, or `gid` unless peer credential support is implemented.
+- Proxies and refs are session-bound. A daemon restart or socket disconnect invalidates old proxies; callers must reconnect and call `create()` again.
+
+Next step: read `docs/node-ipc/README.md` for node-ipc setup, addressing, adapter pre-auth, framing, lifecycle, and error behavior. Use `docs/auth-and-policy.md` for cross-adapter authorization policy and `packages/node-ipc/README.md` when you need the package export surface.
+
 ### When To Add Nexus State
 
 Add `Nexus State` only after:
@@ -64,4 +84,6 @@ At that point, adding `Nexus State` is a layering decision, not a bootstrap requ
 
 - Product docs landing: `docs/README.md`
 - Package map and install choices: `docs/packages.md`
+- Authorization and policy: `docs/auth-and-policy.md`
+- Node IPC adapter docs: `docs/node-ipc/README.md`
 - Nexus State subsystem docs: `docs/state/README.md`
