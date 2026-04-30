@@ -46,9 +46,22 @@ Start with `@nexus-js/core`, then wire your own endpoint implementation and meta
 
 This route is lower-level, but it is the right one when no first-party adapter exists for your environment.
 
-If you use the decorator path directly, remember that decorator registrations are process-global. Multi-instance setups should prefer explicit `configure({ endpoint, services })` input.
+If you use the decorator path directly, remember that decorator registrations are process-global. Multi-instance setups must use explicit `configure({ endpoint, services })` input.
 
 Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
+
+### Bridge Contexts With Multiple Transports
+
+Some runtimes need to bridge two separate Nexus transport graphs. A Chrome extension background service is a common example: it may talk to extension contexts through the Chrome adapter and to a local broker through a browser-compatible transport.
+
+Use two explicit `Nexus` instances in that runtime:
+
+- one instance for extension-internal contexts
+- one instance for the local broker transport
+- explicit `configure({ endpoint, services })` on both instances
+- no `@Expose` or `@Endpoint` decorators, because decorator registrations are process-global
+
+Then expose a gateway service on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
 
 ### Local Node Daemon / CLI
 

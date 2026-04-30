@@ -90,7 +90,32 @@ Nexus does not infer the current context magically. It needs an endpoint impleme
 
 Service registration is optional at the level of a single context boot. It becomes necessary when you want that context to expose callable services to others.
 
-If you use decorators for endpoint or service registration, remember that those registrations are process-global. Multi-instance setups should prefer explicit `configure({ endpoint, services })` input.
+If you use decorators for endpoint or service registration, remember that those registrations are process-global. Multi-instance setups must use explicit `configure({ endpoint, services })` input.
+
+## Multiple Nexus Instances In One Runtime
+
+One JavaScript context can host more than one isolated `Nexus` instance. Use this when the same runtime bridges different transport graphs, such as a Chrome extension background service that talks to content scripts through the Chrome adapter and to a local broker through another adapter.
+
+Use separate instances:
+
+```ts
+import { Nexus } from "@nexus-js/core";
+
+const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
+const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
+```
+
+Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. They do not automatically share a connection graph.
+
+Do not use `@Expose` or `@Endpoint` with this pattern. Decorator registrations are process-global, so one instance can consume registrations that another instance expected to own. Register services and endpoints through explicit `configure({ endpoint, services })` calls instead.
+
+Bridge between instances with normal services:
+
+1. expose a gateway service on one instance
+2. implement that service by calling `create(...)` on the other instance
+3. treat proxies and refs on both sides as session-bound handles
+
+For example, a background service can expose a local-broker gateway on `brokerNexus` and implement it by calling content-script services through `extensionNexus`. That keeps transport admission, extension routing, and broker-facing API boundaries explicit.
 
 ## Targeting And Context Resolution
 

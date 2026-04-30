@@ -99,6 +99,35 @@ nexus.configure({
 
 `nexus.configure(...)` is synchronous. Do not write `await nexus.configure(...)` unless a wrapper API itself returns a promise.
 
+## Multiple Nexus Instances
+
+Use `new Nexus()` when one JavaScript context must host independent Nexus runtimes, such as a browser extension background service bridging extension messaging and a local broker transport.
+
+```ts
+import { Nexus } from "@nexus-js/core";
+
+const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
+const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
+```
+
+Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. It does not share a connection graph with the other instances.
+
+Do not use `@Expose` or `@Endpoint` in multi-instance runtimes. Decorator registrations are process-global, so one instance can consume registrations intended for another. Use explicit `configure({ endpoint, services })` on every instance:
+
+```ts
+extensionNexus.configure({
+  endpoint: extensionEndpointConfig,
+  services: [{ token: ExtensionToken, implementation: extensionService }],
+});
+
+brokerNexus.configure({
+  endpoint: brokerEndpointConfig,
+  services: [{ token: BrokerGatewayToken, implementation: gatewayService }],
+});
+```
+
+Bridge instances with gateway services. For example, expose a broker-facing service on `brokerNexus` and implement it by creating content-script proxies through `extensionNexus`.
+
 ## Exposing Services
 
 Use `@Expose(Token)` for the normal singleton Nexus setup:
@@ -133,7 +162,7 @@ nexus.configure({
 });
 ```
 
-Decorator registrations are process-global. Prefer explicit services for multi-instance or isolated test setups.
+Decorator registrations are process-global. Multi-instance or isolated test setups must use explicit services.
 
 ## Creating Proxies
 

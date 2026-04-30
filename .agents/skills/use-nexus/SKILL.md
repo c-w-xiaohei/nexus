@@ -18,6 +18,7 @@ For full project documentation, read the `docs/` directory in `c-w-xiaohei/nexus
 - Configure every runtime context before creating proxies or exposing services.
 - Prefer adapter helpers such as `usingBackgroundScript(...)`, `usingContentScript(...)`, `usingNodeIpcDaemon(...)`, and `usingNodeIpcClient(...)` for standard runtimes.
 - Use `nexus.configure(...)` for explicit endpoint configuration, service registration, policy, matchers, descriptors, or adapter config composition.
+- Use `new Nexus()` plus explicit `configure({ endpoint, services })` for multi-instance runtimes; do not use `@Expose` or `@Endpoint` decorators there because decorator registration is process-global.
 - Pass an options object to `nexus.create(...)`; provide an explicit `target` unless a Token default target or unique `connectTo` fallback is intentionally being used.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 
@@ -88,6 +89,7 @@ Read `references/usage-style.md` for the complete external usage style, includin
 - shared contract and TokenSpace conventions
 - adapter helper versus `nexus.configure(...)` usage
 - `nexus.create(...)` targeting patterns
+- multi-instance runtime guidance and decorator limitations
 - node-ipc configuration composition
 - policy and authorization style
 - lifecycle expectations

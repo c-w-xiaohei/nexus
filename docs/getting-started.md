@@ -173,7 +173,38 @@ Nexus startup collects registration information first, then builds the runtime k
 
 So decorators are part of startup registration, not a separate runtime path that bypasses `configure()`.
 
-One important limitation: decorator registrations are process-global. They are a good fit for the normal single-`nexus` setup in one runtime, but multi-instance setups should prefer explicit `configure({ endpoint, services })` input instead of relying on global decorator registration.
+One important limitation: decorator registrations are process-global. They are a good fit for the normal single-`nexus` setup in one runtime, but multi-instance setups must use explicit `configure({ endpoint, services })` input instead of relying on global decorator registration.
+
+If one JavaScript context needs two independent Nexus runtimes, create isolated `Nexus` instances and configure each one explicitly:
+
+```ts
+import { Nexus } from "@nexus-js/core";
+
+const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
+const localBrokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
+
+extensionNexus.configure({
+  endpoint: extensionEndpointConfig,
+  services: [
+    {
+      token: ExtensionServiceToken,
+      implementation: extensionService,
+    },
+  ],
+});
+
+localBrokerNexus.configure({
+  endpoint: brokerEndpointConfig,
+  services: [
+    {
+      token: BrokerGatewayToken,
+      implementation: brokerGatewayService,
+    },
+  ],
+});
+```
+
+Do not use `@Expose` or `@Endpoint` in this pattern. Decorators are collected in a shared registry, so only one Nexus instance can consume those registrations safely. Bridge between the two runtimes with explicit services that call the other instance when needed.
 
 ## 6. Create A Proxy From Another Context
 
