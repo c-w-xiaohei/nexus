@@ -9,8 +9,8 @@ It exposes a unified `nexus` API for service exposure, typed remote proxies, con
 remote resource references, state synchronization, and platform adapters such as Chrome extension
 contexts.
 
-This is a pnpm/Turbo monorepo. Current packages are `@nexus-js/core`, `@nexus-js/chrome`, and
-`@nexus-js/react`.
+This is a pnpm/Turbo monorepo. Current packages are `@nexus-js/core`, `@nexus-js/chrome`,
+`@nexus-js/react`, and `@nexus-js/node-ipc`.
 
 No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 (`.github/copilot-instructions.md`) are present at the time this file was written.
@@ -20,9 +20,25 @@ No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 - `packages/core` - core runtime, RPC engine, connection management, transport abstractions, and Nexus State.
 - `packages/chrome` - Chrome extension adapter and `using...` context helpers.
 - `packages/react` - React bindings for Nexus State.
+- `packages/node-ipc` - Node IPC adapter for daemon/client runtimes.
 - `docs` - public documentation.
 - `.doc` - internal proposals, plans, and mandatory style guidance.
 - `.agents/skills` - project-level agent skills, including `use-nexus` for external usage style.
+
+## Collaboration Defaults
+
+- Treat `AGENTS.md` as the source of truth for agent guidance. `CLAUDE.md` is only a compatibility symlink.
+- Keep changes scoped to the request and prefer editing existing files over creating new files.
+- Do not commit or push unless the user explicitly asks for it.
+- If GitHub issues, pull requests, or branch names are relevant to the task, inspect them with `gh` before coding instead of guessing context from titles.
+- For unfamiliar or high-risk CLI usage, check `--help` first. Fixed project commands such as `pnpm test` do not need repeated help checks.
+
+## Design Principles
+
+- Do not add a new abstraction, module, or configuration unless it solves a verified problem.
+- Prefer low cognitive overhead over theoretically perfect encapsulation; make the obvious use case obvious.
+- Reduce boilerplate while preserving complete behavior, testability, and maintainability.
+- For architecture, public API, or cross-package changes, be able to state why the change is needed, whether a simpler option exists, and whether the result lowers cognitive load.
 
 ## Package Manager
 
@@ -174,7 +190,12 @@ pnpm dev
 - Public docs live in `docs/`; internal proposals and style notes live in `.doc/`.
 - Keep adapter docs focused on adapter-specific setup; do not redefine shared service contracts in every adapter guide.
 - Prefer minimal, type-correct examples with explicit targets first, then explain defaults or shortcuts.
+- Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
+- Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
+- PR descriptions should cover why the change is needed, what changed, how it was verified, and any notable risks.
+- After pushing or opening a PR, use `gh pr checks`, `gh run list`, or `gh run watch` when asked to follow CI status.
+- Use concise review comment labels when helpful: `issue`, `suggestion`, `question`, `blocked`, `decision`, or `note`.
 - Do not edit `dist/` outputs directly.
 - Keep changes scoped to the task. Do not revert unrelated user changes.
 - `CLAUDE.md` is a compatibility symlink to this file; update `AGENTS.md` as the source of truth.
