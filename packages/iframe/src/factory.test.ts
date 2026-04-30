@@ -1,0 +1,637 @@
+import { describe, expect, it, vi } from "vitest";
+import { Nexus, Token } from "@nexus-js/core";
+import {
+  IframeAdapterError,
+  IframeChildEndpoint,
+  IframeMatchers,
+  IframeParentEndpoint,
+  usingIframeChild,
+  usingIframeParent,
+} from "./index";
+
+class FakeWindow {
+  readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+  parent: FakeWindow | null = null;
+  constructor(readonly origin: string) {}
+  addEventListener(type: string, listener: (event: unknown) => void): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+  removeEventListener(type: string, listener: (event: unknown) => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+  postMessage(
+    data: unknown,
+    targetOrigin: string,
+    transfer?: Transferable[],
+  ): void {
+    if (!this.parent) return;
+    this.deliver(this.parent, data, targetOrigin, transfer);
+  }
+  dispatch(type: string, event: unknown): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+  deliver(
+    target: FakeWindow,
+    data: unknown,
+    targetOrigin = "*",
+    transfer?: Transferable[],
+  ): void {
+    if (targetOrigin !== "*" && targetOrigin !== target.origin) return;
+    target.dispatch("message", {
+      data,
+      source: this,
+      origin: this.origin,
+      ports: transfer ?? [],
+    });
+  }
+}
+
+class FakeIframe {
+  readonly listeners = new Map<string, Set<() => void>>();
+  constructor(
+    public contentWindow: FakeWindow | null,
+    readonly src: string,
+  ) {}
+  addEventListener(type: string, listener: () => void): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+  removeEventListener(type: string, listener: () => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+  load(): void {
+    for (const listener of this.listeners.get("load") ?? []) listener();
+  }
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("iframe adapter factories", () => {
+  it("returns config with serializable metadata, descriptors, matchers, and capabilities", () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const config = usingIframeParent({
+      configure: false,
+      appId: "app",
+      window: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    expect(config.endpoint?.meta).toEqual({
+      context: "iframe-parent",
+      appId: "app",
+      instance: "default",
+      origin: "https://parent.test",
+    });
+    expect(config.descriptors?.child).toEqual({
+      context: "iframe-child",
+      appId: "app",
+      instance: "default",
+      frameId: "main",
+      origin: "https://child.test",
+    });
+    expect(JSON.stringify(config.descriptors)).toContain("main");
+    expect(
+      config.matchers?.child({
+        context: "iframe-child",
+        appId: "app",
+        instance: "default",
+        frameId: "main",
+        origin: "https://child.test",
+      }),
+    ).toBe(true);
+    expect(config.endpoint?.implementation).toBeInstanceOf(
+      IframeParentEndpoint,
+    );
+    expect(config.endpoint?.implementation?.capabilities).toMatchObject({
+      binaryPackets: false,
+      transferables: true,
+    });
+  });
+
+  it("derives parent config origin from localWindow when window is omitted", () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+
+    const config = usingIframeParent({
+      configure: false,
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+
+    expect(config.endpoint?.meta?.origin).toBe("https://parent.test");
+  });
+
+  it("builds child config with parent descriptor and binary capability override", () => {
+    const childWindow = new FakeWindow("https://child.test");
+    const config = usingIframeChild({
+      configure: false,
+      appId: "app",
+      frameId: "main",
+      parentOrigin: "https://parent.test",
+      window: childWindow as unknown as Window,
+      binaryPackets: true,
+    });
+    expect(config.endpoint?.meta).toEqual({
+      context: "iframe-child",
+      appId: "app",
+      instance: "default",
+      origin: "https://child.test",
+      frameId: "main",
+    });
+    expect(config.descriptors?.parent).toEqual({
+      context: "iframe-parent",
+      appId: "app",
+      instance: "default",
+      origin: "https://parent.test",
+    });
+    expect(config.endpoint?.implementation).toBeInstanceOf(IframeChildEndpoint);
+    expect(config.endpoint?.implementation?.capabilities).toMatchObject({
+      binaryPackets: true,
+      transferables: true,
+    });
+  });
+
+  it("derives child config origin from localWindow when window is omitted", () => {
+    const childWindow = new FakeWindow("https://child.test");
+
+    const config = usingIframeChild({
+      configure: false,
+      appId: "app",
+      frameId: "main",
+      parentOrigin: "https://parent.test",
+      localWindow: childWindow as unknown as Window,
+    });
+
+    expect(config.endpoint?.meta?.origin).toBe("https://child.test");
+  });
+
+  it("validates target origins and app id", () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    expect(() =>
+      usingIframeParent({
+        configure: false,
+        appId: "",
+        window: parentWindow as unknown as Window,
+        frames: [
+          {
+            frameId: "main",
+            iframe: iframe as unknown as HTMLIFrameElement,
+            origin: "https://child.test",
+          },
+        ],
+      }),
+    ).toThrow(IframeAdapterError);
+    expect(() =>
+      usingIframeParent({
+        configure: false,
+        appId: "app",
+        window: parentWindow as unknown as Window,
+        frames: [
+          {
+            frameId: "main",
+            iframe: iframe as unknown as HTMLIFrameElement,
+            origin: "*",
+          },
+        ],
+      }),
+    ).toThrow(IframeAdapterError);
+    expect(() =>
+      usingIframeChild({
+        configure: false,
+        appId: "app",
+        parentOrigin: "*",
+        window: childWindow as unknown as Window,
+      }),
+    ).toThrow(IframeAdapterError);
+    expect(() =>
+      usingIframeChild({
+        configure: false,
+        appId: "app",
+        parentOrigin: "*",
+        allowAnyOrigin: true,
+        window: childWindow as unknown as Window,
+      }),
+    ).not.toThrow();
+  });
+
+  it("matches iframe roles, app id, instance, origin, and frame id", () => {
+    const child = {
+      context: "iframe-child",
+      appId: "app",
+      instance: "one",
+      origin: "https://child.test",
+      frameId: "a",
+    } as const;
+    expect(
+      IframeMatchers.parent("app")({
+        context: "iframe-parent",
+        appId: "app",
+        origin: "https://parent.test",
+      }),
+    ).toBe(true);
+    expect(IframeMatchers.child("app")(child)).toBe(true);
+    expect(IframeMatchers.instance("one")(child)).toBe(true);
+    expect(IframeMatchers.origin("https://child.test")(child)).toBe(true);
+    expect(IframeMatchers.frame("a")(child)).toBe(true);
+  });
+});
+
+describe("iframe adapter message behavior", () => {
+  it("ignores wrong origin, source, channel, and nonce messages before accepting a connection", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    const attackerWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    attackerWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const endpoint = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+          nonce: "n",
+        },
+      ],
+    });
+    const onConnect = vi.fn();
+    endpoint.listen(onConnect);
+    const payload = {
+      __nexusVirtualPort: true,
+      version: 1,
+      type: "connect",
+      channelId: "c",
+      from: "x",
+      nonce: "vn",
+    };
+    childWindow.deliver(
+      parentWindow,
+      {
+        __nexusIframe: true,
+        appId: "app",
+        channel: "other",
+        nonce: "n",
+        payload,
+      },
+      "https://parent.test",
+    );
+    attackerWindow.deliver(
+      parentWindow,
+      {
+        __nexusIframe: true,
+        appId: "app",
+        channel: "nexus:iframe",
+        nonce: "n",
+        payload,
+      },
+      "https://parent.test",
+    );
+    childWindow.deliver(
+      parentWindow,
+      {
+        __nexusIframe: true,
+        appId: "app",
+        channel: "nexus:iframe",
+        nonce: "wrong",
+        payload,
+      },
+      "https://parent.test",
+    );
+    childWindow.deliver(
+      parentWindow,
+      {
+        __nexusIframe: true,
+        appId: "app",
+        channel: "nexus:iframe",
+        nonce: "n",
+        payload,
+      },
+      "https://parent.test",
+    );
+    await flush();
+    await flush();
+    expect(onConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps multiple same-origin iframes isolated by source and frame id", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const firstWindow = new FakeWindow("https://child.test");
+    const secondWindow = new FakeWindow("https://child.test");
+    firstWindow.parent = parentWindow;
+    secondWindow.parent = parentWindow;
+    const firstFrame = new FakeIframe(firstWindow, "https://child.test/a");
+    const secondFrame = new FakeIframe(secondWindow, "https://child.test/b");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "a",
+          iframe: firstFrame as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+        {
+          frameId: "b",
+          iframe: secondFrame as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const firstChild = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: firstWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "a",
+    });
+    const secondChild = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: secondWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "b",
+    });
+    const firstConnect = vi.fn();
+    const secondConnect = vi.fn();
+    firstChild.listen(firstConnect);
+    secondChild.listen(secondConnect);
+
+    await parent.connect({
+      context: "iframe-child",
+      appId: "app",
+      frameId: "b",
+    });
+    await flush();
+
+    expect(firstConnect).not.toHaveBeenCalled();
+    expect(secondConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects parent connections to non-child context descriptors", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+
+    await expect(
+      parent.connect({ context: "iframe-parent", appId: "app" }),
+    ).rejects.toMatchObject({ code: "E_IFRAME_TARGET_NOT_FOUND" });
+  });
+
+  it("rejects child connections to non-parent context descriptors", async () => {
+    const childWindow = new FakeWindow("https://child.test");
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+
+    await expect(
+      child.connect({ context: "iframe-child", appId: "app" }),
+    ).rejects.toMatchObject({ code: "E_IFRAME_TARGET_NOT_FOUND" });
+  });
+
+  it("rejects child connections to mismatched parent descriptors", async () => {
+    const childWindow = new FakeWindow("https://child.test");
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      instance: "one",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+
+    await expect(
+      child.connect({ context: "iframe-parent", appId: "other" }),
+    ).rejects.toMatchObject({ code: "E_IFRAME_TARGET_NOT_FOUND" });
+    await expect(
+      child.connect({
+        context: "iframe-parent",
+        appId: "app",
+        instance: "two",
+      }),
+    ).rejects.toMatchObject({ code: "E_IFRAME_TARGET_NOT_FOUND" });
+    await expect(
+      child.connect({
+        context: "iframe-parent",
+        appId: "app",
+        origin: "https://other.test",
+      }),
+    ).rejects.toMatchObject({ code: "E_IFRAME_TARGET_NOT_FOUND" });
+  });
+
+  it("closes an existing child router on pagehide and beforeunload", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+    parent.listen(() => undefined);
+
+    const [pagehidePort] = await child.connect({});
+    const pagehideDisconnected = vi.fn();
+    pagehidePort.onDisconnect(pagehideDisconnected);
+    childWindow.dispatch("pagehide", {});
+    await flush();
+    expect(pagehideDisconnected).toHaveBeenCalled();
+
+    const [beforeunloadPort] = await child.connect({});
+    const beforeunloadDisconnected = vi.fn();
+    beforeunloadPort.onDisconnect(beforeunloadDisconnected);
+    childWindow.dispatch("beforeunload", {});
+    await flush();
+    expect(beforeunloadDisconnected).toHaveBeenCalled();
+  });
+
+  it("closes an existing parent frame router when the iframe loads", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+    parent.listen(() => undefined);
+    const [port] = await child.connect({
+      context: "iframe-parent",
+      appId: "app",
+    });
+    const disconnected = vi.fn();
+    port.onDisconnect(disconnected);
+    iframe.load();
+    await flush();
+    expect(disconnected).toHaveBeenCalled();
+  });
+
+  it("lets a child reconnect after parent iframe load replaces the frame router", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+    const onConnect = vi.fn();
+    parent.listen(onConnect);
+    await child.connect({ context: "iframe-parent", appId: "app" });
+    iframe.load();
+    await flush();
+
+    await child.connect({ context: "iframe-parent", appId: "app" });
+    await flush();
+
+    expect(onConnect).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes parent iframe load listeners on close", () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+
+    expect(iframe.listeners.get("load")?.size ?? 0).toBe(1);
+    parent.close();
+    parent.close();
+
+    expect(iframe.listeners.get("load")?.size ?? 0).toBe(0);
+  });
+});
+
+describe("iframe adapter RPC integration", () => {
+  it("calls a child service through fake postMessage windows", async () => {
+    interface EchoService {
+      echo(value: string): string;
+    }
+    const EchoToken = new Token<EchoService>("test.echo");
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new Nexus().configure(
+      usingIframeParent({
+        configure: false,
+        appId: "app",
+        window: parentWindow as unknown as Window,
+        frames: [
+          {
+            frameId: "main",
+            iframe: iframe as unknown as HTMLIFrameElement,
+            origin: "https://child.test",
+          },
+        ],
+      }),
+    );
+    new Nexus().configure({
+      ...usingIframeChild({
+        configure: false,
+        appId: "app",
+        frameId: "main",
+        window: childWindow as unknown as Window,
+        parentOrigin: "https://parent.test",
+        connectTo: [{ descriptor: { context: "iframe-parent", appId: "app" } }],
+      }),
+      services: [
+        {
+          token: EchoToken,
+          implementation: { echo: (value: string) => value },
+        },
+      ],
+    });
+    await flush();
+    const servicePromise = parent.create(EchoToken, {
+      target: {
+        descriptor: { context: "iframe-child", appId: "app", frameId: "main" },
+      },
+    });
+    await flush();
+    const service = await servicePromise;
+    await expect(service.echo("hello")).resolves.toBe("hello");
+  });
+});

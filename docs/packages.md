@@ -13,6 +13,7 @@ The key distinction is:
 - Use the `@nexus-js/core/state` entrypoint when you need synchronized remote state
 - Add `@nexus-js/react` only when your UI is React and uses Nexus State hooks
 - Add `@nexus-js/chrome` when building a Chrome extension integration
+- Add `@nexus-js/iframe` when connecting a parent window and iframe over `postMessage`
 - Add `@nexus-js/node-ipc` when connecting local Node daemon and client processes over Unix sockets
 
 If you are unsure, start with `@nexus-js/core`, make one service call work, then add adapters or subsystem entrypoints only where your use case actually needs them.
@@ -37,6 +38,12 @@ Add the Chrome adapter only for Chrome extension integration:
 pnpm add @nexus-js/core @nexus-js/chrome
 ```
 
+Add the iframe adapter only for parent window <-> iframe integration:
+
+```bash
+pnpm add @nexus-js/core @nexus-js/iframe
+```
+
 Add the Node IPC adapter only for local Node daemon/client integration:
 
 ```bash
@@ -47,6 +54,7 @@ Then choose imports:
 
 ```ts
 import { connectNexusStore } from "@nexus-js/core/state";
+import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 ```
 
 ## Core Package
@@ -62,6 +70,15 @@ import { connectNexusStore } from "@nexus-js/core/state";
   - Provides remote store definition, hosting, connection, lifecycle, and dispatch semantics
   - This is a subsystem capability layered on top of `@nexus-js/core`, not a separately installed package
 
+- `@nexus-js/core/transport`
+  - Core transport types and helpers for adapter authors
+  - This is an advanced package surface; most application code should use first-party adapters instead
+
+- `@nexus-js/core/transport/virtual-port`
+  - Virtual port router for multiplexing Nexus ports over message-bus style transports
+  - Used by `@nexus-js/iframe` to carry Nexus connections over iframe `postMessage`
+  - Prefer the iframe adapter unless you are implementing a transport adapter yourself
+
 ## UI Binding Package
 
 - `@nexus-js/react`
@@ -73,6 +90,11 @@ import { connectNexusStore } from "@nexus-js/core/state";
 - `@nexus-js/chrome`
   - Chrome extension adapter for endpoint wiring and context-specific setup
   - Uses `@nexus-js/core` as the underlying framework runtime
+
+- `@nexus-js/iframe`
+  - Browser iframe adapter for parent window <-> iframe RPC over `postMessage`
+  - Provides parent/child endpoint setup, descriptors, matchers, origin checks, optional nonce checks, and virtual-port routing
+  - Uses `@nexus-js/core` as the underlying framework runtime and `@nexus-js/core/transport/virtual-port` internally
 
 - `@nexus-js/node-ipc`
   - Local Node process adapter for daemon/client IPC over Linux filesystem Unix sockets
@@ -86,18 +108,20 @@ import { connectNexusStore } from "@nexus-js/core/state";
 - Headless synchronized state: install `@nexus-js/core`, import from `@nexus-js/core/state`
 - React with Nexus State: install `@nexus-js/core` + `@nexus-js/react`, import state APIs from `@nexus-js/core/state`
 - Chrome extension app with RPC: `@nexus-js/core` + `@nexus-js/chrome`
+- Parent window and iframe app with RPC: `@nexus-js/core` + `@nexus-js/iframe`
 - Local Node daemon/client app with RPC: `@nexus-js/core` + `@nexus-js/node-ipc`
 
 ## One Common Mistake
 
 Do not think of `@nexus-js/core/state` as a separately installed package.
 
-It is part of the `@nexus-js/core` package surface and is imported as a subpath entrypoint.
+It is part of the `@nexus-js/core` package surface and is imported as a subpath entrypoint. The same is true for `@nexus-js/core/transport` and `@nexus-js/core/transport/virtual-port`.
 
 ## Next Steps
 
 - Setup walkthrough: `docs/getting-started.md`
 - Runtime/platform framing: `docs/platforms.md`
 - Authorization and policy: `docs/auth-and-policy.md`
+- Iframe guide: `docs/iframe/README.md`
 - Node IPC guide: `docs/node-ipc/README.md`
 - Nexus State docs entry: `docs/state/README.md`

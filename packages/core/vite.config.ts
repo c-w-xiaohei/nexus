@@ -25,6 +25,11 @@ export default defineConfig({
           "src/transport/serializers/serializer-benchmark.ts",
         ),
         "state/index": path.resolve(__dirname, "src/state/index.ts"),
+        "transport/index": path.resolve(__dirname, "src/transport/index.ts"),
+        "transport/virtual-port/index": path.resolve(
+          __dirname,
+          "src/transport/virtual-port/index.ts",
+        ),
       },
       name: "NexusCore",
       formats: ["es", "cjs"], // Explicitly output ES Module and CommonJS

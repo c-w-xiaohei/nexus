@@ -59,6 +59,19 @@ export default tseslint.config(
     },
   },
 
+  // Environment for 'iframe' package (browser runtime, node build config)
+  {
+    files: ["packages/iframe/**/*.ts", "packages/iframe/vite.config.ts"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        EventListener: "readonly",
+        Transferable: "readonly",
+      },
+    },
+  },
+
   // Environment for 'node-ipc' package (Node runtime and tests)
   {
     files: ["packages/node-ipc/**/*.ts"],

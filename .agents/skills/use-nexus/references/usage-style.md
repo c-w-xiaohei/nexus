@@ -72,6 +72,8 @@ For first-party or adapter-provided runtimes, prefer adapter helpers:
 usingBackgroundScript();
 usingContentScript();
 await usingPopup();
+usingIframeParent({ appId: "app", frames: [] });
+usingIframeChild({ appId: "app", parentOrigin: "https://host.example" });
 ```
 
 Adapter helpers usually configure endpoint implementation, metadata, common matchers, descriptors, and default `connectTo` values.
@@ -332,6 +334,79 @@ const echo = await nexus.create(EchoToken, { target: {} });
 ```
 
 This works because core resolves the empty target to the Token default target, and the node-ipc client endpoint resolves the daemon descriptor to a Unix socket path.
+
+## Iframe Style
+
+For iframe integrations, keep contracts shared and keep parent/child setup focused on iframe wiring.
+
+Shared contract:
+
+```ts
+import { TokenSpace } from "@nexus-js/core";
+import type { IframePlatformMeta, IframeUserMeta } from "@nexus-js/iframe";
+
+export interface GreetingService {
+  greet(name: string): Promise<string>;
+}
+
+const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
+  name: "iframe-demo",
+});
+
+const childServices = appSpace.tokenSpace("child-services", {
+  defaultTarget: {
+    descriptor: {
+      context: "iframe-child",
+      appId: "iframe-demo",
+      frameId: "preview",
+    },
+  },
+});
+
+export const GreetingToken = childServices.token<GreetingService>("greeting");
+```
+
+Parent with explicit target:
+
+```ts
+usingIframeParent({
+  appId: "iframe-demo",
+  frames: [
+    {
+      frameId: "preview",
+      iframe,
+      origin: "https://child.example.com",
+    },
+  ],
+});
+
+const greeting = await nexus.create(GreetingToken, {
+  target: {
+    descriptor: {
+      context: "iframe-child",
+      appId: "iframe-demo",
+      frameId: "preview",
+      origin: "https://child.example.com",
+    },
+  },
+});
+```
+
+Child with explicit service registration:
+
+```ts
+nexus.configure({
+  ...usingIframeChild({
+    appId: "iframe-demo",
+    frameId: "preview",
+    parentOrigin: "https://parent.example.com",
+    configure: false,
+  }),
+  services: [{ token: GreetingToken, implementation: greetingService }],
+});
+```
+
+Use exact origins, add `nonce` when a frame session needs extra binding, and avoid `allowAnyOrigin: true` except for intentionally public frames. Proxies and refs are session-bound; recreate them after iframe reloads or reconnects.
 
 ## Policy And Authorization
 
