@@ -57,10 +57,10 @@ jobs:
           # 2. Run 'changeset publish' to publish packages to npm
           # 3. Create GitHub releases
           publish: pnpm changeset publish
-          github-token: ${{ secrets.BOT_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          # Expose the same token to subprocesses that read GITHUB_TOKEN directly.
-          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
+          # Expose the repository token to subprocesses that read GITHUB_TOKEN directly.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # NPM_TOKEN must be configured as a repository secret
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           # setup-node writes npm auth using NODE_AUTH_TOKEN.
