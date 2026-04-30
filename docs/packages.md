@@ -98,4 +98,5 @@ It is part of the `@nexus-js/core` package surface and is imported as a subpath 
 
 - Setup walkthrough: `docs/getting-started.md`
 - Runtime/platform framing: `docs/platforms.md`
+- Node IPC guide: `docs/node-ipc.md`
 - Nexus State docs entry: `docs/state/README.md`
