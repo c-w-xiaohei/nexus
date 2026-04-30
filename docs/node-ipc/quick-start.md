@@ -10,18 +10,16 @@ Both processes need Nexus configuration. The daemon listens and exposes services
 pnpm add @nexus-js/core @nexus-js/node-ipc
 ```
 
-## 2. Define A Shared Contract
+## 2. Start From A Shared Contract
 
-Put tokens and service types in code imported by both daemon and client.
+Node IPC does not change how Nexus shared contracts work.
+
+Start with the shared token pattern from `docs/getting-started.md`: put the token in shared code, and if the service type already exists elsewhere, import that type instead of redefining it inline.
+
+Assume both daemon and client can already import the shared token:
 
 ```ts
-import { Token } from "@nexus-js/core";
-
-export interface EchoService {
-  echo(input: string): Promise<string>;
-}
-
-export const EchoToken = new Token<EchoService>("example:echo");
+import { EchoToken } from "./shared";
 ```
 
 ## 3. Configure The Daemon

@@ -40,14 +40,9 @@ Public types and errors:
 ## Minimal Daemon
 
 ```ts
-import { nexus, Token } from "@nexus-js/core";
+import { nexus } from "@nexus-js/core";
 import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
-
-interface EchoService {
-  echo(input: string): Promise<string>;
-}
-
-const EchoToken = new Token<EchoService>("example:echo");
+import { EchoToken } from "./shared";
 
 await nexus.configure({
   ...usingNodeIpcDaemon({ appId: "example-app" }),
