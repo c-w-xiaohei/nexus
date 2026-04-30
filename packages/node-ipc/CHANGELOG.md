@@ -1,4 +1,4 @@
-# @nexus-js/core
+# @nexus-js/node-ipc
 
 ## 0.1.2
 
@@ -8,9 +8,5 @@
 
   Core now includes authorization policy hooks, a split between listen and connect capabilities, async listen support with handshake timeouts, and public/internal API updates for serializer benchmarks and dependencies.
 
-## 0.1.1
-
-### Patch Changes
-
-- acd681a: fix dep
-- 03021e8: initial publish
+- Updated dependencies [e84c367]
+  - @nexus-js/core@0.1.2
