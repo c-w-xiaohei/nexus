@@ -123,6 +123,13 @@ pnpm dev
 - Formatting is controlled by Prettier. Do not hand-format against Prettier output.
 - Keep source and docs ASCII unless nearby content already uses non-ASCII or the content requires it.
 
+## Comments And Design Notes
+
+- Add JSDoc for public APIs when behavior, lifecycle, error modes, or type-level contracts are not obvious from the signature.
+- Use design comments for protocol, connection lifecycle, serialization, state synchronization, authorization, and cross-runtime behavior when future maintainers would otherwise need to reconstruct intent from code.
+- Comments should explain intent, invariants, and tradeoffs; avoid restating what the code already says.
+- When implementation follows an issue, proposal, or reference document, cite that source near the relevant code path if it materially affects the design.
+
 ## Naming Conventions
 
 - Use `PascalCase` for classes, types, interfaces, namespaces, and tokens such as `PingToken`.
