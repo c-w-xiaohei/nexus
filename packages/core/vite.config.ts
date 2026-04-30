@@ -20,6 +20,10 @@ export default defineConfig({
     lib: {
       entry: {
         index: path.resolve(__dirname, "src/index.ts"),
+        "internal/serializer-benchmark": path.resolve(
+          __dirname,
+          "src/transport/serializers/serializer-benchmark.ts",
+        ),
         "state/index": path.resolve(__dirname, "src/state/index.ts"),
       },
       name: "NexusCore",

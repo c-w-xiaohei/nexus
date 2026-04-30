@@ -1,10 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ServiceRegistration } from "./types/config";
 import { NexusKernelBuilder } from "./kernel";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
 import { NexusConfigurationError } from "../errors/usage-errors";
 
 describe("NexusKernelBuilder", () => {
+  it("should type service policy with config metadata generics", () => {
+    type UserMeta = { role: "admin" | "guest" };
+    type PlatformMeta = { processId: number };
+
+    const registration = {
+      token: { id: "typed-service" },
+      implementation: {},
+      policy: {
+        canCall: ({ localIdentity, platform }) =>
+          localIdentity.role === "admin" && platform.processId > 0,
+      },
+    } satisfies ServiceRegistration<object, UserMeta, PlatformMeta>;
+
+    expect(registration.policy.canCall).toBeTypeOf("function");
+  });
+
   it("should fail when connectTo target is missing descriptor", async () => {
     const nexus = new Nexus();
     const config = {
@@ -119,5 +136,38 @@ describe("NexusKernelBuilder", () => {
     const result = await builder.build();
     expect(result.isOk()).toBe(true);
     expect(factorySpy).toHaveBeenCalledWith(nexus);
+  });
+
+  it("should pass NexusConfig.policy into ConnectionManager and Engine", async () => {
+    const nexus = new Nexus();
+    const policy = {
+      canConnect: vi.fn(() => true),
+      canCall: vi.fn(() => true),
+    };
+    const config = {
+      endpoint: {
+        meta: { context: "bg" },
+        implementation: { listen: () => {} },
+      },
+      policy,
+    };
+
+    const builder = NexusKernelBuilder.create(
+      config as any,
+      new Map(),
+      null,
+      nexus,
+      new Map(),
+      new Map(),
+    );
+
+    const result = await builder.build();
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) {
+      throw result.error;
+    }
+
+    expect((result.value.connectionManager as any).config.policy).toBe(policy);
+    expect((result.value.engine as any).policy).toBe(policy);
   });
 });

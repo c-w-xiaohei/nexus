@@ -30,6 +30,11 @@
       "types": "./dist/state/index.d.ts",
       "import": "./dist/state/index.mjs",
       "require": "./dist/state/index.js"
+    },
+    "./internal/serializer-benchmark": {
+      "types": "./dist/internal/serializer-benchmark.d.ts",
+      "import": "./dist/internal/serializer-benchmark.mjs",
+      "require": "./dist/internal/serializer-benchmark.js"
     }
   },
   "main": "./dist/index.js",
@@ -43,6 +48,7 @@
   },
   "scripts": {
     "build": "vite build",
+    "benchmark:serializers": "node ./scripts/benchmark-serializers.mjs",
     "dev": "vite build --watch",
     "test": "vitest run",
     "test:integration:file": "vitest run",
@@ -62,9 +68,11 @@
     "vitest": "4.0.18"
   },
   "dependencies": {
+    "@msgpack/msgpack": "3.1.3",
     "es-toolkit": "1.44.0",
+    "msgpackr": "1.11.10",
     "neverthrow": "8.2.0",
-    "zustand": "5.0.8",
-    "zod": "4.3.6"
+    "zod": "4.3.6",
+    "zustand": "5.0.8"
   }
 }

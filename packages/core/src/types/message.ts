@@ -39,6 +39,7 @@ export enum NexusMessageType {
   HANDSHAKE_ACK = 11,
   HANDSHAKE_REJECT = 12,
   IDENTITY_UPDATE = 13,
+  HANDSHAKE_READY = 14,
   // === Layer 1: Transport & Protocol ===
   CHUNK_START = 16,
   CHUNK_DATA = 17,
@@ -142,6 +143,12 @@ export interface HandshakeAckMessage extends NexusMessageBase {
   metadata: any;
 }
 
+/** A final confirmation that both sides accepted the handshake. */
+export interface HandshakeReadyMessage extends NexusMessageBase {
+  type: NexusMessageType.HANDSHAKE_READY;
+  id: MessageId;
+}
+
 /** A rejection of a handshake request due to policy or error. */
 export interface HandshakeRejectMessage extends NexusMessageBase {
   type: NexusMessageType.HANDSHAKE_REJECT;
@@ -201,6 +208,7 @@ export type ResponseMessage =
   | ErrMessage
   | BatchResMessage
   | HandshakeAckMessage
+  | HandshakeReadyMessage
   | HandshakeRejectMessage;
 
 /** Represents any message that does not expect a response. */

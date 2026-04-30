@@ -13,6 +13,7 @@ The key distinction is:
 - Use the `@nexus-js/core/state` entrypoint when you need synchronized remote state
 - Add `@nexus-js/react` only when your UI is React and uses Nexus State hooks
 - Add `@nexus-js/chrome` when building a Chrome extension integration
+- Add `@nexus-js/node-ipc` when connecting local Node daemon and client processes over Unix sockets
 
 If you are unsure, start with `@nexus-js/core`, make one service call work, then add adapters or subsystem entrypoints only where your use case actually needs them.
 
@@ -34,6 +35,12 @@ Add the Chrome adapter only for Chrome extension integration:
 
 ```bash
 pnpm add @nexus-js/core @nexus-js/chrome
+```
+
+Add the Node IPC adapter only for local Node daemon/client integration:
+
+```bash
+pnpm add @nexus-js/core @nexus-js/node-ipc
 ```
 
 Then choose imports:
@@ -67,12 +74,19 @@ import { connectNexusStore } from "@nexus-js/core/state";
   - Chrome extension adapter for endpoint wiring and context-specific setup
   - Uses `@nexus-js/core` as the underlying framework runtime
 
+- `@nexus-js/node-ipc`
+  - Local Node process adapter for daemon/client IPC over Linux filesystem Unix sockets
+  - Use it when one local daemon process exposes Nexus services to one or more local Node clients
+  - Provides socket address resolution, optional shared-secret pre-auth, and binary L1 packet framing before core authorization policies run
+  - Uses `@nexus-js/core` as the underlying framework runtime
+
 ## Common Combinations
 
 - Core RPC only: `@nexus-js/core`
 - Headless synchronized state: install `@nexus-js/core`, import from `@nexus-js/core/state`
 - React with Nexus State: install `@nexus-js/core` + `@nexus-js/react`, import state APIs from `@nexus-js/core/state`
 - Chrome extension app with RPC: `@nexus-js/core` + `@nexus-js/chrome`
+- Local Node daemon/client app with RPC: `@nexus-js/core` + `@nexus-js/node-ipc`
 
 ## One Common Mistake
 

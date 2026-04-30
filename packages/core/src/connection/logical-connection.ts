@@ -8,6 +8,7 @@ import type {
   NexusMessage,
   HandshakeReqMessage,
   HandshakeAckMessage,
+  HandshakeReadyMessage,
   IdentityUpdateMessage,
 } from "../types/message";
 import { NexusMessageType } from "../types/message";
@@ -16,7 +17,7 @@ import { Logger } from "@/logger";
 import { toSerializedError } from "@/utils/error";
 import { ResultAsync, err, ok, type Result } from "neverthrow";
 
-type LogicalConnectionErrorCode = "E_HANDSHAKE_REJECTED" | "E_USAGE_INVALID";
+type LogicalConnectionErrorCode = "E_AUTH_CONNECT_DENIED" | "E_USAGE_INVALID";
 
 type LogicalConnectionErrorOptions = {
   readonly context?: Record<string, unknown>;
@@ -38,9 +39,18 @@ class LogicalConnectionBaseError extends Error {
   }
 }
 
+class LogicalConnectionAuthDeniedError extends Error {
+  readonly code = "E_AUTH_CONNECT_DENIED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "LogicalConnectionAuthDeniedError";
+  }
+}
+
 class LogicalConnectionHandshakeRejectedError extends LogicalConnectionBaseError {
   constructor(message: string, options: LogicalConnectionErrorOptions = {}) {
-    super(message, "E_HANDSHAKE_REJECTED", options);
+    super(message, "E_AUTH_CONNECT_DENIED", options);
     this.name = "LogicalConnectionHandshakeRejectedError";
   }
 }
@@ -72,6 +82,10 @@ export class LogicalConnection<
   public readonly context: ConnectionContext<P>;
   private _remoteIdentity?: U;
   private wasEstablished = false;
+  private rejectionError?: Error;
+  private outboundHandshakeId?: HandshakeReqMessage["id"];
+  private acknowledgedHandshakeId?: HandshakeReqMessage["id"];
+  private inboundOrderingGate: Promise<void> = Promise.resolve();
   private readonly logger: Logger;
   private readonly nextMessageId: () => number;
 
@@ -118,6 +132,18 @@ export class LogicalConnection<
     return this._remoteIdentity;
   }
 
+  public get localIdentity(): U {
+    return this.localUserMetadata;
+  }
+
+  public updateLocalIdentity(updates: Partial<U>): void {
+    this.localUserMetadata = { ...this.localUserMetadata, ...updates };
+  }
+
+  public get handshakeRejectionError(): Error | undefined {
+    return this.rejectionError;
+  }
+
   /**
    * Starts the handshake process from the active/client side.
    * @param localUserMetadata The user metadata of the local endpoint.
@@ -153,6 +179,8 @@ export class LogicalConnection<
       this.close();
       return err(sendResult.error);
     }
+
+    this.outboundHandshakeId = handshakeReq.id;
 
     return ok(undefined);
   }
@@ -207,36 +235,63 @@ export class LogicalConnection<
   public safeHandleMessage(
     message: NexusMessage,
   ): ResultAsync<void, globalThis.Error> {
-    return ResultAsync.fromPromise(
-      (async () => {
-        this.logger.debug("Received message from port.", message);
-        // Identity updates are special and can be received at any time after connection.
-        if (message.type === NexusMessageType.IDENTITY_UPDATE) {
-          this.handleIdentityUpdate(message as IdentityUpdateMessage);
-          return;
-        }
-
-        // If we are initializing and receive a handshake request, we are the passive
-        // side of the connection. We transition to HANDSHAKING to process it.
-        if (
-          this.status === ConnectionStatus.INITIALIZING &&
-          message.type === NexusMessageType.HANDSHAKE_REQ
-        ) {
-          this.status = ConnectionStatus.HANDSHAKING;
-        }
-
-        if (this.status === ConnectionStatus.HANDSHAKING) {
-          await this.processHandshakeMessage(message);
-        } else if (this.status === ConnectionStatus.CONNECTED) {
-          // Once connected, forward all other messages to the manager.
-          await this.handlers.onMessage(message, this.connectionId);
-        }
-      })(),
-      (error) =>
-        error instanceof globalThis.Error
-          ? error
-          : new globalThis.Error(String(error)),
+    const orderingGate = this.shouldWaitForInboundOrdering(message)
+      ? this.inboundOrderingGate
+      : Promise.resolve();
+    const messageHandling = orderingGate.then(() =>
+      this.handleMessageInTransportOrder(message),
     );
+
+    if (this.shouldGateInboundOrdering(message)) {
+      this.inboundOrderingGate = messageHandling.catch(() => undefined);
+    }
+
+    return ResultAsync.fromPromise(messageHandling, (error) =>
+      error instanceof globalThis.Error
+        ? error
+        : new globalThis.Error(String(error)),
+    );
+  }
+
+  private shouldGateInboundOrdering(message: NexusMessage): boolean {
+    return (
+      this.status !== ConnectionStatus.CONNECTED ||
+      message.type === NexusMessageType.IDENTITY_UPDATE
+    );
+  }
+
+  private shouldWaitForInboundOrdering(message: NexusMessage): boolean {
+    if (this.status !== ConnectionStatus.CONNECTED) {
+      return true;
+    }
+
+    return !isConnectedResponseMessage(message);
+  }
+
+  private async handleMessageInTransportOrder(message: NexusMessage) {
+    this.logger.debug("Received message from port.", message);
+    // Identity update authorization can be async; later service messages must
+    // wait so L3 observes the same identity order as the transport.
+    if (message.type === NexusMessageType.IDENTITY_UPDATE) {
+      await this.handleIdentityUpdate(message as IdentityUpdateMessage);
+      return;
+    }
+
+    // If we are initializing and receive a handshake request, we are the passive
+    // side of the connection. We transition to HANDSHAKING to process it.
+    if (
+      this.status === ConnectionStatus.INITIALIZING &&
+      message.type === NexusMessageType.HANDSHAKE_REQ
+    ) {
+      this.status = ConnectionStatus.HANDSHAKING;
+    }
+
+    if (this.status === ConnectionStatus.HANDSHAKING) {
+      await this.processHandshakeMessage(message);
+    } else if (this.status === ConnectionStatus.CONNECTED) {
+      // Once connected, forward all other messages to the manager.
+      await this.handlers.onMessage(message, this.connectionId);
+    }
   }
 
   /**
@@ -263,7 +318,9 @@ export class LogicalConnection<
   // Internal Handshake Logic
   // ===========================================================================
 
-  private handleIdentityUpdate(message: IdentityUpdateMessage): void {
+  private async handleIdentityUpdate(
+    message: IdentityUpdateMessage,
+  ): Promise<void> {
     if (this.status !== ConnectionStatus.CONNECTED || !this._remoteIdentity) {
       this.logger.warn(
         "Ignoring identity update received in non-connected state.",
@@ -274,8 +331,17 @@ export class LogicalConnection<
     }
     const oldIdentity = this._remoteIdentity;
 
-    // Update the local identity first
     const newIdentity = { ...oldIdentity, ...message.updates };
+    const isVerified = await this.handlers.verify(newIdentity, this.context);
+    if (!isVerified) {
+      this.logger.warn("Remote identity update verification failed. Closing.");
+      this.rejectionError = new LogicalConnectionAuthDeniedError(
+        "Identity update rejected by policy.",
+      );
+      this.close();
+      return;
+    }
+
     this._remoteIdentity = newIdentity;
 
     this.logger.debug("Updated remote identity and notifying manager.", {
@@ -303,9 +369,14 @@ export class LogicalConnection<
         await this.handleHandshakeAck(message as HandshakeAckMessage);
         break;
 
+      case NexusMessageType.HANDSHAKE_READY:
+        this.handleHandshakeReady(message as HandshakeReadyMessage);
+        break;
+
       case NexusMessageType.HANDSHAKE_REJECT:
         // The other side rejected our connection.
         this.logger.warn("Handshake rejected by remote.");
+        this.rejectionError = serializedErrorToError(message.error);
         this.close();
         break;
 
@@ -320,19 +391,10 @@ export class LogicalConnection<
   private async handleHandshakeRequest(req: HandshakeReqMessage) {
     this.logger.debug("Handling HANDSHAKE_REQ.", req);
     const assignedMetadata = req.assigns as U | undefined;
-    this._remoteIdentity = req.metadata as U;
+    const remoteIdentity = req.metadata as U;
 
-    // If this is a "christening" call, the child adopts the assigned metadata.
-    // This now only affects the state of this specific LogicalConnection.
-    if (assignedMetadata) {
-      this.localUserMetadata = assignedMetadata;
-    }
-
-    this.logger.debug("Verifying remote identity.", this.remoteIdentity);
-    const isVerified = await this.handlers.verify(
-      this._remoteIdentity,
-      this.context,
-    );
+    this.logger.debug("Verifying remote identity.", remoteIdentity);
+    const isVerified = await this.handlers.verify(remoteIdentity, this.context);
     if (!isVerified) {
       this.logger.warn("Remote identity verification failed. Closing.");
       // TODO: Send HANDSHAKE_REJECT
@@ -340,14 +402,8 @@ export class LogicalConnection<
         type: NexusMessageType.HANDSHAKE_REJECT,
         id: req.id,
         error: toSerializedError(
-          new LogicalConnectionError.HandshakeRejected(
+          new LogicalConnectionAuthDeniedError(
             "Connection rejected by policy.",
-            {
-              context: {
-                connectionId: this.connectionId,
-                remoteIdentity: this._remoteIdentity,
-              },
-            },
           ),
         ),
       });
@@ -357,9 +413,16 @@ export class LogicalConnection<
           rejectResult.error,
         );
       }
-      this.close();
+      setTimeout(() => this.close(), 0);
       return;
     }
+
+    // If this is a "christening" call, the child adopts the assigned metadata
+    // only after authorization has evaluated the pre-assignment local identity.
+    if (assignedMetadata) {
+      this.localUserMetadata = assignedMetadata;
+    }
+    this._remoteIdentity = remoteIdentity;
 
     this.logger.debug(
       "Verification successful. Sending HANDSHAKE_ACK.",
@@ -379,7 +442,85 @@ export class LogicalConnection<
       return;
     }
 
-    // We have sent the ACK, we are now connected.
+    this.acknowledgedHandshakeId = req.id;
+
+    this.logger.info("ACK sent. Waiting for active side final confirmation.");
+  }
+
+  private async handleHandshakeAck(ack: HandshakeAckMessage) {
+    this.logger.debug("Handling HANDSHAKE_ACK.", ack);
+    if (ack.id !== this.outboundHandshakeId) {
+      this.logger.warn("Ignoring HANDSHAKE_ACK for unknown handshake.", {
+        ackId: ack.id,
+        outboundHandshakeId: this.outboundHandshakeId,
+      });
+      return;
+    }
+
+    // We are the active side. We sent a REQ and got an ACK.
+    // The ACK contains the server's user metadata.
+    this._remoteIdentity = ack.metadata as U;
+
+    const isVerified = await this.handlers.verify(
+      this._remoteIdentity,
+      this.context,
+    );
+    if (!isVerified) {
+      this.logger.warn("Remote identity verification failed. Closing.");
+      this.rejectionError = new LogicalConnectionAuthDeniedError(
+        "Connection rejected by policy.",
+      );
+      this.sendHandshakeReject(ack.id, this.rejectionError);
+      this.close();
+      return;
+    }
+
+    const readyResult = this.portProcessor.sendMessage({
+      type: NexusMessageType.HANDSHAKE_READY,
+      id: ack.id,
+    });
+    if (readyResult.isErr()) {
+      this.logger.error("Failed to send HANDSHAKE_READY", readyResult.error);
+      this.close();
+      return;
+    }
+
+    // Let the passive side process HANDSHAKE_READY before callers can use the
+    // active connection returned from resolution.
+    setTimeout(() => {
+      if (
+        this.status !== ConnectionStatus.HANDSHAKING ||
+        !this._remoteIdentity
+      ) {
+        return;
+      }
+      this.status = ConnectionStatus.CONNECTED;
+      this.wasEstablished = true;
+      this.logger.info("Handshake complete (active). Connection is now live.");
+      this.handlers.onVerified({
+        connectionId: this.connectionId,
+        identity: this._remoteIdentity,
+      });
+    }, 0);
+  }
+
+  private handleHandshakeReady(ready: HandshakeReadyMessage): void {
+    if (!this._remoteIdentity) {
+      this.logger.warn("Ignoring HANDSHAKE_READY without remote identity.");
+      return;
+    }
+
+    if (ready.id !== this.acknowledgedHandshakeId) {
+      this.logger.warn(
+        "Ignoring HANDSHAKE_READY for unacknowledged handshake.",
+        {
+          readyId: ready.id,
+          acknowledgedHandshakeId: this.acknowledgedHandshakeId,
+        },
+      );
+      return;
+    }
+
     this.status = ConnectionStatus.CONNECTED;
     this.wasEstablished = true;
     this.logger.info("Handshake complete (passive). Connection is now live.");
@@ -389,24 +530,35 @@ export class LogicalConnection<
     });
   }
 
-  private async handleHandshakeAck(ack: HandshakeAckMessage) {
-    this.logger.debug("Handling HANDSHAKE_ACK.", ack);
-    // We are the active side. We sent a REQ and got an ACK.
-    // The ACK contains the server's user metadata.
-    this._remoteIdentity = ack.metadata as U;
-
-    // As the active party that initiated the connection, we don't need
-    // to re-verify the passive party. Trust is implicit. Verification is
-    // the responsibility of the passive (listening) side.
-    // This removal aligns with the design docs and improves performance.
-
-    // We are now officially connected.
-    this.status = ConnectionStatus.CONNECTED;
-    this.wasEstablished = true;
-    this.logger.info("Handshake complete (active). Connection is now live.");
-    this.handlers.onVerified({
-      connectionId: this.connectionId,
-      identity: this._remoteIdentity,
+  private sendHandshakeReject(id: HandshakeReadyMessage["id"], error: Error) {
+    const rejectResult = this.portProcessor.sendMessage({
+      type: NexusMessageType.HANDSHAKE_REJECT,
+      id,
+      error: toSerializedError(error),
     });
+    if (rejectResult.isErr()) {
+      this.logger.error("Failed to send HANDSHAKE_REJECT", rejectResult.error);
+    }
   }
+}
+
+function serializedErrorToError(input: {
+  message?: string;
+  code?: string;
+  name?: string;
+}): Error {
+  const error = new Error(input.message ?? "Handshake rejected by remote.");
+  error.name = input.name ?? "HandshakeRejectedError";
+  if (input.code) {
+    (error as Error & { code?: string }).code = input.code;
+  }
+  return error;
+}
+
+function isConnectedResponseMessage(message: NexusMessage): boolean {
+  return (
+    message.type === NexusMessageType.RES ||
+    message.type === NexusMessageType.ERR ||
+    message.type === NexusMessageType.BATCH_RES
+  );
 }

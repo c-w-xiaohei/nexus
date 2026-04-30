@@ -50,4 +50,20 @@ describe("@Expose", () => {
     const snapshot = DecoratorRegistry.snapshot();
     expect(snapshot.services.get(token)?.options?.policy).toBe(policy);
   });
+
+  it("should accept policy with only canCall in options", () => {
+    DecoratorRegistry.clear();
+    const token = new Token<object>("call-policy-service");
+    const policy = {
+      canCall: () => true,
+    };
+
+    const decorator = Expose(token, { policy });
+    decorator(class PolicyService {}, {
+      kind: "class",
+    } as ClassDecoratorContext);
+
+    const snapshot = DecoratorRegistry.snapshot();
+    expect(snapshot.services.get(token)?.options?.policy).toBe(policy);
+  });
 });

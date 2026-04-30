@@ -297,17 +297,13 @@ export class Nexus<
       this.namedDescriptors,
     );
 
-    return builder.build().andThen((kernel) => {
-      const cmInitResult = kernel.connectionManager.safeInitialize();
-      if (cmInitResult.isErr()) {
-        return errAsync(cmInitResult.error);
-      }
-
-      this.engine = kernel.engine;
-      this.connectionManager = kernel.connectionManager;
-      DecoratorRegistry.clear();
-      return okAsync(undefined);
-    });
+    return builder.build().andThen((kernel) =>
+      kernel.connectionManager.safeInitialize().map(() => {
+        this.engine = kernel.engine;
+        this.connectionManager = kernel.connectionManager;
+        DecoratorRegistry.clear();
+      }),
+    );
   }
 
   private safeEnsureKernelReady(): ResultAsync<

@@ -8,6 +8,7 @@ import {
 } from "../types";
 import type { ProxyFactory } from "../proxy-factory";
 import type { ResourceManager } from "../resource-manager";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { isRefWrapper } from "@/types/ref-wrapper";
 import { Placeholder } from "./placeholder";
 import {
@@ -52,6 +53,12 @@ export namespace PayloadProcessor {
       args: any[],
       targetConnectionId: string,
     ): TResult<any[], globalThis.Error>;
+    safeSanitizeFromService(
+      args: any[],
+      targetConnectionId: string,
+      serviceName: string,
+      servicePolicy?: NexusAuthorizationPolicy<any, any>,
+    ): TResult<any[], globalThis.Error>;
     safeRevive(
       args: any[],
       sourceConnectionId: string,
@@ -66,11 +73,19 @@ export namespace PayloadProcessor {
 
     const internalSanitize = (value: any, context: SanitizeContext): any => {
       if (isRefWrapper(value)) {
-        const resourceId = resourceManager.registerLocalResource(
-          value.target,
-          context.targetConnectionId,
-          LocalResourceType.OBJECT,
-        );
+        const resourceId = context.serviceName
+          ? resourceManager.registerLocalResource(
+              value.target,
+              context.targetConnectionId,
+              LocalResourceType.OBJECT,
+              context.serviceName,
+              context.servicePolicy,
+            )
+          : resourceManager.registerLocalResource(
+              value.target,
+              context.targetConnectionId,
+              LocalResourceType.OBJECT,
+            );
         logger.debug(
           `-> Sanitized nexus.ref() object by creating local resource #${resourceId}.`,
         );
@@ -165,7 +180,7 @@ export namespace PayloadProcessor {
       }
 
       if (value !== null && typeof value === "object") {
-        const result: { [key: string]: any } = {};
+        const result: { [key: string]: any } = Object.create(null);
         for (const key in value) {
           if (Object.prototype.hasOwnProperty.call(value, key)) {
             result[key] = internalRevive(value[key], context);
@@ -180,10 +195,33 @@ export namespace PayloadProcessor {
     const safeSanitize = (
       args: any[],
       targetConnectionId: string,
+    ): TResult<any[], globalThis.Error> =>
+      safeSanitizeWithContext(args, { targetConnectionId });
+
+    function safeSanitizeFromService(
+      args: any[],
+      targetConnectionId: string,
+      serviceName: string,
+      servicePolicyOverride?: NexusAuthorizationPolicy<any, any>,
+    ): TResult<any[], globalThis.Error> {
+      const servicePolicy =
+        arguments.length >= 4
+          ? servicePolicyOverride
+          : resourceManager.getExposedServiceRecord(serviceName)?.policy;
+      return safeSanitizeWithContext(args, {
+        targetConnectionId,
+        serviceName,
+        servicePolicy,
+      });
+    }
+
+    const safeSanitizeWithContext = (
+      args: any[],
+      context: SanitizeContext,
     ): TResult<any[], globalThis.Error> => {
       const result = Result.fromThrowable(
         () => {
-          const sanitized = internalSanitize(args, { targetConnectionId });
+          const sanitized = internalSanitize(args, context);
           return Array.isArray(sanitized) ? sanitized : [sanitized];
         },
         (error) =>
@@ -191,7 +229,7 @@ export namespace PayloadProcessor {
             ? error
             : new Error.UnsupportedType(
                 `Nexus serialization error: ${String(error)}`,
-                { context: { targetConnectionId } },
+                { context: { ...context } },
               ),
       )();
 
@@ -231,6 +269,7 @@ export namespace PayloadProcessor {
       resourceManager,
       proxyFactory,
       safeSanitize,
+      safeSanitizeFromService,
       safeRevive,
     };
 
