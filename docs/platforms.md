@@ -67,7 +67,7 @@ Important behavior:
 - Platform metadata currently reports adapter facts such as socket address and shared-secret auth status. It does not claim OS-verified peer `pid`, `uid`, or `gid` unless peer credential support is implemented.
 - Proxies and refs are session-bound. A daemon restart or socket disconnect invalidates old proxies; callers must reconnect and call `create()` again.
 
-Next step: read `docs/node-ipc.md` for node-ipc setup, addressing, auth, framing, lifecycle, and error behavior. Use `packages/node-ipc/README.md` when you need the package export surface.
+Next step: read `docs/node-ipc/README.md` for node-ipc setup, addressing, adapter pre-auth, framing, lifecycle, and error behavior. Use `docs/auth-and-policy.md` for cross-adapter authorization policy and `packages/node-ipc/README.md` when you need the package export surface.
 
 ### When To Add Nexus State
 
@@ -84,4 +84,6 @@ At that point, adding `Nexus State` is a layering decision, not a bootstrap requ
 
 - Product docs landing: `docs/README.md`
 - Package map and install choices: `docs/packages.md`
+- Authorization and policy: `docs/auth-and-policy.md`
+- Node IPC adapter docs: `docs/node-ipc/README.md`
 - Nexus State subsystem docs: `docs/state/README.md`

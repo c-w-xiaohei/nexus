@@ -2,7 +2,7 @@
 
 `@nexus-js/node-ipc` is the Nexus adapter for local daemon/client IPC over filesystem Unix domain sockets.
 
-For the product guide, read `docs/node-ipc.md` from the repository root. This package README is a short reference for installation, exports, and the minimum setup shape.
+For the product guide, read `docs/node-ipc/README.md` from the repository root. This package README is a short reference for installation, exports, and the minimum setup shape.
 
 ## Install
 

@@ -15,7 +15,8 @@ Then use these as needed:
 
 - `docs/platforms.md` for runtime/adapter routing
 - `docs/packages.md` for install/import choices
-- `docs/node-ipc.md` for local daemon/client IPC over Unix sockets
+- `docs/auth-and-policy.md` for cross-adapter authorization policy
+- `docs/node-ipc/README.md` for local daemon/client IPC over Unix sockets
 
 If you only read one page first, read `docs/getting-started.md`.
 
@@ -24,7 +25,8 @@ If you only read one page first, read `docs/getting-started.md`.
 - I need my first working Nexus setup: start with `docs/getting-started.md`
 - I need typed cross-context RPC only: continue from `docs/getting-started.md`
 - I need help choosing packages or adapters: use `docs/packages.md` and `docs/platforms.md`
-- I need a local daemon process and local clients: use `docs/node-ipc.md`
+- I need connection/service authorization rules: use `docs/auth-and-policy.md`
+- I need a local daemon process and local clients: use `docs/node-ipc/README.md`
 - I need synchronized remote state: go to `docs/state/README.md`
 
 ## Product Capabilities
@@ -32,6 +34,7 @@ If you only read one page first, read `docs/getting-started.md`.
 - Core cross-context RPC and service exposure via `@nexus-js/core`
 - Platform adapters (for example, Chrome extension integration) via adapter packages such as `@nexus-js/chrome`
 - Local daemon/client IPC over Unix sockets via `@nexus-js/node-ipc`
+- Cross-adapter authorization policy through core `policy.canConnect` and `policy.canCall`
 - Nexus State as a subsystem for synchronized remote state, built on top of core Nexus APIs
 
 ## Nexus State Subsystem Docs
