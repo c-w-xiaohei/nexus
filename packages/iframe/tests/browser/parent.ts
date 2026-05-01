@@ -18,6 +18,7 @@ const telemetry = {
   childCalls: [] as Array<{ frameId: string; value: string }>,
   readyFrames: [] as string[],
 };
+const childEchoServices = new Map<string, EchoService>();
 
 function getFrame(frameId: string) {
   const iframe = document.querySelector<HTMLIFrameElement>(
@@ -37,6 +38,7 @@ const parent = new Nexus().configure({
       origin: "http://127.0.0.1:3210",
       nonce: `browser-nonce-${frameId}`,
     })),
+    heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
   services: [
     {
@@ -78,6 +80,23 @@ async function callChildEcho(frameId: string, value: string) {
   return response;
 }
 
+async function callCachedChildEcho(frameId: string, value: string) {
+  let service = childEchoServices.get(frameId);
+  if (!service) {
+    service = await parent.create(EchoToken, {
+      target: {
+        descriptor: {
+          context: "iframe-child",
+          appId: "browser-app",
+          frameId,
+        },
+      },
+    });
+    childEchoServices.set(frameId, service);
+  }
+  return service.echo(value);
+}
+
 async function callParentEcho(frameId: string, value: string) {
   const iframe = getFrame(frameId);
   const childWindow = iframe.contentWindow as Window & {
@@ -90,17 +109,51 @@ async function callParentEcho(frameId: string, value: string) {
 }
 
 function getTelemetry() {
+  const liveReadyFrames = frameIds.filter((frameId) => {
+    const childWindow = getFrame(frameId).contentWindow as Window & {
+      nexusIframeReady?: boolean;
+    };
+    return childWindow.nexusIframeReady === true;
+  });
   return {
     parentCalls: [...telemetry.parentCalls],
     childCalls: [...telemetry.childCalls],
-    readyFrames: [...telemetry.readyFrames],
+    readyFrames: Array.from(
+      new Set([...telemetry.readyFrames, ...liveReadyFrames]),
+    ),
   };
 }
 
 async function reloadFrame(frameId: string) {
   telemetry.readyFrames = telemetry.readyFrames.filter((id) => id !== frameId);
+  childEchoServices.delete(frameId);
   const iframe = getFrame(frameId);
   iframe.src = `http://127.0.0.1:3210/child.html?frameId=${frameId}&reload=${Date.now()}`;
+}
+
+function makeChildUnresponsive(frameId: string) {
+  const iframe = getFrame(frameId);
+  const childWindow = iframe.contentWindow as Window & {
+    makeUnresponsive?: () => void;
+  };
+  if (!childWindow.makeUnresponsive) {
+    throw new Error(`Child ${frameId} is not ready`);
+  }
+  childWindow.makeUnresponsive();
+}
+
+function hasConnectionToFrame(frameId: string) {
+  const internalParent = parent as typeof parent & {
+    connectionManager?: {
+      connections: ReadonlyMap<
+        string,
+        { remoteIdentity?: { frameId?: string } }
+      >;
+    };
+  };
+  return Array.from(
+    internalParent.connectionManager?.connections.values() ?? [],
+  ).some((connection) => connection.remoteIdentity?.frameId === frameId);
 }
 
 function sendSpoofedConnect(options: { channel?: string; nonce?: string }) {
@@ -124,10 +177,13 @@ function sendSpoofedConnect(options: { channel?: string; nonce?: string }) {
 }
 
 Object.assign(window, {
+  callCachedChildEcho,
   callChildEcho,
   callParentEcho,
   getTelemetry,
   reloadFrame,
   sendSpoofedConnect,
+  makeChildUnresponsive,
+  hasConnectionToFrame,
   parentNexus: parent,
 });

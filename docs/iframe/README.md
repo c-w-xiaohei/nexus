@@ -165,6 +165,8 @@ Core still owns:
 
 ## Lifecycle
 
+The browser `postMessage` bus does not guarantee a native disconnect signal. The iframe adapter uses the core virtual-port heartbeat to detect unresponsive links; its defaults come from core (5000ms interval / 3 misses unless core exposes different values). Override `heartbeat` only for tests or environments that need faster or slower disconnect detection.
+
 Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...)` proxies and refs are session-bound, so recreate proxies and pass fresh refs after an iframe reload, reconnect, or session replacement.
 
 If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.

@@ -84,15 +84,14 @@ await ping.ping("hello");
 
 ## When More Detail Is Needed
 
-Read `references/usage-style.md` for the complete external usage style, including:
+Start with `references/usage-style.md` for the concise external usage index. Load focused references only when the task needs that detail:
 
-- shared contract and TokenSpace conventions
-- adapter helper versus `nexus.configure(...)` usage
-- `nexus.create(...)` targeting patterns
-- multi-instance runtime guidance and decorator limitations
-- node-ipc configuration composition
-- policy and authorization style
-- lifecycle expectations
+- `references/shared-contracts.md` - service interfaces, Tokens, `TokenSpace`, and service exposure
+- `references/runtime-configuration.md` - adapter helpers, `nexus.configure(...)`, multi-instance runtimes, and config composition
+- `references/targeting-and-proxies.md` - `nexus.create(...)`, target resolution, descriptors, matchers, proxies, and refs
+- `references/adapter-node-ipc.md` - node-ipc daemon/client wiring, `configure: false`, auth gates, and default-target routing
+- `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
+- `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style
 
 Also read repository docs under `c-w-xiaohei/nexus/docs`, especially:
 

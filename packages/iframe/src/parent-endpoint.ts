@@ -110,6 +110,7 @@ export class IframeParentEndpoint implements IEndpoint<
     state.router = VirtualPortRouter.create({
       bus: this.createBus(state),
       localId: `iframe-parent:${this.options.appId}:${state.frameId}`,
+      heartbeat: this.options.heartbeat,
     });
   }
 

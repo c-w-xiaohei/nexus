@@ -79,6 +79,7 @@ export class IframeChildEndpoint implements IEndpoint<
     this.router = VirtualPortRouter.create({
       bus: this.createBus(),
       localId: `iframe-child:${this.options.appId}:${this.options.frameId ?? "default"}`,
+      heartbeat: this.options.heartbeat,
     });
   }
 

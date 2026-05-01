@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 interface BrowserHarness {
+  callCachedChildEcho(frameId: string, value: string): Promise<string>;
   callChildEcho(frameId: string, value: string): Promise<string>;
   callParentEcho(frameId: string, value: string): Promise<string>;
   getTelemetry(): {
@@ -10,6 +11,8 @@ interface BrowserHarness {
   };
   reloadFrame(frameId: string): Promise<void>;
   sendSpoofedConnect(options: { channel?: string; nonce?: string }): void;
+  makeChildUnresponsive(frameId: string): void;
+  hasConnectionToFrame(frameId: string): boolean;
 }
 
 async function waitForReadyFrames(page: Page) {
@@ -26,6 +29,17 @@ async function callChildEcho(page: Page, frameId: string, value: string) {
   return page.evaluate(
     ([targetFrameId, input]) =>
       (window as unknown as BrowserHarness).callChildEcho(targetFrameId, input),
+    [frameId, value] as const,
+  );
+}
+
+async function callCachedChildEcho(page: Page, frameId: string, value: string) {
+  return page.evaluate(
+    ([targetFrameId, input]) =>
+      (window as unknown as BrowserHarness).callCachedChildEcho(
+        targetFrameId,
+        input,
+      ),
     [frameId, value] as const,
   );
 }
@@ -150,6 +164,43 @@ test("reconnects to a reloaded iframe and keeps routing isolated", async ({
   );
   await expect(callChildEcho(page, "beta", "still-connected")).resolves.toBe(
     "child:beta:still-connected",
+  );
+});
+
+test("detects an unresponsive iframe through virtual port heartbeat and reconnects after reload", async ({
+  page,
+}) => {
+  await page.goto("/parent.html");
+  await waitForReadyFrames(page);
+
+  await expect(callCachedChildEcho(page, "alpha", "before-hang")).resolves.toBe(
+    "child:alpha:before-hang",
+  );
+
+  await page.evaluate(() =>
+    (window as unknown as BrowserHarness).makeChildUnresponsive("alpha"),
+  );
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as unknown as BrowserHarness).hasConnectionToFrame("alpha"),
+      ),
+    )
+    .toBe(false);
+  await expect(
+    callCachedChildEcho(page, "alpha", "after-disconnect"),
+  ).rejects.toThrow();
+
+  await page.evaluate(() =>
+    (window as unknown as BrowserHarness).reloadFrame("alpha"),
+  );
+  await expect
+    .poll(() => getTelemetry(page).then((telemetry) => telemetry.readyFrames))
+    .toContain("alpha");
+
+  await expect(callChildEcho(page, "alpha", "after-reload")).resolves.toBe(
+    "child:alpha:after-reload",
   );
 });
 
