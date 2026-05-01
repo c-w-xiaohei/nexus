@@ -11,11 +11,20 @@ export default defineConfig({
     headless: true,
     trace: "retain-on-failure",
   },
-  webServer: {
-    command:
-      "pnpm exec vite --host 127.0.0.1 --config tests/browser/vite.config.ts",
-    url: "http://127.0.0.1:3210/parent.html",
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      command:
+        "pnpm exec vite --host 127.0.0.1 --config tests/browser/vite.config.ts --port 3210",
+      url: "http://127.0.0.1:3210/parent.html",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    {
+      command:
+        "pnpm exec vite --host 127.0.0.1 --config tests/browser/vite.config.ts --port 3211",
+      url: "http://127.0.0.1:3211/child.html?frameId=health",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });

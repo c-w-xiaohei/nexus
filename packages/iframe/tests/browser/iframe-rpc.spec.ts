@@ -3,15 +3,17 @@ import { expect, test, type Page } from "@playwright/test";
 interface BrowserHarness {
   callCachedChildEcho(frameId: string, value: string): Promise<string>;
   callChildEcho(frameId: string, value: string): Promise<string>;
-  callParentEcho(frameId: string, value: string): Promise<string>;
   getTelemetry(): {
     parentCalls: Array<{ frameId: string; value: string }>;
     childCalls: Array<{ frameId: string; value: string }>;
     readyFrames: string[];
   };
   reloadFrame(frameId: string): Promise<void>;
-  sendSpoofedConnect(options: { channel?: string; nonce?: string }): void;
-  makeChildUnresponsive(frameId: string): void;
+}
+
+interface ChildHarness {
+  callParentEcho(value: string): Promise<string>;
+  makeUnresponsive(): void;
 }
 
 async function waitForReadyFrames(page: Page) {
@@ -44,14 +46,48 @@ async function callCachedChildEcho(page: Page, frameId: string, value: string) {
 }
 
 async function callParentEcho(page: Page, frameId: string, value: string) {
-  return page.evaluate(
-    ([targetFrameId, input]) =>
-      (window as unknown as BrowserHarness).callParentEcho(
-        targetFrameId,
-        input,
-      ),
-    [frameId, value] as const,
+  const frame = page.frame({ url: new RegExp(`frameId=${frameId}`) });
+  if (!frame) throw new Error(`Missing child frame ${frameId}`);
+  return frame.evaluate(
+    (input) => (window as unknown as ChildHarness).callParentEcho(input),
+    value,
   );
+}
+
+async function makeChildUnresponsive(page: Page, frameId: string) {
+  const frame = page.frame({ url: new RegExp(`frameId=${frameId}`) });
+  if (!frame) throw new Error(`Missing child frame ${frameId}`);
+  await frame.evaluate(() =>
+    (window as unknown as ChildHarness).makeUnresponsive(),
+  );
+}
+
+async function postSpoofedConnectFromChild(
+  page: Page,
+  frameId: string,
+  options: { channel?: string; nonce?: string },
+) {
+  const frame = page.frame({ url: new RegExp(`frameId=${frameId}`) });
+  if (!frame) throw new Error(`Missing child frame ${frameId}`);
+  await frame.evaluate((spoofOptions) => {
+    window.parent.postMessage(
+      {
+        __nexusIframe: true,
+        appId: "browser-app",
+        channel: spoofOptions.channel ?? "nexus:iframe",
+        nonce: spoofOptions.nonce ?? "browser-nonce-alpha",
+        payload: {
+          __nexusVirtualPort: true,
+          version: 1,
+          type: "connect",
+          channelId: "attacker-channel",
+          from: "attacker",
+          nonce: "attacker-nonce",
+        },
+      },
+      "http://127.0.0.1:3210",
+    );
+  }, options);
 }
 
 async function getTelemetry(page: Page) {
@@ -117,16 +153,10 @@ test("rejects wrong channel and nonce connect messages without accepting spoofed
   await page.goto("/parent.html");
   await waitForReadyFrames(page);
 
-  await page.evaluate(() =>
-    (window as unknown as BrowserHarness).sendSpoofedConnect({
-      channel: "wrong-channel",
-    }),
-  );
-  await page.evaluate(() =>
-    (window as unknown as BrowserHarness).sendSpoofedConnect({
-      nonce: "wrong-nonce",
-    }),
-  );
+  await postSpoofedConnectFromChild(page, "alpha", {
+    channel: "wrong-channel",
+  });
+  await postSpoofedConnectFromChild(page, "alpha", { nonce: "wrong-nonce" });
 
   await expect(
     getTelemetry(page).then((telemetry) => telemetry.readyFrames.sort()),
@@ -182,9 +212,7 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
     "child:alpha:before-hang",
   );
 
-  await page.evaluate(() =>
-    (window as unknown as BrowserHarness).makeChildUnresponsive("alpha"),
-  );
+  await makeChildUnresponsive(page, "alpha");
 
   await expect
     .poll(async () => {
@@ -215,7 +243,7 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
     .toBe("child:alpha:after-reload");
 });
 
-test("isolates same-origin iframe routes by frame id", async ({ page }) => {
+test("isolates cross-origin iframe routes by frame id", async ({ page }) => {
   await page.goto("/parent.html");
   await waitForReadyFrames(page);
 
@@ -233,7 +261,9 @@ test("isolates same-origin iframe routes by frame id", async ({ page }) => {
   );
 });
 
-test("does not accept wrong targetOrigin messages", async ({ page }) => {
+test("documents native browser drop for wrong targetOrigin messages", async ({
+  page,
+}) => {
   await page.goto("/parent.html");
   await waitForReadyFrames(page);
 
@@ -265,9 +295,7 @@ test("does not accept wrong targetOrigin messages", async ({ page }) => {
   );
 });
 
-test("ignores same-origin messages from a non-iframe source", async ({
-  page,
-}) => {
+test("ignores messages from a non-iframe source", async ({ page }) => {
   await page.goto("/parent.html");
   await waitForReadyFrames(page);
 
