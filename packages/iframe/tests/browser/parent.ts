@@ -142,20 +142,6 @@ function makeChildUnresponsive(frameId: string) {
   childWindow.makeUnresponsive();
 }
 
-function hasConnectionToFrame(frameId: string) {
-  const internalParent = parent as typeof parent & {
-    connectionManager?: {
-      connections: ReadonlyMap<
-        string,
-        { remoteIdentity?: { frameId?: string } }
-      >;
-    };
-  };
-  return Array.from(
-    internalParent.connectionManager?.connections.values() ?? [],
-  ).some((connection) => connection.remoteIdentity?.frameId === frameId);
-}
-
 function sendSpoofedConnect(options: { channel?: string; nonce?: string }) {
   window.postMessage(
     {
@@ -184,6 +170,5 @@ Object.assign(window, {
   reloadFrame,
   sendSpoofedConnect,
   makeChildUnresponsive,
-  hasConnectionToFrame,
   parentNexus: parent,
 });

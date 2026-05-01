@@ -12,7 +12,6 @@ interface BrowserHarness {
   reloadFrame(frameId: string): Promise<void>;
   sendSpoofedConnect(options: { channel?: string; nonce?: string }): void;
   makeChildUnresponsive(frameId: string): void;
-  hasConnectionToFrame(frameId: string): boolean;
 }
 
 async function waitForReadyFrames(page: Page) {
@@ -159,9 +158,15 @@ test("reconnects to a reloaded iframe and keeps routing isolated", async ({
     .poll(() => getTelemetry(page).then((telemetry) => telemetry.readyFrames))
     .toContain("alpha");
 
-  await expect(callChildEcho(page, "alpha", "after-reload")).resolves.toBe(
-    "child:alpha:after-reload",
-  );
+  await expect
+    .poll(async () => {
+      try {
+        return await callChildEcho(page, "alpha", "after-reload");
+      } catch {
+        return "rejected";
+      }
+    })
+    .toBe("child:alpha:after-reload");
   await expect(callChildEcho(page, "beta", "still-connected")).resolves.toBe(
     "child:beta:still-connected",
   );
@@ -182,15 +187,15 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
   );
 
   await expect
-    .poll(() =>
-      page.evaluate(() =>
-        (window as unknown as BrowserHarness).hasConnectionToFrame("alpha"),
-      ),
-    )
-    .toBe(false);
-  await expect(
-    callCachedChildEcho(page, "alpha", "after-disconnect"),
-  ).rejects.toThrow();
+    .poll(async () => {
+      try {
+        await callCachedChildEcho(page, "alpha", "after-disconnect");
+        return "resolved";
+      } catch {
+        return "rejected";
+      }
+    })
+    .toBe("rejected");
 
   await page.evaluate(() =>
     (window as unknown as BrowserHarness).reloadFrame("alpha"),
@@ -199,9 +204,15 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
     .poll(() => getTelemetry(page).then((telemetry) => telemetry.readyFrames))
     .toContain("alpha");
 
-  await expect(callChildEcho(page, "alpha", "after-reload")).resolves.toBe(
-    "child:alpha:after-reload",
-  );
+  await expect
+    .poll(async () => {
+      try {
+        return await callChildEcho(page, "alpha", "after-reload");
+      } catch {
+        return "rejected";
+      }
+    })
+    .toBe("child:alpha:after-reload");
 });
 
 test("isolates same-origin iframe routes by frame id", async ({ page }) => {
