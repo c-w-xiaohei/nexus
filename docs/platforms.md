@@ -48,12 +48,13 @@ Use:
 - `@nexus-js/core`
 - `@nexus-js/iframe`
 
-This path targets a parent browser window and one or more iframe children. The adapter maps each frame to Nexus descriptors, routes connections over iframe `postMessage`, and applies origin and optional nonce checks before core authorization policies run.
+This path targets a parent browser window and one or more iframe children. The adapter maps each frame to Nexus descriptors, routes connections over iframe `postMessage`, and applies source window, exact origin, app id, channel, and optional nonce transport gates before core authorization policies run.
 
 Important behavior:
 
 - Parent code should register each iframe with a stable `frameId`, the `HTMLIFrameElement`, and the expected child `origin`.
 - Child code must configure the expected `parentOrigin`.
+- `origin` and `parentOrigin` must match the browser origin exactly, including scheme, host, and port.
 - Avoid `allowAnyOrigin: true` unless the iframe content is intentionally public and core policy still restricts access.
 - Proxies and refs are session-bound. Iframe reloads replace the child session, so callers must call `create()` again after reload or reconnect.
 

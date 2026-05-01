@@ -72,8 +72,15 @@ For first-party or adapter-provided runtimes, prefer adapter helpers:
 usingBackgroundScript();
 usingContentScript();
 await usingPopup();
-usingIframeParent({ appId: "app", frames: [] });
-usingIframeChild({ appId: "app", parentOrigin: "https://host.example" });
+usingIframeParent({
+  appId: "app",
+  frames: [{ frameId: "preview", iframe, origin: "https://child.example" }],
+});
+usingIframeChild({
+  appId: "app",
+  frameId: "preview",
+  parentOrigin: "https://host.example",
+});
 ```
 
 Adapter helpers usually configure endpoint implementation, metadata, common matchers, descriptors, and default `connectTo` values.
@@ -337,17 +344,14 @@ This works because core resolves the empty target to the Token default target, a
 
 ## Iframe Style
 
-For iframe integrations, keep contracts shared and keep parent/child setup focused on iframe wiring.
+For iframe integrations, keep contracts shared and keep parent/child setup focused on iframe wiring. Full adapter docs should point to `docs/getting-started.md` for the shared contract pattern instead of redefining it repeatedly.
 
-Shared contract:
+Shared contract shape when a Token default target is useful:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
 import type { IframePlatformMeta, IframeUserMeta } from "@nexus-js/iframe";
-
-export interface GreetingService {
-  greet(name: string): Promise<string>;
-}
+import type { GreetingService } from "./service-contract";
 
 const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
   name: "iframe-demo",
@@ -359,6 +363,7 @@ const childServices = appSpace.tokenSpace("child-services", {
       context: "iframe-child",
       appId: "iframe-demo",
       frameId: "preview",
+      origin: "https://child.example.com",
     },
   },
 });
@@ -376,6 +381,7 @@ usingIframeParent({
       frameId: "preview",
       iframe,
       origin: "https://child.example.com",
+      nonce: "session-nonce",
     },
   ],
 });
@@ -400,13 +406,18 @@ nexus.configure({
     appId: "iframe-demo",
     frameId: "preview",
     parentOrigin: "https://parent.example.com",
+    nonce: "session-nonce",
     configure: false,
   }),
   services: [{ token: GreetingToken, implementation: greetingService }],
 });
 ```
 
-Use exact origins, add `nonce` when a frame session needs extra binding, and avoid `allowAnyOrigin: true` except for intentionally public frames. Proxies and refs are session-bound; recreate them after iframe reloads or reconnects.
+Use `configure: false` whenever composing iframe helper output with `services`, `policy`, or a custom `Nexus` instance. Without it, `usingIframeParent(...)` and `usingIframeChild(...)` configure the shared `nexus` instance directly and return that instance, not a config object.
+
+Use exact origins for parent `frames[].origin` and child `parentOrigin`; they must match the browser origin exactly, including scheme, host, and port. Add `nonce` when a frame session needs extra binding, and avoid `allowAnyOrigin: true` except for intentionally public frames. Adapter source, origin, app id, channel, and nonce checks are transport gates; app-level authorization still belongs in core `policy.canConnect` and `policy.canCall`.
+
+Proxies and refs are session-bound. Iframe reloads and iframe element replacement create a new child session, so recreate proxies and pass fresh refs after reload, reconnect, or session replacement.
 
 ## Policy And Authorization
 

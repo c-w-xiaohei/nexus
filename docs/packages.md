@@ -93,7 +93,7 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 - `@nexus-js/iframe`
   - Browser iframe adapter for parent window <-> iframe RPC over `postMessage`
-  - Provides parent/child endpoint setup, descriptors, matchers, origin checks, optional nonce checks, and virtual-port routing
+  - Provides parent/child endpoint setup, iframe descriptors, origin and optional nonce transport gates, and virtual-port routing
   - Uses `@nexus-js/core` as the underlying framework runtime and `@nexus-js/core/transport/virtual-port` internally
 
 - `@nexus-js/node-ipc`

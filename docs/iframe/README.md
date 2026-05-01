@@ -1,24 +1,41 @@
-# Iframe Adapter
+# Iframe Documentation
 
-`@nexus-js/iframe` connects a parent browser window and iframe children through Nexus RPC over `postMessage`.
+`@nexus-js/iframe` connects a parent browser window and iframe children through Nexus RPC over `postMessage`. Use it for browser pages that own one or more frames and need typed service calls across that boundary.
 
-Install it with core:
+This section covers adapter-specific setup. For the shared Nexus programming model, read `docs/getting-started.md` first.
+
+## Package Routing
+
+- Foundation runtime: `@nexus-js/core`
+- Browser iframe adapter: `@nexus-js/iframe`
+
+Install both in parent and child bundles:
 
 ```bash
 pnpm add @nexus-js/core @nexus-js/iframe
 ```
 
-## Shared Contract
+## When To Use It
 
-Put contracts and Tokens in shared code imported by both parent and child bundles.
+Use the iframe adapter when your application has:
+
+- a parent browser window that owns the iframe elements
+- one or more iframe children loaded in browser windows
+- service calls that should route over `postMessage`
+- exact parent and child origins known at configuration time
+
+Do not use it for workers, Chrome extension context routing, local Node process IPC, or browser frames that must survive reloads without recreating proxies.
+
+## Shared Contracts
+
+Put service contracts and Tokens in shared code imported by both parent and child bundles. The general pattern is covered in `docs/getting-started.md`; adapter docs should not redefine the full contract in every example.
+
+When repeated iframe calls target the same child, a `TokenSpace` default target can keep the route close to the Token:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
 import type { IframePlatformMeta, IframeUserMeta } from "@nexus-js/iframe";
-
-export interface GreetingService {
-  greet(name: string): Promise<string>;
-}
+import type { GreetingService } from "./service-contract";
 
 const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
   name: "iframe-demo",
@@ -30,6 +47,7 @@ const childServices = appSpace.tokenSpace("child-services", {
       context: "iframe-child",
       appId: "iframe-demo",
       frameId: "preview",
+      origin: "https://child.example.com",
     },
   },
 });
@@ -37,9 +55,11 @@ const childServices = appSpace.tokenSpace("child-services", {
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
 
+Introductory examples should still pass explicit `target` options to `nexus.create(...)` because the resolved route is easiest to inspect and debug.
+
 ## Parent Setup
 
-Configure the parent with the iframe element and expected child origin before creating proxies.
+Configure the parent with each iframe element and its exact expected child origin before creating proxies.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -75,11 +95,11 @@ const greeting = await nexus.create(GreetingToken, {
 await greeting.greet("parent");
 ```
 
-The parent helper also registers descriptors named `child` for the first frame and `child:<frameId>` for additional frames. The explicit descriptor above is preferred in introductory code because it is easiest to debug.
+The parent helper also registers descriptors named `child` for the first frame and `child:<frameId>` for additional frames. Named descriptors are useful after setup is working, but explicit descriptors are clearer in first examples.
 
 ## Child Setup
 
-Configure the child with the expected parent origin. Expose services with explicit `configure({ services })` when you want to keep setup local and avoid process-global decorators.
+Configure the child with the exact expected parent origin. Use `configure: false` when composing the adapter config with local services, policy, or custom Nexus instances; in that mode the helper returns config instead of configuring the shared `nexus` instance.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -107,17 +127,53 @@ nexus.configure({
 });
 ```
 
+Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance. Do not spread a helper result unless `configure: false` is set.
+
+## What The Adapter Provides
+
+- parent and child setup helpers
+- parent frame registration by stable `frameId`
+- iframe `postMessage` endpoint wiring
+- virtual-port routing over `postMessage`
+- iframe descriptors and common matchers
+- source window, exact origin, app id, channel, and optional nonce gates
+- iframe platform metadata for policy decisions
+
+## What Core Still Owns
+
+The adapter does not replace core Nexus behavior.
+
+Core still owns:
+
+- Tokens and service contracts
+- service exposure
+- proxy creation
+- target resolution
+- logical connection handshake
+- `policy.canConnect` and `policy.canCall`
+- resource reference lifecycle
+- session-bound proxy semantics
+
 ## Security Notes
 
-- Use exact origins for `origin` and `parentOrigin` whenever possible.
-- `allowAnyOrigin: true` permits `"*"` origin matching and should only be used for intentionally public frames.
+- Use exact origins for parent `frames[].origin` and child `parentOrigin` whenever possible.
+- `origin` and `parentOrigin` must match the browser `MessageEvent.origin` exactly, including scheme, host, and port.
+- `allowAnyOrigin: true` permits wildcard origin matching and should only be used for intentionally public frames.
 - Use `nonce` when a parent page may host multiple frame sessions or when an extra channel binding is useful.
-- Origin and nonce checks are adapter gates. Use `policy.canConnect` and `policy.canCall` for application authorization.
+- Source, origin, app id, channel, and nonce checks are adapter transport gates.
+- Application authorization still belongs in core `policy.canConnect` and `policy.canCall`; do not treat adapter gates as a replacement for app-level policy.
 
 ## Lifecycle
 
-Iframe reloads replace the child window and Nexus session. Raw proxies and refs are session-bound, so recreate proxies with `nexus.create(...)` and pass fresh refs after an iframe reload, reconnect, or session replacement.
+Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...)` proxies and refs are session-bound, so recreate proxies and pass fresh refs after an iframe reload, reconnect, or session replacement.
 
-## Related APIs
+If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.
 
-`@nexus-js/iframe` uses `@nexus-js/core/transport/virtual-port` internally. Application code should prefer `usingIframeParent(...)` and `usingIframeChild(...)`; use the virtual-port subpath only when implementing a transport adapter.
+## Related Pages
+
+- Product docs landing: `docs/README.md`
+- Setup walkthrough and shared contracts: `docs/getting-started.md`
+- Package map: `docs/packages.md`
+- Platform selection: `docs/platforms.md`
+- Shared authorization policy: `docs/auth-and-policy.md`
+- Virtual port transport internals: `@nexus-js/core/transport/virtual-port`
