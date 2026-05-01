@@ -200,7 +200,8 @@ pnpm dev
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
-- PR descriptions should cover why the change is needed, what changed, how it was verified, and any notable risks.
+- PR titles should follow `<type>(<scope>): <description>` when a conventional-commit style title fits the change.
+- PR descriptions should include `Why`, `What`, `How verified`, and `Risks`; link related issues, proposals, or docs when available.
 - After pushing or opening a PR, use `gh pr checks`, `gh run list`, or `gh run watch` when asked to follow CI status.
 - Use concise review comment labels when helpful: `issue`, `suggestion`, `question`, `blocked`, `decision`, or `note`.
 - Do not edit `dist/` outputs directly.
