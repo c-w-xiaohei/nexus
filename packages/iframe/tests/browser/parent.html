@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Nexus iframe parent browser test</title>
+  </head>
+  <body>
+    <iframe
+      id="child-alpha"
+      data-frame-id="alpha"
+      data-src="http://127.0.0.1:3211/child.html?frameId=alpha"
+    ></iframe>
+    <iframe
+      id="child-beta"
+      data-frame-id="beta"
+      data-src="http://127.0.0.1:3211/child.html?frameId=beta"
+    ></iframe>
+    <script type="module" src="./parent.ts"></script>
+  </body>
+</html>

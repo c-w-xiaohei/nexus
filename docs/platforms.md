@@ -14,9 +14,10 @@ Nexus provides one programming model across multiple JavaScript execution contex
 - `@nexus-js/core` contains the core transport-agnostic API and runtime
 - Adapter packages provide platform-specific endpoint setup and conventions
 - `@nexus-js/chrome` is the dedicated adapter for Chrome extension contexts
+- `@nexus-js/iframe` is the dedicated adapter for parent window <-> iframe contexts
 - `@nexus-js/node-ipc` is the local Node process adapter for Linux filesystem Unix sockets
 
-Today, the repository ships first-party Chrome and Node IPC adapters. Other environments use the core model plus custom endpoint wiring.
+Today, the repository ships first-party Chrome, iframe, and Node IPC adapters. Other environments use the core model plus custom endpoint wiring.
 
 ## Choosing A Platform Entry
 
@@ -40,7 +41,26 @@ If that matches your environment, start here before reading subsystem docs.
 
 Next step: use the Chrome adapter README/examples first, then return to `docs/getting-started.md` or `docs/state/README.md` depending on whether you need plain RPC or state sync.
 
-### Worker / iframe / custom runtime
+### Iframe
+
+Use:
+
+- `@nexus-js/core`
+- `@nexus-js/iframe`
+
+This path targets a parent browser window and one or more iframe children. The adapter maps each frame to Nexus descriptors, routes connections over iframe `postMessage`, and applies source window, exact origin, app id, channel, and optional nonce transport gates before core authorization policies run.
+
+Important behavior:
+
+- Parent code should register each iframe with a stable `frameId`, the `HTMLIFrameElement`, and the expected child `origin`.
+- Child code must configure the expected `parentOrigin`.
+- `origin` and `parentOrigin` must match the browser origin exactly, including scheme, host, and port.
+- Avoid `allowAnyOrigin: true` unless the iframe content is intentionally public and core policy still restricts access.
+- Proxies and refs are session-bound. Iframe reloads replace the child session, so callers must call `create()` again after reload or reconnect.
+
+Next step: read `docs/iframe/README.md` for parent/child setup, targeting, security notes, and lifecycle behavior.
+
+### Worker / custom runtime
 
 Start with `@nexus-js/core`, then wire your own endpoint implementation and metadata through `configure({ endpoint })` or the endpoint decorator path.
 
@@ -98,5 +118,6 @@ At that point, adding `Nexus State` is a layering decision, not a bootstrap requ
 - Product docs landing: `docs/README.md`
 - Package map and install choices: `docs/packages.md`
 - Authorization and policy: `docs/auth-and-policy.md`
+- Iframe adapter docs: `docs/iframe/README.md`
 - Node IPC adapter docs: `docs/node-ipc/README.md`
 - Nexus State subsystem docs: `docs/state/README.md`

@@ -5,7 +5,7 @@ import vitest from "eslint-plugin-vitest";
 
 export default tseslint.config(
   // Global ignores
-  { ignores: ["**/dist/", "node_modules"] },
+  { ignores: ["**/dist/", "**/test-results/", "node_modules"] },
 
   // Base config for all TS files
   ...tseslint.configs.recommended,
@@ -55,6 +55,19 @@ export default tseslint.config(
       globals: {
         ...globals.browser,
         ...globals.node,
+      },
+    },
+  },
+
+  // Environment for 'iframe' package (browser runtime, node build config)
+  {
+    files: ["packages/iframe/**/*.ts", "packages/iframe/vite.config.ts"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        EventListener: "readonly",
+        Transferable: "readonly",
       },
     },
   },

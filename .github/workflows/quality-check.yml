@@ -1,5 +1,5 @@
 # Quality Check
-# 
+#
 # This workflow runs on every Pull Request to verify code quality.
 # It includes linting, type checking, testing, and building.
 # Only when all checks pass can a PR be merged.
@@ -14,7 +14,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -27,11 +27,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: 'pnpm'
+          node-version: 22
+          cache: "pnpm"
 
       - name: Install Dependencies
         run: pnpm install
+
+      - name: Build
+        run: pnpm build
+
+      - name: Type Check
+        run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
@@ -39,5 +45,32 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
+  iframe-browser-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Install Chromium
+        run: pnpm --filter @nexus-js/iframe exec playwright install --with-deps chromium
+
+      - name: Build iframe browser test artifacts
+        run: pnpm --filter @nexus-js/iframe... build
+
+      - name: Run iframe browser tests
+        run: pnpm --filter @nexus-js/iframe test:browser

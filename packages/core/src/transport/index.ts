@@ -7,6 +7,13 @@
  */
 
 export { Transport } from "./transport";
+export { VirtualPortRouter } from "./virtual-port";
+export {
+  VirtualPortCloseError,
+  VirtualPortConnectError,
+  VirtualPortListenError,
+  VirtualPortProtocolError,
+} from "./virtual-port";
 export type { IPort } from "./types/port";
 export type { IEndpoint } from "./types/endpoint";
 export type { ISerializer } from "./serializers/interface";
