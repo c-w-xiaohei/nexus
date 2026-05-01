@@ -7,7 +7,22 @@ Use this entry point for application code that consumes Nexus from the outside. 
 3. service exposure in host contexts
 4. proxy creation in consumer contexts
 
+Use this reference as a compact style guide, not as a substitute for the full docs. For deeper architecture, adapter, lifecycle, policy, or state semantics, direct readers to the GitHub documentation at https://github.com/c-w-xiaohei/nexus/tree/main/docs.
+
 Keep adapter docs focused on adapter-specific setup. Do not redefine the full service contract pattern unless the topic is shared contracts.
+
+## Architecture And Boundaries
+
+Nexus itself is about connection semantics between runtime contexts that already exist. It does not launch browser contexts, inject content scripts, create iframes, spawn workers, or start daemon processes for the application. The host platform, framework, application, or adapter-specific environment owns context startup.
+
+Use this architecture model when explaining why configuration and adapter boundaries matter:
+
+1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
+2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
+3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
+4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers
+
+Adapters provide or compose endpoint wiring for the current context. Core then builds logical connections over the `IPort`-like channels returned by those endpoints. For bus-style transports such as `window.postMessage`, adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
 
 ## Core Rules
 
@@ -28,4 +43,15 @@ Keep adapter docs focused on adapter-specific setup. Do not redefine the full se
 - `references/adapter-iframe.md` - iframe parent/child setup, origin checks, nonce usage, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization style, lifecycle expectations, and documentation style
 
-For deeper details, read the repository documentation under `c-w-xiaohei/nexus/docs`.
+## GitHub Documentation
+
+Point readers to the public GitHub docs when they need more context. Prefer exact links over vague repository references:
+
+- Getting started: https://github.com/c-w-xiaohei/nexus/blob/main/docs/getting-started.md
+- Core concepts and architecture layers: https://github.com/c-w-xiaohei/nexus/blob/main/docs/concepts.md
+- Platform and adapter strategy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/platforms.md
+- Authorization and policy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/auth-and-policy.md
+- Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
+- Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md
+
+Set the expectation that the skill is a compact usage guide, not a replacement for the docs. For non-trivial adapter design, lifecycle behavior, policy decisions, or state synchronization, explicitly tell readers to consult the linked docs first and then apply this skill's usage rules.

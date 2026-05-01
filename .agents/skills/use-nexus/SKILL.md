@@ -6,9 +6,9 @@ version: 0.1.0
 
 # Use Nexus
 
-Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, and proxy creation.
+Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, proxy creation, and the architectural boundary between Nexus connection semantics and host-context startup.
 
-For full project documentation, read the `docs/` directory in `c-w-xiaohei/nexus`.
+For full project documentation, direct readers to the GitHub docs in `c-w-xiaohei/nexus`: https://github.com/c-w-xiaohei/nexus/tree/main/docs. Encourage reading the product concepts and platform guides before inventing adapter behavior or lifecycle semantics.
 
 ## Core Rules
 
@@ -21,6 +21,24 @@ For full project documentation, read the `docs/` directory in `c-w-xiaohei/nexus
 - Use `new Nexus()` plus explicit `configure({ endpoint, services })` for multi-instance runtimes; do not use `@Expose` or `@Endpoint` decorators there because decorator registration is process-global.
 - Pass an options object to `nexus.create(...)`; provide an explicit `target` unless a Token default target or unique `connectTo` fallback is intentionally being used.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
+
+## Architecture And Boundaries
+
+- Treat Nexus as connection semantics over already-available JavaScript runtime contexts.
+- A platform adapter supplies an `IEndpoint`; an endpoint listens for or creates `IPort`-like point-to-point channels.
+- Core builds logical connections on top of those ports: handshake, identity, authorization, routing, disconnect cleanup, and session-bound handles.
+- Nexus does not launch browser contexts, inject content scripts, create iframes, spawn workers, or start daemon processes for an application. The host platform or application owns context startup.
+- Adapter helpers configure the current context's endpoint, identity, descriptors, matchers, and connection defaults. They do not make missing peer contexts magically exist.
+- For bus-style transports such as `window.postMessage`, first adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
+
+When explaining Nexus architecture, use this layer model:
+
+1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
+2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
+3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
+4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers
+
+Do not describe Nexus as a process manager, page loader, iframe lifecycle manager, or worker launcher. Describe those as responsibilities of the app, browser, OS, framework, or adapter-specific host environment.
 
 ## Minimal Example
 
@@ -93,9 +111,13 @@ Start with `references/usage-style.md` for the concise external usage index. Loa
 - `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style
 
-Also read repository docs under `c-w-xiaohei/nexus/docs`, especially:
+Also point readers to the public GitHub docs when they need more context. Prefer exact links over vague repository references:
 
-- `docs/getting-started.md`
-- `docs/concepts.md`
-- `docs/platforms.md`
-- adapter-specific docs such as `docs/node-ipc/README.md`
+- Getting started: https://github.com/c-w-xiaohei/nexus/blob/main/docs/getting-started.md
+- Core concepts and architecture layers: https://github.com/c-w-xiaohei/nexus/blob/main/docs/concepts.md
+- Platform and adapter strategy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/platforms.md
+- Authorization and policy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/auth-and-policy.md
+- Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
+- Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md
+
+Set the expectation that the skill is a compact usage guide, not a replacement for the docs. For non-trivial adapter design, lifecycle behavior, policy decisions, or state synchronization, explicitly tell readers to consult the linked docs first and then apply this skill's usage rules.
