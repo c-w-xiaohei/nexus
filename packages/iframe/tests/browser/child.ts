@@ -14,6 +14,36 @@ const ParentEchoToken = new Token<ParentEchoService>("browser.parent-echo");
 const frameId = new URLSearchParams(window.location.search).get("frameId");
 if (!frameId) throw new Error("Missing frameId query parameter");
 
+const telemetry = {
+  binaryDataEnvelopes: 0,
+};
+
+function isBinaryDataEnvelope(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const envelope = data as {
+    __nexusIframe?: unknown;
+    payload?: {
+      __nexusVirtualPort?: unknown;
+      type?: unknown;
+      payload?: unknown;
+    };
+  };
+  return (
+    envelope.__nexusIframe === true &&
+    envelope.payload?.__nexusVirtualPort === true &&
+    envelope.payload.type === "data" &&
+    envelope.payload.payload instanceof ArrayBuffer
+  );
+}
+
+window.addEventListener(
+  "message",
+  (event) => {
+    if (isBinaryDataEnvelope(event.data)) telemetry.binaryDataEnvelopes += 1;
+  },
+  { capture: true },
+);
+
 type BrowserEventListener = Parameters<typeof window.addEventListener>[1];
 type BrowserAddOptions = Parameters<typeof window.addEventListener>[2];
 type BrowserRemoveOptions = Parameters<typeof window.removeEventListener>[2];
@@ -86,8 +116,13 @@ function makeUnresponsive() {
   }
 }
 
+function getTelemetry() {
+  return { binaryDataEnvelopes: telemetry.binaryDataEnvelopes };
+}
+
 Object.assign(window, {
   callParentEcho,
+  getTelemetry,
   makeUnresponsive,
   childNexus: child,
   nexusIframeReady: true,

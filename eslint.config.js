@@ -5,7 +5,7 @@ import vitest from "eslint-plugin-vitest";
 
 export default tseslint.config(
   // Global ignores
-  { ignores: ["**/dist/", "node_modules"] },
+  { ignores: ["**/dist/", "**/test-results/", "node_modules"] },
 
   // Base config for all TS files
   ...tseslint.configs.recommended,

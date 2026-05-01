@@ -8,6 +8,7 @@ import {
   usingIframeChild,
   usingIframeParent,
 } from "./index";
+import { postMessageFrom } from "./window";
 
 class FakeWindow {
   readonly listeners = new Map<string, Set<(event: unknown) => void>>();
@@ -114,7 +115,7 @@ describe("iframe adapter factories", () => {
       IframeParentEndpoint,
     );
     expect(config.endpoint?.implementation?.capabilities).toMatchObject({
-      binaryPackets: false,
+      binaryPackets: true,
       transferables: true,
     });
   });
@@ -166,6 +167,43 @@ describe("iframe adapter factories", () => {
     expect(config.endpoint?.implementation).toBeInstanceOf(IframeChildEndpoint);
     expect(config.endpoint?.implementation?.capabilities).toMatchObject({
       binaryPackets: true,
+      transferables: true,
+    });
+  });
+
+  it("allows iframe endpoints to opt out of binary packet transport", () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+
+    const parentConfig = usingIframeParent({
+      configure: false,
+      appId: "app",
+      window: parentWindow as unknown as Window,
+      binaryPackets: false,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const childConfig = usingIframeChild({
+      configure: false,
+      appId: "app",
+      frameId: "main",
+      parentOrigin: "https://parent.test",
+      window: childWindow as unknown as Window,
+      binaryPackets: false,
+    });
+
+    expect(parentConfig.endpoint?.implementation?.capabilities).toMatchObject({
+      binaryPackets: false,
+      transferables: true,
+    });
+    expect(childConfig.endpoint?.implementation?.capabilities).toMatchObject({
+      binaryPackets: false,
       transferables: true,
     });
   });
@@ -258,6 +296,23 @@ describe("iframe adapter factories", () => {
 });
 
 describe("iframe adapter message behavior", () => {
+  it("forwards transfer lists to native target postMessage", () => {
+    const source = {} as Window;
+    const target = {
+      postMessage: vi.fn(),
+    } as unknown as Window;
+    const message = { value: "packet" };
+    const transfer = [new ArrayBuffer(1)] as Transferable[];
+
+    postMessageFrom(source, target, message, "https://target.test", transfer);
+
+    expect(target.postMessage).toHaveBeenCalledWith(
+      message,
+      "https://target.test",
+      transfer,
+    );
+  });
+
   it("ignores wrong origin, source, channel, and nonce messages before accepting a connection", async () => {
     const parentWindow = new FakeWindow("https://parent.test");
     const childWindow = new FakeWindow("https://child.test");

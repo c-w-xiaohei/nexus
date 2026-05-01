@@ -6,6 +6,7 @@ interface BrowserHarness {
   getTelemetry(): {
     parentCalls: Array<{ frameId: string; value: string }>;
     childCalls: Array<{ frameId: string; value: string }>;
+    binaryDataEnvelopes: number;
     readyFrames: string[];
   };
   reloadFrame(frameId: string): Promise<void>;
@@ -13,6 +14,7 @@ interface BrowserHarness {
 
 interface ChildHarness {
   callParentEcho(value: string): Promise<string>;
+  getTelemetry(): { binaryDataEnvelopes: number };
   makeUnresponsive(): void;
 }
 
@@ -59,6 +61,14 @@ async function makeChildUnresponsive(page: Page, frameId: string) {
   if (!frame) throw new Error(`Missing child frame ${frameId}`);
   await frame.evaluate(() =>
     (window as unknown as ChildHarness).makeUnresponsive(),
+  );
+}
+
+async function getChildTelemetry(page: Page, frameId: string) {
+  const frame = page.frame({ url: new RegExp(`frameId=${frameId}`) });
+  if (!frame) throw new Error(`Missing child frame ${frameId}`);
+  return frame.evaluate(() =>
+    (window as unknown as ChildHarness).getTelemetry(),
   );
 }
 
@@ -123,6 +133,31 @@ test("calls a child Nexus service through a real iframe boundary", async ({
     { frameId: "alpha", value: "again" },
     { frameId: "beta", value: "hello" },
   ]);
+});
+
+test("uses binary ArrayBuffer transport packets across cross-origin iframe RPC", async ({
+  page,
+}) => {
+  await page.goto("/parent.html");
+  await waitForReadyFrames(page);
+
+  const childBefore = await getChildTelemetry(page, "alpha");
+  await expect(
+    callChildEcho(page, "alpha", "binary-parent-child"),
+  ).resolves.toBe("child:alpha:binary-parent-child");
+  const childAfter = await getChildTelemetry(page, "alpha");
+  expect(childAfter.binaryDataEnvelopes).toBeGreaterThan(
+    childBefore.binaryDataEnvelopes,
+  );
+
+  const parentBefore = await getTelemetry(page);
+  await expect(
+    callParentEcho(page, "alpha", "binary-child-parent"),
+  ).resolves.toBe("parent:alpha:binary-child-parent");
+  const parentAfter = await getTelemetry(page);
+  expect(parentAfter.binaryDataEnvelopes).toBeGreaterThan(
+    parentBefore.binaryDataEnvelopes,
+  );
 });
 
 test("child iframe calls a parent Nexus service with frame routing metadata", async ({

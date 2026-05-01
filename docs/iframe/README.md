@@ -135,6 +135,7 @@ Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)`
 - parent frame registration by stable `frameId`
 - iframe `postMessage` endpoint wiring
 - virtual-port routing over `postMessage`
+- binary Nexus transport packets transferred with `ArrayBuffer` by default
 - iframe descriptors and common matchers
 - source window, exact origin, app id, channel, and optional nonce gates
 - iframe platform metadata for policy decisions
@@ -170,6 +171,12 @@ The browser `postMessage` bus does not guarantee a native disconnect signal. The
 Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...)` proxies and refs are session-bound, so recreate proxies and pass fresh refs after an iframe reload, reconnect, or session replacement.
 
 If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.
+
+## Binary Transport Packets
+
+Iframe endpoints advertise binary Nexus transport packets and transferable support by default. This lets core serialize internal transport packets to `ArrayBuffer` and pass that buffer in the browser `postMessage` transfer list when both sides support it.
+
+This only affects Nexus internal transport packets. It does not transfer, move, or detach user RPC payload objects by API contract. Set `binaryPackets: false` on both parent and child endpoint options only when an environment cannot handle binary packet transport.
 
 ## Related Pages
 

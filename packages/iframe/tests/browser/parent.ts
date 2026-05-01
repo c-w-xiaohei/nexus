@@ -16,9 +16,36 @@ const frameIds = ["alpha", "beta"] as const;
 const telemetry = {
   parentCalls: [] as Array<{ frameId: string; value: string }>,
   childCalls: [] as Array<{ frameId: string; value: string }>,
+  binaryDataEnvelopes: 0,
   readyFrames: [] as string[],
 };
 const childEchoServices = new Map<string, EchoService>();
+
+function isBinaryDataEnvelope(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const envelope = data as {
+    __nexusIframe?: unknown;
+    payload?: {
+      __nexusVirtualPort?: unknown;
+      type?: unknown;
+      payload?: unknown;
+    };
+  };
+  return (
+    envelope.__nexusIframe === true &&
+    envelope.payload?.__nexusVirtualPort === true &&
+    envelope.payload.type === "data" &&
+    envelope.payload.payload instanceof ArrayBuffer
+  );
+}
+
+window.addEventListener(
+  "message",
+  (event) => {
+    if (isBinaryDataEnvelope(event.data)) telemetry.binaryDataEnvelopes += 1;
+  },
+  { capture: true },
+);
 
 function getFrame(frameId: string) {
   const iframe = document.querySelector<HTMLIFrameElement>(
@@ -106,6 +133,7 @@ function getTelemetry() {
   return {
     parentCalls: [...telemetry.parentCalls],
     childCalls: [...telemetry.childCalls],
+    binaryDataEnvelopes: telemetry.binaryDataEnvelopes,
     readyFrames: [...telemetry.readyFrames],
   };
 }
