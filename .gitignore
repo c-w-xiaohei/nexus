@@ -21,6 +21,7 @@ build/
 
 # Coverage reports
 coverage/
+test-results/
 
 # Turborepo artifacts
 .turbo/

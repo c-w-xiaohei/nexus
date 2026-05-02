@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus React State Host</title>
+  </head>
+  <body>
+    <div id="host-status">loading</div>
+    <iframe
+      data-frame-id="alpha"
+      data-src="http://127.0.0.1:3311/child.html?frameId=alpha"
+    ></iframe>
+    <iframe
+      data-frame-id="beta"
+      data-src="http://127.0.0.1:3311/child.html?frameId=beta"
+    ></iframe>
+    <script type="module" src="/host.tsx"></script>
+  </body>
+</html>

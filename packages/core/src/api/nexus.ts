@@ -184,7 +184,11 @@ export class Nexus<
       );
     }
 
-    this.config = merge(this.config, config);
+    const { services, ...configWithoutServices } = config;
+    this.config = merge(this.config, configWithoutServices);
+    if (services) {
+      this.config.services = [...(this.config.services ?? []), ...services];
+    }
 
     if (config.matchers) {
       for (const name of Object.keys(config.matchers)) {

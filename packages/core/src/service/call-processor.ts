@@ -143,6 +143,9 @@ export namespace CallProcessor {
             id: messageId,
             resourceId,
             path,
+            ...(options.invocationServiceName
+              ? { invocationServiceName: options.invocationServiceName }
+              : {}),
           });
         case "SET": {
           const sanitizedValue = deps.payloadProcessor.safeSanitize(
@@ -159,6 +162,9 @@ export namespace CallProcessor {
             id: messageId,
             resourceId,
             path,
+            ...(options.invocationServiceName
+              ? { invocationServiceName: options.invocationServiceName }
+              : {}),
             value: sanitizedValue.value[0],
           });
         }
@@ -177,6 +183,9 @@ export namespace CallProcessor {
             id: messageId,
             resourceId,
             path,
+            ...(options.invocationServiceName
+              ? { invocationServiceName: options.invocationServiceName }
+              : {}),
             args: sanitizedArgs.value,
           });
         }

@@ -73,7 +73,12 @@ export namespace JsonSerializer {
       );
     }
 
-    return ok(structure.map((key) => (message as any)[key]));
+    const packet = structure.map((key) => (message as any)[key]);
+    if (!("invocationServiceName" in message)) {
+      return ok(toLegacyInvocationPacket(message.type, packet));
+    }
+
+    return ok(packet);
   };
 
   const packetArrayToMessage = (
@@ -130,14 +135,63 @@ export namespace JsonSerializer {
       );
     }
 
+    const normalizedPacket = normalizeLegacyInvocationPacket(
+      messageType,
+      packet,
+    );
     const logicalMessage: any = {};
     structure.forEach((key, index) => {
-      if (index < packet.length) {
-        logicalMessage[key] = packet[index];
+      if (
+        index < normalizedPacket.length &&
+        !(
+          key === "invocationServiceName" &&
+          normalizedPacket[index] === LEGACY_INVOCATION_SERVICE_NAME
+        )
+      ) {
+        logicalMessage[key] = normalizedPacket[index];
       }
     });
 
     return ok(logicalMessage as Message.NexusMessage);
+  };
+
+  const LEGACY_INVOCATION_SERVICE_NAME = Symbol("legacyInvocationServiceName");
+
+  const normalizeLegacyInvocationPacket = (
+    messageType: Message.NexusMessageType,
+    packet: any[],
+  ): any[] => {
+    if (messageType === Message.NexusMessageType.GET && packet.length === 4) {
+      return [...packet, LEGACY_INVOCATION_SERVICE_NAME];
+    }
+
+    if (
+      (messageType === Message.NexusMessageType.SET ||
+        messageType === Message.NexusMessageType.APPLY) &&
+      packet.length === 5
+    ) {
+      return [...packet.slice(0, 4), LEGACY_INVOCATION_SERVICE_NAME, packet[4]];
+    }
+
+    return packet;
+  };
+
+  const toLegacyInvocationPacket = (
+    messageType: Message.NexusMessageType,
+    packet: any[],
+  ): any[] => {
+    if (messageType === Message.NexusMessageType.GET) {
+      return packet.slice(0, 4);
+    }
+
+    if (
+      messageType === Message.NexusMessageType.SET ||
+      messageType === Message.NexusMessageType.APPLY
+    ) {
+      return [...packet.slice(0, 4), packet[5]];
+    }
+
+    return packet;
   };
 
   export const safeSerialize = (

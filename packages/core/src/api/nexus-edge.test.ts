@@ -25,6 +25,61 @@ describe("Nexus Safe API Edge Cases", () => {
         expect(result.error).toBeInstanceOf(NexusUsageError);
       }
     });
+
+    it("preserves configured service implementation identity and symbol hooks", async () => {
+      const nexus = new Nexus();
+      const hook = Symbol("service hook");
+      const implementation = {
+        ping: () => "pong",
+        [hook]: vi.fn(),
+      };
+      const token = new Token<typeof implementation>("service-with-hook");
+
+      nexus.configure({
+        endpoint: {
+          meta: { context: "test" },
+          implementation: {},
+        },
+      });
+      nexus.configure({
+        services: [{ token, implementation }],
+      });
+
+      await nexus.safeUpdateIdentity({ context: "ready" });
+
+      const registered = (
+        nexus as any
+      ).engine.resourceManager.getExposedService(token.id);
+      expect(registered).toBe(implementation);
+      expect((registered as typeof implementation)[hook]).toBe(
+        implementation[hook],
+      );
+    });
+
+    it("appends services across repeated configure calls by reference", async () => {
+      const nexus = new Nexus();
+      const first = { ping: () => "first" };
+      const second = { ping: () => "second" };
+      const firstToken = new Token<typeof first>("first-service");
+      const secondToken = new Token<typeof second>("second-service");
+
+      nexus.configure({
+        endpoint: {
+          meta: { context: "test" },
+          implementation: {},
+        },
+        services: [{ token: firstToken, implementation: first }],
+      });
+      nexus.configure({
+        services: [{ token: secondToken, implementation: second }],
+      });
+
+      await nexus.safeUpdateIdentity({ context: "ready" });
+
+      const resourceManager = (nexus as any).engine.resourceManager;
+      expect(resourceManager.getExposedService(firstToken.id)).toBe(first);
+      expect(resourceManager.getExposedService(secondToken.id)).toBe(second);
+    });
   });
 
   describe("safeCreate", () => {

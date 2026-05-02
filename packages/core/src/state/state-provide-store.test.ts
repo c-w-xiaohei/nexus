@@ -202,6 +202,67 @@ describe("provideNexusStore", () => {
     });
   });
 
+  it("passes invocation context through wrapped store service methods", async () => {
+    const definition = createCounterDefinition();
+    const registration = provideNexusStore(definition);
+    const implementation = registration.implementation;
+    const originalSubscribe = implementation.subscribe.bind(implementation);
+    const wrappedImplementation = Object.create(
+      Object.getPrototypeOf(implementation),
+    ) as NexusStoreServiceContract<{ count: number }, any> &
+      typeof implementation;
+    Object.defineProperties(
+      wrappedImplementation,
+      Object.getOwnPropertyDescriptors(implementation),
+    );
+    const observedInvocations: unknown[] = [];
+
+    wrappedImplementation.subscribe = (onSync: any, invocation: unknown) => {
+      observedInvocations.push(invocation);
+      return originalSubscribe(onSync, invocation as any);
+    };
+
+    const setup = await createL3Endpoints(
+      {
+        meta: { id: "host" },
+        services: {
+          [definition.token.id]: wrappedImplementation,
+        },
+      },
+      {
+        meta: { id: "client" },
+      },
+    );
+
+    const clientConnectionId = (
+      setup.clientConnection as { connectionId: string }
+    ).connectionId;
+    const storeProxy = (
+      setup.clientEngine as any
+    ).proxyFactory.createServiceProxy(definition.token.id, {
+      target: {
+        connectionId: clientConnectionId,
+      },
+    }) as NexusStoreServiceContract<
+      { count: number },
+      { increment(by: number): number }
+    >;
+
+    await storeProxy.subscribe(vi.fn());
+
+    expect(observedInvocations).toEqual([
+      { sourceConnectionId: clientConnectionId },
+    ]);
+
+    (
+      wrappedImplementation as {
+        [SERVICE_ON_DISCONNECT](connectionId: string): void;
+      }
+    )[SERVICE_ON_DISCONNECT](clientConnectionId);
+
+    await implementation.dispatch("increment", [1]);
+  });
+
   it("binds ownership correctly for overlapping async subscribes from different connections", async () => {
     const definition = createCounterDefinition();
     const registration = provideNexusStore(definition);

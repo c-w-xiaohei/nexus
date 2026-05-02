@@ -95,8 +95,10 @@ export namespace NexusKernelBuilder {
       await Promise.all(factoryPromises);
 
       if (decoratedServices.length > 0) {
-        const serviceConfig = { services: decoratedServices };
-        finalConfig = merge(finalConfig, serviceConfig);
+        finalConfig = {
+          ...finalConfig,
+          services: [...(finalConfig.services ?? []), ...decoratedServices],
+        };
       }
 
       return finalConfig;

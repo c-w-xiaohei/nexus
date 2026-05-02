@@ -31,13 +31,27 @@ const definePacketStructure = <
  */
 export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
   // Layer 3
-  [Message.NexusMessageType.GET]: ["type", "id", "resourceId", "path"],
-  [Message.NexusMessageType.SET]: ["type", "id", "resourceId", "path", "value"],
+  [Message.NexusMessageType.GET]: [
+    "type",
+    "id",
+    "resourceId",
+    "path",
+    "invocationServiceName",
+  ],
+  [Message.NexusMessageType.SET]: [
+    "type",
+    "id",
+    "resourceId",
+    "path",
+    "invocationServiceName",
+    "value",
+  ],
   [Message.NexusMessageType.APPLY]: [
     "type",
     "id",
     "resourceId",
     "path",
+    "invocationServiceName",
     "args",
   ],
   [Message.NexusMessageType.RES]: ["type", "id", "result"],

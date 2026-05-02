@@ -64,6 +64,7 @@ export interface GetMessage extends NexusMessageBase {
   id: MessageId;
   resourceId: string | null;
   path: (string | number)[];
+  invocationServiceName?: string;
 }
 
 /** A request to set a property on a remote resource. */
@@ -72,6 +73,7 @@ export interface SetMessage extends NexusMessageBase {
   id: MessageId;
   resourceId: string | null;
   path: (string | number)[];
+  invocationServiceName?: string;
   value: any;
 }
 
@@ -81,6 +83,7 @@ export interface ApplyMessage extends NexusMessageBase {
   id: MessageId;
   resourceId: string | null;
   path: (string | number)[];
+  invocationServiceName?: string;
   args: any[];
 }
 

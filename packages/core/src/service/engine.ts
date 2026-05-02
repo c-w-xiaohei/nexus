@@ -17,6 +17,7 @@ import { PendingCallManager } from "./pending-call-manager";
 import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import {
+  getServiceInvocationHook,
   isServiceWithHooks,
   SERVICE_ON_DISCONNECT,
 } from "./service-invocation-hooks";
@@ -41,6 +42,7 @@ type DispatchCallBase = {
   strategy?: "one" | "first" | "all" | "stream";
   timeout?: number;
   proxyOptions?: CreateProxyOptions<any>;
+  invocationServiceName?: string;
 };
 
 type TargetStaleSubscription<U extends UserMetadata> = {
@@ -361,7 +363,11 @@ export class Engine<
 
     for (const service of this.resourceManager.listExposedServices()) {
       if (isServiceWithHooks(service)) {
-        service[SERVICE_ON_DISCONNECT]?.(connectionId);
+        const onDisconnect = getServiceInvocationHook(
+          service,
+          SERVICE_ON_DISCONNECT,
+        ) as ((connectionId: string) => void) | undefined;
+        onDisconnect?.(connectionId);
       }
     }
 

@@ -15,6 +15,7 @@ import { ResourceManager } from "../resource-manager";
 import { Result, ResultAsync, err, errAsync, ok, okAsync } from "neverthrow";
 import {
   type ServiceInvocationContext,
+  getServiceInvocationHook,
   isServiceWithHooks,
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
@@ -24,6 +25,7 @@ type MessageResourceErrorCode =
   | "E_RESOURCE_NOT_FOUND"
   | "E_RESOURCE_ACCESS_DENIED"
   | "E_AUTH_CALL_DENIED"
+  | "E_INVOCATION_SERVICE_MISMATCH"
   | "E_INVALID_SERVICE_PATH"
   | "E_TARGET_NOT_CALLABLE"
   | "E_SET_ON_ROOT";
@@ -290,12 +292,58 @@ const operationName = (
   }
 };
 
+const resolveAuthoritativeServiceName = (
+  context: HandlerContext<any, any>,
+  message: GetMessage | SetMessage | ApplyMessage,
+  sourceConnectionId: string,
+): Result<string, InstanceType<typeof MessageHandlerMapError.Resource>> => {
+  if (message.resourceId === null) {
+    return ok(String(message.path[0]));
+  }
+
+  const localServiceName =
+    context.resourceManager.getLocalResourceServiceName(message.resourceId) ??
+    `resource:${message.resourceId}`;
+  const incomingServiceName = message.invocationServiceName;
+
+  if (
+    incomingServiceName !== undefined &&
+    incomingServiceName !== localServiceName
+  ) {
+    return err(
+      new MessageHandlerMapError.Resource(
+        `Resource invocation service mismatch for resource "${message.resourceId}".`,
+        "E_INVOCATION_SERVICE_MISMATCH",
+        {
+          context: {
+            sourceConnectionId,
+            resourceId: message.resourceId,
+            expectedServiceName: localServiceName,
+            receivedServiceName: incomingServiceName,
+          },
+        },
+      ),
+    );
+  }
+
+  return ok(localServiceName);
+};
+
 const authorizeServiceCall = (
   context: HandlerContext<any, any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
 ): ResultAsync<AuthorizedCall, globalThis.Error> => {
-  const serviceName = getServiceName(context, message);
+  const serviceNameResult = resolveAuthoritativeServiceName(
+    context,
+    message,
+    sourceConnectionId,
+  );
+  if (serviceNameResult.isErr()) {
+    return errAsync(serviceNameResult.error);
+  }
+
+  const serviceName = serviceNameResult.value;
   const policy = getCallPolicy(context, message, serviceName);
   const canCall = policy?.canCall;
 
@@ -375,20 +423,6 @@ const validateAuthorizableCall = (
   return authorizeServiceCall(context, message, sourceConnectionId);
 };
 
-const getServiceName = (
-  context: HandlerContext<any, any>,
-  message: GetMessage | SetMessage | ApplyMessage,
-): string => {
-  if (message.resourceId === null) {
-    return String(message.path[0]);
-  }
-
-  return (
-    context.resourceManager.getLocalResourceServiceName(message.resourceId) ??
-    `resource:${message.resourceId}`
-  );
-};
-
 const getCallPolicy = (
   context: HandlerContext<any, any>,
   message: GetMessage | SetMessage | ApplyMessage,
@@ -447,7 +481,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
             return errAsync(pathResult.error);
           }
 
-          const { target, parent } = pathResult.value;
+          const { root, target, parent } = pathResult.value;
 
           if (typeof target !== "function") {
             return errAsync(
@@ -459,23 +493,44 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
             );
           }
 
-          const invocationContext: ServiceInvocationContext | undefined =
-            !resourceId && isServiceWithHooks(parent ?? target)
-              ? parent?.[SERVICE_INVOKE_START]?.(sourceConnectionId)
-              : undefined;
-
-          const revivedArgsResult = payloadProcessor.safeRevive(
-            args,
-            sourceConnectionId,
-          );
-
-          if (revivedArgsResult.isErr()) {
-            return errAsync(revivedArgsResult.error);
-          }
-
+          const hookTarget = !authorizedCall.serviceName.startsWith("resource:")
+            ? context.resourceManager.getExposedService(
+                authorizedCall.serviceName,
+              )
+            : undefined;
+          const invocationHookTarget = isServiceWithHooks(hookTarget)
+            ? hookTarget
+            : isServiceWithHooks(root)
+              ? root
+              : isServiceWithHooks(parent ?? target)
+                ? (parent ?? target)
+                : undefined;
+          const onInvokeStart = getServiceInvocationHook(
+            invocationHookTarget,
+            SERVICE_INVOKE_START,
+          ) as
+            | ((sourceConnectionId: string) => ServiceInvocationContext)
+            | undefined;
+          const onInvokeEnd = getServiceInvocationHook(
+            invocationHookTarget,
+            SERVICE_INVOKE_END,
+          ) as
+            | ((invocationContext?: ServiceInvocationContext) => void)
+            | undefined;
           return ResultAsync.fromPromise(
             Promise.resolve().then(async () => {
+              const invocationContext: ServiceInvocationContext | undefined =
+                onInvokeStart ? onInvokeStart(sourceConnectionId) : undefined;
               try {
+                const revivedArgsResult = payloadProcessor.safeRevive(
+                  args,
+                  sourceConnectionId,
+                );
+
+                if (revivedArgsResult.isErr()) {
+                  throw revivedArgsResult.error;
+                }
+
                 const invokeArgs =
                   typeof invocationContext === "undefined"
                     ? revivedArgsResult.value
@@ -483,8 +538,8 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
 
                 return await target.apply(parent, invokeArgs);
               } finally {
-                if (!resourceId && isServiceWithHooks(parent ?? target)) {
-                  parent?.[SERVICE_INVOKE_END]?.(invocationContext);
+                if (onInvokeEnd) {
+                  onInvokeEnd(invocationContext);
                 }
               }
             }),

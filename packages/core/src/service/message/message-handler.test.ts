@@ -15,6 +15,11 @@ import {
 } from "../../types/message";
 import { LocalResourceType } from "../types";
 import { err, ok } from "neverthrow";
+import {
+  SERVICE_INVOKE_END,
+  SERVICE_INVOKE_START,
+  type ServiceInvocationContext,
+} from "../service-invocation-hooks";
 
 const mockEngine = {
   safeSendMessage: vi.fn(() => ok([])),
@@ -329,6 +334,59 @@ describe("MessageHandler", () => {
       );
     });
 
+    it("should reject resource calls with mismatched invocation service names before policy or hooks run", async () => {
+      const child = { read: vi.fn(() => "secret") };
+      const vaultPolicy = { canCall: vi.fn(() => true) };
+      const adminPolicy = { canCall: vi.fn(() => true) };
+      const adminService = {
+        [SERVICE_INVOKE_START]: vi.fn(),
+        [SERVICE_INVOKE_END]: vi.fn(),
+      };
+      resourceManager.registerExposedService("vault", {}, vaultPolicy);
+      resourceManager.registerExposedService(
+        "admin",
+        adminService,
+        adminPolicy,
+      );
+      const resourceId = resourceManager.registerLocalResource(
+        child,
+        sourceConnectionId,
+        LocalResourceType.OBJECT,
+        "vault",
+        vaultPolicy,
+      );
+      context.policy = { canCall: vi.fn(() => true) } as any;
+
+      await messageHandler.safeHandleMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 118,
+          resourceId,
+          path: ["read"],
+          invocationServiceName: "admin",
+          args: [],
+        },
+        sourceConnectionId,
+      );
+
+      expect(child.read).not.toHaveBeenCalled();
+      expect(vaultPolicy.canCall).not.toHaveBeenCalled();
+      expect(adminPolicy.canCall).not.toHaveBeenCalled();
+      expect(adminService[SERVICE_INVOKE_START]).not.toHaveBeenCalled();
+      expect(adminService[SERVICE_INVOKE_END]).not.toHaveBeenCalled();
+      expect(context.policy.canCall).not.toHaveBeenCalled();
+      expect(mockEngine.safeSendMessage).toHaveBeenLastCalledWith(
+        {
+          type: NexusMessageType.ERR,
+          id: 118,
+          error: expect.objectContaining({
+            code: "E_INVOCATION_SERVICE_MISMATCH",
+          }),
+        },
+        sourceConnectionId,
+      );
+    });
+
     it("should keep using the original service policy snapshot after service registration is overwritten", async () => {
       const child = { read: vi.fn(() => "secret") };
       const originalPolicy = {
@@ -549,6 +607,46 @@ describe("MessageHandler", () => {
           type: NexusMessageType.RES,
           id: 115,
           result: "secret",
+        },
+        sourceConnectionId,
+      );
+    });
+
+    it("should run service invocation end hook when argument revival fails", async () => {
+      const invocationContext: ServiceInvocationContext = {
+        sourceConnectionId,
+      };
+      const service = {
+        fail: vi.fn(),
+        [SERVICE_INVOKE_START]: vi.fn(() => invocationContext),
+        [SERVICE_INVOKE_END]: vi.fn(),
+      };
+      resourceManager.registerExposedService("hooked", service);
+      reviveSpy.mockReturnValueOnce(err(new Error("revive failed")) as any);
+
+      await messageHandler.safeHandleMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 116,
+          resourceId: null,
+          path: ["hooked", "fail"],
+          args: ["bad"],
+        },
+        sourceConnectionId,
+      );
+
+      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith(
+        sourceConnectionId,
+      );
+      expect(service.fail).not.toHaveBeenCalled();
+      expect(service[SERVICE_INVOKE_END]).toHaveBeenCalledWith(
+        invocationContext,
+      );
+      expect(mockEngine.safeSendMessage).toHaveBeenLastCalledWith(
+        {
+          type: NexusMessageType.ERR,
+          id: 116,
+          error: expect.objectContaining({ message: "revive failed" }),
         },
         sourceConnectionId,
       );

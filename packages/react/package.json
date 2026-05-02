@@ -37,9 +37,12 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest run",
+    "pretest:browser": "pnpm --filter @nexus-js/core build && pnpm --filter @nexus-js/iframe build && pnpm --filter @nexus-js/react build",
+    "test:browser": "playwright test",
     "test:integration:file": "vitest run",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.browser.json",
+    "typecheck:browser": "tsc --noEmit -p tsconfig.browser.json"
   },
   "peerDependencies": {
     "@nexus-js/core": "^0.1.2",
@@ -48,6 +51,8 @@
   },
   "devDependencies": {
     "@nexus-js/core": "workspace:*",
+    "@nexus-js/iframe": "workspace:*",
+    "@playwright/test": "1.57.0",
     "@testing-library/react": "16.3.0",
     "@types/react": "18.3.24",
     "@types/react-dom": "18.3.7",

@@ -2,6 +2,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Engine } from "./engine";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
+import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
 
 // A mock service to be registered on the host engine for tests.
 const mockTestService = {
@@ -101,6 +102,22 @@ describe("Engine", () => {
 
     expect(resourceManagerSpy).toHaveBeenCalledWith(clientConnectionId);
     expect(pendingCallManagerSpy).toHaveBeenCalledWith(clientConnectionId);
+  });
+
+  it("should invoke disconnect hooks declared with matching global symbols", () => {
+    const onDisconnect = vi.fn();
+    const service = {
+      [Symbol("nexus.service.on.disconnect")]: onDisconnect,
+    };
+    (hostEngine as any).resourceManager.registerExposedService(
+      "globalSymbolService",
+      service,
+    );
+
+    hostEngine.onDisconnect(hostConnectionId);
+
+    expect((service as any)[SERVICE_ON_DISCONNECT]).toBeUndefined();
+    expect(onDisconnect).toHaveBeenCalledWith(hostConnectionId);
   });
 
   // The other tests about connection resolution and pending call registration

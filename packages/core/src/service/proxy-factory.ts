@@ -302,6 +302,8 @@ export class ProxyFactory<U extends UserMetadata> {
               target: { connectionId: sourceConnectionId },
               resourceId,
               path,
+              invocationServiceName:
+                this.resourceManager.getLocalResourceServiceName(resourceId),
             };
           case "SET":
             return {
@@ -309,6 +311,8 @@ export class ProxyFactory<U extends UserMetadata> {
               target: { connectionId: sourceConnectionId },
               resourceId,
               path,
+              invocationServiceName:
+                this.resourceManager.getLocalResourceServiceName(resourceId),
               value: extra?.value,
             } as DispatchCallOptions;
           case "APPLY":
@@ -317,6 +321,8 @@ export class ProxyFactory<U extends UserMetadata> {
               target: { connectionId: sourceConnectionId },
               resourceId,
               path,
+              invocationServiceName:
+                this.resourceManager.getLocalResourceServiceName(resourceId),
               args: extra?.args ?? [],
             };
         }
