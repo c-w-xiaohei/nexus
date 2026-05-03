@@ -551,7 +551,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
                     ? revivedArgsResult.value
                     : [...revivedArgsResult.value, invocationContext];
 
-                return await target.apply(parent, invokeArgs);
+                return await Reflect.apply(target, parent, invokeArgs);
               } finally {
                 if (onInvokeEnd) {
                   onInvokeEnd(invocationContext);

@@ -670,7 +670,7 @@ export const relayNexusStore = <
         storeInstanceId: relayStoreInstanceId,
         subscriptionId,
         version: 0,
-        state: cloneState(upstream.latestState),
+        state: cloneState(latestState ?? upstream.latestState),
       };
     },
     async unsubscribe(subscriptionId: string) {

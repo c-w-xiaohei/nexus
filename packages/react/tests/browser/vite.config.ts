@@ -25,6 +25,10 @@ export default defineConfig({
         __dirname,
         "../../../core/dist/state/index.mjs",
       ),
+      "@nexus-js/core/relay": path.resolve(
+        __dirname,
+        "../../../core/dist/relay/index.mjs",
+      ),
       "@nexus-js/core/transport/virtual-port": path.resolve(
         __dirname,
         "../../../core/dist/transport/virtual-port/index.mjs",

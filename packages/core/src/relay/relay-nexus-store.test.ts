@@ -8,7 +8,10 @@ import {
   type ServiceInvocationContext,
 } from "@/service/service-invocation-hooks";
 import { NexusStoreDisconnectedError } from "@/state/errors";
-import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "@/types/symbols";
+import {
+  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+} from "@/types/symbols";
 import { relayNexusStore } from "./index";
 
 interface CounterState {
@@ -86,6 +89,49 @@ describe("relayNexusStore", () => {
       state: { count: 2 },
     });
     expect(subscribe).toHaveBeenCalledOnce();
+  });
+
+  it("new downstream subscribers receive the latest projected relay state", async () => {
+    let upstreamOnSync!: (event: unknown) => void;
+    const registration = relayNexusStore(definition, {
+      forwardThrough: {
+        create: vi.fn(async () => ({
+          subscribe: vi.fn(async (onSync: typeof upstreamOnSync) => {
+            upstreamOnSync = onSync;
+            return {
+              storeInstanceId: "bg-store",
+              subscriptionId: "bg-sub",
+              version: 1,
+              state: { count: 0 },
+            };
+          }),
+          unsubscribe: vi.fn(async () => undefined),
+          dispatch: vi.fn(),
+        })),
+      } as any,
+      forwardTarget: { descriptor: { context: "background" } },
+    });
+
+    await expect(
+      registration.implementation.subscribe(vi.fn(), createInvocation("alpha")),
+    ).resolves.toMatchObject({
+      version: 0,
+      state: { count: 0 },
+    });
+
+    upstreamOnSync({
+      type: "snapshot",
+      storeInstanceId: "bg-store",
+      version: 2,
+      state: { count: 3 },
+    });
+
+    await expect(
+      registration.implementation.subscribe(vi.fn(), createInvocation("beta")),
+    ).resolves.toMatchObject({
+      version: 0,
+      state: { count: 3 },
+    });
   });
 
   it("returns downstream committedVersion only after projecting an upstream snapshot", async () => {
@@ -284,6 +330,118 @@ describe("relayNexusStore", () => {
     expect(onSync).toHaveBeenCalledWith(
       expect.objectContaining({ type: "terminal" }),
     );
+  });
+
+  it("terminalizes downstream subscribers when the upstream store instance changes", async () => {
+    let upstreamOnSync!: (event: unknown) => void;
+    const dispatch = vi.fn();
+    const registration = relayNexusStore(definition, {
+      forwardThrough: {
+        create: vi.fn(async () => ({
+          subscribe: vi.fn(async (onSync: typeof upstreamOnSync) => {
+            upstreamOnSync = onSync;
+            return {
+              storeInstanceId: "bg-store-a",
+              subscriptionId: "bg-sub",
+              version: 1,
+              state: { count: 0 },
+            };
+          }),
+          unsubscribe: vi.fn(async () => undefined),
+          dispatch,
+        })),
+      } as any,
+      forwardTarget: { descriptor: { context: "background" } },
+    });
+    const onSync = vi.fn();
+    await registration.implementation.subscribe(
+      onSync,
+      createInvocation("alpha"),
+    );
+
+    upstreamOnSync({
+      type: "snapshot",
+      storeInstanceId: "bg-store-b",
+      version: 2,
+      state: { count: 1 },
+    });
+
+    expect(onSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal",
+        reason: "target-replaced",
+      }),
+    );
+    await expect(
+      registration.implementation.dispatch(
+        "increment",
+        [1],
+        createInvocation("alpha"),
+      ),
+    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes downstream subscribers when the upstream target becomes stale", async () => {
+    let staleCallback!: () => void;
+    const dispatchGate = deferred<{
+      type: "dispatch-result";
+      committedVersion: number;
+      result: number;
+    }>();
+    const registration = relayNexusStore(definition, {
+      forwardThrough: {
+        create: vi.fn(async () => ({
+          subscribe: vi.fn(async () => ({
+            storeInstanceId: "bg-store",
+            subscriptionId: "bg-sub",
+            version: 1,
+            state: { count: 0 },
+          })),
+          unsubscribe: vi.fn(async () => undefined),
+          dispatch: vi.fn(async () => dispatchGate.promise),
+          [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
+            cb: () => void,
+          ) => {
+            staleCallback = cb;
+            return () => undefined;
+          },
+        })),
+      } as any,
+      forwardTarget: { descriptor: { context: "background" } },
+    });
+    const onSync = vi.fn();
+    await registration.implementation.subscribe(
+      onSync,
+      createInvocation("alpha"),
+    );
+
+    const pending = registration.implementation.dispatch(
+      "increment",
+      [1],
+      createInvocation("alpha"),
+    );
+    staleCallback();
+    dispatchGate.resolve({
+      type: "dispatch-result",
+      committedVersion: 2,
+      result: 1,
+    });
+
+    expect(onSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal",
+        reason: "target-changed",
+      }),
+    );
+    await expect(pending).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+    await expect(
+      registration.implementation.dispatch(
+        "increment",
+        [1],
+        createInvocation("alpha"),
+      ),
+    ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
   });
 
   it("cleans subscriptions only for the disconnected owner", async () => {

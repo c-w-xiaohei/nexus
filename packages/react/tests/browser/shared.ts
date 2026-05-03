@@ -10,6 +10,24 @@ export const CHILD_ORIGIN = "http://127.0.0.1:3311";
 export const FRAME_IDS = ["alpha", "beta"] as const;
 export type FrameId = (typeof FRAME_IDS)[number];
 
+export const RELAY_APP_ID = "react-relay-browser";
+export const RELAY_HOST_ORIGIN = HOST_ORIGIN;
+export const RELAY_ORIGIN = CHILD_ORIGIN;
+export const RELAY_FRAME_ID = "relay";
+export const RELAY_CHILD_IDS = ["leaf-a", "leaf-b"] as const;
+export type RelayChildId = (typeof RELAY_CHILD_IDS)[number];
+
+export interface RelayProfileService {
+  profile: {
+    read(childId: string): Promise<{ childId: string; servedBy: string }>;
+    failWithCode(code: string): Promise<never>;
+  };
+}
+
+export const RelayProfileToken = new Token<RelayProfileService>(
+  "react.browser.relay.profile",
+);
+
 export interface CounterWrite {
   readonly actor: string;
   readonly op: string;
@@ -82,6 +100,22 @@ export const hostTarget = {
   descriptor: { context: "iframe-parent", appId: APP_ID },
 } as const;
 
+export const relayHostTarget = {
+  descriptor: {
+    context: "iframe-parent",
+    appId: RELAY_APP_ID,
+    origin: RELAY_HOST_ORIGIN,
+  },
+} as const;
+
+export const relayFrameTarget = {
+  descriptor: {
+    context: "iframe-parent",
+    appId: RELAY_APP_ID,
+    origin: RELAY_ORIGIN,
+  },
+} as const;
+
 export const childDescriptor = (frameId: string) => ({
   context: "iframe-child",
   appId: APP_ID,
@@ -90,3 +124,8 @@ export const childDescriptor = (frameId: string) => ({
 
 export const frameNonce = (frameId: string) =>
   `react-state-star-nonce-${frameId}`;
+
+export const relayFrameNonce = () => `react-relay-nonce-${RELAY_FRAME_ID}`;
+
+export const relayChildNonce = (childId: string) =>
+  `react-relay-child-nonce-${childId}`;

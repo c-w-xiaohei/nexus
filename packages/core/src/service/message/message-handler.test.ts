@@ -111,6 +111,48 @@ describe("MessageHandler", () => {
       add: (a: number, b: number) => a + b,
     };
 
+    it("should invoke proxy functions without reading their apply property", async () => {
+      const propertyReads: PropertyKey[] = [];
+      const invocations: unknown[][] = [];
+      const read = new Proxy(
+        vi.fn(() => "profile-result"),
+        {
+          get(target, property, receiver) {
+            propertyReads.push(property);
+            return Reflect.get(target, property, receiver);
+          },
+          apply(target, thisArg, argArray) {
+            invocations.push([...argArray]);
+            return Reflect.apply(target, thisArg, argArray);
+          },
+        },
+      );
+      resourceManager.registerExposedService("relay", {
+        profile: { read },
+      });
+
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 99,
+        resourceId: null,
+        path: ["relay", "profile", "read"],
+        args: ["leaf-a"],
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(propertyReads).not.toContain("apply");
+      expect(invocations).toEqual([["leaf-a"]]);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
+        {
+          type: NexusMessageType.RES,
+          id: 99,
+          result: "profile-result",
+        },
+        sourceConnectionId,
+      );
+    });
+
     it("should deny APPLY before invoking a local service when policy.canCall returns false", async () => {
       const add = vi.fn((a: number, b: number) => a + b);
       resourceManager.registerExposedService("calculator", { add });
