@@ -40,10 +40,7 @@ export interface RelayServiceCallContext<U, P> extends RelayBaseContext<U, P> {
   operation: "GET" | "SET" | "APPLY";
 }
 
-export interface RelayStoreSubscribeContext<U, P> extends RelayBaseContext<
-  U,
-  P
-> {}
+export type RelayStoreSubscribeContext<U, P> = RelayBaseContext<U, P>;
 
 export interface RelayStoreDispatchContext<U, P> extends RelayBaseContext<
   U,
