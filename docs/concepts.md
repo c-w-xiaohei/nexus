@@ -105,6 +105,14 @@ const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
 const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
 ```
 
+Name multi-instance variables after the local transport graph or endpoint face
+they represent, not after a remote target. For example, prefer
+`chromeNexus`, `iframeParentNexus`, or `brokerNexus` over
+`toBackgroundNexus` or `backgroundNexus` when the instance actually runs in a
+content script. A `Nexus` instance is a local endpoint face with its own
+identity, policy, services, connections, proxies, and refs; it is not a
+one-way client for a single destination.
+
 Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. They do not automatically share a connection graph.
 
 Do not use `@Expose` or `@Endpoint` with this pattern. Decorator registrations are process-global, so one instance can consume registrations that another instance expected to own. Register services and endpoints through explicit `configure({ endpoint, services })` calls instead.

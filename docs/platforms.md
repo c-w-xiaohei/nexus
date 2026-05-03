@@ -81,6 +81,12 @@ Use two explicit `Nexus` instances in that runtime:
 - explicit `configure({ endpoint, services })` on both instances
 - no `@Expose` or `@Endpoint` decorators, because decorator registrations are process-global
 
+Name these instances after the local graph or endpoint face they represent,
+such as `extensionNexus`, `chromeNexus`, `iframeParentNexus`, or
+`brokerNexus`. Avoid names such as `toBackgroundNexus` or `backgroundNexus`
+for an instance running in a content script; the instance represents the local
+face in a transport graph, not a one-way direction to a remote context.
+
 Then expose a gateway service on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
 
 ### Local Node Daemon / CLI

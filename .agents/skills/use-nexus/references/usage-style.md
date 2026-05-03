@@ -31,6 +31,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - Configure every runtime context before exposing services or creating proxies.
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or explicit services.
 - Use explicit service registration instead of decorators for multi-instance runtimes and isolated tests.
+- Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
 - Pass an options object to `nexus.create(...)`; keep explicit targets in introductory examples.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
 
