@@ -18,6 +18,8 @@ import {
 
 Types and errors are also exported from the same subpath.
 
+`relayNexusStore` is available from `@nexus-js/core/relay` and re-exported from `@nexus-js/core/state` for store-focused code. Use it only when a bridge context needs to project an upstream authoritative store into a downstream Nexus graph. See `docs/relay.md` for relay semantics.
+
 ## `defineNexusStore()`
 
 Use `defineNexusStore()` to declare a Nexus State store contract.

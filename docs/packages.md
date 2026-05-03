@@ -11,6 +11,7 @@ The key distinction is:
 
 - Start with `@nexus-js/core` in all Nexus applications
 - Use the `@nexus-js/core/state` entrypoint when you need synchronized remote state
+- Use the `@nexus-js/core/relay` entrypoint when a bridge context forwards selected services or stores between adjacent Nexus graphs
 - Add `@nexus-js/react` only when your UI is React and uses Nexus State hooks
 - Add `@nexus-js/chrome` when building a Chrome extension integration
 - Add `@nexus-js/iframe` when connecting a parent window and iframe over `postMessage`
@@ -54,6 +55,7 @@ Then choose imports:
 
 ```ts
 import { connectNexusStore } from "@nexus-js/core/state";
+import { relayService, relayNexusStore } from "@nexus-js/core/relay";
 import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 ```
 
@@ -69,6 +71,11 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
   - Nexus State headless runtime subpath entrypoint exposed by `@nexus-js/core`
   - Provides remote store definition, hosting, connection, lifecycle, and dispatch semantics
   - This is a subsystem capability layered on top of `@nexus-js/core`, not a separately installed package
+
+- `@nexus-js/core/relay`
+  - Nexus Relay subpath entrypoint exposed by `@nexus-js/core`
+  - Provides `relayService` and `relayNexusStore` for explicit provider-level forwarding across adjacent Nexus graphs
+  - Use it in bridge contexts with multiple configured `Nexus` instances; do not use it as transparent multi-hop routing
 
 - `@nexus-js/core/transport`
   - Core transport types and helpers for adapter authors
@@ -106,6 +113,7 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 - Core RPC only: `@nexus-js/core`
 - Headless synchronized state: install `@nexus-js/core`, import from `@nexus-js/core/state`
+- Explicit service/store relay: install `@nexus-js/core`, import from `@nexus-js/core/relay`
 - React with Nexus State: install `@nexus-js/core` + `@nexus-js/react`, import state APIs from `@nexus-js/core/state`
 - Chrome extension app with RPC: `@nexus-js/core` + `@nexus-js/chrome`
 - Parent window and iframe app with RPC: `@nexus-js/core` + `@nexus-js/iframe`
@@ -115,12 +123,13 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 Do not think of `@nexus-js/core/state` as a separately installed package.
 
-It is part of the `@nexus-js/core` package surface and is imported as a subpath entrypoint. The same is true for `@nexus-js/core/transport` and `@nexus-js/core/transport/virtual-port`.
+It is part of the `@nexus-js/core` package surface and is imported as a subpath entrypoint. The same is true for `@nexus-js/core/relay`, `@nexus-js/core/transport`, and `@nexus-js/core/transport/virtual-port`.
 
 ## Next Steps
 
 - Setup walkthrough: `docs/getting-started.md`
 - Runtime/platform framing: `docs/platforms.md`
+- Nexus Relay: `docs/relay.md`
 - Authorization and policy: `docs/auth-and-policy.md`
 - Iframe guide: `docs/iframe/README.md`
 - Node IPC guide: `docs/node-ipc/README.md`

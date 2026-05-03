@@ -13,11 +13,13 @@ Use this section for Nexus State-specific setup, runtime semantics, and API deta
 - Lifecycle and error behavior: `docs/state/lifecycle-and-errors.md`
 - Testing guidance: `docs/state/testing.md`
 - Common questions: `docs/state/faq.md`
+- State relay across adjacent Nexus graphs: `docs/relay.md`
 
 ## Package Routing
 
 - Headless runtime entrypoint: `@nexus-js/core/state` (from `@nexus-js/core`)
 - React bindings: `@nexus-js/react`
 - Foundation framework: `@nexus-js/core`
+- Relay entrypoint for bridge contexts: `@nexus-js/core/relay`
 
 If you are looking for product-level Nexus docs, go to `docs/README.md`.
