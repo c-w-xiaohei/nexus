@@ -1,4 +1,4 @@
-# @nexus-js/chrome
+# @nexus-js/iframe
 
 ## 0.2.0
 
@@ -11,20 +11,3 @@
 - Updated dependencies [e029932]
 - Updated dependencies [48aaab9]
   - @nexus-js/core@0.2.0
-
-## 0.1.2
-
-### Patch Changes
-
-- Updated dependencies [e84c367]
-  - @nexus-js/core@0.1.2
-
-## 0.1.1
-
-### Patch Changes
-
-- acd681a: fix dep
-- 03021e8: initial publish
-- Updated dependencies [acd681a]
-- Updated dependencies [03021e8]
-  - @nexus-js/core@0.1.1

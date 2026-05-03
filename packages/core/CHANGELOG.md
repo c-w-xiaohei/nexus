@@ -1,5 +1,12 @@
 # @nexus-js/core
 
+## 0.2.0
+
+### Minor Changes
+
+- e029932: Add the iframe adapter package and public transport subpaths for adapter authors, including virtual-port routing over message-bus transports.
+- 48aaab9: Add `@nexus-js/core/relay` with `relayService` and `relayNexusStore`, and extend Nexus State/store invocation context and terminal sync handling needed for relay-backed forwarding.
+
 ## 0.1.2
 
 ### Patch Changes
