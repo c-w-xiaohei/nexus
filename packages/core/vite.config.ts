@@ -25,6 +25,7 @@ export default defineConfig({
           "src/transport/serializers/serializer-benchmark.ts",
         ),
         "state/index": path.resolve(__dirname, "src/state/index.ts"),
+        "relay/index": path.resolve(__dirname, "src/relay/index.ts"),
         "transport/index": path.resolve(__dirname, "src/transport/index.ts"),
         "transport/virtual-port/index": path.resolve(
           __dirname,

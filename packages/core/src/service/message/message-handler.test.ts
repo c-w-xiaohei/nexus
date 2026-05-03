@@ -615,6 +615,9 @@ describe("MessageHandler", () => {
     it("should run service invocation end hook when argument revival fails", async () => {
       const invocationContext: ServiceInvocationContext = {
         sourceConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
       };
       const service = {
         fail: vi.fn(),
@@ -635,9 +638,12 @@ describe("MessageHandler", () => {
         sourceConnectionId,
       );
 
-      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith(
+      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith({
         sourceConnectionId,
-      );
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      });
       expect(service.fail).not.toHaveBeenCalled();
       expect(service[SERVICE_INVOKE_END]).toHaveBeenCalledWith(
         invocationContext,
@@ -650,6 +656,33 @@ describe("MessageHandler", () => {
         },
         sourceConnectionId,
       );
+    });
+
+    it("should pass authenticated invocation identity context to invoke start hook", async () => {
+      const add = vi.fn((a: number, b: number) => a + b);
+      const service = {
+        add,
+        [SERVICE_INVOKE_START]: vi.fn(),
+      };
+      resourceManager.registerExposedService("auth-hooked", service);
+
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 118,
+        resourceId: null,
+        path: ["auth-hooked", "add"],
+        args: [1, 2],
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith({
+        sourceConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      });
+      expect(add).toHaveBeenCalledWith(1, 2);
     });
 
     it("should preserve an existing resource policy snapshot for nested returned resources after service overwrite", async () => {

@@ -79,6 +79,11 @@ function instrumentStore(
     telemetry.subscribeCalls += 1;
     const result = await ownerAwareImplementation.subscribe(
       (event) => {
+        if (event.type !== "snapshot") {
+          onSync(event);
+          return;
+        }
+
         telemetry.snapshots.push({
           version: event.version,
           count: event.state.count,

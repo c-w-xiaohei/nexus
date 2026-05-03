@@ -136,11 +136,119 @@ describe("provideNexusStore", () => {
     const registration = provideNexusStore(definition);
 
     const hooks = registration.implementation as {
-      [SERVICE_INVOKE_START]?: (sourceConnectionId: string) => unknown;
+      [SERVICE_INVOKE_START]?: (invocationContext: {
+        sourceConnectionId: string;
+        sourceIdentity?: unknown;
+        localIdentity?: unknown;
+        platform?: unknown;
+      }) => unknown;
     };
 
-    const context = hooks[SERVICE_INVOKE_START]?.("conn-ctx-shape");
-    expect(context).toEqual({ sourceConnectionId: "conn-ctx-shape" });
+    const context = hooks[SERVICE_INVOKE_START]?.({
+      sourceConnectionId: "conn-ctx-shape",
+      sourceIdentity: { id: "client" },
+      localIdentity: { id: "host" },
+      platform: { from: "popup" },
+    });
+    expect(context).toEqual({
+      sourceConnectionId: "conn-ctx-shape",
+      sourceIdentity: { id: "client" },
+      localIdentity: { id: "host" },
+      platform: { from: "popup" },
+    });
+  });
+
+  it("forwards invocation context into wrapped dispatch path", async () => {
+    const definition = createCounterDefinition();
+    const registration = provideNexusStore(definition);
+    const implementation =
+      registration.implementation as NexusStoreServiceContract<
+        { count: number },
+        { increment(by: number): number }
+      >;
+
+    const invocation = (
+      implementation as {
+        [SERVICE_INVOKE_START]?: (invocationContext: {
+          sourceConnectionId: string;
+          sourceIdentity?: unknown;
+          localIdentity?: unknown;
+          platform?: unknown;
+        }) => unknown;
+      }
+    )[SERVICE_INVOKE_START]?.({
+      sourceConnectionId: "conn-dispatch-forward",
+      sourceIdentity: { id: "client-forward" },
+      localIdentity: { id: "host-forward" },
+      platform: { from: "popup-forward" },
+    });
+
+    await implementation.dispatch("increment", [2], invocation as any);
+
+    const baseline = await implementation.subscribe(() => {});
+    expect(baseline.state.count).toBe(2);
+  });
+
+  it("passes full trusted invocation identity context through remote dispatch", async () => {
+    const definition = createCounterDefinition();
+    const registration = provideNexusStore(definition);
+    const observedDispatchInvocations: unknown[] = [];
+    const implementation = registration.implementation;
+    const originalDispatch = implementation.dispatch.bind(implementation);
+    const wrappedImplementation = Object.create(
+      Object.getPrototypeOf(implementation),
+    ) as NexusStoreServiceContract<{ count: number }, any> &
+      typeof implementation;
+    Object.defineProperties(
+      wrappedImplementation,
+      Object.getOwnPropertyDescriptors(implementation),
+    );
+
+    wrappedImplementation.dispatch = (
+      action: any,
+      args: any,
+      invocation: any,
+    ) => {
+      observedDispatchInvocations.push(invocation);
+      return originalDispatch(action, args, invocation);
+    };
+
+    const setup = await createL3Endpoints(
+      {
+        meta: { id: "host" },
+        services: {
+          [definition.token.id]: wrappedImplementation,
+        },
+      },
+      {
+        meta: { id: "client" },
+      },
+    );
+
+    const clientConnectionId = (
+      setup.clientConnection as { connectionId: string }
+    ).connectionId;
+    const storeProxy = (
+      setup.clientEngine as any
+    ).proxyFactory.createServiceProxy(definition.token.id, {
+      target: {
+        connectionId: clientConnectionId,
+      },
+    }) as NexusStoreServiceContract<
+      { count: number },
+      { increment(by: number): number }
+    >;
+
+    await storeProxy.dispatch("increment", [1]);
+
+    expect(observedDispatchInvocations).toEqual([
+      {
+        sourceConnectionId: clientConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      },
+    ]);
   });
 
   it("binds async subscribe ownership through hook path and cleans via disconnect hook", async () => {
@@ -251,7 +359,12 @@ describe("provideNexusStore", () => {
     await storeProxy.subscribe(vi.fn());
 
     expect(observedInvocations).toEqual([
-      { sourceConnectionId: clientConnectionId },
+      {
+        sourceConnectionId: clientConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      },
     ]);
 
     (
