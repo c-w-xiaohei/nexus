@@ -54,6 +54,6 @@
     "vitest": "4.0.18"
   },
   "peerDependencies": {
-    "@nexus-js/core": "^0.1.2"
+    "@nexus-js/core": ">=0.1.2 <1"
   }
 }

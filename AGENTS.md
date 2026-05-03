@@ -200,6 +200,11 @@ pnpm dev
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
+- Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
+- Use `minor` for new public APIs, new subpath exports, optional capabilities, backward-compatible behavior, and first-party packages following compatible `core` capabilities.
+- Use `major` only when users must change code, a public contract is removed or changed, a supported runtime/install combination is truly dropped, or wire protocol/interoperability becomes incompatible.
+- Do not treat `peerDependencies` range edits as major by themselves; bump major only when the supported compatibility matrix is actually narrowed.
+- Do not let a `core` minor automatically force downstream majors; version adapters and React bindings by their own public API and real compatibility impact.
 - PR titles should follow `<type>(<scope>): <description>` when a conventional-commit style title fits the change.
 - PR descriptions should include `Why`, `What`, `How verified`, and `Risks`; link related issues, proposals, or docs when available.
 - After pushing or opening a PR, use `gh pr checks`, `gh run list`, or `gh run watch` when asked to follow CI status.
