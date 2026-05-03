@@ -77,6 +77,10 @@ brokerNexus.configure({
 
 Bridge instances with gateway services. For example, expose a broker-facing service on `brokerNexus` and implement it by creating content-script proxies through `extensionNexus`.
 
+Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when the gateway should forward an existing service contract or Nexus State store into another adjacent graph. Configure the relay provider on the downstream-facing instance and pass the upstream-facing instance as `forwardThrough` with an explicit `forwardTarget`.
+
+Do not model Relay as `target.via`, raw message forwarding, or automatic graph merging. The bridge runtime still owns both configured `Nexus` instances and decides exactly which providers are forwarded.
+
 ## Configuration Composition
 
 Adapter helpers have two common shapes:

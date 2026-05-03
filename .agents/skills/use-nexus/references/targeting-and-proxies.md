@@ -60,3 +60,5 @@ Raw core handles are lifecycle-scoped.
 - `nexus.ref(...)` creates capabilities that remain tied to the original connection scope after crossing the transport boundary.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Recreate proxies and pass fresh refs after session replacement.
+
+Nexus Relay does not change these raw-handle rules. Downstream callers still target the adjacent relay provider with ordinary `nexus.create(...)`; the relay provider separately uses `forwardThrough` and `forwardTarget` for its upstream call.
