@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus React Relay Frame</title>
+  </head>
+  <body>
+    <div id="relay-status">loading</div>
+    <iframe
+      data-child-id="leaf-a"
+      data-src="http://127.0.0.1:3311/relay-child.html?childId=leaf-a"
+    ></iframe>
+    <iframe
+      data-child-id="leaf-b"
+      data-src="http://127.0.0.1:3311/relay-child.html?childId=leaf-b"
+    ></iframe>
+    <script type="module" src="/relay-frame.tsx"></script>
+  </body>
+</html>

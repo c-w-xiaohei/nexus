@@ -89,6 +89,8 @@ face in a transport graph, not a one-way direction to a remote context.
 
 Then expose a gateway service on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
 
+When the gateway should forward an existing service contract or Nexus State store, use `@nexus-js/core/relay`. Relay registers an ordinary provider on one graph and forwards through another `Nexus` instance with explicit `forwardThrough` and `forwardTarget` options. It is not a `target.via` tunnel and does not forward raw Nexus messages. See `docs/relay.md`.
+
 ### Local Node Daemon / CLI
 
 Use:
@@ -124,6 +126,7 @@ At that point, adding `Nexus State` is a layering decision, not a bootstrap requ
 - Product docs landing: `docs/README.md`
 - Package map and install choices: `docs/packages.md`
 - Authorization and policy: `docs/auth-and-policy.md`
+- Nexus Relay: `docs/relay.md`
 - Iframe adapter docs: `docs/iframe/README.md`
 - Node IPC adapter docs: `docs/node-ipc/README.md`
 - Nexus State subsystem docs: `docs/state/README.md`

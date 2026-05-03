@@ -23,7 +23,8 @@ export const provideNexusStore = <
       });
     },
     unsubscribe: (subscriptionId) => host.unsubscribe(subscriptionId),
-    dispatch: (action, args) => host.dispatch(action, args),
+    dispatch: (action, args, invocation) =>
+      host.dispatch(action, args, invocation),
   };
 
   const implementationWithHooks = implementation as NexusStoreServiceContract<
@@ -31,14 +32,14 @@ export const provideNexusStore = <
     TActions
   > & {
     [SERVICE_INVOKE_START](
-      sourceConnectionId: string,
+      invocationContext: ServiceInvocationContext,
     ): ServiceInvocationContext;
     [SERVICE_INVOKE_END](invocationContext?: ServiceInvocationContext): void;
     [SERVICE_ON_DISCONNECT](connectionId: string): void;
   };
 
-  implementationWithHooks[SERVICE_INVOKE_START] = (sourceConnectionId) =>
-    host.onInvokeStart(sourceConnectionId);
+  implementationWithHooks[SERVICE_INVOKE_START] = (invocationContext) =>
+    host.onInvokeStart(invocationContext);
   implementationWithHooks[SERVICE_INVOKE_END] = (invocationContext) => {
     host.onInvokeEnd(invocationContext);
   };

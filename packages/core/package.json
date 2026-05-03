@@ -31,6 +31,11 @@
       "import": "./dist/state/index.mjs",
       "require": "./dist/state/index.js"
     },
+    "./relay": {
+      "types": "./dist/relay/index.d.ts",
+      "import": "./dist/relay/index.mjs",
+      "require": "./dist/relay/index.js"
+    },
     "./transport": {
       "types": "./dist/transport/index.d.ts",
       "import": "./dist/transport/index.mjs",

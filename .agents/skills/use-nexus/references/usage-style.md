@@ -6,6 +6,7 @@ Use this entry point for application code that consumes Nexus from the outside. 
 2. runtime configuration in every context
 3. service exposure in host contexts
 4. proxy creation in consumer contexts
+5. explicit Relay only when a bridge context forwards selected services or stores across adjacent Nexus graphs
 
 Use this reference as a compact style guide, not as a substitute for the full docs. For deeper architecture, adapter, lifecycle, policy, or state semantics, direct readers to the GitHub documentation at https://github.com/c-w-xiaohei/nexus/tree/main/docs.
 
@@ -20,7 +21,7 @@ Use this architecture model when explaining why configuration and adapter bounda
 1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
 2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
 3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
-4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers
+4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
 
 Adapters provide or compose endpoint wiring for the current context. Core then builds logical connections over the `IPort`-like channels returned by those endpoints. For bus-style transports such as `window.postMessage`, adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
 
@@ -32,6 +33,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or explicit services.
 - Use explicit service registration instead of decorators for multi-instance runtimes and isolated tests.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
+- Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
 - Pass an options object to `nexus.create(...)`; keep explicit targets in introductory examples.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
 
@@ -51,6 +53,7 @@ Point readers to the public GitHub docs when they need more context. Prefer exac
 - Getting started: https://github.com/c-w-xiaohei/nexus/blob/main/docs/getting-started.md
 - Core concepts and architecture layers: https://github.com/c-w-xiaohei/nexus/blob/main/docs/concepts.md
 - Platform and adapter strategy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/platforms.md
+- Nexus Relay: https://github.com/c-w-xiaohei/nexus/blob/main/docs/relay.md
 - Authorization and policy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/auth-and-policy.md
 - Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
 - Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md

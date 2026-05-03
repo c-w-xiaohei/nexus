@@ -1900,6 +1900,378 @@ describe("state client runtime and connect APIs", () => {
     }
   });
 
+  it("safeConnectNexusStore rejects terminal envelope before baseline", async () => {
+    const terminalBeforeBaselineService = {
+      subscribe: vi.fn(async (onSync: (event: unknown) => void) => {
+        onSync({
+          type: "terminal",
+          storeInstanceId: "store-terminal-before-baseline",
+          lastKnownVersion: 3,
+          reason: "target-replaced",
+        });
+
+        return {
+          storeInstanceId: "store-terminal-before-baseline",
+          subscriptionId: "sub-terminal-before-baseline",
+          version: 3,
+          state: { count: 3 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 4,
+        result: 0,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (
+                next: (value: typeof terminalBeforeBaselineService) => any,
+              ) => next(terminalBeforeBaselineService),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-before-baseline"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreDisconnectedError);
+      expect(result.error.message).toMatch(/terminal|stale|disconnected/i);
+    }
+  });
+
+  it("safeConnectNexusStore ignores buffered terminal with mismatched instance before baseline", async () => {
+    const service = {
+      subscribe: vi.fn(async (onSync: (event: unknown) => void) => {
+        onSync({
+          type: "terminal",
+          storeInstanceId: "store-terminal-buffered-other",
+          lastKnownVersion: 3,
+          reason: "target-replaced",
+        });
+
+        return {
+          storeInstanceId: "store-terminal-buffered-real",
+          subscriptionId: "sub-terminal-buffered-real",
+          version: 3,
+          state: { count: 3 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 4,
+        result: 4,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-buffered-mismatch"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    expect(result.isOk()).toBe(true);
+    if (result.isOk()) {
+      expect(result.value.getStatus()).toMatchObject({
+        type: "ready",
+        storeInstanceId: "store-terminal-buffered-real",
+        version: 3,
+      });
+    }
+  });
+
+  it("safeConnectNexusStore applies matching terminal when multiple pre-baseline terminals arrive", async () => {
+    const service = {
+      subscribe: vi.fn(async (onSync: (event: unknown) => void) => {
+        onSync({
+          type: "terminal",
+          storeInstanceId: "store-terminal-buffered-real",
+          lastKnownVersion: 3,
+          reason: "target-replaced",
+        });
+        onSync({
+          type: "terminal",
+          storeInstanceId: "store-terminal-buffered-other",
+          lastKnownVersion: 7,
+          reason: "target-replaced",
+        });
+
+        return {
+          storeInstanceId: "store-terminal-buffered-real",
+          subscriptionId: "sub-terminal-buffered-real",
+          version: 3,
+          state: { count: 3 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 4,
+        result: 4,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const result = await safeConnectNexusStore(
+      {
+        safeCreate: () =>
+          ({
+            mapErr: () => ({
+              andThen: (next: (value: typeof service) => any) => next(service),
+            }),
+          }) as any,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-buffered-multi"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusStoreDisconnectedError);
+      expect(result.error.message).toMatch(/terminal|stale|disconnect/i);
+    }
+  });
+
+  it("rejects action when terminalized even if lastKnownVersion already satisfies waiter", async () => {
+    const service = {
+      subscribe: vi.fn(async () => {
+        return {
+          storeInstanceId: "store-terminal-fastpath",
+          subscriptionId: "sub-terminal-fastpath",
+          version: 1,
+          state: { count: 1 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 1,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      { create: async () => service } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-fastpath"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    (remote as any).onSync({
+      type: "terminal",
+      storeInstanceId: "store-terminal-fastpath",
+      lastKnownVersion: 1,
+      reason: "target-replaced",
+    });
+
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+  });
+
+  it("RemoteStoreEntity transitions terminal after baseline and rejects future actions", async () => {
+    let onSync!: (event: unknown) => void;
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-terminal-after-baseline",
+          subscriptionId: "sub-terminal-after-baseline",
+          version: 1,
+          state: { count: 1 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 2,
+        result: 2,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-after-baseline"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    onSync({
+      type: "terminal",
+      storeInstanceId: "store-terminal-after-baseline",
+      lastKnownVersion: 1,
+      reason: "target-replaced",
+    });
+
+    expect(remote.getStatus().type).toBe("stale");
+    await expect(remote.actions.increment()).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+  });
+
+  it("ignores terminal envelopes with mismatched store instance id", async () => {
+    let onSync!: (event: unknown) => void;
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-terminal-instance-guard",
+          subscriptionId: "sub-terminal-instance-guard",
+          version: 1,
+          state: { count: 1 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 2,
+        result: 2,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-instance-guard"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    onSync({
+      type: "terminal",
+      storeInstanceId: "store-other-instance",
+      lastKnownVersion: 1,
+      reason: "target-replaced",
+    });
+
+    expect(remote.getStatus()).toMatchObject({
+      type: "ready",
+      storeInstanceId: "store-terminal-instance-guard",
+      version: 1,
+    });
+    const action = remote.actions.increment();
+    onSync({
+      type: "snapshot",
+      storeInstanceId: "store-terminal-instance-guard",
+      version: 2,
+      state: { count: 2 },
+    });
+    await expect(action).resolves.toBe(2);
+  });
+
+  it("rejects pending version waiter when terminal envelope arrives before committed snapshot", async () => {
+    let onSync!: (event: unknown) => void;
+    const dispatchGate = deferred<void>();
+    const service = {
+      subscribe: vi.fn(async (callback: typeof onSync) => {
+        onSync = callback;
+        return {
+          storeInstanceId: "store-terminal-pending-waiter",
+          subscriptionId: "sub-terminal-pending-waiter",
+          version: 1,
+          state: { count: 1 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => {
+        await dispatchGate.promise;
+        return {
+          type: "dispatch-result",
+          committedVersion: 2,
+          result: 2,
+        };
+      }),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+
+    const remote = await connectNexusStore(
+      {
+        create: async () => service,
+      } as any,
+      defineNexusStore({
+        token: new Token("state:counter:terminal-pending-waiter"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { descriptor: { context: "background" } as any } },
+    );
+
+    const actionPromise = remote.actions.increment();
+    dispatchGate.resolve();
+    await vi.waitFor(() => {
+      expect(service.dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    onSync({
+      type: "terminal",
+      storeInstanceId: "store-terminal-pending-waiter",
+      lastKnownVersion: 1,
+      reason: "target-replaced",
+    });
+
+    await expect(actionPromise).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+  });
+
   it("safeConnectNexusStore enforces handshake timeout", async () => {
     const neverService = {
       subscribe: vi.fn(async () => {

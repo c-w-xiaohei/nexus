@@ -1,12 +1,12 @@
 ---
 name: use-nexus
-description: This skill should be used when the user asks to write Nexus application code, configure Nexus adapters, define Nexus service contracts or Tokens, expose services, create proxies with nexus.create, or document external Nexus usage patterns.
+description: This skill should be used when the user asks to write Nexus application code, configure Nexus adapters, define Nexus service contracts or Tokens, expose services, create proxies with nexus.create, use Nexus Relay, or document external Nexus usage patterns.
 version: 0.1.0
 ---
 
 # Use Nexus
 
-Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, proxy creation, and the architectural boundary between Nexus connection semantics and host-context startup.
+Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, proxy creation, Nexus Relay, and the architectural boundary between Nexus connection semantics and host-context startup.
 
 For full project documentation, direct readers to the GitHub docs in `c-w-xiaohei/nexus`: https://github.com/c-w-xiaohei/nexus/tree/main/docs. Encourage reading the product concepts and platform guides before inventing adapter behavior or lifecycle semantics.
 
@@ -19,6 +19,8 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Prefer adapter helpers such as `usingBackgroundScript(...)`, `usingContentScript(...)`, `usingNodeIpcDaemon(...)`, and `usingNodeIpcClient(...)` for standard runtimes.
 - Use `nexus.configure(...)` for explicit endpoint configuration, service registration, policy, matchers, descriptors, or adapter config composition.
 - Use `new Nexus()` plus explicit `configure({ endpoint, services })` for multi-instance runtimes; do not use `@Expose` or `@Endpoint` decorators there because decorator registration is process-global.
+- Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
+- Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
 - Pass an options object to `nexus.create(...)`; provide an explicit `target` unless a Token default target or unique `connectTo` fallback is intentionally being used.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 
@@ -36,7 +38,9 @@ When explaining Nexus architecture, use this layer model:
 1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
 2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
 3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
-4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers
+4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
+
+Describe Nexus Relay as a product-facing capability built on ordinary service and Nexus State provider semantics. It relies on connection identity and routing below it, but it is not a transport layer or raw routing layer.
 
 Do not describe Nexus as a process manager, page loader, iframe lifecycle manager, or worker launcher. Describe those as responsibilities of the app, browser, OS, framework, or adapter-specific host environment.
 
@@ -117,6 +121,7 @@ Also point readers to the public GitHub docs when they need more context. Prefer
 - Core concepts and architecture layers: https://github.com/c-w-xiaohei/nexus/blob/main/docs/concepts.md
 - Platform and adapter strategy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/platforms.md
 - Authorization and policy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/auth-and-policy.md
+- Nexus Relay: https://github.com/c-w-xiaohei/nexus/blob/main/docs/relay.md
 - Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
 - Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md
 

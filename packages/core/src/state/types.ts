@@ -7,7 +7,10 @@ import type {
   DispatchResultEnvelope,
   SnapshotEnvelope,
   SubscribeResult,
+  TerminalEnvelope,
+  TerminalReason,
 } from "./protocol";
+import type { ServiceInvocationContext } from "@/service/service-invocation-hooks";
 
 type ActionFunction = (...args: any[]) => any;
 
@@ -51,13 +54,16 @@ export interface NexusStoreServiceContract<
 > {
   subscribe(
     onSync: (
-      event: Omit<SnapshotEnvelope, "state"> & { state: TState },
+      event:
+        | (Omit<SnapshotEnvelope, "state"> & { state: TState })
+        | TerminalEnvelope,
     ) => void,
   ): Promise<Omit<SubscribeResult, "state"> & { state: TState }>;
   unsubscribe(subscriptionId: string): Promise<void>;
   dispatch<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
+    invocationContext?: ServiceInvocationContext,
   ): Promise<{
     type: DispatchResultEnvelope["type"];
     committedVersion: DispatchResultEnvelope["committedVersion"];
@@ -89,7 +95,7 @@ export type RemoteStoreStatus =
   | {
       type: "stale";
       lastKnownVersion: number | null;
-      reason: "target-changed";
+      reason: "target-changed" | TerminalReason;
     }
   | { type: "destroyed" };
 

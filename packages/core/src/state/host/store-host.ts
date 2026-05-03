@@ -52,7 +52,9 @@ export interface StoreHostRuntime<
     state: TState;
   }>;
   cleanupConnection(connectionId: string): void;
-  onInvokeStart(sourceConnectionId: string): ServiceInvocationContext;
+  onInvokeStart(
+    invocationContext: ServiceInvocationContext | string,
+  ): ServiceInvocationContext;
   onInvokeEnd(invocationContext?: ServiceInvocationContext): void;
   resolveSubscriptionOwner(
     invocationContext?: ServiceInvocationContext,
@@ -124,12 +126,25 @@ class StoreHostEntity<
     });
   }
 
-  public onInvokeStart(sourceConnectionId: string): ServiceInvocationContext {
+  public onInvokeStart(
+    invocationContext: ServiceInvocationContext | string,
+  ): ServiceInvocationContext {
+    const normalizedInvocationContext: ServiceInvocationContext =
+      typeof invocationContext === "string"
+        ? {
+            sourceConnectionId: invocationContext,
+            sourceIdentity: undefined,
+            localIdentity: undefined,
+            platform: undefined,
+          }
+        : invocationContext;
+
+    const sourceConnectionId = normalizedInvocationContext.sourceConnectionId;
     this.disconnectedConnections.delete(sourceConnectionId);
     const current =
       this.activeInvocationsByConnection.get(sourceConnectionId) ?? 0;
     this.activeInvocationsByConnection.set(sourceConnectionId, current + 1);
-    return { sourceConnectionId };
+    return normalizedInvocationContext;
   }
 
   public onInvokeEnd(invocationContext?: ServiceInvocationContext): void {
@@ -234,6 +249,7 @@ class StoreHostEntity<
   public async dispatch<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
+    _invocationContext?: ServiceInvocationContext,
   ): Promise<
     DispatchResultEnvelope & {
       result: ActionResult<TActions, K>;

@@ -15,6 +15,8 @@ import {
   DispatchResultEnvelopeSchema,
   SnapshotEnvelopeSchema,
   SubscribeResultSchema,
+  TerminalEnvelopeSchema,
+  type TerminalReason,
 } from "../protocol";
 import type {
   ActionArgs,
@@ -87,6 +89,13 @@ export class RemoteStoreEntity<
     storeInstanceId: string;
     version: number;
     state: TState;
+  }> = [];
+  private readonly pendingTerminals: Array<{
+    type: "terminal";
+    storeInstanceId: string;
+    lastKnownVersion: number;
+    reason: TerminalReason;
+    error?: unknown;
   }> = [];
   private readonly versionWaiters = new Set<VersionWaiter>();
   private subscriptionId: string | null = null;
@@ -210,13 +219,25 @@ export class RemoteStoreEntity<
       return;
     }
 
-    const parsed = this.safeParseSnapshot(event);
+    const parsed = this.safeParseSyncEnvelope(event);
     if (parsed.isErr()) {
       this.transitionToProtocolError(parsed.error);
       return;
     }
 
-    const snapshot = parsed.value;
+    const envelope = parsed.value;
+
+    if (envelope.type === "terminal") {
+      if (!this.handshakeCompleted) {
+        this.pendingTerminals.push(envelope);
+        return;
+      }
+
+      this.applyTerminalEnvelope(envelope);
+      return;
+    }
+
+    const snapshot = envelope;
 
     if (!this.handshakeCompleted) {
       this.pendingEvents.push(snapshot);
@@ -239,6 +260,18 @@ export class RemoteStoreEntity<
 
     const data = parsed.value;
 
+    const matchingPendingTerminal = this.pendingTerminals.find(
+      (pending) => pending.storeInstanceId === data.storeInstanceId,
+    );
+    this.pendingTerminals.length = 0;
+
+    if (matchingPendingTerminal) {
+      this.handshakeCompleted = true;
+      this.subscriptionId = data.subscriptionId;
+      this.applyTerminalEnvelope(matchingPendingTerminal);
+      return;
+    }
+
     this.subscriptionId = data.subscriptionId;
     this.handshakeCompleted = true;
     this.applyIncomingSnapshot(
@@ -254,6 +287,64 @@ export class RemoteStoreEntity<
     for (const event of this.pendingEvents.splice(0)) {
       this.applyIncomingSnapshot(event, "event");
     }
+  }
+
+  private applyTerminalEnvelope(envelope: {
+    type: "terminal";
+    storeInstanceId: string;
+    lastKnownVersion: number;
+    reason: TerminalReason;
+    error?: unknown;
+  }): void {
+    if (this.terminal) {
+      return;
+    }
+
+    if (
+      this.storeInstanceId &&
+      this.storeInstanceId !== envelope.storeInstanceId
+    ) {
+      return;
+    }
+
+    const staleReasons = new Set<TerminalReason>([
+      "target-replaced",
+      "target-changed",
+    ]);
+    if (staleReasons.has(envelope.reason)) {
+      this.status = {
+        type: "stale",
+        lastKnownVersion: envelope.lastKnownVersion,
+        reason: envelope.reason,
+      };
+      this.terminal = true;
+      const staleError = createDisconnectedError(
+        `Remote store became terminal (${envelope.reason}).`,
+        envelope.error,
+      );
+      this.terminalActionError = staleError;
+      this.version = envelope.lastKnownVersion;
+      this.rejectAllVersionWaiters(staleError);
+      this.tryUnsubscribeBestEffort();
+      this.runTransportCleanup();
+      return;
+    }
+
+    const disconnected = createDisconnectedError(
+      `Remote store became terminal (${envelope.reason}).`,
+      envelope.error,
+    );
+    this.status = {
+      type: "disconnected",
+      lastKnownVersion: envelope.lastKnownVersion,
+      cause: disconnected,
+    };
+    this.terminal = true;
+    this.terminalActionError = disconnected;
+    this.version = envelope.lastKnownVersion;
+    this.rejectAllVersionWaiters(disconnected);
+    this.tryUnsubscribeBestEffort();
+    this.runTransportCleanup();
   }
 
   public safeInvokeAction<K extends keyof TActions & string>(
@@ -454,14 +545,14 @@ export class RemoteStoreEntity<
   private waitForVersion(
     isSatisfied: (version: number) => boolean,
   ): Promise<void> {
-    const currentVersion = this.version;
-    if (currentVersion !== null && isSatisfied(currentVersion)) {
-      return Promise.resolve();
-    }
-
     const gate = this.safeEnsureActionReady();
     if (gate.isErr()) {
       return Promise.reject(gate.error);
+    }
+
+    const currentVersion = this.version;
+    if (currentVersion !== null && isSatisfied(currentVersion)) {
+      return Promise.resolve();
     }
 
     return new Promise<void>((resolve, reject) => {
@@ -499,6 +590,9 @@ export class RemoteStoreEntity<
     }
 
     for (const waiter of Array.from(this.versionWaiters)) {
+      if (this.terminal) {
+        return;
+      }
       if (waiter.isSatisfied(currentVersion)) {
         this.versionWaiters.delete(waiter);
         clearTimeout(waiter.timer);
@@ -535,49 +629,81 @@ export class RemoteStoreEntity<
     void this.service.unsubscribe(this.subscriptionId).catch(() => undefined);
   }
 
-  private safeParseSnapshot(event: unknown): Result<
-    {
-      type: "snapshot";
-      storeInstanceId: string;
-      version: number;
-      state: TState;
-    },
+  private safeParseSyncEnvelope(event: unknown): Result<
+    | {
+        type: "snapshot";
+        storeInstanceId: string;
+        version: number;
+        state: TState;
+      }
+    | {
+        type: "terminal";
+        storeInstanceId: string;
+        lastKnownVersion: number;
+        reason: TerminalReason;
+        error?: unknown;
+      },
     NexusStoreProtocolError
   > {
-    const parsedResult = Result.fromThrowable(
+    const snapshotResult = Result.fromThrowable(
       () => SnapshotEnvelopeSchema.safeParse(event),
       (error) => error,
     )();
-    if (parsedResult.isErr()) {
+    if (snapshotResult.isErr()) {
       return err(
-        new NexusStoreProtocolError("Invalid snapshot envelope.", {
-          cause: parsedResult.error,
+        new NexusStoreProtocolError("Invalid sync envelope.", {
+          cause: snapshotResult.error,
         }),
       );
     }
 
-    const parsed = parsedResult.value;
-    if (!parsed.success) {
+    const parsedSnapshot = snapshotResult.value;
+    if (parsedSnapshot.success) {
+      const validatedState = this.safeValidateState(
+        parsedSnapshot.data.state,
+        "Invalid snapshot state payload.",
+      );
+      if (validatedState.isErr()) {
+        return err(validatedState.error);
+      }
+
+      return ok({
+        type: "snapshot",
+        storeInstanceId: parsedSnapshot.data.storeInstanceId,
+        version: parsedSnapshot.data.version,
+        state: validatedState.value,
+      });
+    }
+
+    const terminalResult = Result.fromThrowable(
+      () => TerminalEnvelopeSchema.safeParse(event),
+      (error) => error,
+    )();
+    if (terminalResult.isErr()) {
       return err(
-        new NexusStoreProtocolError("Invalid snapshot envelope.", {
-          cause: parsed.error,
+        new NexusStoreProtocolError("Invalid sync envelope.", {
+          cause: terminalResult.error,
         }),
       );
     }
 
-    const validatedState = this.safeValidateState(
-      parsed.data.state,
-      "Invalid snapshot state payload.",
-    );
-    if (validatedState.isErr()) {
-      return err(validatedState.error);
+    const parsedTerminal = terminalResult.value;
+    if (!parsedTerminal.success) {
+      return err(
+        new NexusStoreProtocolError("Invalid sync envelope.", {
+          cause: parsedTerminal.error,
+        }),
+      );
     }
 
     return ok({
-      type: "snapshot",
-      storeInstanceId: parsed.data.storeInstanceId,
-      version: parsed.data.version,
-      state: validatedState.value,
+      type: "terminal",
+      storeInstanceId: parsedTerminal.data.storeInstanceId,
+      lastKnownVersion: parsedTerminal.data.lastKnownVersion,
+      reason: parsedTerminal.data.reason,
+      ...(typeof parsedTerminal.data.error === "undefined"
+        ? {}
+        : { error: parsedTerminal.data.error }),
     });
   }
 

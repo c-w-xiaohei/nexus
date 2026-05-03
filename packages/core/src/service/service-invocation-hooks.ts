@@ -8,10 +8,15 @@ const SERVICE_ON_DISCONNECT_KEY = "nexus.service.on.disconnect";
 
 export interface ServiceInvocationContext {
   readonly sourceConnectionId: string;
+  readonly sourceIdentity: unknown;
+  readonly localIdentity: unknown;
+  readonly platform: unknown;
 }
 
 export interface ServiceInvocationHooks {
-  [SERVICE_INVOKE_START]?(sourceConnectionId: string): ServiceInvocationContext;
+  [SERVICE_INVOKE_START]?(
+    invocationContext: ServiceInvocationContext,
+  ): ServiceInvocationContext;
   [SERVICE_INVOKE_END]?(invocationContext?: ServiceInvocationContext): void;
   [SERVICE_ON_DISCONNECT]?(connectionId: string): void;
 }

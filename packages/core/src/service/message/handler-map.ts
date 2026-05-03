@@ -509,7 +509,9 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
             invocationHookTarget,
             SERVICE_INVOKE_START,
           ) as
-            | ((sourceConnectionId: string) => ServiceInvocationContext)
+            | ((
+                invocationContext: ServiceInvocationContext,
+              ) => ServiceInvocationContext)
             | undefined;
           const onInvokeEnd = getServiceInvocationHook(
             invocationHookTarget,
@@ -520,7 +522,20 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           return ResultAsync.fromPromise(
             Promise.resolve().then(async () => {
               const invocationContext: ServiceInvocationContext | undefined =
-                onInvokeStart ? onInvokeStart(sourceConnectionId) : undefined;
+                onInvokeStart
+                  ? onInvokeStart({
+                      sourceConnectionId,
+                      sourceIdentity:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.remoteIdentity,
+                      localIdentity:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.localIdentity,
+                      platform:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.platform,
+                    })
+                  : undefined;
               try {
                 const revivedArgsResult = payloadProcessor.safeRevive(
                   args,
@@ -536,7 +551,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
                     ? revivedArgsResult.value
                     : [...revivedArgsResult.value, invocationContext];
 
-                return await target.apply(parent, invokeArgs);
+                return await Reflect.apply(target, parent, invokeArgs);
               } finally {
                 if (onInvokeEnd) {
                   onInvokeEnd(invocationContext);

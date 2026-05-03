@@ -111,6 +111,48 @@ describe("MessageHandler", () => {
       add: (a: number, b: number) => a + b,
     };
 
+    it("should invoke proxy functions without reading their apply property", async () => {
+      const propertyReads: PropertyKey[] = [];
+      const invocations: unknown[][] = [];
+      const read = new Proxy(
+        vi.fn(() => "profile-result"),
+        {
+          get(target, property, receiver) {
+            propertyReads.push(property);
+            return Reflect.get(target, property, receiver);
+          },
+          apply(target, thisArg, argArray) {
+            invocations.push([...argArray]);
+            return Reflect.apply(target, thisArg, argArray);
+          },
+        },
+      );
+      resourceManager.registerExposedService("relay", {
+        profile: { read },
+      });
+
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 99,
+        resourceId: null,
+        path: ["relay", "profile", "read"],
+        args: ["leaf-a"],
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(propertyReads).not.toContain("apply");
+      expect(invocations).toEqual([["leaf-a"]]);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
+        {
+          type: NexusMessageType.RES,
+          id: 99,
+          result: "profile-result",
+        },
+        sourceConnectionId,
+      );
+    });
+
     it("should deny APPLY before invoking a local service when policy.canCall returns false", async () => {
       const add = vi.fn((a: number, b: number) => a + b);
       resourceManager.registerExposedService("calculator", { add });
@@ -615,6 +657,9 @@ describe("MessageHandler", () => {
     it("should run service invocation end hook when argument revival fails", async () => {
       const invocationContext: ServiceInvocationContext = {
         sourceConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
       };
       const service = {
         fail: vi.fn(),
@@ -635,9 +680,12 @@ describe("MessageHandler", () => {
         sourceConnectionId,
       );
 
-      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith(
+      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith({
         sourceConnectionId,
-      );
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      });
       expect(service.fail).not.toHaveBeenCalled();
       expect(service[SERVICE_INVOKE_END]).toHaveBeenCalledWith(
         invocationContext,
@@ -650,6 +698,33 @@ describe("MessageHandler", () => {
         },
         sourceConnectionId,
       );
+    });
+
+    it("should pass authenticated invocation identity context to invoke start hook", async () => {
+      const add = vi.fn((a: number, b: number) => a + b);
+      const service = {
+        add,
+        [SERVICE_INVOKE_START]: vi.fn(),
+      };
+      resourceManager.registerExposedService("auth-hooked", service);
+
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 118,
+        resourceId: null,
+        path: ["auth-hooked", "add"],
+        args: [1, 2],
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(service[SERVICE_INVOKE_START]).toHaveBeenCalledWith({
+        sourceConnectionId,
+        sourceIdentity: { id: "client" },
+        localIdentity: { id: "host" },
+        platform: { from: "client" },
+      });
+      expect(add).toHaveBeenCalledWith(1, 2);
     });
 
     it("should preserve an existing resource policy snapshot for nested returned resources after service overwrite", async () => {

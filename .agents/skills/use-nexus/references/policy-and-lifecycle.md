@@ -38,6 +38,8 @@ Raw core handles are lifecycle-scoped.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Recreate proxies and pass fresh refs after session replacement.
 
+Relay-backed services and stores keep this lifecycle model explicit. Relay policy receives direct downstream caller identity from invocation context, and relay-backed store handles become terminal when the upstream source is disconnected, stale, or replaced. Create fresh downstream handles for fresh sessions.
+
 ## Documentation Style
 
 For adapter docs:

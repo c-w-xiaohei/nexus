@@ -125,6 +125,8 @@ Bridge between instances with normal services:
 
 For example, a background service can expose a local-broker gateway on `brokerNexus` and implement it by calling content-script services through `extensionNexus`. That keeps transport admission, extension routing, and broker-facing API boundaries explicit.
 
+If the bridge is forwarding a selected upstream service or Nexus State store into a downstream graph, use Nexus Relay instead of inventing a raw router. Relay is still provider-level forwarding: it exposes an ordinary service or store provider on one instance and implements it by calling another instance. It does not merge graphs or introduce transparent multi-hop routing. See `docs/relay.md`.
+
 ## Targeting And Context Resolution
 
 Nexus routes calls through target descriptors and matching rules.
@@ -200,6 +202,8 @@ At a high level, the implementation splits into layers:
 
 You usually interact with the top layer, but the behavior you observe comes from all of them working together.
 
+Nexus Relay is exposed at the product-facing API layer through `@nexus-js/core/relay`, and implemented using the service/proxy/resource layer plus the Nexus State service contract. It relies on connection identity and routing underneath, but it is not a transport or raw message-routing layer.
+
 ## Identity Updates And Lifecycle
 
 Contexts can change identity over time.
@@ -220,6 +224,7 @@ At the application layer, reconnect usually means rebuilding session-bound handl
 
 - core RPC and service exposure: `@nexus-js/core`
 - state subsystem for synchronized remote state: `@nexus-js/core/state`
+- relay helpers for explicit graph bridging: `@nexus-js/core/relay`
 - React bindings for Nexus State: `@nexus-js/react`
 
 Nexus State is a subsystem, not the product root.
@@ -229,4 +234,5 @@ Nexus State is a subsystem, not the product root.
 - Install/setup flow: `docs/getting-started.md`
 - Package choices: `docs/packages.md`
 - Platform model: `docs/platforms.md`
+- Nexus Relay: `docs/relay.md`
 - Nexus State docs: `docs/state/README.md`
