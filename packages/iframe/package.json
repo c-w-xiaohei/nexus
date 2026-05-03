@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/iframe",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Iframe postMessage adapter for Nexus framework",
   "private": false,
   "license": "MIT",
