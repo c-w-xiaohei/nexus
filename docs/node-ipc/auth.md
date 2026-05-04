@@ -38,7 +38,11 @@ Client:
 ```ts
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: { appId: "example-app" },
+  connectTo: [
+    {
+      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    },
+  ],
   authToken: process.env.NEXUS_IPC_TOKEN,
 });
 ```
@@ -78,9 +82,15 @@ This metadata is the bridge from adapter pre-auth into core policy.
 
 Use core `canConnect` to require successful pre-auth:
 
+For policy composition, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path remains calling `usingNodeIpcDaemon(...)` directly and publishing providers with `@nexus.Expose(...)` or `nexus.provide(...)`.
+
 ```ts
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app", authToken }),
+nexus.configure({
+  ...usingNodeIpcDaemon({
+    appId: "example-app",
+    authToken: process.env.NEXUS_IPC_TOKEN,
+    configure: false,
+  }),
   policy: {
     canConnect({ platform }) {
       return platform.authenticated === true;
@@ -92,8 +102,12 @@ await nexus.configure({
 Use core `canCall` to authorize service operations after the connection exists.
 
 ```ts
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app", authToken }),
+nexus.configure({
+  ...usingNodeIpcDaemon({
+    appId: "example-app",
+    authToken: process.env.NEXUS_IPC_TOKEN,
+    configure: false,
+  }),
   policy: {
     canCall({ serviceName, operation }) {
       return serviceName === "example:admin" && operation === "APPLY";

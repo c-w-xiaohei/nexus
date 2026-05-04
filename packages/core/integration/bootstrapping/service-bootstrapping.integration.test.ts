@@ -7,8 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Nexus } from "../../src/api/nexus";
 import { Token } from "../../src/api/token";
-import { Expose } from "../../src/api/decorators/expose";
-import { DecoratorRegistry } from "../../src/api/registry";
 
 import type {
   AppPlatformMeta,
@@ -21,7 +19,7 @@ import type {
 
 describe("Nexus L4 Integration: Service Bootstrapping", () => {
   it("should use a factory for dependency injection", async () => {
-    DecoratorRegistry.clear();
+    const hostNexus = new Nexus<any, any>();
 
     class Dependency {
       getValue() {
@@ -35,7 +33,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     const ServiceWithDepToken = new Token<IServiceWithDep>("service-with-dep");
 
-    @Expose(ServiceWithDepToken, {
+    @hostNexus.Expose(ServiceWithDepToken, {
       factory: () =>
         new (class implements IServiceWithDep {
           private dep = new Dependency();
@@ -53,7 +51,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     void ServiceWithDepImpl;
 
-    const hostNexus = new Nexus<any, any>().configure({
+    hostNexus.configure({
       endpoint: {
         meta: { context: "host" },
         implementation: { listen: vi.fn() },
@@ -72,12 +70,12 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
   });
 
   it("should create basic tokens and use them with @Expose decorator", async () => {
-    DecoratorRegistry.clear();
+    const nexus = new Nexus<AppUserMeta, AppPlatformMeta>();
 
     const SettingsToken = new Token<ISettingsService>("settings-service");
     const CommentToken = new Token<ICommentService>("comment-service");
 
-    @Expose(SettingsToken)
+    @nexus.Expose(SettingsToken)
     class SettingsServiceImpl implements ISettingsService {
       async getSettings() {
         return { showAvatars: true, defaultProject: "test-project" };
@@ -93,7 +91,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
       }
     }
 
-    @Expose(CommentToken)
+    @nexus.Expose(CommentToken)
     class CommentServiceImpl implements ICommentService {
       async getComments(_issueId: string) {
         return [{ id: "1", user: "test-user", body: "Test comment" }];
@@ -107,7 +105,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
     void SettingsServiceImpl;
     void CommentServiceImpl;
 
-    const nexus = new Nexus<AppUserMeta, AppPlatformMeta>().configure({
+    nexus.configure({
       endpoint: {
         meta: { context: "background", version: "1.0" },
         implementation: { listen: vi.fn() },

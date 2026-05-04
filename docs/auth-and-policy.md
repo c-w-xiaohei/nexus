@@ -26,7 +26,7 @@ The core policy gate runs after Nexus has enough identity and platform metadata 
 Add `policy` to `nexus.configure(...)`:
 
 ```ts
-await nexus.configure({
+nexus.configure({
   endpoint: endpointConfig,
   policy: {
     canConnect(context) {
@@ -94,21 +94,20 @@ Global policy applies to all services. Service-level policy narrows or customize
 Use service-level policy when one service needs stricter rules than the rest of the process:
 
 ```ts
-await nexus.configure({
+nexus.configure({
   endpoint: endpointConfig,
-  services: [
-    {
-      token: AdminToken,
-      implementation: adminService,
-      policy: {
-        canCall({ remoteIdentity }) {
-          return remoteIdentity.groups?.includes("admin") === true;
-        },
-      },
+});
+
+nexus.provide(AdminToken, adminService, {
+  policy: {
+    canCall({ remoteIdentity }) {
+      return remoteIdentity.groups?.includes("admin") === true;
     },
-  ],
+  },
 });
 ```
+
+`configure({ services })` can also attach service-level policy during bootstrap bulk composition or low-level compatibility setup, but `provide(...)` is the ordinary provider registration path.
 
 Policy composition is per capability. If a service policy omits `canCall`, Nexus falls back to the global `canCall`. If a service policy provides `canCall`, that service-level hook decides the service call.
 
@@ -132,9 +131,11 @@ When writing policy:
 
 For node-ipc, shared-secret pre-auth sets `platform.authenticated` before core policy runs:
 
+When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers with `@nexus.Expose(...)` or `nexus.provide(...)`.
+
 ```ts
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app", authToken }),
+nexus.configure({
+  ...usingNodeIpcDaemon({ appId: "example-app", authToken, configure: false }),
   policy: {
     canConnect({ platform }) {
       return platform.authenticated === true;

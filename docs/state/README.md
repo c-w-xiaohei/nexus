@@ -4,6 +4,8 @@ Nexus State is the synchronized remote-state subsystem for Nexus. It provides a 
 
 Use this section for Nexus State-specific setup, runtime semantics, and API details.
 
+Host stores with the ordinary provider path, for example `nexus.provide(provideNexusStore(store))`. Store default targeting comes from the store token's `defaultCreate.target`; Nexus State does not add a separate default target field.
+
 ## Start Here
 
 - New to Nexus State: `docs/state/quick-start.md`

@@ -35,7 +35,7 @@ pnpm build
 
 ### Example Usage (Chrome Extension Scenario)
 
-Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages the `nexus-chrome-adapter` for simplified setup.
+Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages `@nexus-js/chrome` for simplified setup.
 
 **1. Define Shared Types and Service Contract**
 
@@ -43,7 +43,7 @@ Create a shared file (e.g., `src/shared/types.ts`):
 
 ```typescript
 // src/shared/types.ts
-import type { ChromeUserMeta, ChromePlatformMeta } from "@nexus/chrome-adapter";
+import type { ChromeUserMeta, ChromePlatformMeta } from "@nexus-js/chrome";
 
 // Define your application-specific user metadata by extending ChromeUserMeta
 // For example, if your content script adds a specific 'feature'
@@ -59,7 +59,7 @@ Create a shared service contract file (e.g., `src/shared/api.ts`):
 
 ```typescript
 // src/shared/api.ts
-import { TokenSpace } from "@nexus/core";
+import { TokenSpace } from "@nexus-js/core";
 import type { MyUserMeta, MyPlatformMeta } from "./types";
 
 // 1. Define the interface for your service
@@ -76,9 +76,10 @@ const appSpace = new TokenSpace<MyUserMeta, MyPlatformMeta>({
 // 3. Create a sub-space for content script services
 // Define a default target for all tokens within this space
 const contentScriptSpace = appSpace.tokenSpace("content-script-services", {
-  defaultTarget: {
-    matcher: (identity) => identity.context === "content-script",
-    expects: "first", // Default to 'first' for content script calls
+  defaultCreate: {
+    target: {
+      matcher: (identity) => identity.context === "content-script",
+    },
   },
 });
 
@@ -95,8 +96,8 @@ Your content script (e.g., `src/content-script.ts`) will now use the `usingConte
 ```typescript
 // src/content-script.ts
 // IMPORTANT: This file MUST be imported at the very top of your content script entry file
-import { Expose } from "@nexus/core";
-import { usingContentScript } from "@nexus/chrome-adapter"; // Import the factory
+import { nexus } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI, IMyContentScriptAPI } from "./shared/api";
 import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
@@ -113,7 +114,7 @@ usingContentScript<MyUserMeta, MyPlatformMeta>().configure({
 });
 
 // 2. Expose the service implementation using the Token
-@Expose(MyContentScriptAPI)
+@nexus.Expose(MyContentScriptAPI)
 class ContentScriptService implements IMyContentScriptAPI {
   async getMessage(): Promise<string> {
     console.log("Content Script received request for message.");
@@ -132,8 +133,8 @@ Your background script (e.g., `src/background.ts`) will use the `usingBackground
 ```typescript
 // src/background.ts
 // IMPORTANT: This file MUST be imported at the very top of your background script entry file
-import { nexus } from "@nexus/core";
-import { usingBackgroundScript } from "@nexus/chrome-adapter"; // Import the factory
+import { nexus } from "@nexus-js/core";
+import { usingBackgroundScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI } from "./shared/api";
 import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
@@ -151,7 +152,7 @@ async function callContentScript() {
       target: {
         matcher: "any-content-script", // Use the named matcher provided by the Chrome adapter
       },
-      // 'expects: "first"' is already the default for this TokenSpace, so it can be omitted
+      expects: "first",
     });
 
     if (remoteContentScript) {

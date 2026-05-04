@@ -66,7 +66,7 @@ Start with `@nexus-js/core`, then wire your own endpoint implementation and meta
 
 This route is lower-level, but it is the right one when no first-party adapter exists for your environment.
 
-If you use the decorator path directly, remember that decorator registrations are process-global. Multi-instance setups must use explicit `configure({ endpoint, services })` input.
+If you use the decorator path directly, remember that process-global decorator registrations fit the normal single-`nexus` setup. Multi-instance setups should configure each instance's endpoint explicitly, then publish providers through instance-local `provide(...)` calls or instance-bound decorators such as `@specificNexus.Expose(...)`. Keep `configure({ services })` for bootstrap bulk composition or low-level compatibility only.
 
 Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
 
@@ -78,8 +78,9 @@ Use two explicit `Nexus` instances in that runtime:
 
 - one instance for extension-internal contexts
 - one instance for the local broker transport
-- explicit `configure({ endpoint, services })` on both instances
-- no `@Expose` or `@Endpoint` decorators, because decorator registrations are process-global
+- explicit endpoint configuration on both instances
+- provider registration through `.provide(...)` or instance-bound decorators such as `@brokerNexus.Expose(...)`
+- no process-global `@Expose` or `@Endpoint` decorators, because decorator registrations are process-global
 
 Name these instances after the local graph or endpoint face they represent,
 such as `extensionNexus`, `chromeNexus`, `iframeParentNexus`, or
@@ -87,7 +88,7 @@ such as `extensionNexus`, `chromeNexus`, `iframeParentNexus`, or
 for an instance running in a content script; the instance represents the local
 face in a transport graph, not a one-way direction to a remote context.
 
-Then expose a gateway service on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
+Then publish a gateway provider on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
 
 When the gateway should forward an existing service contract or Nexus State store, use `@nexus-js/core/relay`. Relay registers an ordinary provider on one graph and forwards through another `Nexus` instance with explicit `forwardThrough` and `forwardTarget` options. It is not a `target.via` tunnel and does not forward raw Nexus messages. See `docs/relay.md`.
 

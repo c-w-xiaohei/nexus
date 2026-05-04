@@ -135,7 +135,20 @@ describe("NexusKernelBuilder", () => {
 
     const result = await builder.build();
     expect(result.isOk()).toBe(true);
-    expect(factorySpy).toHaveBeenCalledWith(nexus);
+    expect(factorySpy).toHaveBeenCalledWith({
+      targetClass: expect.any(Function),
+      token,
+      localMeta: { context: "bg" },
+    });
+    expect(factorySpy.mock.calls[0]?.[0]).not.toEqual(
+      expect.objectContaining({
+        ready: expect.any(Function),
+        create: expect.any(Function),
+        provide: expect.any(Function),
+        configure: expect.any(Function),
+        updateIdentity: expect.any(Function),
+      }),
+    );
   });
 
   it("should pass NexusConfig.policy into ConnectionManager and Engine", async () => {
@@ -169,5 +182,119 @@ describe("NexusKernelBuilder", () => {
 
     expect((result.value.connectionManager as any).config.policy).toBe(policy);
     expect((result.value.engine as any).policy).toBe(policy);
+  });
+
+  it("should fail endpoint source conflicts before endpoint instantiation", async () => {
+    const nexus = new Nexus();
+    const endpointConstructor = vi.fn();
+
+    const builder = NexusKernelBuilder.create(
+      {
+        endpoint: {
+          meta: { context: "configured" },
+          implementation: { listen: () => {} },
+        },
+      } as any,
+      new Map(),
+      {
+        targetClass: class DecoratedEndpoint {
+          constructor() {
+            endpointConstructor();
+          }
+        },
+        options: { meta: { context: "decorated" } },
+      } as any,
+      nexus,
+      new Map(),
+      new Map(),
+    );
+
+    const result = await builder.build();
+
+    expect(result.isErr()).toBe(true);
+    expect(endpointConstructor).not.toHaveBeenCalled();
+    if (result.isErr()) {
+      expect(result.error).toEqual(
+        expect.objectContaining({ code: "E_ENDPOINT_SOURCE_CONFLICT" }),
+      );
+    }
+  });
+
+  it("should fail endpoint source conflicts when configured endpoint only has connectTo", async () => {
+    const nexus = new Nexus();
+
+    const builder = NexusKernelBuilder.create(
+      {
+        endpoint: {
+          connectTo: [{ descriptor: { context: "peer" } }],
+        },
+      } as any,
+      new Map(),
+      {
+        targetClass: class DecoratedEndpoint {},
+        options: { meta: { context: "decorated" } },
+      } as any,
+      nexus,
+      new Map(),
+      new Map(),
+    );
+
+    const result = await builder.build();
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toEqual(
+        expect.objectContaining({ code: "E_ENDPOINT_SOURCE_CONFLICT" }),
+      );
+    }
+  });
+
+  it("should fail duplicate provider ids before class instantiation", async () => {
+    const nexus = new Nexus();
+    const tokenA = new Token<object>("duplicate-before-instance");
+    const tokenB = new Token<object>("duplicate-before-instance");
+    const serviceConstructor = vi.fn();
+    const factory = vi.fn(() => ({}));
+
+    const builder = NexusKernelBuilder.create(
+      {
+        endpoint: {
+          meta: { context: "bg" },
+          implementation: { listen: () => {} },
+        },
+        services: [{ token: tokenA, implementation: {} }],
+      } as any,
+      new Map([
+        [
+          tokenB,
+          {
+            targetClass: class DecoratedService {
+              constructor() {
+                serviceConstructor();
+              }
+            },
+            options: { factory },
+          },
+        ],
+      ]),
+      null,
+      nexus,
+      new Map(),
+      new Map(),
+    );
+
+    const result = await builder.build();
+
+    expect(result.isErr()).toBe(true);
+    expect(serviceConstructor).not.toHaveBeenCalled();
+    expect(factory).not.toHaveBeenCalled();
+    if (result.isErr()) {
+      expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
+      expect((result.error as any).context.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
+        ]),
+      );
+    }
   });
 });

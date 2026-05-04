@@ -78,20 +78,21 @@ chromeNexus.configure({
 
 iframeParentNexus.configure({
   endpoint: iframeParentEndpoint,
-  services: [
-    relayService(UserProfileToken, {
-      forwardThrough: chromeNexus,
-      forwardTarget: {
-        descriptor: { context: "background" },
-      },
-      policy: {
-        canCall({ origin, path, operation }) {
-          return origin.context === "iframe-child" && operation === "APPLY";
-        },
-      },
-    }),
-  ],
 });
+
+iframeParentNexus.provide(
+  relayService(UserProfileToken, {
+    forwardThrough: chromeNexus,
+    forwardTarget: {
+      descriptor: { context: "background" },
+    },
+    policy: {
+      canCall({ origin, path, operation }) {
+        return origin.context === "iframe-child" && operation === "APPLY";
+      },
+    },
+  }),
+);
 ```
 
 Downstream callers use ordinary targeting in their own graph:
@@ -107,6 +108,8 @@ await profile.update({ name: "Ada" });
 ```
 
 The iframe child does not know about the upstream Chrome graph. It calls an adjacent provider in the iframe graph.
+
+Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token default target is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token default; configure `forwardThrough` and `forwardTarget` explicitly.
 
 ### Service Relay Semantics
 
@@ -153,23 +156,24 @@ import { sessionStore } from "./shared-store";
 
 iframeParentNexus.configure({
   endpoint: iframeParentEndpoint,
-  services: [
-    relayNexusStore(sessionStore, {
-      forwardThrough: chromeNexus,
-      forwardTarget: {
-        descriptor: { context: "background" },
-      },
-      policy: {
-        canSubscribe({ origin }) {
-          return origin.context === "iframe-child";
-        },
-        canDispatch({ origin, action }) {
-          return origin.context === "iframe-child" && action !== "adminReset";
-        },
-      },
-    }),
-  ],
 });
+
+iframeParentNexus.provide(
+  relayNexusStore(sessionStore, {
+    forwardThrough: chromeNexus,
+    forwardTarget: {
+      descriptor: { context: "background" },
+    },
+    policy: {
+      canSubscribe({ origin }) {
+        return origin.context === "iframe-child";
+      },
+      canDispatch({ origin, action }) {
+        return origin.context === "iframe-child" && action !== "adminReset";
+      },
+    },
+  }),
+);
 ```
 
 Downstream callers connect through the relay provider like any other Nexus State store:

@@ -44,11 +44,12 @@ It defines:
 - the store identity via `token`
 - the initial state factory
 - host-side actions
-- optional convenience config like `defaultTarget`
+- optional convenience config through the store token's `defaultCreate.target`
 
 ### Notes
 
 - `token` remains the real identity source
+- store default targeting comes from the token; Nexus State does not define a second store-level default target source
 - store actions must use serializable arguments/results
 - Nexus State v1 only supports snapshot-mode sync publicly
 
@@ -57,9 +58,7 @@ It defines:
 `provideNexusStore()` adapts a Nexus State store definition into an ordinary Nexus service registration.
 
 ```ts
-nexus.configure({
-  services: [provideNexusStore(counterStore)],
-});
+nexus.provide(provideNexusStore(counterStore));
 ```
 
 You do not create a second registration system for Nexus State.

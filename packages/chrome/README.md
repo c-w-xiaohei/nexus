@@ -1,11 +1,11 @@
-# @nexus/chrome-adapter
+# @nexus-js/chrome
 
 Chrome extension adapter for the Nexus framework, providing seamless cross-context communication for Chrome extensions.
 
 ## Installation
 
 ```bash
-npm install @nexus/chrome-adapter @nexus/core
+npm install @nexus-js/chrome @nexus-js/core
 ```
 
 ## Quick Start
@@ -13,12 +13,8 @@ npm install @nexus/chrome-adapter @nexus/core
 ### Background Script
 
 ```typescript
-import {
-  usingBackgroundScript,
-  nexus,
-  Expose,
-  Token,
-} from "@nexus/chrome-adapter";
+import { nexus, Token } from "@nexus-js/core";
+import { usingBackgroundScript } from "@nexus-js/chrome";
 
 // Define service interface and token
 interface IBackgroundService {
@@ -27,14 +23,14 @@ interface IBackgroundService {
 }
 
 const BackgroundServiceToken = new Token<IBackgroundService>(
-  "background-service"
+  "background-service",
 );
 
 // Configure Nexus for background context
 usingBackgroundScript();
 
 // Expose service
-@Expose(BackgroundServiceToken)
+@nexus.Expose(BackgroundServiceToken)
 class BackgroundService implements IBackgroundService {
   async getSettings() {
     return await chrome.storage.sync.get("settings");
@@ -49,7 +45,8 @@ class BackgroundService implements IBackgroundService {
 ### Content Script
 
 ```typescript
-import { usingContentScript, nexus } from "@nexus/chrome-adapter";
+import { nexus } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for content script context
@@ -57,9 +54,7 @@ usingContentScript();
 
 // Use background service
 async function main() {
-  const backgroundService = await nexus.create(BackgroundServiceToken, {
-    target: { descriptor: { context: "background" } },
-  });
+  const backgroundService = await nexus.create(BackgroundServiceToken);
 
   const settings = await backgroundService.getSettings();
   console.log("Settings:", settings);
@@ -71,16 +66,15 @@ main();
 ### Popup
 
 ```typescript
-import { usingPopup, nexus } from "@nexus/chrome-adapter";
+import { nexus } from "@nexus-js/core";
+import { usingPopup } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for popup context
 async function initPopup() {
   await usingPopup();
 
-  const backgroundService = await nexus.create(BackgroundServiceToken, {
-    target: { descriptor: { context: "background" } },
-  });
+  const backgroundService = await nexus.create(BackgroundServiceToken);
 
   // Use the service
   const settings = await backgroundService.getSettings();
@@ -97,6 +91,14 @@ initPopup();
 - **Pre-configured matchers** for common scenarios
 - **Zero-configuration setup** for standard use cases
 - **Full TypeScript support** with discriminated union types
+
+Content scripts, popups, and options pages can usually call background services with `nexus.create(Token)` when the Token has a `defaultCreate.target` for the background or the adapter has a unique background `connectTo` fallback. Background-to-content-script calls usually need an explicit descriptor or matcher because there may be many content scripts. After active-tab handoff, an old raw proxy does not drift to the new active tab; call `nexus.create(...)` again.
+
+For object services, Nexus State stores, or Relay providers, configure the runtime and call `provide(...)` instead of using class decorators:
+
+```typescript
+usingBackgroundScript().provide(BackgroundServiceToken, backgroundService);
+```
 
 ## API Reference
 
@@ -127,7 +129,7 @@ initPopup();
 ### Custom Matchers
 
 ```typescript
-import { ChromeMatchers } from "@nexus/chrome-adapter";
+import { ChromeMatchers } from "@nexus-js/chrome";
 
 // Use built-in matchers
 const githubContentScripts = await nexus.createMulticast(ServiceToken, {
@@ -155,15 +157,15 @@ nexus.updateIdentity({
 
 ```typescript
 // Options page
-import { usingOptionsPage } from "@nexus/chrome-adapter";
+import { usingOptionsPage } from "@nexus-js/chrome";
 usingOptionsPage();
 
 // DevTools page
-import { usingDevToolsPage } from "@nexus/chrome-adapter";
+import { usingDevToolsPage } from "@nexus-js/chrome";
 usingDevToolsPage();
 
 // Offscreen document
-import { usingOffscreenDocument } from "@nexus/chrome-adapter";
+import { usingOffscreenDocument } from "@nexus-js/chrome";
 usingOffscreenDocument("audio-processing");
 ```
 

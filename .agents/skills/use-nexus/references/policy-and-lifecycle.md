@@ -2,6 +2,8 @@
 
 Configure policy through `nexus.configure({ policy })`.
 
+Keep `configure(...)` in main/bootstrap/runtime modules. Service modules should not configure endpoints or policies while declaring implementations.
+
 ```ts
 nexus.configure({
   endpoint: endpointConfig,
@@ -50,5 +52,6 @@ For adapter docs:
 - Prefer explicit targets in first examples.
 - Explain default-target fallback only after the explicit version.
 - State when a helper configures `nexus` directly versus returning config.
+- Show class-style service exposure with `@xxNexus.Expose(Token)` and function/object/helper provider exposure with `xxNexus.provide(...)`.
 
 For deeper details, read the repository documentation under `c-w-xiaohei/nexus/docs`.

@@ -15,13 +15,16 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Keep service contracts and Tokens in shared code imported by every context that needs them.
 - Prefer `TokenSpace` when an app needs structured token IDs or default target inheritance.
 - Import existing service types instead of redefining service shapes inline.
-- Configure every runtime context before creating proxies or exposing services.
+- Define Tokens in shared contract modules and import service interfaces with `import type`; do not repeat anonymous service shapes at token sites.
+- Configure every runtime context only from main/bootstrap/runtime modules, before creating proxies or exposing services.
 - Prefer adapter helpers such as `usingBackgroundScript(...)`, `usingContentScript(...)`, `usingNodeIpcDaemon(...)`, and `usingNodeIpcClient(...)` for standard runtimes.
-- Use `nexus.configure(...)` for explicit endpoint configuration, service registration, policy, matchers, descriptors, or adapter config composition.
-- Use `new Nexus()` plus explicit `configure({ endpoint, services })` for multi-instance runtimes; do not use `@Expose` or `@Endpoint` decorators there because decorator registration is process-global.
+- Use `nexus.configure(...)` for explicit endpoint configuration, policy, matchers, descriptors, or adapter config composition. Do not scatter `configure(...)` calls inside service implementation files.
+- For class services, import the concrete runtime instance and use `@xxNexus.Expose(Token)` to bind the class to that instance's registry.
+- For function/object-style providers, import the concrete runtime instance and use `xxNexus.provide(Token, service, options?)`.
+- Use `new Nexus()` with a named instance such as `backgroundNexus`, `iframeParentNexus`, or `brokerNexus` for multi-instance runtimes; bind decorators and providers to that specific instance.
 - Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
 - Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
-- Pass an options object to `nexus.create(...)`; provide an explicit `target` unless a Token default target or unique `connectTo` fallback is intentionally being used.
+- Keep explicit targets in introductory `nexus.create(...)` examples. When relying on Token `defaultCreate.target` or a unique `connectTo` fallback, call `nexus.create(Token)` directly.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 
 ## Architecture And Boundaries
@@ -51,18 +54,17 @@ Shared contract:
 ```ts
 import { TokenSpace } from "@nexus-js/core";
 import type { AppPlatformMeta, AppUserMeta } from "./runtime-types";
-
-export interface PingService {
-  ping(input: string): Promise<string>;
-}
+import type { PingService } from "./contracts";
 
 const appSpace = new TokenSpace<AppUserMeta, AppPlatformMeta>({
   name: "my-app",
 });
 
 const services = appSpace.tokenSpace("services", {
-  defaultTarget: {
-    descriptor: { context: "host" },
+  defaultCreate: {
+    target: {
+      descriptor: { context: "host" },
+    },
   },
 });
 
@@ -72,13 +74,12 @@ export const PingToken = services.token<PingService>("ping");
 Host context:
 
 ```ts
-import { Expose } from "@nexus-js/core";
 import { usingHostRuntime } from "@nexus-js/some-adapter";
 import { PingToken, type PingService } from "./shared";
 
-usingHostRuntime();
+const hostNexus = usingHostRuntime();
 
-@Expose(PingToken)
+@hostNexus.Expose(PingToken)
 class PingServiceImpl implements PingService {
   async ping(input: string) {
     return `pong:${input}`;

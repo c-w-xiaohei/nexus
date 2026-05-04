@@ -239,13 +239,25 @@ export class Engine<
       { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
     >,
   ): void {
-    for (const [name, registration] of Object.entries(services)) {
-      this.resourceManager.registerExposedService(
-        name,
-        registration.implementation,
-        registration.policy,
-      );
+    const result = this.safeProvideServicesBatch(services);
+    if (result.isErr()) {
+      throw result.error;
     }
+  }
+
+  public safeProvideServicesBatch(
+    services: Record<
+      string,
+      { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+    >,
+  ): Result<void, Error> {
+    return this.resourceManager.safeRegisterExposedServicesBatch(
+      Object.entries(services).map(([name, registration]) => ({
+        name,
+        service: registration.implementation,
+        policy: registration.policy,
+      })),
+    );
   }
 
   public safeDispatchCall(

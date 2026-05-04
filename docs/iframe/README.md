@@ -42,18 +42,22 @@ const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
 });
 
 const childServices = appSpace.tokenSpace("child-services", {
-  defaultTarget: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
+  defaultCreate: {
+    target: {
+      descriptor: {
+        context: "iframe-child",
+        appId: "iframe-demo",
+        frameId: "preview",
+        origin: "https://child.example.com",
+      },
     },
   },
 });
 
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
+
+Child-to-parent calls can use a parent default target. Parent-to-one-fixed-child calls can use a child default target. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
 
 Introductory examples should still pass explicit `target` options to `nexus.create(...)` because the resolved route is easiest to inspect and debug.
 
@@ -99,35 +103,40 @@ The parent helper also registers descriptors named `child` for the first frame a
 
 ## Child Setup
 
-Configure the child with the exact expected parent origin. Use `configure: false` when composing the adapter config with local services, policy, or custom Nexus instances; in that mode the helper returns config instead of configuring the shared `nexus` instance.
+Configure the child with the exact expected parent origin. Class services should bind to the configured Nexus instance with `@nexus.Expose(...)`; object, State, and Relay providers should use `provide(...)`.
 
 ```ts
 import { nexus } from "@nexus-js/core";
 import { usingIframeChild } from "@nexus-js/iframe";
 import { GreetingToken } from "./shared";
 
-nexus.configure({
-  ...usingIframeChild({
-    appId: "iframe-demo",
-    frameId: "preview",
-    parentOrigin: "https://parent.example.com",
-    nonce: "session-nonce",
-    configure: false,
-  }),
-  services: [
-    {
-      token: GreetingToken,
-      implementation: {
-        async greet(name) {
-          return `hello ${name}`;
-        },
-      },
-    },
-  ],
+usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
 });
+
+@nexus.Expose(GreetingToken)
+class GreetingServiceImpl {
+  async greet(name) {
+    return `hello ${name}`;
+  }
+}
 ```
 
-Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance. Do not spread a helper result unless `configure: false` is set.
+For an already-constructed object implementation, use:
+
+```ts
+usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
+}).provide(GreetingToken, greetingService);
+```
+
+Use `configure: false` only when composing adapter config with policy, custom endpoints, bootstrap bulk services, or custom Nexus instances. Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance. Do not spread a helper result unless `configure: false` is set.
 
 ## What The Adapter Provides
 

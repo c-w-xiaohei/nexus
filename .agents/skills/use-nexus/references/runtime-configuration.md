@@ -2,6 +2,8 @@
 
 Configure every context before useful Nexus work can happen. A host context and a consumer context each need endpoint wiring and identity metadata.
 
+Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation modules should import the configured instance and use `@xxNexus.Expose(...)` or `xxNexus.provide(...)`; they should not configure endpoints themselves.
+
 ## Adapter Helpers
 
 Prefer adapter helpers for first-party or adapter-provided runtimes.
@@ -59,20 +61,18 @@ const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
 const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
 ```
 
-Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. It does not share a connection graph with other instances.
+Each instance has its own endpoint, metadata, policy, services, connections, proxies, refs, and decorator registry. It does not share a connection graph with other instances.
 
-Do not use `@Expose` or `@Endpoint` in multi-instance runtimes. Decorator registrations are process-global, so one instance can consume registrations intended for another. Use explicit `configure({ endpoint, services })` on every instance.
+Name instances after their local transport graph or endpoint face, then bind class decorators and providers to that instance.
 
 ```ts
-extensionNexus.configure({
-  endpoint: extensionEndpointConfig,
-  services: [{ token: ExtensionToken, implementation: extensionService }],
-});
+extensionNexus.configure({ endpoint: extensionEndpointConfig });
+brokerNexus.configure({ endpoint: brokerEndpointConfig });
 
-brokerNexus.configure({
-  endpoint: brokerEndpointConfig,
-  services: [{ token: BrokerGatewayToken, implementation: gatewayService }],
-});
+@extensionNexus.Expose(ExtensionToken)
+class ExtensionServiceImpl implements ExtensionService {}
+
+brokerNexus.provide(BrokerGatewayToken, gatewayService);
 ```
 
 Bridge instances with gateway services. For example, expose a broker-facing service on `brokerNexus` and implement it by creating content-script proxies through `extensionNexus`.
@@ -101,7 +101,7 @@ usingNodeIpcClient({
 });
 ```
 
-Use `configure: false` when composing helper output with `services`, `policy`, extra configuration, or a custom `Nexus` instance.
+Use `configure: false` when composing helper output with policy, extra configuration, or a custom `Nexus` instance.
 
 ```ts
 nexus.configure({
@@ -109,13 +109,9 @@ nexus.configure({
     appId: "example-app",
     configure: false,
   }),
-  services: [
-    {
-      token: EchoToken,
-      implementation: echoService,
-    },
-  ],
 });
+
+nexus.provide(EchoToken, echoService);
 ```
 
 Do not spread a helper result unless `configure: false` is set. Without it, the helper has already configured the shared `nexus` instance and returns a Nexus instance, not a config object.

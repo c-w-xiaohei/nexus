@@ -12,8 +12,9 @@ Nexus always needs these pieces:
 
 1. shared contracts and `Token`s
 2. an endpoint implementation for the current context
-3. runtime configuration through `nexus.configure(...)` or endpoint decorators
-4. a consumer that creates a proxy with a resolvable target
+3. runtime configuration through `using*()` helpers or `nexus.configure(...)`
+4. a provider published with `@nexus.Expose(...)` or `provide(...)`
+5. a consumer that creates a session-bound remote proxy
 
 For an end-to-end remote call to work, some context in the system must also expose the target service.
 
@@ -120,16 +121,19 @@ Two concrete next-step routes are:
 - shipped adapter route: use `@nexus-js/chrome` and follow its README/examples
 - custom runtime route: implement the `IEndpoint` contract from `@nexus-js/core` and wire it through `configure({ endpoint })`
 
-## 4. Expose A Service
+## 4. Publish A Provider
 
 Expose the implementation in the host context.
 
 ```ts
-import { Expose } from "@nexus-js/core";
+import { nexus } from "@nexus-js/core";
+import { usingHostRuntime } from "@nexus-js/some-adapter";
 import { PingToken } from "./shared";
 import type { PingService } from "./service-contract";
 
-@Expose(PingToken)
+usingHostRuntime();
+
+@nexus.Expose(PingToken)
 class PingServiceImpl implements PingService {
   async ping(input: string): Promise<string> {
     return `pong:${input}`;
@@ -137,7 +141,15 @@ class PingServiceImpl implements PingService {
 }
 ```
 
-You can also expose services through `configure({ services })` if that fits your app architecture better.
+The equivalent object-provider style is:
+
+```ts
+usingHostRuntime().provide(PingToken, pingService);
+```
+
+Use `@nexus.Expose(...)` for class declarations. Use `provide(...)` for already-constructed object/function instances, Nexus State stores, Relay providers, runtime dependencies created during startup, and live registration after the runtime is ready.
+
+`configure({ services })` remains available for bootstrap bulk composition and low-level compatibility paths, but do not use it for live provider registration after ready; call `nexus.provide(...)` instead.
 
 At this point, one side of the system is configured and can host the service.
 
@@ -173,7 +185,7 @@ Nexus startup collects registration information first, then builds the runtime k
 
 So decorators are part of startup registration, not a separate runtime path that bypasses `configure()`.
 
-One important limitation: decorator registrations are process-global. They are a good fit for the normal single-`nexus` setup in one runtime, but multi-instance setups must use explicit `configure({ endpoint, services })` input instead of relying on global decorator registration.
+One important limitation: process-global decorators such as `@Expose` and `@Endpoint` are only a good fit for the normal single-`nexus` setup in one runtime. Multi-instance setups should configure each instance's endpoint explicitly, then publish providers through instance-local `provide(...)` calls or instance-bound decorators such as `@specificNexus.Expose(...)`.
 
 If one JavaScript context needs two independent Nexus runtimes, create isolated `Nexus` instances and configure each one explicitly:
 
@@ -185,39 +197,39 @@ const localBrokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
 
 extensionNexus.configure({
   endpoint: extensionEndpointConfig,
-  services: [
-    {
-      token: ExtensionServiceToken,
-      implementation: extensionService,
-    },
-  ],
 });
+extensionNexus.provide(ExtensionServiceToken, extensionService);
 
 localBrokerNexus.configure({
   endpoint: brokerEndpointConfig,
-  services: [
-    {
-      token: BrokerGatewayToken,
-      implementation: brokerGatewayService,
-    },
-  ],
 });
+localBrokerNexus.provide(BrokerGatewayToken, brokerGatewayService);
 ```
 
-Do not use `@Expose` or `@Endpoint` in this pattern. Decorators are collected in a shared registry, so only one Nexus instance can consume those registrations safely. Bridge between the two runtimes with explicit services that call the other instance when needed.
+Avoid process-global `@Expose` or `@Endpoint` in this pattern. Decorator registrations are collected in a shared registry, so only one Nexus instance can consume those registrations safely. If a class service belongs to a specific instance, use that instance's decorator, for example `@extensionNexus.Expose(ExtensionServiceToken)`. Use `configure({ services })` here only for bootstrap bulk composition or low-level compatibility; prefer `.provide(...)` for ordinary provider registration. Bridge between the two runtimes with explicit providers that call the other instance when needed.
 
 ## 6. Create A Proxy From Another Context
 
-From a different configured context, create the proxy with a target:
+From a different configured context, create the proxy. If the token has a default create target or the endpoint has a unique `connectTo` fallback, the standard call site is:
 
 ```ts
 import { nexus } from "@nexus-js/core";
 import { PingToken } from "./shared";
 
+const remote = await nexus.create(PingToken);
+
+const value = await remote.ping("hello");
+console.log(value);
+```
+
+Keep explicit targets while debugging or when the topology is complex:
+
+```ts
 const remote = await nexus.create(PingToken, {
   target: {
-    descriptor: { context: "background" },
+    descriptor: { context: "host" },
   },
+  expects: "one",
 });
 
 const value = await remote.ping("hello");
@@ -236,12 +248,10 @@ Why is `target` usually needed?
 Because Nexus has to decide where the proxy should connect. It resolves target intent in this order:
 
 1. explicit `target` in `create(...)`
-2. token default target
+2. token `defaultCreate.target`
 3. a unique `connectTo` fallback from endpoint configuration
 
-`create()` still takes an options object; fallback only affects how Nexus resolves the target intent inside that object.
-
-If that resolution is ambiguous or empty, Nexus fails instead of guessing.
+If that resolution is ambiguous or empty, `create(Token)` fails instead of discovering providers globally or guessing.
 
 You can also target by named descriptor or matcher if your app registers those through configuration. See `docs/concepts.md` for the targeting model.
 

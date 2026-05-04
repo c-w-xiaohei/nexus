@@ -168,12 +168,13 @@ pnpm dev
 ## Nexus Public Usage Style
 
 - Put service contracts and `Token`s in shared code imported by all participating contexts.
-- Prefer `TokenSpace` for hierarchical token IDs and default target inheritance.
+- Prefer `TokenSpace.defaultCreate.target` for hierarchical token IDs and inherited create defaults.
 - Import existing service types instead of redefining service shapes inline.
 - Configure every runtime context before creating proxies or exposing services.
 - Prefer adapter helpers like `usingBackgroundScript()` and `usingContentScript()` for standard runtime setup.
-- Use `nexus.configure(...)` for custom endpoints, multi-instance tests, service registration, policy, matchers, and descriptors.
-- Pass an options object to `nexus.create(...)`; use explicit targets in introductory examples.
+- Use `nexus.configure(...)` for runtime bootstrap configuration: custom endpoints, multi-instance tests, policy, matchers, descriptors, and low-level composition.
+- Use `@nexus.Expose(...)` for class services; use `provide(...)` for object services, State stores, Relay providers, runtime-created dependencies, and live provider registration.
+- Use `nexus.create(Token)` when a Token `defaultCreate.target` or unique `connectTo` fallback intentionally supplies the target; use explicit targets plus `expects` in introductory debugging or complex topology examples.
 - Raw `nexus.create(...)` proxies and refs are session-bound. Recreate them after disconnect, daemon restart, or session replacement.
 - See `.agents/skills/use-nexus/references/usage-style.md` for detailed external usage style.
 

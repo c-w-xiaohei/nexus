@@ -40,6 +40,17 @@ const resolveManager = async <U extends object, P extends object>(
     },
   );
 
+const resolveManagerCandidates = async <U extends object, P extends object>(
+  manager: ConnectionManager<U, P>,
+  options: any,
+) =>
+  manager.safeResolveConnections(options).match(
+    (value) => value,
+    (error) => {
+      throw error;
+    },
+  );
+
 const sendFromManager = <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
   target: any,
@@ -708,6 +719,66 @@ describe("ConnectionManager", () => {
       expect(conn2).not.toBeNull();
       expect(conn2).toBe(conn1);
       expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
+    });
+
+    it("returns all matching ready connections in stable allocation order", async () => {
+      await initializeManager(hostManager);
+      const clientA = await createConnectionManagerStack(
+        { context: "client", id: 10 },
+        hostL1OnConnect,
+      );
+      const clientB = await createConnectionManagerStack(
+        { context: "client", id: 20 },
+        hostL1OnConnect,
+      );
+
+      await resolveManager(clientA.manager, { descriptor: hostMeta });
+      await resolveManager(clientB.manager, { descriptor: hostMeta });
+
+      await vi.waitFor(() => expect(hostManager.connections.size).toBe(2));
+
+      const matches = await resolveManagerCandidates(hostManager, {
+        descriptor: { context: "client" },
+      });
+
+      expect(
+        matches.map((connection) => connection.remoteIdentity?.id),
+      ).toEqual([10, 20]);
+    });
+
+    it("does not actively connect for matcher-only resolution", async () => {
+      await initializeManager(hostManager);
+      const matcher = (identity: TestUserMeta) => identity.context === "client";
+
+      const matches = await resolveManagerCandidates(hostManager, {
+        matcher,
+      });
+
+      expect(matches).toEqual([]);
+      expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
+    });
+
+    it("creates from descriptor and only returns it when matcher verifies remote identity", async () => {
+      await initializeManager(hostManager);
+      const clientA = await createConnectionManagerStack(
+        clientMeta,
+        hostL1OnConnect,
+      );
+
+      const mismatch = await resolveManagerCandidates(clientA.manager, {
+        descriptor: hostMeta,
+        matcher: (identity: TestUserMeta) => identity.id === 999,
+      });
+
+      expect(mismatch).toEqual([]);
+
+      const match = await resolveManagerCandidates(clientA.manager, {
+        descriptor: hostMeta,
+        matcher: (identity: TestUserMeta) => identity.id === hostMeta.id,
+      });
+
+      expect(match).toHaveLength(1);
+      expect(match[0].remoteIdentity).toEqual(hostMeta);
     });
   });
 

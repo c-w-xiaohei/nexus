@@ -66,12 +66,13 @@ export namespace TargetResolver {
   };
 
   export const resolveUnicastTarget = <U extends UserMetadata>(
-    optionsTarget: TargetCriteria<U, string, string>,
-    tokenDefaultTarget: TargetCriteria<U, string, string> | undefined,
+    optionsTarget: TargetCriteria<U, string, string> | null | undefined,
+    tokenDefaultTarget: TargetCriteria<U, string, string> | null | undefined,
     connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
     tokenId: string,
   ): Result<TargetCriteria<U, string, string>, NexusTargetingError> => {
-    let finalTarget: TargetCriteria<U, string, string> = optionsTarget;
+    let finalTarget: TargetCriteria<U, string, string> | null | undefined =
+      optionsTarget;
 
     if (isTargetEmpty(finalTarget) && tokenDefaultTarget) {
       finalTarget = tokenDefaultTarget;
@@ -101,10 +102,13 @@ export namespace TargetResolver {
       );
     }
 
-    return ok(finalTarget);
+    return ok(finalTarget as TargetCriteria<U, string, string>);
   };
 }
 
 function isTargetEmpty(target: object | null | undefined): boolean {
-  return !target || Object.keys(target).length === 0;
+  return (
+    !target ||
+    Object.values(target).every((value) => typeof value === "undefined")
+  );
 }

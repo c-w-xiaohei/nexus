@@ -264,6 +264,7 @@ export async function createStarNetwork<
     meta: U;
     services?: Record<string, object>;
     cmConfig?: ConnectionManagerConfig<U, P>;
+    matchers?: Record<string, (identity: U) => boolean>;
   };
   leaves: {
     meta: U;
@@ -337,6 +338,7 @@ export async function createStarNetwork<
         implementation,
       }),
     ),
+    matchers: config.center.matchers,
   });
   (centerInstance.nexus as any).scheduleInit();
 
