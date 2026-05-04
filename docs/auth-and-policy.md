@@ -131,7 +131,7 @@ When writing policy:
 
 For node-ipc, shared-secret pre-auth sets `platform.authenticated` before core policy runs:
 
-When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers with `@nexus.Expose(...)` or `nexus.provide(...)`.
+When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
 
 ```ts
 nexus.configure({

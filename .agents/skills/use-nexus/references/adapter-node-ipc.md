@@ -46,7 +46,7 @@ For function/object style, use `daemonNexus.provide(EchoToken, echoService)`.
 
 ## Client
 
-Use `nexus.create(EchoToken)` when the Token default target or unique node-ipc `connectTo` fallback supplies the daemon target.
+Use `nexus.create(EchoToken)` when the Token `defaultCreate.target` or unique node-ipc `connectTo` fallback supplies the daemon target.
 
 ```ts
 import { nexus } from "@nexus-js/core";

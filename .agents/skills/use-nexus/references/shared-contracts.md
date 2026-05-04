@@ -4,7 +4,7 @@ Define service interfaces and Tokens in shared modules imported by both host and
 
 ## Tokens
 
-Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share default targeting. Use direct `new Token<T>(...)` only for small examples or when namespacing and default targets are unnecessary.
+Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultCreate.target` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.
 
 Token modules should import existing service interfaces with `import type`. Do not repeat service method shapes inline at token definition sites.
 

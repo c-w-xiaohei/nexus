@@ -30,7 +30,7 @@ Do not use it for workers, Chrome extension context routing, local Node process 
 
 Put service contracts and Tokens in shared code imported by both parent and child bundles. The general pattern is covered in `docs/getting-started.md`; adapter docs should not redefine the full contract in every example.
 
-When repeated iframe calls target the same child, a `TokenSpace` default target can keep the route close to the Token:
+When repeated iframe calls target the same child, a TokenSpace `defaultCreate.target` can keep the route close to the Token:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
@@ -57,7 +57,7 @@ const childServices = appSpace.tokenSpace("child-services", {
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
 
-Child-to-parent calls can use a parent default target. Parent-to-one-fixed-child calls can use a child default target. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
+Child-to-parent calls can use a parent `defaultCreate.target`. Parent-to-one-fixed-child calls can use a child `defaultCreate.target`. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
 
 Introductory examples should still pass explicit `target` options to `nexus.create(...)` because the resolved route is easiest to inspect and debug.
 
@@ -103,21 +103,20 @@ The parent helper also registers descriptors named `child` for the first frame a
 
 ## Child Setup
 
-Configure the child with the exact expected parent origin. Class services should bind to the configured Nexus instance with `@nexus.Expose(...)`; object, State, and Relay providers should use `provide(...)`.
+Configure the child with the exact expected parent origin. Class services should bind to the configured Nexus instance with `@childNexus.Expose(...)`; object, State, and Relay providers should use `provide(...)`.
 
 ```ts
-import { nexus } from "@nexus-js/core";
 import { usingIframeChild } from "@nexus-js/iframe";
 import { GreetingToken } from "./shared";
 
-usingIframeChild({
+const childNexus = usingIframeChild({
   appId: "iframe-demo",
   frameId: "preview",
   parentOrigin: "https://parent.example.com",
   nonce: "session-nonce",
 });
 
-@nexus.Expose(GreetingToken)
+@childNexus.Expose(GreetingToken)
 class GreetingServiceImpl {
   async greet(name) {
     return `hello ${name}`;

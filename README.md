@@ -7,10 +7,10 @@ Nexus is a **powerful**, **type-safe**, and **default-safe** cross-context commu
 Traditional cross-context communication often leads to fragmented APIs, boilerplate code, hidden performance pitfalls, and complex asynchronous state management. Nexus addresses these challenges by providing:
 
 - **Unified Abstraction:** A single, consistent API (`nexus` singleton) across different platforms.
-- **Declarative APIs:** Use decorators (`@Expose`, `@Endpoint`) and fluent configuration (`.configure()`) to define your communication intent.
+- **Declarative APIs:** Use instance-bound decorators such as `@nexus.Expose(...)` / `@nexus.Endpoint(...)`, `nexus.provide(...)`, and bootstrap configuration to define your communication intent.
 - **End-to-end Type Safety:** Leveraging TypeScript to provide robust compile-time checks and an excellent developer experience.
 - **Robust Resource Management:** Handles the lifecycle of remote resources and connections automatically.
-- **Familiar Paradigms:** Nexus maps cross-context communication to intuitive local programming concepts: `@Expose` for exporting a service, `nexus.create` for constructing a remote service instance, and `Token` as its unique identifier.
+- **Familiar Paradigms:** Nexus maps cross-context communication to intuitive local programming concepts: `@nexus.Expose(...)` for class service providers, `nexus.provide(...)` for object providers, `nexus.create(...)` for session-bound remote proxies, and `Token` as the service identity.
 
 ## Quick Start
 
@@ -68,20 +68,15 @@ export interface IMyContentScriptAPI {
 }
 
 // 2. Create a TokenSpace for structured token management
-// This allows for hierarchical token IDs and default target inheritance.
+// This allows for hierarchical token IDs and defaultCreate.target inheritance.
 const appSpace = new TokenSpace<MyUserMeta, MyPlatformMeta>({
   name: "my-extension",
 });
 
-// 3. Create a sub-space for content script services
-// Define a default target for all tokens within this space
-const contentScriptSpace = appSpace.tokenSpace("content-script-services", {
-  defaultCreate: {
-    target: {
-      matcher: (identity) => identity.context === "content-script",
-    },
-  },
-});
+// 3. Create a sub-space for content script services.
+// Background-to-content-script calls usually choose a tab explicitly, so this
+// example keeps targeting at the create(...) call site.
+const contentScriptSpace = appSpace.tokenSpace("content-script-services");
 
 // 4. Create a unique Token for the service within the defined space.
 // The full ID will be "my-extension:content-script-services:my-service"
@@ -96,15 +91,17 @@ Your content script (e.g., `src/content-script.ts`) will now use the `usingConte
 ```typescript
 // src/content-script.ts
 // IMPORTANT: This file MUST be imported at the very top of your content script entry file
-import { nexus } from "@nexus-js/core";
 import { usingContentScript } from "@nexus-js/chrome"; // Import the factory
-import { MyContentScriptAPI, IMyContentScriptAPI } from "./shared/api";
-import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
+import { MyContentScriptAPI, type IMyContentScriptAPI } from "./shared/api";
+import type { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
 // 1. Initialize Nexus for the content script context.
 // This sets up the endpoint, default meta, and connectTo background.
 // Chain .configure() to add your custom user metadata.
-usingContentScript<MyUserMeta, MyPlatformMeta>().configure({
+const contentScriptNexus = usingContentScript<
+  MyUserMeta,
+  MyPlatformMeta
+>().configure({
   endpoint: {
     meta: {
       url: window.location.href, // Dynamic metadata for the content script
@@ -114,17 +111,16 @@ usingContentScript<MyUserMeta, MyPlatformMeta>().configure({
 });
 
 // 2. Expose the service implementation using the Token
-@nexus.Expose(MyContentScriptAPI)
+@contentScriptNexus.Expose(MyContentScriptAPI)
 class ContentScriptService implements IMyContentScriptAPI {
   async getMessage(): Promise<string> {
     console.log("Content Script received request for message.");
     return "Hello from Content Script!";
   }
 }
-
-// Ensure the service is instantiated (if not using a factory in ExposeOptions)
-new ContentScriptService();
 ```
+
+The class decorator registers provider intent on `contentScriptNexus`. Make sure this module is imported before the runtime bootstrap snapshot so the decorator runs; Nexus does not scan files or require manual `new ContentScriptService()` for this class-service path.
 
 **3. Configure and Consume Service in Background Script**
 
@@ -146,8 +142,8 @@ usingBackgroundScript<MyUserMeta, MyPlatformMeta>();
 async function callContentScript() {
   try {
     // 2. Create a proxy for the remote service.
-    // Leverage the default target defined in TokenSpace, or explicitly define it here.
-    // The 'any-content-script' matcher is provided by usingBackgroundScript().
+    // Content scripts are usually many, so choose the target at the call site.
+    // The "any-content-script" matcher is provided by usingBackgroundScript().
     const remoteContentScript = await nexus.create(MyContentScriptAPI, {
       target: {
         matcher: "any-content-script", // Use the named matcher provided by the Chrome adapter

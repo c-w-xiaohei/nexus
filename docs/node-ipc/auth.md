@@ -82,7 +82,7 @@ This metadata is the bridge from adapter pre-auth into core policy.
 
 Use core `canConnect` to require successful pre-auth:
 
-For policy composition, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path remains calling `usingNodeIpcDaemon(...)` directly and publishing providers with `@nexus.Expose(...)` or `nexus.provide(...)`.
+For policy composition, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path remains calling `usingNodeIpcDaemon(...)` directly and publishing providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
 
 ```ts
 nexus.configure({

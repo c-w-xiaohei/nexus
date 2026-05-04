@@ -28,10 +28,10 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 ## Core Rules
 
 - Put service interfaces and Tokens in shared modules imported by every host and consumer context.
-- Prefer `TokenSpace` for hierarchical token IDs and repeated default targeting intent.
+- Prefer `TokenSpace` for hierarchical token IDs and repeated `defaultCreate.target` routing intent.
 - Import service interfaces with `import type` when defining Tokens; do not repeat anonymous service shapes inline.
-- Configure every runtime context from main/bootstrap/runtime modules before exposing services or creating proxies.
-- Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or explicit services.
+- Configure every runtime context from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
+- Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or bootstrap bulk compatibility.
 - For class-style services, import the concrete runtime instance and use `@xxNexus.Expose(Token)`.
 - For function/object-style providers, helper outputs, State, Relay, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.

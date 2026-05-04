@@ -49,7 +49,7 @@ It defines:
 ### Notes
 
 - `token` remains the real identity source
-- store default targeting comes from the token; Nexus State does not define a second store-level default target source
+- store default targeting comes from the token's `defaultCreate.target`; Nexus State does not define a second store-level default target source
 - store actions must use serializable arguments/results
 - Nexus State v1 only supports snapshot-mode sync publicly
 

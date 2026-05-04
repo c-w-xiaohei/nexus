@@ -13,10 +13,10 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 ## Core Rules
 
 - Keep service contracts and Tokens in shared code imported by every context that needs them.
-- Prefer `TokenSpace` when an app needs structured token IDs or default target inheritance.
+- Prefer `TokenSpace` when an app needs structured token IDs or `defaultCreate.target` inheritance.
 - Import existing service types instead of redefining service shapes inline.
 - Define Tokens in shared contract modules and import service interfaces with `import type`; do not repeat anonymous service shapes at token sites.
-- Configure every runtime context only from main/bootstrap/runtime modules, before creating proxies or exposing services.
+- Configure every runtime context only from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers such as `usingBackgroundScript(...)`, `usingContentScript(...)`, `usingNodeIpcDaemon(...)`, and `usingNodeIpcClient(...)` for standard runtimes.
 - Use `nexus.configure(...)` for explicit endpoint configuration, policy, matchers, descriptors, or adapter config composition. Do not scatter `configure(...)` calls inside service implementation files.
 - For class services, import the concrete runtime instance and use `@xxNexus.Expose(Token)` to bind the class to that instance's registry.
@@ -96,11 +96,7 @@ import { PingToken } from "./shared";
 
 usingClientRuntime();
 
-const ping = await nexus.create(PingToken, {
-  target: {
-    descriptor: { context: "host" },
-  },
-});
+const ping = await nexus.create(PingToken);
 
 await ping.ping("hello");
 ```

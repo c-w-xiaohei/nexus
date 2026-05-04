@@ -62,11 +62,11 @@ Next step: read `docs/iframe/README.md` for parent/child setup, targeting, secur
 
 ### Worker / custom runtime
 
-Start with `@nexus-js/core`, then wire your own endpoint implementation and metadata through `configure({ endpoint })` or the endpoint decorator path.
+Start with `@nexus-js/core`, then wire your own endpoint implementation and metadata through `configure({ endpoint })` or an instance-bound endpoint decorator such as `@nexus.Endpoint(...)`.
 
 This route is lower-level, but it is the right one when no first-party adapter exists for your environment.
 
-If you use the decorator path directly, remember that process-global decorator registrations fit the normal single-`nexus` setup. Multi-instance setups should configure each instance's endpoint explicitly, then publish providers through instance-local `provide(...)` calls or instance-bound decorators such as `@specificNexus.Expose(...)`. Keep `configure({ services })` for bootstrap bulk composition or low-level compatibility only.
+If you use the decorator path directly, bind decorators to the Nexus instance that owns the local endpoint face. The default singleton can use `@nexus.Endpoint(...)` / `@nexus.Expose(...)`; multi-instance setups should use instance-specific forms such as `@brokerNexus.Endpoint(...)` and `@brokerNexus.Expose(...)`. Keep `configure({ services })` for bootstrap bulk composition or low-level compatibility only.
 
 Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
 
@@ -80,7 +80,7 @@ Use two explicit `Nexus` instances in that runtime:
 - one instance for the local broker transport
 - explicit endpoint configuration on both instances
 - provider registration through `.provide(...)` or instance-bound decorators such as `@brokerNexus.Expose(...)`
-- no process-global `@Expose` or `@Endpoint` decorators, because decorator registrations are process-global
+- no top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)`; bind decorators to the owning instance instead
 
 Name these instances after the local graph or endpoint face they represent,
 such as `extensionNexus`, `chromeNexus`, `iframeParentNexus`, or

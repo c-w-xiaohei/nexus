@@ -1,6 +1,6 @@
 # Policy And Lifecycle
 
-Configure policy through `nexus.configure({ policy })`.
+Configure policy during bootstrap through `nexus.configure({ policy })`. After `ready`, policy is structural runtime configuration; create a new Nexus instance to change it.
 
 Keep `configure(...)` in main/bootstrap/runtime modules. Service modules should not configure endpoints or policies while declaring implementations.
 

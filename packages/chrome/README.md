@@ -13,7 +13,7 @@ npm install @nexus-js/chrome @nexus-js/core
 ### Background Script
 
 ```typescript
-import { nexus, Token } from "@nexus-js/core";
+import { Token } from "@nexus-js/core";
 import { usingBackgroundScript } from "@nexus-js/chrome";
 
 // Define service interface and token
@@ -27,10 +27,10 @@ const BackgroundServiceToken = new Token<IBackgroundService>(
 );
 
 // Configure Nexus for background context
-usingBackgroundScript();
+const backgroundNexus = usingBackgroundScript();
 
-// Expose service
-@nexus.Expose(BackgroundServiceToken)
+// Expose a class service on the configured background instance
+@backgroundNexus.Expose(BackgroundServiceToken)
 class BackgroundService implements IBackgroundService {
   async getSettings() {
     return await chrome.storage.sync.get("settings");

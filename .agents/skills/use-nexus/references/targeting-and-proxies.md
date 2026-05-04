@@ -16,13 +16,13 @@ await settings.saveSettings({ theme: "dark" });
 
 Target resolution order for unicast proxy creation is:
 
-1. explicit `target` in `nexus.create(...)`
+1. explicit non-empty `target` in `nexus.create(...)`
 2. Token `defaultCreate.target`
 3. unique endpoint `connectTo` fallback
 
-Keep the explicit target in introductory docs because it is easiest to debug. Use Token defaults for repeated routing intent.
+Keep the explicit target in introductory docs because it is easiest to debug. Use Token defaults for repeated routing intent. Empty targets such as `undefined`, `{}`, or targets whose fields are all `undefined` fall through to `Token.defaultCreate.target` instead of overriding it.
 
-When relying on a Token default target or a unique `connectTo` fallback, call `create(Token)` directly.
+When relying on a Token `defaultCreate.target` or a unique `connectTo` fallback, call `create(Token)` directly.
 
 ```ts
 const settings = await nexus.create(SettingsToken);

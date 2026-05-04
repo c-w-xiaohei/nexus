@@ -61,7 +61,7 @@ You can do that either with:
 
 - `nexus.configure({ endpoint: ... })`
 - an adapter helper
-- or `@Endpoint`
+- an instance-bound endpoint decorator such as `@nexus.Endpoint(...)`
 
 The minimum runtime configuration looks like this:
 
@@ -131,9 +131,9 @@ import { usingHostRuntime } from "@nexus-js/some-adapter";
 import { PingToken } from "./shared";
 import type { PingService } from "./service-contract";
 
-usingHostRuntime();
+const hostNexus = usingHostRuntime();
 
-@nexus.Expose(PingToken)
+@hostNexus.Expose(PingToken)
 class PingServiceImpl implements PingService {
   async ping(input: string): Promise<string> {
     return `pong:${input}`;
@@ -147,7 +147,7 @@ The equivalent object-provider style is:
 usingHostRuntime().provide(PingToken, pingService);
 ```
 
-Use `@nexus.Expose(...)` for class declarations. Use `provide(...)` for already-constructed object/function instances, Nexus State stores, Relay providers, runtime dependencies created during startup, and live registration after the runtime is ready.
+Use `@xxNexus.Expose(...)` for class declarations, where `xxNexus` is the configured Nexus instance that owns the local endpoint face. Use `provide(...)` for already-constructed object/function instances, Nexus State stores, Relay providers, runtime dependencies created during startup, and live registration after the runtime is ready.
 
 `configure({ services })` remains available for bootstrap bulk composition and low-level compatibility paths, but do not use it for live provider registration after ready; call `nexus.provide(...)` instead.
 
@@ -180,12 +180,12 @@ Without this step, the consumer cannot create a usable proxy.
 Nexus startup collects registration information first, then builds the runtime kernel from:
 
 - explicit `nexus.configure(...)` input
-- `@Endpoint` registration, if used
-- `@Expose` registrations, if used
+- instance-bound `@nexus.Endpoint(...)` / `@specificNexus.Endpoint(...)` registrations, if used
+- instance-bound `@nexus.Expose(...)` / `@specificNexus.Expose(...)` registrations, if used
 
 So decorators are part of startup registration, not a separate runtime path that bypasses `configure()`.
 
-One important limitation: process-global decorators such as `@Expose` and `@Endpoint` are only a good fit for the normal single-`nexus` setup in one runtime. Multi-instance setups should configure each instance's endpoint explicitly, then publish providers through instance-local `provide(...)` calls or instance-bound decorators such as `@specificNexus.Expose(...)`.
+The decorator expression captures its Nexus instance. `@nexus.Expose(...)` binds to the default singleton, while `@specificNexus.Expose(...)` binds to that specific instance. Top-level `@Expose(...)` and `@Endpoint(...)` are compatibility shorthand for the default singleton and should not be the main path in new multi-instance code.
 
 If one JavaScript context needs two independent Nexus runtimes, create isolated `Nexus` instances and configure each one explicitly:
 
@@ -206,7 +206,7 @@ localBrokerNexus.configure({
 localBrokerNexus.provide(BrokerGatewayToken, brokerGatewayService);
 ```
 
-Avoid process-global `@Expose` or `@Endpoint` in this pattern. Decorator registrations are collected in a shared registry, so only one Nexus instance can consume those registrations safely. If a class service belongs to a specific instance, use that instance's decorator, for example `@extensionNexus.Expose(ExtensionServiceToken)`. Use `configure({ services })` here only for bootstrap bulk composition or low-level compatibility; prefer `.provide(...)` for ordinary provider registration. Bridge between the two runtimes with explicit providers that call the other instance when needed.
+Avoid top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)` in this pattern. If a class service belongs to a specific instance, use that instance's decorator, for example `@extensionNexus.Expose(ExtensionServiceToken)`. Use `configure({ services })` here only for bootstrap bulk composition or low-level compatibility; prefer `.provide(...)` for ordinary provider registration. Bridge between the two runtimes with explicit providers that call the other instance when needed.
 
 ## 6. Create A Proxy From Another Context
 
@@ -247,7 +247,7 @@ Why is `target` usually needed?
 
 Because Nexus has to decide where the proxy should connect. It resolves target intent in this order:
 
-1. explicit `target` in `create(...)`
+1. explicit non-empty `target` in `create(...)`
 2. token `defaultCreate.target`
 3. a unique `connectTo` fallback from endpoint configuration
 

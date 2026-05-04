@@ -97,7 +97,7 @@ Nexus does not infer the current context magically. It needs an endpoint impleme
 
 Provider registration is optional at the level of a single context boot. It becomes necessary when you want that context to expose callable services to others. Use `@nexus.Expose(...)` for class declarations and `provide(...)` for object, function, State, Relay, or live providers.
 
-If you use decorators for endpoint or service registration, remember that those registrations are process-global. Multi-instance setups should use explicit bootstrap composition and instance-local `provide(...)` calls instead.
+Decorator factories are bound to the Nexus instance captured by the decorator expression. `@nexus.Expose(...)` and `@nexus.Endpoint(...)` bind to the default singleton; `@specificNexus.Expose(...)` and `@specificNexus.Endpoint(...)` bind to that specific instance. Top-level `@Expose(...)` and `@Endpoint(...)` remain compatibility shorthand for the default singleton, not the new multi-instance authoring path.
 
 ## Multiple Nexus Instances In One Runtime
 
@@ -122,7 +122,7 @@ one-way client for a single destination.
 
 Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. They do not automatically share a connection graph.
 
-Do not use `@Expose` or `@Endpoint` with this pattern. Decorator registrations are process-global, so one instance can consume registrations that another instance expected to own. Configure endpoints explicitly and publish instance-local providers with `provide(...)` instead.
+Do not use top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)` with this pattern. Configure endpoints explicitly, publish object providers with instance-local `provide(...)`, and bind class services or endpoint decorators to the owning instance with forms such as `@extensionNexus.Expose(...)` or `@brokerNexus.Endpoint(...)`.
 
 Bridge between instances with normal services:
 
@@ -144,7 +144,7 @@ Nexus routes calls through target descriptors and matching rules.
 
 For unicast proxy creation, Nexus resolves target intent in this order:
 
-1. explicit `create(..., { target })`
+1. explicit non-empty `create(..., { target })`
 2. token `defaultCreate.target`
 3. unique endpoint `connectTo` fallback
 
