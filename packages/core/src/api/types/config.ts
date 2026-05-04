@@ -14,6 +14,20 @@ export interface TargetCriteria<
   matcher?: TargetMatcher<U, M>;
 }
 
+export interface TokenCreateDefaults<
+  U extends UserMetadata = UserMetadata,
+  M extends string = never,
+  D extends string = never,
+> {
+  target?: TargetCriteria<U, M, D>;
+}
+
+export type NamedDefaultOptIn<M extends string, D extends string> = [
+  M | D,
+] extends [never]
+  ? { namedDefaults?: false | undefined }
+  : { namedDefaults: true };
+
 /**
  * Describes the criteria for finding endpoints, used for multicast targets.
  */
@@ -69,7 +83,7 @@ export interface CreateOptions<
   D extends string,
 > {
   /** The criteria for finding the target endpoint. */
-  target: TargetCriteria<U, M, D>;
+  target?: TargetCriteria<U, M, D> | null;
   /**
    * The expected number of results.
    * - 'one': Expects exactly one connection. Throws if 0 or >1 are found. (Default)

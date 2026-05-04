@@ -31,6 +31,21 @@ describe("ResourceManager", () => {
       const target = resourceManager.getExposedService("nonExistentApi");
       expect(target).toBeUndefined();
     });
+
+    it("rejects duplicate exposed services without overwriting the existing service", () => {
+      const replacement = { echo: () => "replacement" };
+
+      resourceManager.registerExposedService("myApi", mockService);
+      const result = resourceManager.safeRegisterExposedServicesBatch([
+        { name: "myApi", service: replacement },
+      ]);
+
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect((result.error as any).code).toBe("E_PROVIDER_DUPLICATE_TOKEN");
+      }
+      expect(resourceManager.getExposedService("myApi")).toBe(mockService);
+    });
   });
 
   describe("Local Resources", () => {

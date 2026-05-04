@@ -1,8 +1,20 @@
 import { NexusError } from "./nexus-error";
 import type { NexusErrorOptions } from "./nexus-error";
 
-export type NexusConfigurationErrorCode = "E_CONFIGURATION_INVALID";
-export type NexusUsageErrorCode = "E_USAGE_INVALID";
+export type NexusConfigurationErrorCode =
+  | "E_CONFIGURATION_INVALID"
+  | "E_PROVIDER_DUPLICATE_TOKEN"
+  | "E_PROVIDER_BATCH_INVALID"
+  | "E_NEXUS_BOOTSTRAPPING_LOCKED"
+  | "E_NEXUS_BOOTSTRAP_FAILED"
+  | "E_NEXUS_DISPOSED"
+  | "E_NEXUS_ALREADY_READY"
+  | "E_ENDPOINT_SOURCE_CONFLICT"
+  | "E_DUPLICATE_PROVIDER";
+export type NexusUsageErrorCode =
+  | "E_USAGE_INVALID"
+  | "E_USAGE_DEFAULT_CREATE_CONFLICT"
+  | "E_PROVIDER_BATCH_INVALID";
 
 /**
  * Represents an error in the configuration of the Nexus instance.

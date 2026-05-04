@@ -4,7 +4,7 @@ For iframe integrations, keep contracts shared and keep parent/child setup focus
 
 ## Shared Contract Shape
 
-Use a Token default target when the parent repeatedly calls the same child frame.
+Use a Token `defaultCreate.target` when the parent repeatedly calls the same child frame.
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
@@ -16,12 +16,14 @@ const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
 });
 
 const childServices = appSpace.tokenSpace("child-services", {
-  defaultTarget: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
+  defaultCreate: {
+    target: {
+      descriptor: {
+        context: "iframe-child",
+        appId: "iframe-demo",
+        frameId: "preview",
+        origin: "https://child.example.com",
+      },
     },
   },
 });
@@ -60,20 +62,21 @@ const greeting = await nexus.create(GreetingToken, {
 
 ## Child
 
-Use `configure: false` when composing iframe helper output with `services`, `policy`, or a custom `Nexus` instance.
+For class-style child services, bind the class to the child Nexus instance.
 
 ```ts
-nexus.configure({
-  ...usingIframeChild({
-    appId: "iframe-demo",
-    frameId: "preview",
-    parentOrigin: "https://parent.example.com",
-    nonce: "session-nonce",
-    configure: false,
-  }),
-  services: [{ token: GreetingToken, implementation: greetingService }],
+const childNexus = usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
 });
+
+@childNexus.Expose(GreetingToken)
+class GreetingServiceImpl implements GreetingService {}
 ```
+
+For function/object style, use `childNexus.provide(GreetingToken, greetingService)`.
 
 Without `configure: false`, `usingIframeParent(...)` and `usingIframeChild(...)` configure the shared `nexus` instance directly and return that instance, not a config object.
 

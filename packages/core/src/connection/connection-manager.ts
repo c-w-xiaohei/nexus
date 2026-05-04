@@ -209,6 +209,24 @@ export class ConnectionManager<
     );
   }
 
+  public safeResolveConnections(
+    options: ResolveOptions<U, P>,
+  ): ResultAsync<readonly LogicalConnection<U, P>[], ConnectionManagerError> {
+    const initializedCheck = this.ensureInitialized("safeResolveConnections");
+    if (initializedCheck.isErr()) {
+      return errAsync(initializedCheck.error);
+    }
+
+    return ResultAsync.fromPromise(
+      this.resolveConnectionsUnsafe(options),
+      (e) =>
+        connectionManagerErrorFromUnknown(e, {
+          message: "Failed to resolve connections",
+          context: { options },
+        }),
+    );
+  }
+
   public safeSendMessage(
     target: MessageTarget<U>,
     message: NexusMessage,
@@ -329,11 +347,39 @@ export class ConnectionManager<
   ): Promise<LogicalConnection<U, P> | null> {
     this.logger.debug("Attempting to resolve connection.", options);
 
-    const found = findReadyConnection(this.connectionsMap, options);
-    if (found) {
+    const found = findReadyConnections(this.connectionsMap, options);
+    if (found.length > 0) {
+      return found[0];
+    }
+
+    return this.createConnectionForDescriptor(options);
+  }
+
+  private async resolveConnectionsUnsafe(
+    options: ResolveOptions<U, P>,
+  ): Promise<readonly LogicalConnection<U, P>[]> {
+    this.logger.debug("Attempting to resolve connection candidates.", options);
+
+    const found = findReadyConnections(this.connectionsMap, options);
+    if (found.length > 0) {
       return found;
     }
 
+    const created = await this.createConnectionForDescriptor(options);
+    if (!created?.remoteIdentity) {
+      return [];
+    }
+
+    if (options.matcher && !options.matcher(created.remoteIdentity)) {
+      return [];
+    }
+
+    return [created];
+  }
+
+  private async createConnectionForDescriptor(
+    options: ResolveOptions<U, P>,
+  ): Promise<LogicalConnection<U, P> | null> {
     const { matcher, descriptor } = options;
     if (matcher && !descriptor) {
       return null;
@@ -851,14 +897,15 @@ function isDeepMatch(target: any, source: any): boolean {
   return true;
 }
 
-function findReadyConnection<
+function findReadyConnections<
   U extends UserMetadata,
   P extends PlatformMetadata,
 >(
   connections: ReadonlyMap<string, LogicalConnection<U, P>>,
   options: ResolveOptions<U, P>,
-): LogicalConnection<U, P> | null {
+): readonly LogicalConnection<U, P>[] {
   const { matcher, descriptor } = options;
+  const matches: LogicalConnection<U, P>[] = [];
 
   for (const connection of connections.values()) {
     if (!connection.isReady() || !connection.remoteIdentity) {
@@ -866,7 +913,8 @@ function findReadyConnection<
     }
 
     if (matcher && matcher(connection.remoteIdentity)) {
-      return connection;
+      matches.push(connection);
+      continue;
     }
 
     if (
@@ -874,11 +922,11 @@ function findReadyConnection<
       descriptor &&
       isDeepMatch(connection.remoteIdentity, descriptor)
     ) {
-      return connection;
+      matches.push(connection);
     }
   }
 
-  return null;
+  return matches;
 }
 
 function routeMessage<U extends UserMetadata, P extends PlatformMetadata>(

@@ -229,6 +229,12 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
       services: {
         [BackgroundServiceToken.id]: backgroundService,
       },
+      matchers: {
+        "is-active": (id) => id.context === "content-script" && id.isActive,
+        "is-github-issue": (id) =>
+          id.context === "content-script" &&
+          id.url.startsWith("github.com/issue"),
+      },
     },
     leaves: [
       {

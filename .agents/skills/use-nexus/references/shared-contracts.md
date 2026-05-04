@@ -4,24 +4,24 @@ Define service interfaces and Tokens in shared modules imported by both host and
 
 ## Tokens
 
-Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share default targeting. Use direct `new Token<T>(...)` only for small examples or when namespacing and default targets are unnecessary.
+Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultCreate.target` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.
+
+Token modules should import existing service interfaces with `import type`. Do not repeat service method shapes inline at token definition sites.
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
 import type { ChromePlatformMeta, ChromeUserMeta } from "@nexus-js/chrome";
-
-export interface SettingsService {
-  getSettings(): Promise<Record<string, unknown>>;
-  saveSettings(settings: Record<string, unknown>): Promise<void>;
-}
+import type { SettingsService } from "./contracts";
 
 const appSpace = new TokenSpace<ChromeUserMeta, ChromePlatformMeta>({
   name: "my-extension",
 });
 
 const backgroundServices = appSpace.tokenSpace("background-services", {
-  defaultTarget: {
-    descriptor: { context: "background" },
+  defaultCreate: {
+    target: {
+      descriptor: { context: "background" },
+    },
   },
 });
 
@@ -49,13 +49,13 @@ export const SettingsToken = services.token<{
 
 ## Service Exposure
 
-Use `@Expose(Token)` for normal singleton Nexus setup.
+Use `@xxNexus.Expose(Token)` for class-style services. Import the concrete Nexus instance from the runtime/bootstrap module so the class is bound to that instance's registry.
 
 ```ts
-import { Expose } from "@nexus-js/core";
+import { backgroundNexus } from "./runtime";
 import { SettingsToken, type SettingsService } from "./shared";
 
-@Expose(SettingsToken)
+@backgroundNexus.Expose(SettingsToken)
 class SettingsServiceImpl implements SettingsService {
   async getSettings() {
     return {};
@@ -67,18 +67,28 @@ class SettingsServiceImpl implements SettingsService {
 }
 ```
 
-Use explicit `configure({ services })` for multi-instance setups, tests, or architectures that avoid process-global decorators.
+Use `xxNexus.provide(...)` for function/object-style providers, helper outputs, and already constructed service instances.
 
 ```ts
-nexus.configure({
-  endpoint: endpointConfig,
-  services: [
-    {
-      token: SettingsToken,
-      implementation: settingsService,
+import { backgroundNexus } from "./runtime";
+import { SettingsToken, type SettingsService } from "./shared";
+
+const settingsService: SettingsService = {
+  async getSettings() {
+    return {};
+  },
+  async saveSettings(settings) {
+    await persist(settings);
+  },
+};
+
+backgroundNexus.provide(SettingsToken, settingsService, {
+  policy: {
+    canCall({ remoteIdentity }) {
+      return remoteIdentity.context === "content-script";
     },
-  ],
+  },
 });
 ```
 
-Decorator registrations are process-global. Multi-instance and isolated test setups must use explicit services.
+Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation files should expose providers through `@xxNexus.Expose(...)` or `xxNexus.provide(...)`, not configure endpoints.
