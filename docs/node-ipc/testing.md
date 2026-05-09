@@ -8,6 +8,23 @@ Run the package tests with:
 pnpm --filter @nexus-js/node-ipc test
 ```
 
+## Unit Tests With Mock Nexus
+
+Use `@nexus-js/testing` for application unit tests that only need to prove how code calls Nexus services.
+
+```ts
+const mock = createMockNexus();
+mock.service(EchoToken, echoService);
+
+const echo = await mock.nexus.create(EchoToken, {
+  target: {
+    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+  },
+});
+```
+
+This does not test node-ipc adapter behavior. It does not open sockets, resolve socket paths, frame packets, run shared-secret auth, detect stale sockets, or prove daemon restart semantics.
+
 ## Test Areas
 
 The package test suite covers:
@@ -36,7 +53,7 @@ A good node-ipc integration test should:
 5. call that service through `nexus.create()`
 6. close both runtimes and remove the temporary root
 
-This catches adapter/core integration problems that mocked endpoints cannot catch.
+This catches adapter/core integration problems that mocked endpoints cannot catch. Keep real socket integration tests for adapter/core integration problems that `createMockNexus()` intentionally cannot catch.
 
 ## Avoiding Flaky Socket Tests
 

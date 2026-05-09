@@ -175,3 +175,9 @@ setTimeout(() => {
   callContentScript();
 }, 3000); // Adjust delay as needed
 ```
+
+## Documentation
+
+- Product docs: `docs/README.md`
+- Package map: `docs/packages.md`
+- Testing Nexus application code: `docs/testing/README.md`

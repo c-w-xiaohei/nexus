@@ -68,9 +68,18 @@ The adapter is Linux-first and uses filesystem Unix domain sockets through Node-
 
 It is intended for Node runtimes first. Bun can run many Node-compatible `node:net` Unix socket paths, but Bun support should be treated as compatibility-mode support until the project has Bun CI coverage. The adapter does not use Node `child_process` IPC channels or socket-handle passing.
 
+## Testing Boundary
+
+Use `@nexus-js/testing` and `createMockNexus()` for unit tests of application code that consumes daemon services through a `NexusInstance`.
+
+Do not use the mock to validate node-ipc adapter behavior. It does not exercise Unix socket addressing, filesystem permissions, packet framing, shared-secret pre-auth, stale socket cleanup, daemon close/recreate behavior, or real disconnect timing.
+
+Use `docs/node-ipc/testing.md` for adapter and real socket integration testing guidance.
+
 ## Related Pages
 
 - Product docs landing: `docs/README.md`
 - Package map: `docs/packages.md`
 - Platform selection: `docs/platforms.md`
+- Testing application code: `docs/testing/README.md`
 - Shared authorization policy: `docs/auth-and-policy.md`

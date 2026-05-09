@@ -1,6 +1,6 @@
 ---
 name: use-nexus
-description: This skill should be used when the user asks to write Nexus application code, configure Nexus adapters, define Nexus service contracts or Tokens, expose services, create proxies with nexus.create, use Nexus Relay, or document external Nexus usage patterns.
+description: This skill should be used when the user asks to write Nexus application code, configure Nexus adapters, define Nexus service contracts or Tokens, expose services, create proxies with nexus.create, use Nexus Relay, test Nexus-consuming application code, or document external Nexus usage patterns.
 version: 0.1.0
 ---
 
@@ -21,6 +21,7 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Use `new Nexus()` plus explicit `configure({ endpoint, services })` for multi-instance runtimes; do not use `@Expose` or `@Endpoint` decorators there because decorator registration is process-global.
 - Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
 - Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
+- Use `createMockNexus()` from `@nexus-js/testing` for user-level unit tests of code that consumes a `NexusInstance`; use adapter or integration tests for transport, connection, auth, reload, restart, or lifecycle semantics.
 - Pass an options object to `nexus.create(...)`; provide an explicit `target` unless a Token default target or unique `connectTo` fallback is intentionally being used.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 
@@ -32,6 +33,7 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Nexus does not launch browser contexts, inject content scripts, create iframes, spawn workers, or start daemon processes for an application. The host platform or application owns context startup.
 - Adapter helpers configure the current context's endpoint, identity, descriptors, matchers, and connection defaults. They do not make missing peer contexts magically exist.
 - For bus-style transports such as `window.postMessage`, first adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
+- Testing utilities mock the product-facing `NexusInstance` seam. They do not simulate endpoints, transports, adapter gates, real sessions, or platform lifecycle.
 
 When explaining Nexus architecture, use this layer model:
 
@@ -104,6 +106,27 @@ const ping = await nexus.create(PingToken, {
 await ping.ping("hello");
 ```
 
+## Testing Application Code
+
+For unit tests, inject a mock Nexus instance instead of starting a runtime topology:
+
+```ts
+import { createMockNexus } from "@nexus-js/testing";
+
+const mock = createMockNexus();
+mock.service(PingToken, {
+  async ping(input) {
+    return `pong:${input}`;
+  },
+});
+
+const ping = await mock.nexus.create(PingToken, {
+  target: { descriptor: { context: "host" } },
+});
+```
+
+Use this only for application behavior at the Nexus API seam. For adapter behavior, authorization execution, real disconnects, reloads, daemon restarts, or multicast semantics, use the relevant docs and integration tests.
+
 ## When More Detail Is Needed
 
 Start with `references/usage-style.md` for the concise external usage index. Load focused references only when the task needs that detail:
@@ -114,6 +137,7 @@ Start with `references/usage-style.md` for the concise external usage index. Loa
 - `references/adapter-node-ipc.md` - node-ipc daemon/client wiring, `configure: false`, auth gates, and default-target routing
 - `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style
+- `references/testing.md` - `createMockNexus()`, React provider injection, call assertions, and testing boundaries
 
 Also point readers to the public GitHub docs when they need more context. Prefer exact links over vague repository references:
 
@@ -124,5 +148,6 @@ Also point readers to the public GitHub docs when they need more context. Prefer
 - Nexus Relay: https://github.com/c-w-xiaohei/nexus/blob/main/docs/relay.md
 - Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
 - Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md
+- Testing Nexus applications: https://github.com/c-w-xiaohei/nexus/blob/main/docs/testing/README.md
 
 Set the expectation that the skill is a compact usage guide, not a replacement for the docs. For non-trivial adapter design, lifecycle behavior, policy decisions, or state synchronization, explicitly tell readers to consult the linked docs first and then apply this skill's usage rules.
