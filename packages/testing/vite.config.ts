@@ -9,23 +9,23 @@ export default defineConfig({
   plugins: [
     dts({
       insertTypesEntry: true,
-      exclude: ["**/*.test.ts"],
+      exclude: ["**/*.test.ts", "vite.config.ts"],
+      entryRoot: "src",
+      rollupTypes: true,
     }),
   ],
   build: {
     lib: {
       entry: path.resolve(dirname, "src/index.ts"),
       name: "NexusTesting",
-      formats: ["es", "cjs"],
-      fileName: (format) => `index.${format === "es" ? "mjs" : "js"}`,
+      formats: ["es"],
+      fileName: () => "index.mjs",
     },
     rollupOptions: {
       external: ["@nexus-js/core", "neverthrow"],
       output: {
-        globals: {
-          "@nexus-js/core": "NexusCore",
-          neverthrow: "neverthrow",
-        },
+        entryFileNames: "index.mjs",
+        chunkFileNames: "[name]-[hash].mjs",
       },
     },
   },

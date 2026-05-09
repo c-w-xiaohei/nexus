@@ -174,15 +174,53 @@ describe("createMockNexus", () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     mock.service(ExampleToken, createExampleService());
 
-    const result = await mock.nexus.safeCreate(
+    const missingOptions = await mock.nexus.safeCreate(
       ExampleToken,
       undefined as never,
     );
+    const invalidToken = await mock.nexus.safeCreate(
+      { id: "not-a-token" } as never,
+      createOptions,
+    );
+    const arrayTarget = await mock.nexus.safeCreate(ExampleToken, {
+      target: [] as never,
+    });
+
+    for (const result of [missingOptions, invalidToken, arrayTarget]) {
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toBeInstanceOf(NexusUsageError);
+      }
+    }
+  });
+
+  it("rejects invalid create expects before recording the call", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(ExampleToken, createExampleService());
+
+    const result = await mock.nexus.safeCreate(ExampleToken, {
+      ...createOptions,
+      expects: "all" as never,
+    });
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error).toBeInstanceOf(NexusUsageError);
     }
+    expect(mock.calls.create()).toHaveLength(0);
+  });
+
+  it("rejects invalid create timeout before recording the call", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(ExampleToken, createExampleService());
+
+    await expect(
+      mock.nexus.create(ExampleToken, {
+        ...createOptions,
+        timeout: "100" as never,
+      }),
+    ).rejects.toBeInstanceOf(NexusUsageError);
+    expect(mock.calls.create()).toHaveLength(0);
   });
 
   it("makes create and safeCreate expose the same injected failure", async () => {
@@ -400,6 +438,29 @@ describe("createMockNexus", () => {
     ).rejects.toBeInstanceOf(NexusUsageError);
   });
 
+  it("rejects unknown named descriptors and matchers in fallback targets", async () => {
+    const tokenWithMissingDefault = new Token<ExampleService>(
+      "testing:missing-default-target",
+      { descriptor: "missing" as never },
+    );
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(tokenWithMissingDefault, createExampleService());
+    mock.service(ExampleToken, createExampleService());
+    mock.nexus.configure({
+      endpoint: {
+        meta: { context: "content" },
+        connectTo: [{ matcher: "missing" as never }],
+      },
+    });
+
+    await expect(
+      mock.nexus.create(tokenWithMissingDefault, { target: {} }),
+    ).rejects.toBeInstanceOf(NexusUsageError);
+    await expect(
+      mock.nexus.create(ExampleToken, { target: {} }),
+    ).rejects.toBeInstanceOf(NexusUsageError);
+  });
+
   it("returns ok from safeConfigure with the same nexus", () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     const service = createExampleService();
@@ -414,6 +475,25 @@ describe("createMockNexus", () => {
       expect(result.value).toBe(mock.nexus);
     }
     expect(mock.calls.configure()).toEqual([{ config }]);
+  });
+
+  it("returns err from safeConfigure for malformed runtime input", () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+
+    const result = mock.nexus.safeConfigure(null as never);
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusUsageError);
+    }
+    expect(mock.calls.configure()).toHaveLength(0);
+  });
+
+  it("throws from configure for malformed runtime input", () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+
+    expect(() => mock.nexus.configure(null as never)).toThrow(NexusUsageError);
+    expect(mock.calls.configure()).toHaveLength(0);
   });
 
   it("returns configure call copies", () => {
@@ -494,6 +574,27 @@ describe("createMockNexus", () => {
       { updates: { active: true, instance: "one" } },
       { updates: { active: false } },
     ]);
+  });
+
+  it("returns err from safeUpdateIdentity for malformed runtime input", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+
+    const result = await mock.nexus.safeUpdateIdentity(null as never);
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(NexusUsageError);
+    }
+    expect(mock.calls.updateIdentity()).toHaveLength(0);
+  });
+
+  it("throws from updateIdentity for malformed runtime input", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+
+    await expect(mock.nexus.updateIdentity(null as never)).rejects.toThrow(
+      NexusUsageError,
+    );
+    expect(mock.calls.updateIdentity()).toHaveLength(0);
   });
 
   it("returns release and updateIdentity call copies", async () => {

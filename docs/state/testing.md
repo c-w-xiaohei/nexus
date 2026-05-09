@@ -25,6 +25,10 @@ mock.nexus.configure({
     connectTo: [{ descriptor: { context: "background" } }],
   },
 });
+
+const remote = await connectNexusStore(mock.nexus, counterStore, {
+  target: { descriptor: { context: "background" } },
+});
 ```
 
 React component tests should inject the mock instance through `NexusProvider`:
