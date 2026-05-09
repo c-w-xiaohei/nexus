@@ -1,11 +1,11 @@
-# @nexus/chrome-adapter
+# @nexus-js/chrome
 
 Chrome extension adapter for the Nexus framework, providing seamless cross-context communication for Chrome extensions.
 
 ## Installation
 
 ```bash
-npm install @nexus/chrome-adapter @nexus/core
+npm install @nexus-js/chrome @nexus-js/core
 ```
 
 ## Quick Start
@@ -13,12 +13,7 @@ npm install @nexus/chrome-adapter @nexus/core
 ### Background Script
 
 ```typescript
-import {
-  usingBackgroundScript,
-  nexus,
-  Expose,
-  Token,
-} from "@nexus/chrome-adapter";
+import { usingBackgroundScript, nexus, Expose, Token } from "@nexus-js/chrome";
 
 // Define service interface and token
 interface IBackgroundService {
@@ -27,7 +22,7 @@ interface IBackgroundService {
 }
 
 const BackgroundServiceToken = new Token<IBackgroundService>(
-  "background-service"
+  "background-service",
 );
 
 // Configure Nexus for background context
@@ -49,7 +44,7 @@ class BackgroundService implements IBackgroundService {
 ### Content Script
 
 ```typescript
-import { usingContentScript, nexus } from "@nexus/chrome-adapter";
+import { usingContentScript, nexus } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for content script context
@@ -71,7 +66,7 @@ main();
 ### Popup
 
 ```typescript
-import { usingPopup, nexus } from "@nexus/chrome-adapter";
+import { usingPopup, nexus } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for popup context
@@ -127,7 +122,7 @@ initPopup();
 ### Custom Matchers
 
 ```typescript
-import { ChromeMatchers } from "@nexus/chrome-adapter";
+import { ChromeMatchers } from "@nexus-js/chrome";
 
 // Use built-in matchers
 const githubContentScripts = await nexus.createMulticast(ServiceToken, {
@@ -151,19 +146,27 @@ nexus.updateIdentity({
 });
 ```
 
+## Testing Boundary
+
+Use `@nexus-js/testing` and `createMockNexus()` for unit tests of application code that consumes Chrome-targeted services through a `NexusInstance`.
+
+Do not use the mock to validate Chrome adapter behavior. It does not exercise Chrome runtime ports, tab or frame metadata collection, service worker lifecycle, extension context startup, runtime disconnect ordering, or Chrome permission behavior.
+
+Use Chrome adapter tests or extension E2E tests for those platform behaviors.
+
 ### New Context Support
 
 ```typescript
 // Options page
-import { usingOptionsPage } from "@nexus/chrome-adapter";
+import { usingOptionsPage } from "@nexus-js/chrome";
 usingOptionsPage();
 
 // DevTools page
-import { usingDevToolsPage } from "@nexus/chrome-adapter";
+import { usingDevToolsPage } from "@nexus-js/chrome";
 usingDevToolsPage();
 
 // Offscreen document
-import { usingOffscreenDocument } from "@nexus/chrome-adapter";
+import { usingOffscreenDocument } from "@nexus-js/chrome";
 usingOffscreenDocument("audio-processing");
 ```
 

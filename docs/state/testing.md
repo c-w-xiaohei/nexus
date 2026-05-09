@@ -1,8 +1,47 @@
 # Testing Nexus State
 
-Nexus State has three useful testing layers.
+Nexus State has four useful testing layers.
 
-## 1. Store Runtime Tests
+## 1. Application Unit Tests
+
+Use `@nexus-js/testing` when application code consumes Nexus through a `NexusInstance` and you want a deterministic unit test without a real runtime topology.
+
+For plain service-consuming code, register the service contract behind the Token:
+
+```ts
+const mock = createMockNexus();
+mock.service(UserToken, userService);
+```
+
+For Nexus State app code, prefer registering the real store service contract with `provideNexusStore(...)` instead of hand-writing `NexusStoreServiceContract` objects:
+
+```ts
+const mock = createMockNexus();
+
+mock.nexus.configure({
+  services: [provideNexusStore(counterStore)],
+  endpoint: {
+    meta: { context: "background" },
+    connectTo: [{ descriptor: { context: "background" } }],
+  },
+});
+
+const remote = await connectNexusStore(mock.nexus, counterStore, {
+  target: { descriptor: { context: "background" } },
+});
+```
+
+React component tests should inject the mock instance through `NexusProvider`:
+
+```tsx
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <NexusProvider nexus={mock.nexus}>{children}</NexusProvider>
+);
+```
+
+This verifies application collaboration with the store service contract. It does not verify real cross-runtime message delivery, browser extension behavior, disconnect timing, or adapter lifecycle semantics.
+
+## 2. Store Runtime Tests
 
 Use focused Nexus State runtime tests when you want to verify:
 
@@ -20,7 +59,7 @@ Current examples live in:
 - `packages/core/src/state/state-errors.test.ts`
 - `packages/core/src/state/state.test.ts`
 
-## 2. React Adapter Tests
+## 3. React Adapter Tests
 
 Use React tests when you want to verify:
 
@@ -34,7 +73,7 @@ Current examples live in:
 
 - `packages/react/src/react.test.tsx`
 
-## 3. Multi-Context Integration Tests
+## 4. Multi-Context Integration Tests
 
 This is the most important level for Nexus State cross-context correctness.
 
@@ -84,9 +123,10 @@ This is one common failure assertion, not the only one. Depending on the path yo
 
 When adding new Nexus State behavior:
 
-1. add a focused state/runtime test first
-2. add a React test if the behavior affects hooks
-3. add or extend multi-context integration tests only for user-visible cross-context semantics
+1. start with `createMockNexus()` when the behavior only needs a Nexus API seam
+2. add a focused state/runtime test when behavior depends on state internals
+3. add a React test if the behavior affects hooks
+4. add or extend multi-context integration tests only for user-visible cross-context semantics
 
 ## Good Integration Questions
 

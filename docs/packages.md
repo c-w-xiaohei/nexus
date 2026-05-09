@@ -16,6 +16,7 @@ The key distinction is:
 - Add `@nexus-js/chrome` when building a Chrome extension integration
 - Add `@nexus-js/iframe` when connecting a parent window and iframe over `postMessage`
 - Add `@nexus-js/node-ipc` when connecting local Node daemon and client processes over Unix sockets
+- Add `@nexus-js/testing` as a dev dependency when unit testing application code that consumes a `NexusInstance`
 
 If you are unsure, start with `@nexus-js/core`, make one service call work, then add adapters or subsystem entrypoints only where your use case actually needs them.
 
@@ -49,6 +50,12 @@ Add the Node IPC adapter only for local Node daemon/client integration:
 
 ```bash
 pnpm add @nexus-js/core @nexus-js/node-ipc
+```
+
+Add testing utilities only in test/dev dependencies:
+
+```bash
+pnpm add -D @nexus-js/testing
 ```
 
 Then choose imports:
@@ -92,6 +99,14 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
   - React bindings for Nexus State
   - Depends on `@nexus-js/core` and works with stores imported from `@nexus-js/core/state`
 
+## Testing Package
+
+- `@nexus-js/testing`
+  - User-level unit testing utilities for application code that consumes Nexus
+  - Provides `createMockNexus()` for injectable `NexusInstance` test doubles
+  - Install as a dev dependency
+  - Does not simulate transports, adapters, real connections, reconnects, or platform auth behavior
+
 ## Platform Adapter Package
 
 - `@nexus-js/chrome`
@@ -118,6 +133,7 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 - Chrome extension app with RPC: `@nexus-js/core` + `@nexus-js/chrome`
 - Parent window and iframe app with RPC: `@nexus-js/core` + `@nexus-js/iframe`
 - Local Node daemon/client app with RPC: `@nexus-js/core` + `@nexus-js/node-ipc`
+- Unit tests for Nexus-consuming app code: production packages plus dev dependency `@nexus-js/testing`
 
 ## One Common Mistake
 
@@ -134,3 +150,4 @@ It is part of the `@nexus-js/core` package surface and is imported as a subpath 
 - Iframe guide: `docs/iframe/README.md`
 - Node IPC guide: `docs/node-ipc/README.md`
 - Nexus State docs entry: `docs/state/README.md`
+- Testing app code: `docs/testing/README.md`

@@ -172,6 +172,14 @@ Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...
 
 If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.
 
+## Testing Boundary
+
+Use `@nexus-js/testing` and `createMockNexus()` for unit tests of application code that consumes iframe-targeted services through a `NexusInstance`.
+
+Do not use the mock to validate iframe adapter behavior. It does not exercise browser `postMessage`, source-window checks, exact origin checks, app id or channel gates, nonce validation, heartbeat disconnect detection, iframe reload, or iframe element replacement.
+
+Use iframe adapter tests or browser integration tests for those platform behaviors.
+
 ## Binary Transport Packets
 
 Iframe endpoints advertise binary Nexus transport packets and transferable support by default. This lets core serialize internal transport packets to `ArrayBuffer` and pass that buffer in the browser `postMessage` transfer list when both sides support it.
@@ -184,5 +192,6 @@ This only affects Nexus internal transport packets. It does not transfer, move, 
 - Setup walkthrough and shared contracts: `docs/getting-started.md`
 - Package map: `docs/packages.md`
 - Platform selection: `docs/platforms.md`
+- Testing application code: `docs/testing/README.md`
 - Shared authorization policy: `docs/auth-and-policy.md`
 - Virtual port transport internals: `@nexus-js/core/transport/virtual-port`

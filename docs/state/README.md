@@ -4,6 +4,8 @@ Nexus State is the synchronized remote-state subsystem for Nexus. It provides a 
 
 Use this section for Nexus State-specific setup, runtime semantics, and API details.
 
+For general application-level unit tests with an injectable mock `NexusInstance`, also read `docs/testing/README.md`.
+
 ## Start Here
 
 - New to Nexus State: `docs/state/quick-start.md`
@@ -21,5 +23,6 @@ Use this section for Nexus State-specific setup, runtime semantics, and API deta
 - React bindings: `@nexus-js/react`
 - Foundation framework: `@nexus-js/core`
 - Relay entrypoint for bridge contexts: `@nexus-js/core/relay`
+- Application unit testing utilities: `@nexus-js/testing`
 
 If you are looking for product-level Nexus docs, go to `docs/README.md`.

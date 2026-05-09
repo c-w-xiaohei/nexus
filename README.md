@@ -35,7 +35,7 @@ pnpm build
 
 ### Example Usage (Chrome Extension Scenario)
 
-Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages the `nexus-chrome-adapter` for simplified setup.
+Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages the `@nexus-js/chrome` package for simplified setup.
 
 **1. Define Shared Types and Service Contract**
 
@@ -43,7 +43,7 @@ Create a shared file (e.g., `src/shared/types.ts`):
 
 ```typescript
 // src/shared/types.ts
-import type { ChromeUserMeta, ChromePlatformMeta } from "@nexus/chrome-adapter";
+import type { ChromeUserMeta, ChromePlatformMeta } from "@nexus-js/chrome";
 
 // Define your application-specific user metadata by extending ChromeUserMeta
 // For example, if your content script adds a specific 'feature'
@@ -59,7 +59,7 @@ Create a shared service contract file (e.g., `src/shared/api.ts`):
 
 ```typescript
 // src/shared/api.ts
-import { TokenSpace } from "@nexus/core";
+import { TokenSpace } from "@nexus-js/core";
 import type { MyUserMeta, MyPlatformMeta } from "./types";
 
 // 1. Define the interface for your service
@@ -95,8 +95,8 @@ Your content script (e.g., `src/content-script.ts`) will now use the `usingConte
 ```typescript
 // src/content-script.ts
 // IMPORTANT: This file MUST be imported at the very top of your content script entry file
-import { Expose } from "@nexus/core";
-import { usingContentScript } from "@nexus/chrome-adapter"; // Import the factory
+import { Expose } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI, IMyContentScriptAPI } from "./shared/api";
 import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
@@ -132,8 +132,8 @@ Your background script (e.g., `src/background.ts`) will use the `usingBackground
 ```typescript
 // src/background.ts
 // IMPORTANT: This file MUST be imported at the very top of your background script entry file
-import { nexus } from "@nexus/core";
-import { usingBackgroundScript } from "@nexus/chrome-adapter"; // Import the factory
+import { nexus } from "@nexus-js/core";
+import { usingBackgroundScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI } from "./shared/api";
 import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
@@ -175,3 +175,9 @@ setTimeout(() => {
   callContentScript();
 }, 3000); // Adjust delay as needed
 ```
+
+## Documentation
+
+- Product docs: `docs/README.md`
+- Package map: `docs/packages.md`
+- Testing Nexus application code: `docs/testing/README.md`
