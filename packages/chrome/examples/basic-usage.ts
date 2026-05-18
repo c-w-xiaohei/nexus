@@ -10,7 +10,7 @@ import {
   Expose,
   Token,
   type ChromeUserMeta,
-} from "@nexus/chrome-adapter";
+} from "@nexus-js/chrome";
 
 // Shared service interface and token
 interface ITabService {
