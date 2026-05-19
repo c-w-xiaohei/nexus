@@ -6,6 +6,8 @@ Use this section for Nexus State-specific setup, runtime semantics, and API deta
 
 Host stores with the ordinary provider path, for example `nexus.provide(provideNexusStore(store))`. Store default targeting comes from the store token's `defaultCreate.target`; Nexus State does not add a separate default target field.
 
+For general application-level unit tests with an injectable mock `NexusInstance`, also read `docs/testing/README.md`.
+
 ## Start Here
 
 - New to Nexus State: `docs/state/quick-start.md`
@@ -23,5 +25,6 @@ Host stores with the ordinary provider path, for example `nexus.provide(provideN
 - React bindings: `@nexus-js/react`
 - Foundation framework: `@nexus-js/core`
 - Relay entrypoint for bridge contexts: `@nexus-js/core/relay`
+- Application unit testing utilities: `@nexus-js/testing`
 
 If you are looking for product-level Nexus docs, go to `docs/README.md`.

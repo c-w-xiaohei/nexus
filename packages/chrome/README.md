@@ -153,6 +153,14 @@ nexus.updateIdentity({
 });
 ```
 
+## Testing Boundary
+
+Use `@nexus-js/testing` and `createMockNexus()` for unit tests of application code that consumes Chrome-targeted services through a `NexusInstance`.
+
+Do not use the mock to validate Chrome adapter behavior. It does not exercise Chrome runtime ports, tab or frame metadata collection, service worker lifecycle, extension context startup, runtime disconnect ordering, or Chrome permission behavior.
+
+Use Chrome adapter tests or extension E2E tests for those platform behaviors.
+
 ### New Context Support
 
 ```typescript

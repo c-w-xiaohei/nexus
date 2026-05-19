@@ -15,6 +15,7 @@ Then use these as needed:
 
 - `docs/platforms.md` for runtime/adapter routing
 - `docs/packages.md` for install/import choices
+- `docs/testing/README.md` for unit testing application code that consumes Nexus
 - `docs/auth-and-policy.md` for cross-adapter authorization policy
 - `docs/relay.md` for explicit service/store relay across adjacent Nexus graphs
 - `docs/node-ipc/README.md` for local daemon/client IPC over Unix sockets
@@ -30,6 +31,7 @@ If you only read one page first, read `docs/getting-started.md`.
 - I need to forward selected services or stores through a bridge context: use `docs/relay.md`
 - I need a local daemon process and local clients: use `docs/node-ipc/README.md`
 - I need synchronized remote state: go to `docs/state/README.md`
+- I need to unit test Nexus-consuming application code: go to `docs/testing/README.md`
 
 ## Product Capabilities
 
@@ -39,6 +41,11 @@ If you only read one page first, read `docs/getting-started.md`.
 - Cross-adapter authorization policy through core `policy.canConnect` and `policy.canCall`
 - Nexus Relay for explicit provider-level service and store forwarding across adjacent Nexus graphs
 - Nexus State as a subsystem for synchronized remote state, built on top of core Nexus APIs
+- User-level unit testing utilities via `@nexus-js/testing`
+
+## Testing Docs
+
+Use `docs/testing/README.md` when testing application code at the `NexusInstance` seam. Use adapter and integration docs when testing platform transport, connection lifecycle, authorization, reload, restart, or real cross-context behavior.
 
 ## Nexus State Subsystem Docs
 

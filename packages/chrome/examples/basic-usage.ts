@@ -7,10 +7,8 @@ import {
   usingContentScript,
   usingPopup,
   nexus,
-  Expose,
   Token,
-  type ChromeUserMeta,
-} from "@nexus/chrome-adapter";
+} from "@nexus-js/chrome";
 
 // Shared service interface and token
 interface ITabService {
@@ -25,10 +23,10 @@ const TabServiceToken = new Token<ITabService>("tab-service");
 // background.ts
 export function setupBackground() {
   // Configure Nexus for background context
-  usingBackgroundScript();
+  const backgroundNexus = usingBackgroundScript();
 
   // Implement and expose the service
-  @Expose(TabServiceToken)
+  @backgroundNexus.Expose(TabServiceToken)
   class TabService implements ITabService {
     async getCurrentTab() {
       const tabs = await chrome.tabs.query({
