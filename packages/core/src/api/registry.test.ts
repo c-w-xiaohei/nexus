@@ -4,15 +4,9 @@ import { Token } from "./token";
 import type { EndpointRegistrationData } from "./registry";
 
 describe("DecoratorRegistry", () => {
-  it("should enforce owner claim semantics", () => {
+  it("clear() should leave the legacy registry empty", () => {
     DecoratorRegistry.clear();
-
-    const ownerA = Symbol("a");
-    const ownerB = Symbol("b");
-
-    expect(DecoratorRegistry.claim(ownerA)).toBe(true);
-    expect(DecoratorRegistry.claim(ownerA)).toBe(true);
-    expect(DecoratorRegistry.claim(ownerB)).toBe(false);
+    expect(DecoratorRegistry.hasRegistrations()).toBe(false);
   });
 
   it("should warn on duplicate service and endpoint registrations", () => {
@@ -40,8 +34,6 @@ describe("DecoratorRegistry", () => {
 
   it("snapshot() should copy services and clear() should reset all state", () => {
     DecoratorRegistry.clear();
-    const owner = Symbol("owner");
-    DecoratorRegistry.claim(owner);
 
     const token = new Token<object>("service-b");
     DecoratorRegistry.registerService(token, {
@@ -57,7 +49,5 @@ describe("DecoratorRegistry", () => {
     expect(postClearSnapshot.services.size).toBe(0);
     expect(postClearSnapshot.endpoint).toBeNull();
     expect(DecoratorRegistry.hasRegistrations()).toBe(false);
-
-    expect(DecoratorRegistry.claim(Symbol("new-owner"))).toBe(true);
   });
 });

@@ -1,6 +1,8 @@
 # Policy And Lifecycle
 
-Configure policy through `nexus.configure({ policy })`.
+Configure policy during bootstrap through `nexus.configure({ policy })`. After `ready`, policy is structural runtime configuration; create a new Nexus instance to change it.
+
+Keep `configure(...)` in main/bootstrap/runtime modules. Service modules should not configure endpoints or policies while declaring implementations.
 
 ```ts
 nexus.configure({
@@ -50,5 +52,6 @@ For adapter docs:
 - Prefer explicit targets in first examples.
 - Explain default-target fallback only after the explicit version.
 - State when a helper configures `nexus` directly versus returning config.
+- Show class-style service exposure with `@xxNexus.Expose(Token)` and function/object/helper provider exposure with `xxNexus.provide(...)`.
 
 For deeper details, read the repository documentation under `c-w-xiaohei/nexus/docs`.

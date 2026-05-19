@@ -31,18 +31,10 @@ import { nexus } from "@nexus-js/core";
 import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
 import { EchoToken } from "./shared";
 
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app" }),
-  services: [
-    {
-      token: EchoToken,
-      implementation: {
-        async echo(input) {
-          return `echo:${input}`;
-        },
-      },
-    },
-  ],
+usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
+  async echo(input) {
+    return `echo:${input}`;
+  },
 });
 ```
 
@@ -57,23 +49,30 @@ import { nexus } from "@nexus-js/core";
 import { usingNodeIpcClient } from "@nexus-js/node-ipc";
 import { EchoToken } from "./shared";
 
-await nexus.configure(
-  usingNodeIpcClient({
-    appId: "example-app",
-    connectTo: { appId: "example-app" },
-  }),
-);
-
-const echo = await nexus.create(EchoToken, {
-  target: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-  },
+usingNodeIpcClient({
+  appId: "example-app",
+  connectTo: [
+    {
+      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    },
+  ],
 });
+
+const echo = await nexus.create(EchoToken);
 
 console.log(await echo.echo("hello"));
 ```
 
-If your token has a default target or the endpoint has a unique `connectTo` fallback, you can avoid repeating the descriptor in every `create()` call. Keep the explicit target while getting started because it makes routing failures easier to debug.
+`create(EchoToken)` works when `EchoToken` has a `defaultCreate.target` for the daemon or when the client has exactly one `connectTo` fallback. If neither is true, Nexus fails instead of guessing. Keep an explicit target while debugging or when several daemons are reachable:
+
+```ts
+const echo = await nexus.create(EchoToken, {
+  target: {
+    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+  },
+  expects: "one",
+});
+```
 
 ## 5. Add Shared-Secret Pre-Auth
 
@@ -82,27 +81,24 @@ Shared-secret pre-auth is optional but recommended for daemon/client setups wher
 Daemon:
 
 ```ts
-await nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    authToken: process.env.NEXUS_IPC_TOKEN,
-  }),
-  services: [
-    /* ... */
-  ],
-});
+usingNodeIpcDaemon({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
+}).provide(EchoToken, echoService);
 ```
 
 Client:
 
 ```ts
-await nexus.configure(
-  usingNodeIpcClient({
-    appId: "example-app",
-    connectTo: { appId: "example-app" },
-    authToken: process.env.NEXUS_IPC_TOKEN,
-  }),
-);
+usingNodeIpcClient({
+  appId: "example-app",
+  connectTo: [
+    {
+      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    },
+  ],
+  authToken: process.env.NEXUS_IPC_TOKEN,
+});
 ```
 
 Empty tokens are rejected. Wrong tokens fail before Nexus core receives the socket.
@@ -111,9 +107,15 @@ Empty tokens are rejected. Wrong tokens fail before Nexus core receives the sock
 
 Use adapter pre-auth to establish `platform.authenticated`, then use core policy to make authorization decisions.
 
+Policy composition is a low-level bootstrap path. Ask the helper for pure config with `configure: false`, then register the provider with `nexus.provide(...)`.
+
 ```ts
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app", authToken }),
+nexus.configure({
+  ...usingNodeIpcDaemon({
+    appId: "example-app",
+    authToken: process.env.NEXUS_IPC_TOKEN,
+    configure: false,
+  }),
   policy: {
     canConnect({ platform }) {
       return platform.authenticated === true;
@@ -122,10 +124,9 @@ await nexus.configure({
       return serviceName === "example:echo" && operation === "APPLY";
     },
   },
-  services: [
-    /* ... */
-  ],
 });
+
+nexus.provide(EchoToken, echoService);
 ```
 
 For general policy semantics, read `docs/auth-and-policy.md`.

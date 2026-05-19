@@ -3,6 +3,7 @@ import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { Token } from "./token";
 import type { EndpointOptions } from "./decorators/endpoint";
 import type { ExposeOptions } from "./decorators/expose";
+import { NexusConfigurationError } from "@/errors";
 
 /**
  * A type-safe representation of the service registration data.
@@ -24,6 +25,11 @@ export type EndpointRegistrationData = {
   options: EndpointOptions<UserMetadata>;
 };
 
+export type DecoratorSnapshot = {
+  services: ReadonlyMap<Token<object>, ServiceRegistrationData>;
+  endpoint: EndpointRegistrationData | null;
+};
+
 export namespace DecoratorRegistry {
   /**
    * Stores all services registered via the @Expose decorator.
@@ -37,23 +43,11 @@ export namespace DecoratorRegistry {
    * There can be only one endpoint per JavaScript context.
    */
   let endpoint: EndpointRegistrationData | null = null;
-  let owner: symbol | null = null;
 
-  export type Snapshot = {
-    services: ReadonlyMap<Token<object>, ServiceRegistrationData>;
-    endpoint: EndpointRegistrationData | null;
-  };
+  export type Snapshot = DecoratorSnapshot;
 
   export const hasRegistrations = (): boolean =>
     servicesMap.size > 0 || endpoint !== null;
-
-  export const claim = (instanceOwner: symbol): boolean => {
-    if (owner && owner !== instanceOwner) {
-      return false;
-    }
-    owner = instanceOwner;
-    return true;
-  };
 
   export const snapshot = (): Snapshot => ({
     services: new Map(servicesMap),
@@ -98,6 +92,51 @@ export namespace DecoratorRegistry {
   export const clear = (): void => {
     servicesMap.clear();
     endpoint = null;
-    owner = null;
   };
+}
+
+export class InstanceDecoratorRegistry {
+  private readonly servicesMap = new Map<
+    Token<object>,
+    ServiceRegistrationData
+  >();
+  private readonly serviceTokenIds = new Set<string>();
+  private endpoint: EndpointRegistrationData | null = null;
+
+  public hasRegistrations(): boolean {
+    return this.servicesMap.size > 0 || this.endpoint !== null;
+  }
+
+  public snapshot(): DecoratorSnapshot {
+    return {
+      services: new Map(this.servicesMap),
+      endpoint: this.endpoint,
+    };
+  }
+
+  public registerService(
+    token: Token<object>,
+    data: ServiceRegistrationData,
+  ): void {
+    if (this.serviceTokenIds.has(token.id)) {
+      throw new NexusConfigurationError(
+        `Nexus: Provider for token ID "${token.id}" has already been registered on this Nexus instance.`,
+        "E_DUPLICATE_PROVIDER",
+        { token: token.id },
+      );
+    }
+
+    this.serviceTokenIds.add(token.id);
+    this.servicesMap.set(token, data);
+  }
+
+  public registerEndpoint(data: EndpointRegistrationData): void {
+    if (this.endpoint) {
+      throw new NexusConfigurationError(
+        "Nexus: @Endpoint decorator has already been registered on this Nexus instance.",
+        "E_ENDPOINT_SOURCE_CONFLICT",
+      );
+    }
+    this.endpoint = data;
+  }
 }

@@ -22,7 +22,7 @@ type GetDescriptors<T> = T extends { descriptors: infer D }
   : never;
 
 interface RegisteredService {
-  readonly token: Token<object>;
+  readonly token: Token<object, any, any, any>;
   readonly implementation: object;
 }
 
@@ -32,7 +32,7 @@ export interface MockNexusCreateCall<
   D extends string = string,
 > {
   readonly tokenId: string;
-  readonly token: Token<object>;
+  readonly token: Token<object, any, any, any>;
   readonly options: CreateOptions<U, M, D>;
 }
 
@@ -89,8 +89,9 @@ const isTargetEmpty = <
   M extends string,
   D extends string,
 >(
-  target: TargetCriteria<U, M, D> | undefined,
-): boolean => !target || Object.keys(target).length === 0;
+  target: TargetCriteria<U, M, D> | null | undefined,
+): boolean =>
+  !target || Object.values(target).every((value) => value === undefined);
 
 const unsupportedOperationError = () =>
   new NexusMockError(
@@ -106,7 +107,7 @@ const serviceNotFoundError = (tokenId: string) =>
   );
 
 const invalidCreateOptionsError = () =>
-  new NexusUsageError("Mock Nexus create options must include a target.");
+  new NexusUsageError("Mock Nexus create options must be an object.");
 
 const invalidCreateExpectsError = () =>
   new NexusUsageError("Mock Nexus create expects must be 'one' or 'first'.");
@@ -159,7 +160,7 @@ const resolveTarget = <
   D extends string,
 >(
   tokenId: string,
-  target: TargetCriteria<U, M, D>,
+  target: TargetCriteria<U, M, D> | null | undefined,
   tokenDefaultTarget: TargetCriteria<U, M, D> | undefined,
   connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
 ): Error | null => {
@@ -183,6 +184,21 @@ const resolveTarget = <
     "E_TARGET_NO_MATCH",
     { tokenId },
   );
+};
+
+const getCreateTarget = <
+  U extends UserMetadata,
+  M extends string,
+  D extends string,
+>(
+  target: TargetCriteria<U, M, D> | null | undefined,
+  tokenDefaultTarget: TargetCriteria<U, M, D> | undefined,
+  connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
+): TargetCriteria<U, M, D> | undefined => {
+  if (!isTargetEmpty(target)) return target ?? undefined;
+  if (!isTargetEmpty(tokenDefaultTarget)) return tokenDefaultTarget;
+  if (connectTo?.length === 1) return connectTo[0] as TargetCriteria<U, M, D>;
+  return undefined;
 };
 
 const createAsyncProxy = <T extends object>(implementation: T): Asyncified<T> =>
@@ -236,7 +252,10 @@ export function createMockNexus<
     token: Token<T>,
     implementation: T,
   ): void => {
-    services.set(token.id, { token: token as Token<object>, implementation });
+    services.set(token.id, {
+      token: token as Token<object, any, any, any>,
+      implementation,
+    });
   };
 
   const resolveCreate = <
@@ -245,14 +264,19 @@ export function createMockNexus<
     D extends string = RegisteredDescriptors,
   >(
     token: Token<T> | unknown,
-    options: CreateOptions<U, M, D> | unknown,
+    options: CreateOptions<U, M, D> | unknown = {},
   ): Result<Asyncified<T>, Error> => {
     if (!isToken<T>(token)) {
       return err(invalidTokenError());
     }
+    const typedToken = token as unknown as Token<T, U, M, D>;
+    if (!isPlainRuntimeObject(options)) {
+      return err(invalidCreateOptionsError());
+    }
     if (
-      !isPlainRuntimeObject(options) ||
-      !("target" in options) ||
+      "target" in options &&
+      options.target !== null &&
+      options.target !== undefined &&
       !isPlainRuntimeObject(options.target)
     ) {
       return err(invalidCreateOptionsError());
@@ -275,32 +299,34 @@ export function createMockNexus<
 
     const typedOptions = options as unknown as CreateOptions<U, M, D>;
 
-    const targetingError = resolveTarget(
-      token.id,
+    const tokenDefaultTarget =
+      typedToken.defaultCreate?.target ?? typedToken.defaultTarget;
+    const finalTarget = getCreateTarget(
       typedOptions.target,
-      token.defaultTarget as TargetCriteria<U, M, D> | undefined,
+      tokenDefaultTarget,
+      connectTo,
+    );
+
+    const targetingError = resolveTarget(
+      typedToken.id,
+      typedOptions.target,
+      tokenDefaultTarget,
       connectTo,
     );
     if (targetingError) return err(targetingError);
 
-    const fallbackTarget = isTargetEmpty(typedOptions.target)
-      ? token.defaultTarget && !isTargetEmpty(token.defaultTarget)
-        ? (token.defaultTarget as TargetCriteria<U, string, string>)
-        : connectTo?.length === 1
-          ? connectTo[0]
-          : typedOptions.target
-      : typedOptions.target;
-
-    const namedTargetError = resolveNamedTarget(
-      fallbackTarget as TargetCriteria<U, string, string>,
-      namedDescriptors,
-      namedMatchers,
-    );
-    if (namedTargetError) return err(namedTargetError);
+    if (finalTarget) {
+      const namedTargetError = resolveNamedTarget(
+        finalTarget as TargetCriteria<U, string, string>,
+        namedDescriptors,
+        namedMatchers,
+      );
+      if (namedTargetError) return err(namedTargetError);
+    }
 
     createCalls.push({
-      tokenId: token.id,
-      token: token as Token<object>,
+      tokenId: typedToken.id,
+      token: typedToken as Token<object, any, any, any>,
       options: typedOptions as unknown as CreateOptions<
         U,
         RegisteredMatchers,
@@ -308,11 +334,11 @@ export function createMockNexus<
       >,
     });
 
-    const injectedFailure = failures.get(token.id);
+    const injectedFailure = failures.get(typedToken.id);
     if (injectedFailure) return err(injectedFailure);
 
-    const registered = services.get(token.id);
-    if (!registered) return err(serviceNotFoundError(token.id));
+    const registered = services.get(typedToken.id);
+    if (!registered) return err(serviceNotFoundError(typedToken.id));
 
     return ok<Asyncified<T>, Error>(
       createAsyncProxy(registered.implementation as T),
@@ -423,7 +449,7 @@ export function createMockNexus<
 
   const create = async <T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
+    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
   ): Promise<Asyncified<T>> => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
       token,
@@ -435,7 +461,7 @@ export function createMockNexus<
 
   const safeCreate = <T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
+    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
   ) => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
       token,

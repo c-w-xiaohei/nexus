@@ -161,15 +161,6 @@ describe("Nexus L4 Integration: Target Resolution and Discovery", () => {
   });
 
   it("should use named and compound matchers for discovery", async () => {
-    world.background.nexus.configure({
-      matchers: {
-        "is-active": (id) => id.context === "content-script" && id.isActive,
-        "is-github-issue": (id) =>
-          id.context === "content-script" &&
-          id.url.startsWith("github.com/issue"),
-      },
-    });
-
     const activeGitHubTab = await world.background.nexus.create(
       ContentScriptServiceToken,
       {

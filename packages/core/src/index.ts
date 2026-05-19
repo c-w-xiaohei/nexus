@@ -4,6 +4,7 @@ export { Expose } from "./api/decorators/expose";
 export { Endpoint } from "./api/decorators/endpoint";
 
 export { Token } from "./api/token";
+export type { TokenOptions } from "./api/token";
 export { TokenSpace } from "./api/token-space";
 export type {
   TokenSpaceConfig,
@@ -28,6 +29,8 @@ export type {
   CreateOptions,
   CreateMulticastOptions,
   TargetCriteria,
+  TokenCreateDefaults,
+  NamedDefaultOptIn,
   TargetDescriptor,
   TargetMatcher,
   MessageTarget,

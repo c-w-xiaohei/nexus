@@ -30,10 +30,17 @@ Nexus separates compile-time service shape from runtime identity:
 The core Nexus model is:
 
 1. define a contract and token in shared code
-2. expose a service in one runtime context
-3. create and call a typed proxy from another context
+2. configure the local Nexus face with `configure()` or an adapter helper
+3. publish a provider on that face with `@nexus.Expose(...)` or `provide(...)`
+4. create and call a session-bound typed proxy from another context
 
 This gives local-like API ergonomics while preserving explicit cross-context boundaries.
+
+Formal API roles:
+
+- `configure()` configures the local Nexus face: endpoint, identity, policy, descriptors, matchers, and bootstrap composition.
+- `@nexus.Expose(...)` and `provide(...)` publish providers on that local face.
+- `create()` discovers a session-bound remote handle using the call site's target resolution rules.
 
 ## Session-Bound Proxies And Connection-Bound References
 
@@ -88,9 +95,9 @@ That is why `configure()` matters at the product level.
 
 Nexus does not infer the current context magically. It needs an endpoint implementation and metadata in order to route and accept connections.
 
-Service registration is optional at the level of a single context boot. It becomes necessary when you want that context to expose callable services to others.
+Provider registration is optional at the level of a single context boot. It becomes necessary when you want that context to expose callable services to others. Use `@nexus.Expose(...)` for class declarations and `provide(...)` for object, function, State, Relay, or live providers.
 
-If you use decorators for endpoint or service registration, remember that those registrations are process-global. Multi-instance setups must use explicit `configure({ endpoint, services })` input.
+Decorator factories are bound to the Nexus instance captured by the decorator expression. `@nexus.Expose(...)` and `@nexus.Endpoint(...)` bind to the default singleton; `@specificNexus.Expose(...)` and `@specificNexus.Endpoint(...)` bind to that specific instance. Top-level `@Expose(...)` and `@Endpoint(...)` remain compatibility shorthand for the default singleton, not the new multi-instance authoring path.
 
 ## Multiple Nexus Instances In One Runtime
 
@@ -115,7 +122,7 @@ one-way client for a single destination.
 
 Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. They do not automatically share a connection graph.
 
-Do not use `@Expose` or `@Endpoint` with this pattern. Decorator registrations are process-global, so one instance can consume registrations that another instance expected to own. Register services and endpoints through explicit `configure({ endpoint, services })` calls instead.
+Do not use top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)` with this pattern. Configure endpoints explicitly, publish object providers with instance-local `provide(...)`, and bind class services or endpoint decorators to the owning instance with forms such as `@extensionNexus.Expose(...)` or `@brokerNexus.Endpoint(...)`.
 
 Bridge between instances with normal services:
 
@@ -137,11 +144,13 @@ Nexus routes calls through target descriptors and matching rules.
 
 For unicast proxy creation, Nexus resolves target intent in this order:
 
-1. explicit `create(..., { target })`
-2. token default target
+1. explicit non-empty `create(..., { target })`
+2. token `defaultCreate.target`
 3. unique endpoint `connectTo` fallback
 
-`create()` still takes an options object. The fallback logic only changes how Nexus resolves target intent inside that call.
+Token defaults are consumer-side create defaults, not provider locations. A provider is still published on the local Nexus face where `@nexus.Expose(...)` or `provide(...)` runs.
+
+`expects` is a call-site topology assertion. Put it on `create(...)` when the caller requires one or many matches; do not encode it in token defaults.
 
 If there is no unique target, proxy creation fails.
 

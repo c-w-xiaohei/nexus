@@ -4,7 +4,9 @@ import {
   RemoteProxyRecord,
 } from "./types";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import { NexusConfigurationError } from "@/errors";
 import { Logger } from "@/logger";
+import { err, ok, type Result } from "neverthrow";
 
 export namespace ResourceManager {
   export interface ExposedServiceRecord {
@@ -20,6 +22,9 @@ export namespace ResourceManager {
     ): void;
     getExposedService(name: string): object | undefined;
     getExposedServiceRecord(name: string): ExposedServiceRecord | undefined;
+    safeRegisterExposedServicesBatch(
+      services: readonly ExposedServiceBatchRegistration[],
+    ): Result<void, Error>;
     listExposedServices(): readonly object[];
     registerLocalResource(
       target: object,
@@ -46,6 +51,12 @@ export namespace ResourceManager {
     listRemoteProxyIdsBySource(connectionId: string): string[];
     listLocalResourceIdsByOwner(connectionId: string): string[];
     cleanupConnection(connectionId: string): void;
+  }
+
+  export interface ExposedServiceBatchRegistration {
+    readonly name: string;
+    readonly service: object;
+    readonly policy?: NexusAuthorizationPolicy<any, any>;
   }
 
   export const create = (): Runtime => {
@@ -75,6 +86,45 @@ export namespace ResourceManager {
     const getExposedServiceRecord = (
       name: string,
     ): ExposedServiceRecord | undefined => exposedServices.get(name);
+
+    const safeRegisterExposedServicesBatch = (
+      services: readonly ExposedServiceBatchRegistration[],
+    ): Result<void, Error> => {
+      const seen = new Set<string>();
+      const duplicateNames = new Set<string>();
+      for (const registration of services) {
+        if (
+          seen.has(registration.name) ||
+          exposedServices.has(registration.name)
+        ) {
+          duplicateNames.add(registration.name);
+        }
+        seen.add(registration.name);
+      }
+
+      if (duplicateNames.size > 0) {
+        return err(
+          new NexusConfigurationError(
+            `Nexus: Provider token id already registered: ${Array.from(duplicateNames).join(", ")}.`,
+            "E_PROVIDER_DUPLICATE_TOKEN",
+            { duplicateTokenIds: Array.from(duplicateNames) },
+          ),
+        );
+      }
+
+      for (const registration of services) {
+        logger.debug(
+          `Registered exposed service: "${registration.name}"`,
+          registration.service,
+        );
+        exposedServices.set(registration.name, {
+          service: registration.service,
+          policy: registration.policy,
+        });
+      }
+
+      return ok(undefined);
+    };
 
     const listExposedServices = (): readonly object[] =>
       Array.from(exposedServices.values(), ({ service }) => service);
@@ -201,6 +251,7 @@ export namespace ResourceManager {
       registerExposedService,
       getExposedService,
       getExposedServiceRecord,
+      safeRegisterExposedServicesBatch,
       listExposedServices,
       registerLocalResource,
       getLocalResource,

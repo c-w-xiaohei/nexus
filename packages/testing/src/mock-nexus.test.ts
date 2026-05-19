@@ -174,10 +174,6 @@ describe("createMockNexus", () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     mock.service(ExampleToken, createExampleService());
 
-    const missingOptions = await mock.nexus.safeCreate(
-      ExampleToken,
-      undefined as never,
-    );
     const invalidToken = await mock.nexus.safeCreate(
       { id: "not-a-token" } as never,
       createOptions,
@@ -186,7 +182,7 @@ describe("createMockNexus", () => {
       target: [] as never,
     });
 
-    for (const result of [missingOptions, invalidToken, arrayTarget]) {
+    for (const result of [invalidToken, arrayTarget]) {
       expect(result.isErr()).toBe(true);
       if (result.isErr()) {
         expect(result.error).toBeInstanceOf(NexusUsageError);
@@ -304,6 +300,38 @@ describe("createMockNexus", () => {
     await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
   });
 
+  it("accepts omitted create options when the token has a defaultCreate target", async () => {
+    const tokenWithDefaultCreate = new Token<ExampleService>(
+      "testing:default-create-target",
+      {
+        defaultCreate: {
+          target: { descriptor: { context: "background" } },
+        },
+      },
+    );
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(tokenWithDefaultCreate, createExampleService());
+
+    const proxy = await mock.nexus.create(tokenWithDefaultCreate);
+
+    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
+  });
+
+  it("accepts omitted create options when endpoint connectTo has one target", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(ExampleToken, createExampleService());
+    mock.nexus.configure({
+      endpoint: {
+        meta: { context: "content" },
+        connectTo: [{ descriptor: { context: "background" } }],
+      },
+    });
+
+    const proxy = await mock.nexus.create(ExampleToken);
+
+    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
+  });
+
   it("accepts an empty target when endpoint connectTo has one target", async () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     mock.service(ExampleToken, createExampleService());
@@ -362,6 +390,15 @@ describe("createMockNexus", () => {
     await expect(
       mock.nexus.create(ExampleToken, { target: {} }),
     ).rejects.toMatchObject({ code: "E_TARGET_NO_MATCH" });
+  });
+
+  it("rejects omitted create options without a default target or connectTo fallback", async () => {
+    const mock = createMockNexus<AppMeta, PlatformMeta>();
+    mock.service(ExampleToken, createExampleService());
+
+    await expect(mock.nexus.create(ExampleToken)).rejects.toMatchObject({
+      code: "E_TARGET_NO_MATCH",
+    });
   });
 
   it("records configure, registers services, and does not execute policy", async () => {
@@ -779,14 +816,10 @@ describe("createMockNexus", () => {
 
     // @ts-expect-error mock.nexus does not evolve in place
     mock.nexus.matchers.and("active");
-    expectTypeOf(mock.nexus.create).parameter(1).toEqualTypeOf<{
-      target: {
-        descriptor?: Partial<AppMeta>;
-        matcher?: (identity: AppMeta) => boolean;
-      };
-      expects?: "one" | "first";
-      timeout?: number;
-    }>();
+    if (false) {
+      mock.nexus.create(ExampleToken);
+      mock.nexus.safeCreate(ExampleToken);
+    }
 
     mock.nexus.matchers.and((identity) => identity.context === "background");
     mock.nexus.matchers.or((identity) => identity.active === true);

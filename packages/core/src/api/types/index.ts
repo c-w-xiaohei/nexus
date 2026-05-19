@@ -3,10 +3,17 @@ import type { RefWrapper } from "@/types/ref-wrapper";
 import type { Token } from "../token";
 import type {
   NexusConfig,
+  ServiceRegistration,
+  AuthorizationPolicy,
   CreateOptions,
   TargetMatcher,
   CreateMulticastOptions,
 } from "./config";
+import type { ExposeOptions, NexusClassDecorator } from "../decorators/expose";
+import type {
+  EndpointOptions,
+  NexusEndpointDecorator,
+} from "../decorators/endpoint";
 import type { SerializedError } from "@/types/message";
 import type { Result, ResultAsync } from "neverthrow";
 
@@ -102,6 +109,29 @@ export interface NexusInstance<
     RegisteredDescriptors | GetDescriptors<T>
   >;
 
+  provide<T extends object>(
+    token: Token<T>,
+    implementation: T,
+    options?: { policy?: AuthorizationPolicy<U, P> },
+  ): this;
+  provide<T extends object>(registration: ServiceRegistration<T, U, P>): this;
+  provide(registrations: readonly ServiceRegistration<object, U, P>[]): this;
+
+  safeProvide<T extends object>(
+    token: Token<T>,
+    implementation: T,
+    options?: { policy?: AuthorizationPolicy<U, P> },
+  ): Result<this, Error>;
+  safeProvide<T extends object>(
+    registration: ServiceRegistration<T, U, P>,
+  ): Result<this, Error>;
+  safeProvide(
+    registrations: readonly ServiceRegistration<object, U, P>[],
+  ): Result<this, Error>;
+
+  ready(): Promise<void>;
+  safeReady(): ResultAsync<void, Error>;
+
   /**
    * Creates a proxy for a single remote service.
    * This method performs immediate connection resolution and will fail fast
@@ -114,12 +144,12 @@ export interface NexusInstance<
    */
   create<T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
+    options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): Promise<Asyncified<T>>;
 
   safeCreate<T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
+    options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): ResultAsync<Asyncified<T>, Error>;
 
   /**
@@ -193,6 +223,12 @@ export interface NexusInstance<
   safeRef<T extends object>(target: T): Result<RefWrapper<T>, Error>;
   release(proxy: object): void;
   safeRelease(proxy: object): Result<void, Error>;
+
+  readonly Expose: <T extends object>(
+    token: Token<T>,
+    options?: ExposeOptions,
+  ) => NexusClassDecorator<T>;
+  readonly Endpoint: (options: EndpointOptions<U>) => NexusEndpointDecorator<U>;
 
   // Utilities
   readonly matchers: MatcherUtils<U, RegisteredMatchers>;

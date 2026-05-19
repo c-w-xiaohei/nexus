@@ -88,6 +88,31 @@ describe("TargetResolver.resolveUnicastTarget", () => {
     }
   });
 
+  it("should treat undefined, null, empty object, and undefined-only target as empty", () => {
+    const tokenDefault = { descriptor: { context: "background" as const } };
+
+    for (const target of [
+      undefined,
+      null,
+      {},
+      { descriptor: undefined },
+      { matcher: undefined },
+      { descriptor: undefined, matcher: undefined },
+    ]) {
+      const result = TargetResolver.resolveUnicastTarget<Meta>(
+        target,
+        tokenDefault,
+        undefined,
+        "token-empty",
+      );
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value).toEqual(tokenDefault);
+      }
+    }
+  });
+
   it("should return error for ambiguous connectTo and empty target", () => {
     const ambiguous = TargetResolver.resolveUnicastTarget<Meta>(
       {},

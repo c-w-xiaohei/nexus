@@ -1,7 +1,8 @@
 import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 import type { IEndpoint } from "@/transport";
 import type { TargetCriteria } from "../types/config";
-import { DecoratorRegistry } from "../registry";
+import type { EndpointRegistrationData } from "../registry";
+import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { fn } from "@/utils/fn";
 import { z } from "zod";
@@ -55,13 +56,35 @@ const EndpointOptionsSchema = z.object({
 
 const validateEndpointOptions = fn(EndpointOptionsSchema, (input) => input);
 
+export type NexusEndpointDecorator<U extends UserMetadata = UserMetadata> = (
+  targetClass: new (...args: unknown[]) => IEndpoint<U, object>,
+  context: ClassDecoratorContext,
+) => void;
+
 /**
  * `@Endpoint` 装饰器，用于将一个类声明为当前上下文的通信端点。
  * 它将端点的身份 (`meta`)、连接行为 (`connectTo`) 和平台实现 (`IEndpoint` 类) 内聚在一起。
  *
  * @param options 配置选项，包含 `meta` 和可选的 `connectTo`。
  */
-export function Endpoint<U extends UserMetadata>(options: EndpointOptions<U>) {
+export function createEndpointDecorator(registry: {
+  registerEndpoint(data: EndpointRegistrationData): void;
+}): <U extends UserMetadata>(
+  options: EndpointOptions<U>,
+) => NexusEndpointDecorator<U> {
+  return (options) => createEndpointDecoratorForRegistry(registry, options);
+}
+
+export function Endpoint<U extends UserMetadata>(
+  options: EndpointOptions<U>,
+): NexusEndpointDecorator<U> {
+  return nexus.Endpoint(options);
+}
+
+function createEndpointDecoratorForRegistry<U extends UserMetadata>(
+  registry: { registerEndpoint(data: EndpointRegistrationData): void },
+  options: EndpointOptions<U>,
+) {
   const validatedOptions = validateEndpointOptions(options);
   if (validatedOptions.isErr()) {
     throw new NexusUsageError(
@@ -82,7 +105,7 @@ export function Endpoint<U extends UserMetadata>(options: EndpointOptions<U>) {
     }
 
     // 阶段一：仅收集注册意图到新的静态类中。
-    DecoratorRegistry.registerEndpoint({
+    registry.registerEndpoint({
       targetClass,
       options: validatedOptions.value as EndpointOptions<UserMetadata>,
     });

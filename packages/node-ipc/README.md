@@ -44,18 +44,10 @@ import { nexus } from "@nexus-js/core";
 import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
 import { EchoToken } from "./shared";
 
-await nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app" }),
-  services: [
-    {
-      token: EchoToken,
-      implementation: {
-        async echo(input) {
-          return `echo:${input}`;
-        },
-      },
-    },
-  ],
+usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
+  async echo(input) {
+    return `echo:${input}`;
+  },
 });
 ```
 
@@ -66,18 +58,16 @@ import { nexus } from "@nexus-js/core";
 import { usingNodeIpcClient } from "@nexus-js/node-ipc";
 import { EchoToken } from "./shared";
 
-await nexus.configure(
-  usingNodeIpcClient({
-    appId: "example-app",
-    connectTo: { appId: "example-app" },
-  }),
-);
-
-const echo = await nexus.create(EchoToken, {
-  target: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-  },
+usingNodeIpcClient({
+  appId: "example-app",
+  connectTo: [
+    {
+      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    },
+  ],
 });
+
+const echo = await nexus.create(EchoToken);
 
 console.log(await echo.echo("hello"));
 ```
@@ -89,6 +79,7 @@ console.log(await echo.echo("hello"));
 - `instance` defaults to `default`
 - Shared-secret pre-auth is optional and configured with `authToken`
 - Core `policy.canConnect` and `policy.canCall` remain the authorization authority after pre-auth
+- `create(EchoToken)` requires a token `defaultCreate.target` or a unique `connectTo` fallback; use explicit `target` plus `expects` for complex daemon topologies
 - Proxies and refs are session-bound; recreate them after daemon restart or disconnect
 
 ## Error Codes

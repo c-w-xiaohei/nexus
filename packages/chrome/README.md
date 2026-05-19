@@ -13,7 +13,8 @@ npm install @nexus-js/chrome @nexus-js/core
 ### Background Script
 
 ```typescript
-import { usingBackgroundScript, nexus, Expose, Token } from "@nexus-js/chrome";
+import { Token } from "@nexus-js/core";
+import { usingBackgroundScript } from "@nexus-js/chrome";
 
 // Define service interface and token
 interface IBackgroundService {
@@ -26,10 +27,10 @@ const BackgroundServiceToken = new Token<IBackgroundService>(
 );
 
 // Configure Nexus for background context
-usingBackgroundScript();
+const backgroundNexus = usingBackgroundScript();
 
-// Expose service
-@Expose(BackgroundServiceToken)
+// Expose a class service on the configured background instance
+@backgroundNexus.Expose(BackgroundServiceToken)
 class BackgroundService implements IBackgroundService {
   async getSettings() {
     return await chrome.storage.sync.get("settings");
@@ -44,7 +45,8 @@ class BackgroundService implements IBackgroundService {
 ### Content Script
 
 ```typescript
-import { usingContentScript, nexus } from "@nexus-js/chrome";
+import { nexus } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for content script context
@@ -52,9 +54,7 @@ usingContentScript();
 
 // Use background service
 async function main() {
-  const backgroundService = await nexus.create(BackgroundServiceToken, {
-    target: { descriptor: { context: "background" } },
-  });
+  const backgroundService = await nexus.create(BackgroundServiceToken);
 
   const settings = await backgroundService.getSettings();
   console.log("Settings:", settings);
@@ -66,16 +66,15 @@ main();
 ### Popup
 
 ```typescript
-import { usingPopup, nexus } from "@nexus-js/chrome";
+import { nexus } from "@nexus-js/core";
+import { usingPopup } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for popup context
 async function initPopup() {
   await usingPopup();
 
-  const backgroundService = await nexus.create(BackgroundServiceToken, {
-    target: { descriptor: { context: "background" } },
-  });
+  const backgroundService = await nexus.create(BackgroundServiceToken);
 
   // Use the service
   const settings = await backgroundService.getSettings();
@@ -92,6 +91,14 @@ initPopup();
 - **Pre-configured matchers** for common scenarios
 - **Zero-configuration setup** for standard use cases
 - **Full TypeScript support** with discriminated union types
+
+Content scripts, popups, and options pages can usually call background services with `nexus.create(Token)` when the Token has a `defaultCreate.target` for the background or the adapter has a unique background `connectTo` fallback. Background-to-content-script calls usually need an explicit descriptor or matcher because there may be many content scripts. After active-tab handoff, an old raw proxy does not drift to the new active tab; call `nexus.create(...)` again.
+
+For object services, Nexus State stores, or Relay providers, configure the runtime and call `provide(...)` instead of using class decorators:
+
+```typescript
+usingBackgroundScript().provide(BackgroundServiceToken, backgroundService);
+```
 
 ## API Reference
 

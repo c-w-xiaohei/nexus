@@ -9,7 +9,6 @@ import type { NexusConfig, ServiceRegistration } from "./types/config";
 import { merge } from "es-toolkit";
 import type { Token } from "./token";
 import { Transport } from "@/transport";
-import type { NexusInstance } from "./types";
 import type { NexusMessage } from "@/types/message";
 import type {
   EndpointRegistrationData,
@@ -45,7 +44,7 @@ export namespace NexusKernelBuilder {
     initialConfig: NexusConfig<U, P, string, string>,
     serviceRegistry: ReadonlyMap<Token<object>, ServiceRegistrationData>,
     endpointRegistration: EndpointRegistrationData | null,
-    nexusInstance: NexusInstance<U, P, string, string>,
+    _nexusInstance: unknown,
     namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
     namedDescriptors: ReadonlyMap<string, Partial<U>>,
   ): Runtime<U, P> => {
@@ -53,6 +52,29 @@ export namespace NexusKernelBuilder {
       NexusConfig<U, P, string, string>
     > => {
       let finalConfig = initialConfig;
+
+      const hasExplicitEndpoint = finalConfig.endpoint !== undefined;
+      if (endpointRegistration && hasExplicitEndpoint) {
+        throw new NexusConfigurationError(
+          "Nexus: configure({ endpoint }) and @nexus.Endpoint(...) cannot both define the bootstrap endpoint.",
+          "E_ENDPOINT_SOURCE_CONFLICT",
+        );
+      }
+
+      const providerIds = new Set<string>();
+      for (const registration of finalConfig.services ?? []) {
+        if (providerIds.has(registration.token.id)) {
+          throw createProviderBatchError(registration.token.id);
+        }
+        providerIds.add(registration.token.id);
+      }
+
+      for (const token of serviceRegistry.keys()) {
+        if (providerIds.has(token.id)) {
+          throw createProviderBatchError(token.id);
+        }
+        providerIds.add(token.id);
+      }
 
       if (endpointRegistration) {
         const { targetClass, options } = endpointRegistration;
@@ -78,7 +100,11 @@ export namespace NexusKernelBuilder {
           let implementation: object;
           if (options?.factory) {
             implementation = await Promise.resolve(
-              options.factory(nexusInstance as NexusInstance),
+              options.factory({
+                targetClass,
+                token,
+                localMeta: finalConfig.endpoint?.meta,
+              }),
             );
           } else {
             implementation = new targetClass();
@@ -99,6 +125,35 @@ export namespace NexusKernelBuilder {
           ...finalConfig,
           services: [...(finalConfig.services ?? []), ...decoratedServices],
         };
+      }
+
+      const seenTokenIds = new Set<string>();
+      const duplicateErrors: NexusConfigurationError[] = [];
+      for (const registration of finalConfig.services ?? []) {
+        const tokenId = registration.token.id;
+        if (seenTokenIds.has(tokenId)) {
+          duplicateErrors.push(
+            new NexusConfigurationError(
+              `Nexus: Provider token id "${tokenId}" is already registered.`,
+              "E_PROVIDER_DUPLICATE_TOKEN",
+              { tokenId },
+            ),
+          );
+        }
+        seenTokenIds.add(tokenId);
+      }
+      if (duplicateErrors.length > 0) {
+        throw new NexusConfigurationError(
+          "Nexus: provider batch registration failed validation.",
+          "E_PROVIDER_BATCH_INVALID",
+          {
+            errors: duplicateErrors.map((error) => ({
+              message: error.message,
+              code: error.code,
+              context: error.context,
+            })),
+          },
+        );
       }
 
       return finalConfig;
@@ -244,4 +299,26 @@ export namespace NexusKernelBuilder {
 
     return { build };
   };
+}
+
+function createProviderBatchError(tokenId: string): NexusConfigurationError {
+  const duplicateError = new NexusConfigurationError(
+    `Nexus: Provider token id "${tokenId}" is already registered.`,
+    "E_PROVIDER_DUPLICATE_TOKEN",
+    { tokenId },
+  );
+
+  return new NexusConfigurationError(
+    "Nexus: provider batch registration failed validation.",
+    "E_PROVIDER_BATCH_INVALID",
+    {
+      errors: [
+        {
+          message: duplicateError.message,
+          code: duplicateError.code,
+          context: duplicateError.context,
+        },
+      ],
+    },
+  );
 }
