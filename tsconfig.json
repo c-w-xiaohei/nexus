@@ -18,11 +18,7 @@
     "skipLibCheck": true,
     "target": "ESNext",
     "module": "esnext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable", "ESNext"],
-    "paths": {
-      "@nexus/core": ["./packages/core/src"],
-      "@nexus/chrome-adapter": ["./packages/chrome/src"]
-    }
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "ESNext"]
   },
   "exclude": ["node_modules"]
 }

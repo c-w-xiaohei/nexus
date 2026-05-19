@@ -121,6 +121,22 @@ Add `Nexus State` only after:
 
 At that point, adding `Nexus State` is a layering decision, not a bootstrap requirement.
 
+## Testing Strategy
+
+Choose the test layer based on what you need to prove:
+
+| Behavior                                                                      | Test with                                                                  |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Application code calls the right Nexus service Token                          | `@nexus-js/testing` and `createMockNexus()`                                |
+| React components receive a Nexus instance                                     | `NexusProvider` with `createMockNexus()`                                   |
+| Nexus State application code consumes a store service contract                | `createMockNexus()` plus real state service registration where appropriate |
+| Iframe origin, source window, nonce, heartbeat, or reload behavior            | iframe adapter tests or browser integration tests                          |
+| Node IPC socket path, framing, shared-secret auth, or daemon restart behavior | node-ipc real socket integration tests                                     |
+| Chrome runtime ports, tabs, frames, or service worker behavior                | Chrome adapter tests or extension E2E tests                                |
+| Core connection lifecycle, authorization, routing, or multicast semantics     | core integration tests                                                     |
+
+`createMockNexus()` is for user-level unit tests at the Nexus API seam. It does not create runtime contexts, endpoints, transports, or real connections.
+
 ## Related Guides
 
 - Product docs landing: `docs/README.md`
@@ -130,3 +146,4 @@ At that point, adding `Nexus State` is a layering decision, not a bootstrap requ
 - Iframe adapter docs: `docs/iframe/README.md`
 - Node IPC adapter docs: `docs/node-ipc/README.md`
 - Nexus State subsystem docs: `docs/state/README.md`
+- Testing application code: `docs/testing/README.md`
