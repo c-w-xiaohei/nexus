@@ -35,7 +35,7 @@ pnpm build
 
 ### Example Usage (Chrome Extension Scenario)
 
-Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages the `@nexus-js/chrome` package for simplified setup.
+Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages `@nexus-js/chrome` for simplified setup.
 
 **1. Define Shared Types and Service Contract**
 
