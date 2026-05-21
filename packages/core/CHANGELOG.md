@@ -1,5 +1,11 @@
 # @nexus-js/core
 
+## 0.3.0
+
+### Minor Changes
+
+- 9332801: Replace `provideNexusStore` with `createNexusStore`, returning both the Nexus service registration config and a local authoritative store handle.
+
 ## 0.2.0
 
 ### Minor Changes
