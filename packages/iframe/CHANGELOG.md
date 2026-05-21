@@ -1,5 +1,12 @@
 # @nexus-js/iframe
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [9332801]
+  - @nexus-js/core@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
