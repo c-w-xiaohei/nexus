@@ -10,7 +10,7 @@ import { createStarNetwork } from "../../src/utils/test-utils";
 import {
   connectNexusStore,
   defineNexusStore,
-  provideNexusStore,
+  createNexusStore,
   type NexusStoreServiceContract,
 } from "../../src/state";
 
@@ -40,7 +40,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
         meta: { context: "background" },
         services: {
           [counterStore.token.id]:
-            provideNexusStore(counterStore).implementation,
+            createNexusStore(counterStore).config.implementation,
         },
       },
       leaves: [
@@ -100,7 +100,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
         meta: { context: "background" },
         services: {
           [counterStore.token.id]:
-            provideNexusStore(counterStore).implementation,
+            createNexusStore(counterStore).config.implementation,
         },
       },
       leaves: [
@@ -308,7 +308,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const createHostService = () =>
-      provideNexusStore(definition)
+      createNexusStore(definition).config
         .implementation as CounterActions extends Record<
         string,
         (...args: any[]) => any
@@ -472,7 +472,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const createHostService = () =>
-      provideNexusStore(definition)
+      createNexusStore(definition).config
         .implementation as CounterActions extends Record<
         string,
         (...args: any[]) => any

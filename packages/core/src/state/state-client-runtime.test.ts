@@ -17,7 +17,7 @@ import {
   NexusStoreProtocolError,
   normalizeNexusStoreError,
 } from "./errors";
-import { provideNexusStore } from "./provide-store";
+import { createNexusStore } from "./create-store";
 import type { NexusStoreServiceContract } from "./types";
 import {
   connectNexusStore,
@@ -509,7 +509,7 @@ describe("state client runtime and connect APIs", () => {
         meta: { context: "background" },
         services: {
           [counterStore.token.id]:
-            provideNexusStore(counterStore).implementation,
+            createNexusStore(counterStore).config.implementation,
         },
       },
       leaves: [
@@ -553,7 +553,7 @@ describe("state client runtime and connect APIs", () => {
       }),
     });
 
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const network = await createStarNetwork<Meta, { from: string }>({
       center: {
         meta: { context: "background" },
@@ -617,8 +617,8 @@ describe("state client runtime and connect APIs", () => {
       }),
     });
 
-    const registration1 = provideNexusStore(definition);
-    const registration2 = provideNexusStore(definition);
+    const { config: registration1 } = createNexusStore(definition);
+    const { config: registration2 } = createNexusStore(definition);
 
     const network = await createStarNetwork<Meta, { from: string }>({
       center: {
@@ -677,7 +677,7 @@ describe("state client runtime and connect APIs", () => {
 
   it("safeConnectNexusStore returns ResultAsync", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const network = await createStarNetwork<
       { context: "background" | "popup" },
       { from: string }
@@ -2541,7 +2541,7 @@ describe("state client runtime and connect APIs", () => {
 
   it("disconnect behavior composes with host cleanup capability", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
 
     const setup = await createL3Endpoints(
       {

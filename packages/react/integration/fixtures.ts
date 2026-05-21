@@ -1,7 +1,7 @@
 import { Nexus, Token, type IEndpoint, type IPort } from "@nexus-js/core";
 import {
+  createNexusStore,
   defineNexusStore,
-  provideNexusStore,
   type NexusStoreDefinition,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
@@ -336,7 +336,7 @@ export const createReactNexusHarness = async (
     );
 
     const definition = createDefinitionWithInitialState(host.initialCount ?? 0);
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const activeSubscriptions = new Set<string>();
     subscriptionCounts.set(host.id, activeSubscriptions);
 

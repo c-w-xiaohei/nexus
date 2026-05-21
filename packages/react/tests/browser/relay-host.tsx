@@ -1,6 +1,6 @@
 import { Nexus } from "@nexus-js/core";
 import {
-  provideNexusStore,
+  createNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
 import { usingIframeParent } from "@nexus-js/iframe";
@@ -62,7 +62,7 @@ function instrumentStore(implementation: StoreImplementation) {
   return wrapper;
 }
 
-const registration = provideNexusStore(counterStore);
+const { config: registration } = createNexusStore(counterStore);
 const hostNexus = new Nexus().configure({
   ...usingIframeParent({
     configure: false,

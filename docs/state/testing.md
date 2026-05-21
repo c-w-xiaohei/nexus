@@ -13,13 +13,14 @@ const mock = createMockNexus();
 mock.service(UserToken, userService);
 ```
 
-For Nexus State app code, prefer registering the real store service contract with `provideNexusStore(...)` instead of hand-writing `NexusStoreServiceContract` objects:
+For Nexus State app code, prefer registering the real store service contract from `createNexusStore(...)` instead of hand-writing `NexusStoreServiceContract` objects:
 
 ```ts
 const mock = createMockNexus();
+const { config, store } = createNexusStore(counterStore);
 
 mock.nexus.configure({
-  services: [provideNexusStore(counterStore)],
+  services: [config],
   endpoint: {
     meta: { context: "background" },
     connectTo: [{ descriptor: { context: "background" } }],
@@ -29,6 +30,8 @@ mock.nexus.configure({
 const remote = await connectNexusStore(mock.nexus, counterStore, {
   target: { descriptor: { context: "background" } },
 });
+
+expect(store.getState()).toEqual(remote.getState());
 ```
 
 React component tests should inject the mock instance through `NexusProvider`:
@@ -54,7 +57,7 @@ Use focused Nexus State runtime tests when you want to verify:
 Current examples live in:
 
 - `packages/core/src/state/state-host-runtime.test.ts`
-- `packages/core/src/state/state-provide-store.test.ts`
+- `packages/core/src/state/state-create-store.test.ts`
 - `packages/core/src/state/state-client-runtime.test.ts`
 - `packages/core/src/state/state-errors.test.ts`
 - `packages/core/src/state/state.test.ts`

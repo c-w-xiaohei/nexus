@@ -11,7 +11,7 @@ import {
   connectNexusStore,
   defineNexusStore,
   NexusStoreDisconnectedError,
-  provideNexusStore,
+  createNexusStore,
 } from "../../src/state";
 
 import type { AppPlatformMeta, AppUserMeta } from "../fixtures";
@@ -53,8 +53,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
       },
     });
 
-    const cs1Registration = provideNexusStore(definition);
-    const cs2Registration = provideNexusStore(definition);
+    const { config: cs1Registration } = createNexusStore(definition);
+    const { config: cs2Registration } = createNexusStore(definition);
 
     const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
       center: {
@@ -144,8 +144,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
       },
     });
 
-    const cs1Registration = provideNexusStore(definition);
-    const cs2Registration = provideNexusStore(definition);
+    const { config: cs1Registration } = createNexusStore(definition);
+    const { config: cs2Registration } = createNexusStore(definition);
 
     const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
       center: {

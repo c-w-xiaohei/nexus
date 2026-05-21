@@ -22,7 +22,7 @@ type GetDescriptors<T> = T extends { descriptors: infer D }
   : never;
 
 interface RegisteredService {
-  readonly token: Token<object, any, any, any>;
+  readonly token: Token<object, any, any>;
   readonly implementation: object;
 }
 
@@ -32,7 +32,7 @@ export interface MockNexusCreateCall<
   D extends string = string,
 > {
   readonly tokenId: string;
-  readonly token: Token<object, any, any, any>;
+  readonly token: Token<object, any, any>;
   readonly options: CreateOptions<U, M, D>;
 }
 
@@ -253,7 +253,7 @@ export function createMockNexus<
     implementation: T,
   ): void => {
     services.set(token.id, {
-      token: token as Token<object, any, any, any>,
+      token: token as Token<object, any, any>,
       implementation,
     });
   };
@@ -326,7 +326,7 @@ export function createMockNexus<
 
     createCalls.push({
       tokenId: typedToken.id,
-      token: typedToken as Token<object, any, any, any>,
+      token: typedToken as unknown as Token<object, any, any>,
       options: typedOptions as unknown as CreateOptions<
         U,
         RegisteredMatchers,
@@ -449,11 +449,11 @@ export function createMockNexus<
 
   const create = async <T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
+    options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): Promise<Asyncified<T>> => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
       token,
-      options,
+      options ?? {},
     );
     if (result.isErr()) throw result.error;
     return result.value;
@@ -461,11 +461,11 @@ export function createMockNexus<
 
   const safeCreate = <T extends object>(
     token: Token<T>,
-    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
+    options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ) => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
       token,
-      options,
+      options ?? {},
     );
     return result.isErr() ? errAsync(result.error) : okAsync(result.value);
   };

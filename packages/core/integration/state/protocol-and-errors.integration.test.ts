@@ -16,7 +16,7 @@ import {
   NexusStoreConnectError,
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-  provideNexusStore,
+  createNexusStore,
 } from "../../src/state";
 
 type HandshakeCounterState = { count: number };
@@ -338,7 +338,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
         meta: { context: "background" },
         services: {
           [counterStore.token.id]:
-            provideNexusStore(counterStore).implementation,
+            createNexusStore(counterStore).config.implementation,
         },
       },
       leaves: [

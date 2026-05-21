@@ -1,6 +1,6 @@
 /**
  * These tests cover the bridge from a store definition to the ordinary Nexus
- * service layer via `provideNexusStore`.
+ * service layer via `createNexusStore`.
  * They stay under `src/state` because they validate the internal layer-3 bridge
  * contract and ownership hooks, not the higher-level product scenarios in
  * `packages/core/integration`.
@@ -13,7 +13,7 @@ import {
   NexusStoreDisconnectedError,
   normalizeNexusStoreError,
 } from "./errors";
-import { provideNexusStore } from "./provide-store";
+import { createNexusStore } from "./create-store";
 import type { NexusStoreServiceContract } from "./types";
 import { connectNexusStore } from "./connect-store";
 import {
@@ -44,28 +44,157 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-describe("provideNexusStore", () => {
+describe("createNexusStore", () => {
   it("translates store definition to ordinary ServiceRegistration", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration, store } = createNexusStore(definition);
 
     expect(registration.token).toBe(definition.token);
     expect(typeof registration.implementation.subscribe).toBe("function");
     expect(typeof registration.implementation.unsubscribe).toBe("function");
     expect(typeof registration.implementation.dispatch).toBe("function");
+    expect(store.getState()).toEqual({ count: 0 });
+    expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
 
     const baseline = await registration.implementation.subscribe(() => {});
     expect(baseline.version).toBe(0);
 
-    await registration.implementation.dispatch("increment", [3]);
+    await expect(store.actions.increment(3)).resolves.toBe(3);
     const after = await registration.implementation.subscribe(() => {});
     expect(after.version).toBe(1);
     expect(after.state.count).toBe(3);
+    expect(store.getState()).toEqual({ count: 3 });
+  });
+
+  it("keeps getState mutations from changing authoritative state or version", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+
+    const state = store.getState();
+    state.count = 99;
+
+    expect(store.getState()).toEqual({ count: 0 });
+    expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
+  });
+
+  it("keeps service subscribe baseline mutations from changing authoritative state", async () => {
+    const definition = createCounterDefinition();
+    const { config, store } = createNexusStore(definition);
+
+    const baseline = await config.implementation.subscribe(() => {});
+    baseline.state.count = 99;
+
+    expect(store.getState()).toEqual({ count: 0 });
+    expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
+  });
+
+  it("sends future plain state to local subscribers without leaking listener mutations", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+    const seen: Array<{ count: number }> = [];
+
+    store.subscribe((state) => {
+      seen.push(state);
+      state.count = 99;
+    });
+    await store.actions.increment(2);
+
+    expect(seen).toEqual([{ count: 99 }]);
+    expect(store.getState()).toEqual({ count: 2 });
+  });
+
+  it("stops local subscriber updates after unsubscribe", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+    const listener = vi.fn();
+
+    const unsubscribe = store.subscribe(listener);
+    await store.actions.increment(1);
+    unsubscribe();
+    await store.actions.increment(1);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps local subscribers active when one listener throws", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+    const throwingListener = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    const stableListener = vi.fn();
+
+    store.subscribe(throwingListener);
+    store.subscribe(stableListener);
+
+    await store.actions.increment(1);
+    await store.actions.increment(1);
+
+    expect(throwingListener).toHaveBeenCalledTimes(2);
+    expect(stableListener).toHaveBeenCalledTimes(2);
+  });
+
+  it("destroys the local authoritative store idempotently and rejects later actions", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+
+    store.destroy();
+    store.destroy();
+
+    expect(store.getStatus()).toEqual({ type: "destroyed" });
+    expect(() => store.subscribe(() => {})).toThrow(
+      "Nexus State host is destroyed",
+    );
+    await expect(store.actions.increment(1)).rejects.toThrow(
+      "Nexus State host is destroyed",
+    );
+  });
+
+  it("rejects an async local action that resolves after destroy without committing", async () => {
+    const started = deferred<void>();
+    const gate = deferred<void>();
+    const definition = defineNexusStore({
+      token: new Token("state:counter:destroy-during-action"),
+      state: () => ({ count: 0 }),
+      actions: ({ getState, setState }) => ({
+        async incrementAfterGate(by: number) {
+          started.resolve();
+          await gate.promise;
+          setState({ count: getState().count + by });
+          return getState().count;
+        },
+      }),
+    });
+    const { store } = createNexusStore(definition);
+
+    const actionPromise = store.actions.incrementAfterGate(5);
+    await started.promise;
+    store.destroy();
+    gate.resolve();
+
+    await expect(actionPromise).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+    expect(store.getStatus()).toEqual({ type: "destroyed" });
+    expect(store.getState()).toEqual({ count: 0 });
+  });
+
+  it("does not dispatch local action proxy meta keys", () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+
+    expect((store.actions as any).then).toBeUndefined();
+    expect((store.actions as any).catch).toBeUndefined();
+    expect((store.actions as any).finally).toBeUndefined();
+    expect((store.actions as any).toJSON).toBeUndefined();
+    expect((store.actions as any).inspect).toBeUndefined();
+    expect((store.actions as any).valueOf).toBeUndefined();
+    expect((store.actions as any).toString).toBeUndefined();
   });
 
   it("cleans orphan subscriptions on disconnect through layer3 runtime", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
 
     expect(
       (registration.implementation as { [SERVICE_ON_DISCONNECT]?: unknown })[
@@ -133,7 +262,7 @@ describe("provideNexusStore", () => {
 
   it("exposes explicit invocation context shape for subscribe binding", () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
 
     const hooks = registration.implementation as {
       [SERVICE_INVOKE_START]?: (invocationContext: {
@@ -160,7 +289,7 @@ describe("provideNexusStore", () => {
 
   it("forwards invocation context into wrapped dispatch path", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const implementation =
       registration.implementation as NexusStoreServiceContract<
         { count: number },
@@ -191,7 +320,7 @@ describe("provideNexusStore", () => {
 
   it("passes full trusted invocation identity context through remote dispatch", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const observedDispatchInvocations: unknown[] = [];
     const implementation = registration.implementation;
     const originalDispatch = implementation.dispatch.bind(implementation);
@@ -253,7 +382,7 @@ describe("provideNexusStore", () => {
 
   it("binds async subscribe ownership through hook path and cleans via disconnect hook", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
 
     const setup = await createL3Endpoints(
       {
@@ -312,7 +441,7 @@ describe("provideNexusStore", () => {
 
   it("passes invocation context through wrapped store service methods", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const implementation = registration.implementation;
     const originalSubscribe = implementation.subscribe.bind(implementation);
     const wrappedImplementation = Object.create(
@@ -378,7 +507,7 @@ describe("provideNexusStore", () => {
 
   it("binds ownership correctly for overlapping async subscribes from different connections", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const subscribeBarrier = deferred<void>();
     const localListener = vi.fn();
 
@@ -485,7 +614,7 @@ describe("provideNexusStore", () => {
 
   it("cleans remote subscription on real disconnect after async subscribe path", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const subscribeGate = deferred<void>();
     const localListener = vi.fn();
 
@@ -556,7 +685,7 @@ describe("provideNexusStore", () => {
 
   it("rejects late subscribe completion when connection already disconnected", async () => {
     const definition = createCounterDefinition();
-    const registration = provideNexusStore(definition);
+    const { config: registration } = createNexusStore(definition);
     const subscribeGate = deferred<void>();
     const localListener = vi.fn();
 

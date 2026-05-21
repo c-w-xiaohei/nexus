@@ -7,7 +7,7 @@ import {
   connectNexusStore,
   defineNexusStore,
   NexusStoreDisconnectedError,
-  provideNexusStore,
+  createNexusStore,
   type NexusStoreServiceContract,
 } from "../../src/state";
 import type { IEndpoint } from "../../src/transport/types/endpoint";
@@ -241,7 +241,8 @@ async function createRelayHarness() {
     services: [{ token: RelayProfileToken, implementation: profileService }],
   });
 
-  const hostCounterService = provideNexusStore(counterStore).implementation;
+  const hostCounterService =
+    createNexusStore(counterStore).config.implementation;
   const instrumentedCounterService: typeof hostCounterService = {
     subscribe: hostCounterService.subscribe.bind(hostCounterService),
     unsubscribe: hostCounterService.unsubscribe.bind(hostCounterService),

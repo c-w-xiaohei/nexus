@@ -19,7 +19,7 @@ const createWrapper = (harness: CounterHarness) => {
 };
 
 describe("react integration", () => {
-  it("provider + useRemoteStore connects to a real provided store", async () => {
+  it("provider + useRemoteStore connects to a real registered store", async () => {
     const harness = await createReactNexusHarness({
       hosts: [{ id: "host-a", initialCount: 0 }],
     });

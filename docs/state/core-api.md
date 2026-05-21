@@ -9,7 +9,7 @@ Current public entrypoint:
 ```ts
 import {
   defineNexusStore,
-  provideNexusStore,
+  createNexusStore,
   connectNexusStore,
   safeConnectNexusStore,
   safeInvokeStoreAction,
@@ -53,15 +53,21 @@ It defines:
 - store actions must use serializable arguments/results
 - Nexus State v1 only supports snapshot-mode sync publicly
 
-## `provideNexusStore()`
+## `createNexusStore()`
 
-`provideNexusStore()` adapts a Nexus State store definition into an ordinary Nexus service registration.
+`createNexusStore()` creates one authoritative store host and returns both the Nexus service registration and a same-context store handle.
 
 ```ts
-nexus.provide(provideNexusStore(counterStore));
+const { config, store } = createNexusStore(counterStore);
+
+nexus.configure({
+  services: [config],
+});
+
+console.log(store.getState());
 ```
 
-You do not create a second registration system for Nexus State.
+Use `config` with `nexus.configure({ services: [config] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
 ## `connectNexusStore()`
 

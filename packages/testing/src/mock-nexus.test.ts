@@ -7,8 +7,8 @@ import {
 } from "@nexus-js/core";
 import {
   connectNexusStore,
+  createNexusStore,
   defineNexusStore,
-  provideNexusStore,
 } from "@nexus-js/core/state";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createMockNexus, NexusMockError } from "./index";
@@ -305,7 +305,9 @@ describe("createMockNexus", () => {
       "testing:default-create-target",
       {
         defaultCreate: {
-          target: { descriptor: { context: "background" } },
+          target: {
+            descriptor: { context: "background" } as Record<string, unknown>,
+          },
         },
       },
     );
@@ -748,7 +750,7 @@ describe("createMockNexus", () => {
     }
   });
 
-  it("supports connectNexusStore with a provided store service", async () => {
+  it("supports connectNexusStore with a registered store service", async () => {
     const CounterToken = new Token<any>("testing:counter-store");
     const counterStore = defineNexusStore({
       token: CounterToken,
@@ -762,8 +764,9 @@ describe("createMockNexus", () => {
       }),
     });
     const mock = createMockNexus<AppMeta, PlatformMeta>();
+    const { config } = createNexusStore(counterStore);
     mock.nexus.configure({
-      services: [provideNexusStore(counterStore)],
+      services: [config],
       endpoint: {
         meta: { context: "background" },
         connectTo: [{ descriptor: { context: "background" } }],
@@ -817,8 +820,8 @@ describe("createMockNexus", () => {
     // @ts-expect-error mock.nexus does not evolve in place
     mock.nexus.matchers.and("active");
     if (false) {
-      mock.nexus.create(ExampleToken);
-      mock.nexus.safeCreate(ExampleToken);
+      configured.create(ExampleToken);
+      configured.safeCreate(ExampleToken);
     }
 
     mock.nexus.matchers.and((identity) => identity.context === "background");

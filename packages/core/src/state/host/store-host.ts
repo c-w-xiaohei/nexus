@@ -37,6 +37,19 @@ export interface StoreHostRuntime<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
 > extends NexusStoreServiceContract<TState, TActions> {
+  getSnapshot(): {
+    storeInstanceId: string;
+    version: number;
+    state: TState;
+  };
+  subscribeLocal(
+    onSync: (event: {
+      type: "snapshot";
+      storeInstanceId: string;
+      version: number;
+      state: TState;
+    }) => void,
+  ): string;
   subscribe(
     onSync: (event: {
       type: "snapshot";
@@ -170,6 +183,34 @@ class StoreHostEntity<
     return invocationContext?.sourceConnectionId;
   }
 
+  public getSnapshot(): {
+    storeInstanceId: string;
+    version: number;
+    state: TState;
+  } {
+    return {
+      storeInstanceId: this.storeInstanceId,
+      version: this.version,
+      state: this.cloneSnapshot(this.localStore.getState().snapshot),
+    };
+  }
+
+  public subscribeLocal(
+    onSync: (event: {
+      type: "snapshot";
+      storeInstanceId: string;
+      version: number;
+      state: TState;
+    }) => void,
+  ): string {
+    const active = this.safeEnsureActive();
+    if (active.isErr()) {
+      throw active.error;
+    }
+
+    return this.addSubscription(onSync).subscriptionId;
+  }
+
   public async subscribe(
     onSync: (event: {
       type: "snapshot";
@@ -206,33 +247,8 @@ class StoreHostEntity<
         return ResultAsync.fromSafePromise(Promise.resolve(undefined));
       })
       .map(() => {
-        const subscriptionId = `store-subscription:${++subscriptionSequence}`;
         const ownerConnectionId = options?.ownerConnectionId;
-        this.retainSubscriptionCallback(onSync as unknown as object);
-
-        this.subscriptions.set(subscriptionId, {
-          onSync,
-          ...(ownerConnectionId ? { ownerConnectionId } : {}),
-        });
-
-        if (ownerConnectionId) {
-          const ownedSubscriptions =
-            this.subscriptionsByConnection.get(ownerConnectionId) ??
-            new Set<string>();
-          ownedSubscriptions.add(subscriptionId);
-          this.subscriptionsByConnection.set(
-            ownerConnectionId,
-            ownedSubscriptions,
-          );
-        }
-
-        const baselineSnapshot = this.localStore.getState().snapshot;
-        return {
-          storeInstanceId: this.storeInstanceId,
-          subscriptionId,
-          version: this.version,
-          state: baselineSnapshot,
-        };
+        return this.addSubscription(onSync, ownerConnectionId);
       })
       .match(
         (value) => value,
@@ -321,6 +337,11 @@ class StoreHostEntity<
             )
       )
         .map((result) => {
+          const activeBeforeCommit = this.safeEnsureActive();
+          if (activeBeforeCommit.isErr()) {
+            throw activeBeforeCommit.error;
+          }
+
           const committedSnapshot = this.validateStateOrThrow(
             this.workingSnapshot,
             "Invalid store state payload.",
@@ -425,12 +446,53 @@ class StoreHostEntity<
           type: "snapshot",
           storeInstanceId: this.storeInstanceId,
           version: this.version,
-          state: snapshot,
+          state: this.cloneSnapshot(snapshot),
         });
       } catch {
         this.deleteSubscription(subscriptionId);
       }
     }
+  }
+
+  private addSubscription(
+    onSync: (event: {
+      type: "snapshot";
+      storeInstanceId: string;
+      version: number;
+      state: TState;
+    }) => void,
+    ownerConnectionId?: string,
+  ): {
+    storeInstanceId: string;
+    subscriptionId: string;
+    version: number;
+    state: TState;
+  } {
+    const subscriptionId = `store-subscription:${++subscriptionSequence}`;
+    const baselineSnapshot = this.localStore.getState().snapshot;
+    const baselineState = this.cloneSnapshot(baselineSnapshot);
+
+    this.retainSubscriptionCallback(onSync as unknown as object);
+
+    this.subscriptions.set(subscriptionId, {
+      onSync,
+      ...(ownerConnectionId ? { ownerConnectionId } : {}),
+    });
+
+    if (ownerConnectionId) {
+      const ownedSubscriptions =
+        this.subscriptionsByConnection.get(ownerConnectionId) ??
+        new Set<string>();
+      ownedSubscriptions.add(subscriptionId);
+      this.subscriptionsByConnection.set(ownerConnectionId, ownedSubscriptions);
+    }
+
+    return {
+      storeInstanceId: this.storeInstanceId,
+      subscriptionId,
+      version: this.version,
+      state: baselineState,
+    };
   }
 
   private deleteSubscription(subscriptionId: string): void {

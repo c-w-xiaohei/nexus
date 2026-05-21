@@ -25,6 +25,7 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
 - Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
 - Keep explicit targets in introductory `nexus.create(...)` examples. When relying on Token `defaultCreate.target` or a unique `connectTo` fallback, call `nexus.create(Token)` directly.
+- For Nexus State providers, use `const { config, store } = createNexusStore(definition)`: pass `config` through `nexus.configure({ services: [config] })` or `services: [config]`, and use `store` only for same-context authoritative consumption.
 - Use `createMockNexus()` from `@nexus-js/testing` for user-level unit tests of code that consumes a `NexusInstance`; use adapter or integration tests for transport, connection, auth, reload, restart, or lifecycle semantics.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 

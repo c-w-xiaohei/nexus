@@ -1,6 +1,6 @@
 import { Nexus } from "@nexus-js/core";
 import {
-  provideNexusStore,
+  createNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
 import { usingIframeParent } from "@nexus-js/iframe";
@@ -176,7 +176,7 @@ function eventFrameId(
   return FRAME_IDS[(subscribeCallIndex - 1) % FRAME_IDS.length];
 }
 
-const registration = provideNexusStore(counterStore);
+const { config: registration } = createNexusStore(counterStore);
 const host = new Nexus().configure({
   ...usingIframeParent({
     configure: false,
