@@ -6,7 +6,7 @@ import type { NexusInstance } from "@nexus-js/core";
 import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory";
 import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server";
 import type { NodeIpcSocketAddress } from "./types/address";
-import type { NodeIpcPlatformMeta, NodeIpcUserMeta } from "./types/meta";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta";
 
 export type EchoService = {
   echo(input: string): string;
@@ -23,13 +23,13 @@ export type TestHarness = {
     policy?: Parameters<typeof usingNodeIpcDaemon>[0]["policy"];
     service?: EchoService;
   }): Promise<{
-    daemon: NexusInstance<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+    daemon: NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
     close(): void;
   }>;
   createClient(options?: {
     authToken?: string;
     policy?: Parameters<typeof usingNodeIpcClient>[0]["policy"];
-  }): NexusInstance<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+  }): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
   cleanup(): Promise<void>;
 };
 
@@ -45,7 +45,7 @@ export async function createHarness(): Promise<TestHarness> {
     address,
     async startDaemon(options = {}) {
       const endpoint = new UnixSocketServerEndpoint(address, options.authToken);
-      const daemon = new Nexus<NodeIpcUserMeta, NodeIpcPlatformMeta>();
+      const daemon = new Nexus<NodeIpcEndpointMeta, NodeIpcPlatformMeta>();
       const config = {
         ...usingNodeIpcDaemon({
           appId: "test-daemon",
@@ -53,10 +53,10 @@ export async function createHarness(): Promise<TestHarness> {
           authToken: options.authToken,
           configure: false,
           policy: options.policy,
-          services: [
+          providers: [
             {
               token: EchoToken,
-              implementation:
+              service:
                 options.service ??
                 ({
                   echo: (input: string) => input,
@@ -86,7 +86,7 @@ export async function createHarness(): Promise<TestHarness> {
       };
     },
     createClient(options = {}) {
-      const client = new Nexus<NodeIpcUserMeta, NodeIpcPlatformMeta>();
+      const client = new Nexus<NodeIpcEndpointMeta, NodeIpcPlatformMeta>();
       const config = usingNodeIpcClient({
         appId: `test-client-${Math.random().toString(16).slice(2)}`,
         authToken: options.authToken,

@@ -30,26 +30,24 @@ Do not use it for workers, Chrome extension context routing, local Node process 
 
 Put service contracts and Tokens in shared code imported by both parent and child bundles. The general pattern is covered in `docs/getting-started.md`; adapter docs should not redefine the full contract in every example.
 
-When repeated iframe calls target the same child, a TokenSpace `defaultCreate.target` can keep the route close to the Token:
+When repeated iframe calls target the same child, a TokenSpace `defaultTarget` can keep the route close to the Token:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { IframePlatformMeta, IframeUserMeta } from "@nexus-js/iframe";
+import type { IframePlatformMeta, IframeEndpointMeta } from "@nexus-js/iframe";
 import type { GreetingService } from "./service-contract";
 
-const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
+const appSpace = new TokenSpace<IframeEndpointMeta, IframePlatformMeta>({
   name: "iframe-demo",
 });
 
-const childServices = appSpace.tokenSpace("child-services", {
-  defaultCreate: {
-    target: {
-      descriptor: {
-        context: "iframe-child",
-        appId: "iframe-demo",
-        frameId: "preview",
-        origin: "https://child.example.com",
-      },
+const childServices = appSpace.space("child-services", {
+  defaultTarget: {
+    descriptor: {
+      context: "iframe-child",
+      appId: "iframe-demo",
+      frameId: "preview",
+      origin: "https://child.example.com",
     },
   },
 });
@@ -57,7 +55,7 @@ const childServices = appSpace.tokenSpace("child-services", {
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
 
-Child-to-parent calls can use a parent `defaultCreate.target`. Parent-to-one-fixed-child calls can use a child `defaultCreate.target`. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
+Child-to-parent calls can use a parent `defaultTarget`. Parent-to-one-fixed-child calls can use a child `defaultTarget`. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
 
 Introductory examples should still pass explicit `target` options to `nexus.create(...)` because the resolved route is easiest to inspect and debug.
 
@@ -135,7 +133,35 @@ usingIframeChild({
 }).provide(GreetingToken, greetingService);
 ```
 
-Use `configure: false` only when composing adapter config with policy, custom endpoints, bootstrap bulk services, or custom Nexus instances. Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance. Do not spread a helper result unless `configure: false` is set.
+Use `configure: false` only when composing adapter config with policy, custom endpoints, bootstrap bulk providers, or custom Nexus instances. Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance.
+
+For composition, use `composeNexusConfig([...])` instead of raw object spreading:
+
+```ts
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingIframeParent } from "@nexus-js/iframe";
+
+nexus.configure(
+  composeNexusConfig([
+    usingIframeParent({
+      appId: "iframe-demo",
+      frames: [
+        { frameId: "preview", iframe, origin: "https://child.example.com" },
+      ],
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ remoteIdentity }) {
+          return remoteIdentity.context === "iframe-child";
+        },
+      },
+    },
+  ]),
+);
+```
+
+Layers apply left-to-right, and later layers win for the same domain.
 
 ## What The Adapter Provides
 
@@ -162,6 +188,20 @@ Core still owns:
 - `policy.canConnect` and `policy.canCall`
 - resource reference lifecycle
 - session-bound proxy semantics
+
+## Configuration Composition
+
+Compose structural configuration before the runtime bootstrap snapshot. After a Nexus instance is ready, structural `configure(...)` calls are rejected; live provider registration or replacement after ready goes through `provide(...)`, not `configure({ providers })`.
+
+Config composition is domain-aware:
+
+- omitted fields keep previous layers
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided
+- `endpoint.connectTo: []` clears inherited connection defaults
+- `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
+- `policy: undefined` clears inherited policy when callers intentionally need to remove it
+- `descriptors` and `matchers` merge by key; later duplicate keys win
+- `providers` replace by `token.id`; the later provider replaces both service and policy
 
 ## Security Notes
 

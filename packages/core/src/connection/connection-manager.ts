@@ -7,8 +7,8 @@ import type { IdentityUpdateMessage, NexusMessage } from "../types/message";
 import { NexusMessageType } from "../types/message";
 import type {
   ConnectionContext,
-  PlatformMetadata,
-  UserMetadata,
+  PlatformMeta,
+  EndpointMeta,
 } from "../types/identity";
 import { LogicalConnection } from "./logical-connection";
 import type {
@@ -100,8 +100,8 @@ export const connectionManagerErrorFromUnknown = (
 };
 
 export class ConnectionManager<
-  U extends UserMetadata & { groups?: string[] },
-  P extends PlatformMetadata,
+  U extends EndpointMeta & { groups?: string[] },
+  P extends PlatformMeta,
 > {
   private readonly logger = new Logger("L2 --- ConnectionManager");
   private readonly connectionsMap = new Map<string, LogicalConnection<U, P>>();
@@ -122,7 +122,7 @@ export class ConnectionManager<
     private readonly config: ConnectionManagerConfig<U, P>,
     private readonly transport: Transport.Context<U, P>,
     private readonly handlers: ConnectionManagerHandlers<U, P>,
-    private localUserMetadata: U,
+    private localEndpointMeta: U,
   ) {}
 
   public get connections(): ReadonlyMap<string, LogicalConnection<U, P>> {
@@ -131,8 +131,8 @@ export class ConnectionManager<
 
   public get serviceGroups(): ReadonlyMap<string, ReadonlySet<string>> {
     return new Map(
-      Array.from(this.serviceGroupsMap, ([groupName, connectionIds]) => [
-        groupName,
+      Array.from(this.serviceGroupsMap, ([group, connectionIds]) => [
+        group,
         new Set(connectionIds),
       ]),
     );
@@ -267,7 +267,7 @@ export class ConnectionManager<
     }
 
     try {
-      this.localUserMetadata = { ...this.localUserMetadata, ...updates };
+      this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
       for (const connection of this.connectionsMap.values()) {
         connection.updateLocalIdentity(updates);
       }
@@ -633,7 +633,7 @@ export class ConnectionManager<
     }
 
     const handshakeStartResult = connection.initiateHandshake(
-      this.localUserMetadata,
+      this.localEndpointMeta,
       assignmentMetadata,
     );
     if (handshakeStartResult.isErr()) {
@@ -651,7 +651,7 @@ export class ConnectionManager<
     return new LogicalConnection<U, P>(portProcessor, handlers, {
       connectionId,
       platformMetadata,
-      localUserMetadata: this.localUserMetadata,
+      localEndpointMeta: this.localEndpointMeta,
       nextMessageId: this.nextMessageId,
     });
   }
@@ -691,7 +691,7 @@ export class ConnectionManager<
         try {
           const allowed = await canConnect({
             localIdentity:
-              connectionRef.current?.localIdentity ?? this.localUserMetadata,
+              connectionRef.current?.localIdentity ?? this.localEndpointMeta,
             remoteIdentity: identity,
             platform: context.platform,
             direction,
@@ -833,8 +833,8 @@ type Deferred<T> = {
 };
 
 type LogicalHandlersOverrides<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > = {
   onVerified?: (connection: LogicalConnection<U, P>, identity: U) => void;
   onClosed?: (connInfo: { connectionId: string; identity?: U }) => void;
@@ -898,8 +898,8 @@ function isDeepMatch(target: any, source: any): boolean {
 }
 
 function findReadyConnections<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 >(
   connections: ReadonlyMap<string, LogicalConnection<U, P>>,
   options: ResolveOptions<U, P>,
@@ -929,7 +929,7 @@ function findReadyConnections<
   return matches;
 }
 
-function routeMessage<U extends UserMetadata, P extends PlatformMetadata>(
+function routeMessage<U extends EndpointMeta, P extends PlatformMeta>(
   connections: ReadonlyMap<string, LogicalConnection<U, P>>,
   serviceGroups: ReadonlyMap<string, ReadonlySet<string>>,
   target: MessageTarget<U>,
@@ -962,8 +962,8 @@ function routeMessage<U extends UserMetadata, P extends PlatformMetadata>(
     return ok(sentConnectionIds);
   }
 
-  if ("groupName" in target) {
-    const groupMembers = serviceGroups.get(target.groupName);
+  if ("group" in target) {
+    const groupMembers = serviceGroups.get(target.group);
     if (!groupMembers) {
       return ok([]);
     }
@@ -1002,8 +1002,8 @@ function routeMessage<U extends UserMetadata, P extends PlatformMetadata>(
 }
 
 function broadcastIdentityUpdate<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 >(
   connections: ReadonlyMap<string, LogicalConnection<U, P>>,
   updates: Partial<U>,
@@ -1031,8 +1031,8 @@ function broadcastIdentityUpdate<
 }
 
 function flushBufferedMessages<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 >(
   logger: Logger,
   connectionId: string,
@@ -1075,15 +1075,15 @@ function registerGroups(
   connectionId: string,
   groups: string[],
 ): void {
-  for (const groupName of groups) {
-    if (!serviceGroups.has(groupName)) {
-      serviceGroups.set(groupName, new Set());
+  for (const group of groups) {
+    if (!serviceGroups.has(group)) {
+      serviceGroups.set(group, new Set());
     }
-    serviceGroups.get(groupName)!.add(connectionId);
+    serviceGroups.get(group)!.add(connectionId);
   }
 }
 
-function updateServiceGroups<U extends UserMetadata & { groups?: string[] }>(
+function updateServiceGroups<U extends EndpointMeta & { groups?: string[] }>(
   serviceGroups: Map<string, Set<string>>,
   connectionId: string,
   oldIdentity: U | null,
@@ -1095,14 +1095,14 @@ function updateServiceGroups<U extends UserMetadata & { groups?: string[] }>(
   const removed = oldGroups.filter((group) => !newGroups.includes(group));
   const added = newGroups.filter((group) => !oldGroups.includes(group));
 
-  for (const groupName of removed) {
-    serviceGroups.get(groupName)?.delete(connectionId);
+  for (const group of removed) {
+    serviceGroups.get(group)?.delete(connectionId);
   }
 
-  for (const groupName of added) {
-    if (!serviceGroups.has(groupName)) {
-      serviceGroups.set(groupName, new Set());
+  for (const group of added) {
+    if (!serviceGroups.has(group)) {
+      serviceGroups.set(group, new Set());
     }
-    serviceGroups.get(groupName)!.add(connectionId);
+    serviceGroups.get(group)!.add(connectionId);
   }
 }

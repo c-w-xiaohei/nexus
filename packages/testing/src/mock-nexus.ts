@@ -4,12 +4,12 @@ import {
   Token,
   type Asyncified,
   type CreateOptions,
+  type EndpointMeta,
+  type MatcherTarget,
   type NexusConfig,
   type NexusInstance,
-  type PlatformMetadata,
-  type TargetCriteria,
-  type TargetMatcher,
-  type UserMetadata,
+  type PlatformMeta,
+  type Target,
 } from "@nexus-js/core";
 import { err, errAsync, ok, okAsync, type Result } from "neverthrow";
 import { NexusMockError } from "./errors";
@@ -22,23 +22,23 @@ type GetDescriptors<T> = T extends { descriptors: infer D }
   : never;
 
 interface RegisteredService {
-  readonly token: Token<object, any, any>;
-  readonly implementation: object;
+  readonly token: Token<object, any>;
+  readonly service: object;
 }
 
 export interface MockNexusCreateCall<
-  U extends UserMetadata = UserMetadata,
+  U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
 > {
   readonly tokenId: string;
-  readonly token: Token<object, any, any>;
+  readonly token: Token<object, any>;
   readonly options: CreateOptions<U, M, D>;
 }
 
 export interface MockNexusConfigureCall<
-  U extends UserMetadata = UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
 > {
   readonly config: NexusConfig<U, P>;
 }
@@ -48,14 +48,14 @@ export interface MockNexusReleaseCall {
 }
 
 export interface MockNexusUpdateIdentityCall<
-  U extends UserMetadata = UserMetadata,
+  U extends EndpointMeta = EndpointMeta,
 > {
   readonly updates: Partial<U>;
 }
 
 export interface MockNexus<
-  U extends UserMetadata = UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
   RegisteredMatchers extends string = never,
   RegisteredDescriptors extends string = never,
 > {
@@ -85,11 +85,11 @@ export interface MockNexus<
 const REF_WRAPPER_SYMBOL = Symbol.for("nexus.ref.wrapper");
 
 const isTargetEmpty = <
-  U extends UserMetadata,
+  U extends EndpointMeta,
   M extends string,
   D extends string,
 >(
-  target: TargetCriteria<U, M, D> | null | undefined,
+  target: Target<U, M, D> | null | undefined,
 ): boolean =>
   !target || Object.values(target).every((value) => value === undefined);
 
@@ -132,8 +132,8 @@ const isPlainRuntimeObject = (
 const isToken = <T extends object>(token: unknown): token is Token<T> =>
   token instanceof Token;
 
-const resolveNamedTarget = <U extends UserMetadata>(
-  target: TargetCriteria<U, string, string>,
+const resolveNamedTarget = <U extends EndpointMeta>(
+  target: Target<U, string, string>,
   namedDescriptors: ReadonlyMap<string, Partial<U>>,
   namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
 ): Error | null => {
@@ -155,21 +155,21 @@ const resolveNamedTarget = <U extends UserMetadata>(
 };
 
 const resolveTarget = <
-  U extends UserMetadata,
+  U extends EndpointMeta,
   M extends string,
   D extends string,
 >(
   tokenId: string,
-  target: TargetCriteria<U, M, D> | null | undefined,
-  tokenDefaultTarget: TargetCriteria<U, M, D> | undefined,
-  connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
+  target: Target<U, M, D> | null | undefined,
+  tokenDefaultTarget: Target<U, M, D> | undefined,
+  connectTo: readonly Target<U, string, string>[] | undefined,
 ): Error | null => {
   let finalTarget = target;
   if (isTargetEmpty(finalTarget) && tokenDefaultTarget) {
     finalTarget = tokenDefaultTarget;
   }
   if (isTargetEmpty(finalTarget) && connectTo?.length === 1) {
-    finalTarget = connectTo[0] as TargetCriteria<U, M, D>;
+    finalTarget = connectTo[0] as Target<U, M, D>;
   }
   if (!isTargetEmpty(finalTarget)) return null;
   if (connectTo && connectTo.length > 1) {
@@ -187,17 +187,17 @@ const resolveTarget = <
 };
 
 const getCreateTarget = <
-  U extends UserMetadata,
+  U extends EndpointMeta,
   M extends string,
   D extends string,
 >(
-  target: TargetCriteria<U, M, D> | null | undefined,
-  tokenDefaultTarget: TargetCriteria<U, M, D> | undefined,
-  connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
-): TargetCriteria<U, M, D> | undefined => {
+  target: Target<U, M, D> | null | undefined,
+  tokenDefaultTarget: Target<U, M, D> | undefined,
+  connectTo: readonly Target<U, string, string>[] | undefined,
+): Target<U, M, D> | undefined => {
   if (!isTargetEmpty(target)) return target ?? undefined;
   if (!isTargetEmpty(tokenDefaultTarget)) return tokenDefaultTarget;
-  if (connectTo?.length === 1) return connectTo[0] as TargetCriteria<U, M, D>;
+  if (connectTo?.length === 1) return connectTo[0] as Target<U, M, D>;
   return undefined;
 };
 
@@ -227,8 +227,8 @@ const createAsyncProxy = <T extends object>(implementation: T): Asyncified<T> =>
   ) as Asyncified<T>;
 
 export function createMockNexus<
-  U extends UserMetadata = UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
   RegisteredMatchers extends string = never,
   RegisteredDescriptors extends string = never,
 >(): MockNexus<U, P, RegisteredMatchers, RegisteredDescriptors> {
@@ -244,7 +244,7 @@ export function createMockNexus<
   const configureCalls: MockNexusConfigureCall<U, P>[] = [];
   const releaseCalls: MockNexusReleaseCall[] = [];
   const updateIdentityCalls: MockNexusUpdateIdentityCall<U>[] = [];
-  let connectTo: readonly TargetCriteria<U, string, string>[] | undefined;
+  let connectTo: readonly Target<U, string, string>[] | undefined;
   let localMeta: U | undefined;
   let policy: NexusConfig<U, P>["policy"] | undefined;
 
@@ -253,8 +253,8 @@ export function createMockNexus<
     implementation: T,
   ): void => {
     services.set(token.id, {
-      token: token as Token<object, any, any>,
-      implementation,
+      token: token as Token<object, any>,
+      service: implementation,
     });
   };
 
@@ -269,7 +269,7 @@ export function createMockNexus<
     if (!isToken<T>(token)) {
       return err(invalidTokenError());
     }
-    const typedToken = token as unknown as Token<T, U, M, D>;
+    const typedToken = token as unknown as Token<T, U>;
     if (!isPlainRuntimeObject(options)) {
       return err(invalidCreateOptionsError());
     }
@@ -299,8 +299,7 @@ export function createMockNexus<
 
     const typedOptions = options as unknown as CreateOptions<U, M, D>;
 
-    const tokenDefaultTarget =
-      typedToken.defaultCreate?.target ?? typedToken.defaultTarget;
+    const tokenDefaultTarget = typedToken.defaultTarget;
     const finalTarget = getCreateTarget(
       typedOptions.target,
       tokenDefaultTarget,
@@ -317,7 +316,7 @@ export function createMockNexus<
 
     if (finalTarget) {
       const namedTargetError = resolveNamedTarget(
-        finalTarget as TargetCriteria<U, string, string>,
+        finalTarget as Target<U, string, string>,
         namedDescriptors,
         namedMatchers,
       );
@@ -326,7 +325,7 @@ export function createMockNexus<
 
     createCalls.push({
       tokenId: typedToken.id,
-      token: typedToken as unknown as Token<object, any, any>,
+      token: typedToken as unknown as Token<object, any>,
       options: typedOptions as unknown as CreateOptions<
         U,
         RegisteredMatchers,
@@ -341,7 +340,7 @@ export function createMockNexus<
     if (!registered) return err(serviceNotFoundError(typedToken.id));
 
     return ok<Asyncified<T>, Error>(
-      createAsyncProxy(registered.implementation as T),
+      createAsyncProxy(registered.service as T),
     );
   };
 
@@ -354,8 +353,8 @@ export function createMockNexus<
     RegisteredDescriptors | GetDescriptors<T>
   > => {
     configureCalls.push({ config: config as NexusConfig<U, P> });
-    config.services?.forEach((registration) => {
-      registerService(registration.token, registration.implementation);
+    config.providers?.forEach((registration) => {
+      registerService(registration.token, registration.service);
     });
     Object.entries(config.matchers ?? {}).forEach(([name, matcher]) => {
       namedMatchers.set(name, matcher);
@@ -364,7 +363,7 @@ export function createMockNexus<
       namedDescriptors.set(name, descriptor);
     });
     if (config.endpoint?.connectTo) {
-      connectTo = config.endpoint.connectTo as readonly TargetCriteria<
+      connectTo = config.endpoint.connectTo as readonly Target<
         U,
         string,
         string
@@ -404,7 +403,7 @@ export function createMockNexus<
 
   const matchers = {
     and:
-      (...items: TargetMatcher<U, RegisteredMatchers>[]) =>
+      (...items: MatcherTarget<U, RegisteredMatchers>[]) =>
       (identity: U) =>
         items.every((item) => {
           const matcher =
@@ -412,14 +411,14 @@ export function createMockNexus<
           return Boolean(matcher?.(identity));
         }),
     or:
-      (...items: TargetMatcher<U, RegisteredMatchers>[]) =>
+      (...items: MatcherTarget<U, RegisteredMatchers>[]) =>
       (identity: U) =>
         items.some((item) => {
           const matcher =
             typeof item === "string" ? namedMatchers.get(item) : item;
           return Boolean(matcher?.(identity));
         }),
-    not: (item: TargetMatcher<U, RegisteredMatchers>) => (identity: U) => {
+    not: (item: MatcherTarget<U, RegisteredMatchers>) => (identity: U) => {
       const matcher = typeof item === "string" ? namedMatchers.get(item) : item;
       return !matcher?.(identity);
     },

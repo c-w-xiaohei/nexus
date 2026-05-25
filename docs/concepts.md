@@ -108,8 +108,11 @@ Use separate instances:
 ```ts
 import { Nexus } from "@nexus-js/core";
 
-const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
-const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
+const extensionNexus = new Nexus<
+  ExtensionEndpointMeta,
+  ExtensionPlatformMeta
+>();
+const brokerNexus = new Nexus<BrokerEndpointMeta, BrokerPlatformMeta>();
 ```
 
 Name multi-instance variables after the local transport graph or endpoint face
@@ -145,7 +148,7 @@ Nexus routes calls through target descriptors and matching rules.
 For unicast proxy creation, Nexus resolves target intent in this order:
 
 1. explicit non-empty `create(..., { target })`
-2. token `defaultCreate.target`
+2. token `defaultTarget`
 3. unique endpoint `connectTo` fallback
 
 Token defaults are consumer-side create defaults, not provider locations. A provider is still published on the local Nexus face where `@nexus.Expose(...)` or `provide(...)` runs.
@@ -180,8 +183,8 @@ nexus.configure({
     background: { context: "background" },
   },
   matchers: {
-    activeContentScript: (identity) =>
-      identity.context === "content-script" && identity.isActive === true,
+    visibleContentScript: (identity) =>
+      identity.context === "content-script" && identity.isVisible === true,
   },
 });
 
@@ -190,7 +193,7 @@ const byDescriptor = await nexus.create(PingToken, {
 });
 
 const byMatcher = await nexus.create(PingToken, {
-  target: { matcher: "activeContentScript" },
+  target: { matcher: "visibleContentScript" },
 });
 ```
 
@@ -219,7 +222,7 @@ Contexts can change identity over time.
 
 Examples:
 
-- active tab changes
+- a caller chooses a different tab or window target
 - metadata changes
 - group membership changes
 
@@ -227,7 +230,7 @@ Nexus uses identity updates to keep targeting and connection lifecycle behavior 
 
 This is why `updateIdentity()` exists as part of the public product API: if a context changes meaningfully over time, Nexus needs updated identity information to keep routing and lifecycle decisions correct.
 
-At the application layer, reconnect usually means rebuilding session-bound handles after identity or connection changes. Higher-layer code may automate that rebuild flow, but raw core handles do not silently heal across session replacement.
+At the application layer, reconnect usually means rebuilding session-bound handles after caller-owned target discovery, identity changes, or connection changes. Higher-layer code may automate that rebuild flow, but raw core handles do not silently heal across session replacement.
 
 ## Product Capability Layers
 

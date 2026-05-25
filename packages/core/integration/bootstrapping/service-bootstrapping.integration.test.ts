@@ -1,5 +1,5 @@
 /**
- * Simulates service bootstrapping at startup where decorators register services,
+ * Simulates service bootstrapping at startup where decorators register providers,
  * factories provide dependency wiring, and TokenSpace namespaces define runtime
  * service identity and targeting defaults before RPC traffic starts.
  */
@@ -143,13 +143,13 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     const app = new TokenSpace<AppUserMeta, AppPlatformMeta>({ name: "app" });
 
-    const background = app.tokenSpace("background", {
+    const background = app.space("background", {
       defaultTarget: {
         descriptor: { context: "background", version: "1.0" },
       },
     });
 
-    const contentScript = app.tokenSpace("content-script", {
+    const contentScript = app.space("content-script", {
       defaultTarget: {
         matcher: (identity: AppUserMeta) =>
           identity.context === "content-script",
@@ -196,15 +196,15 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
       },
     });
 
-    const product = company.tokenSpace("product");
-    const backend = product.tokenSpace("backend");
-    const microservices = backend.tokenSpace("microservices", {
+    const product = company.space("product");
+    const backend = product.space("backend");
+    const microservices = backend.space("microservices", {
       defaultTarget: {
         matcher: (identity: AppUserMeta) =>
           identity.context === "content-script",
       },
     });
-    const auth = microservices.tokenSpace("auth");
+    const auth = microservices.space("auth");
 
     const UserToken = auth.token<IUserService>("profile");
 

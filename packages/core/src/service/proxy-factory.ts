@@ -1,4 +1,4 @@
-import type { UserMetadata } from "../types/identity";
+import type { EndpointMeta } from "../types/identity";
 import type { DispatchCallOptions } from "./engine";
 import type { ResourceManager } from "./resource-manager";
 import type { CallTarget, ResolveOptions } from "@/connection/types";
@@ -23,7 +23,7 @@ const INTERNAL_PROXY_PROPERTIES = new Set([
 /**
  * Options for creating a service proxy, specifying the target and behavior.
  */
-export interface CreateProxyOptions<U extends UserMetadata> {
+export interface CreateProxyOptions<U extends EndpointMeta> {
   target: CallTarget<U, any>;
   staleTarget?: Pick<ResolveOptions<U, any>, "descriptor" | "matcher">;
   strategy?: "one" | "first" | "all" | "stream";
@@ -65,7 +65,7 @@ type ChainableProxyConfig = {
  * It encapsulates the complexity of setting up proxy traps and managing their
  * registration with the ResourceManager.
  */
-export class ProxyFactory<U extends UserMetadata> {
+export class ProxyFactory<U extends EndpointMeta> {
   private readonly releaseRegistry: FinalizationRegistry<ReleaseContext>;
   private readonly logger: Logger = new Logger("L3 -> ProxyFactory");
 

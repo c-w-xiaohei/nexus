@@ -1,4 +1,4 @@
-import type { TargetCriteria, ServiceRegistration } from "@/api/types/config";
+import type { Target, ServiceProvider } from "@/api/types/config";
 import type { NexusInstance } from "@/api/types";
 import type { Token } from "@/api/token";
 import {
@@ -13,7 +13,7 @@ import {
   RELEASE_PROXY_SYMBOL,
 } from "@/types/symbols";
 import { isRefWrapper } from "@/types/ref-wrapper";
-import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { PlatformMeta, EndpointMeta } from "@/types/identity";
 import {
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
@@ -50,13 +50,13 @@ export interface RelayStoreDispatchContext<U, P> extends RelayBaseContext<
 }
 
 export interface RelayServiceOptions<
-  DownstreamU extends UserMetadata,
-  DownstreamP extends PlatformMetadata,
-  UpstreamU extends UserMetadata,
-  UpstreamP extends PlatformMetadata,
+  DownstreamU extends EndpointMeta,
+  DownstreamP extends PlatformMeta,
+  UpstreamU extends EndpointMeta,
+  UpstreamP extends PlatformMeta,
 > {
   forwardThrough: NexusInstance<UpstreamU, UpstreamP>;
-  forwardTarget: TargetCriteria<UpstreamU, string, string>;
+  forwardTarget: Target<UpstreamU, string, string>;
   policy?: {
     canCall?(
       context: RelayServiceCallContext<DownstreamU, DownstreamP>,
@@ -68,13 +68,13 @@ export interface RelayServiceOptions<
 }
 
 export interface RelayNexusStoreOptions<
-  DownstreamU extends UserMetadata,
-  DownstreamP extends PlatformMetadata,
-  UpstreamU extends UserMetadata,
-  UpstreamP extends PlatformMetadata,
+  DownstreamU extends EndpointMeta,
+  DownstreamP extends PlatformMeta,
+  UpstreamU extends EndpointMeta,
+  UpstreamP extends PlatformMeta,
 > {
   forwardThrough: NexusInstance<UpstreamU, UpstreamP>;
-  forwardTarget: TargetCriteria<UpstreamU, string, string>;
+  forwardTarget: Target<UpstreamU, string, string>;
   policy?: {
     canSubscribe?(
       context: RelayStoreSubscribeContext<DownstreamU, DownstreamP>,
@@ -265,14 +265,14 @@ const cloneState = <TState extends object>(state: TState): TState => {
 
 export const relayService = <
   TService extends object,
-  DownstreamU extends UserMetadata,
-  DownstreamP extends PlatformMetadata,
-  UpstreamU extends UserMetadata,
-  UpstreamP extends PlatformMetadata,
+  DownstreamU extends EndpointMeta,
+  DownstreamP extends PlatformMeta,
+  UpstreamU extends EndpointMeta,
+  UpstreamP extends PlatformMeta,
 >(
   token: Token<TService>,
   options: RelayServiceOptions<DownstreamU, DownstreamP, UpstreamU, UpstreamP>,
-): ServiceRegistration<TService> => {
+): ServiceProvider<TService> => {
   let activeInvocation: ServiceInvocationContext | undefined;
 
   const createPathProxy = (path: (string | number)[]): unknown =>
@@ -366,7 +366,7 @@ export const relayService = <
     },
   };
 
-  const implementation = new Proxy(rootTarget, {
+  const service = new Proxy(rootTarget, {
     get(target, prop, receiver) {
       if (prop in target) {
         return Reflect.get(target, prop, receiver);
@@ -389,17 +389,17 @@ export const relayService = <
 
   return {
     token,
-    implementation,
+    service,
   };
 };
 
 export const relayNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  DownstreamU extends UserMetadata,
-  DownstreamP extends PlatformMetadata,
-  UpstreamU extends UserMetadata,
-  UpstreamP extends PlatformMetadata,
+  DownstreamU extends EndpointMeta,
+  DownstreamP extends PlatformMeta,
+  UpstreamU extends EndpointMeta,
+  UpstreamP extends PlatformMeta,
 >(
   definition: NexusStoreDefinition<TState, TActions>,
   options: RelayNexusStoreOptions<
@@ -408,7 +408,7 @@ export const relayNexusStore = <
     UpstreamU,
     UpstreamP
   >,
-): ServiceRegistration<NexusStoreServiceContract<TState, TActions>> => {
+): ServiceProvider<NexusStoreServiceContract<TState, TActions>> => {
   const relayStoreInstanceId = createRelaySessionId();
   let downstreamVersion = 0;
   let latestState: TState | null = null;
@@ -620,7 +620,7 @@ export const relayNexusStore = <
     tokenId: definition.token.id,
   });
 
-  const implementation: NexusStoreServiceContract<TState, TActions> & {
+  const service: NexusStoreServiceContract<TState, TActions> & {
     [SERVICE_INVOKE_START](
       invocationContext: ServiceInvocationContext,
     ): ServiceInvocationContext;
@@ -767,6 +767,6 @@ export const relayNexusStore = <
 
   return {
     token: definition.token,
-    implementation,
+    service,
   };
 };

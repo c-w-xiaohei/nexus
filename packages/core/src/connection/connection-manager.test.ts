@@ -98,7 +98,7 @@ describe("ConnectionManager", () => {
         hostL1OnConnect = onConnect;
       }),
       connect: vi.fn(async (): Promise<[any, any]> => {
-        // Default implementation for host endpoint (usually not used)
+        // Default service for host endpoint (usually not used)
         const [port] = createMockPortPair();
         return [port, { from: "mock" }];
       }),
@@ -491,7 +491,7 @@ describe("ConnectionManager", () => {
       };
 
       // Act & Assert: Send message to group-1, both clients should receive it
-      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { group: "group-1" }, testMessage);
       await vi.waitFor(() => {
         expect(clientA.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
@@ -506,7 +506,7 @@ describe("ConnectionManager", () => {
       vi.clearAllMocks();
 
       // Act & Assert: Send message to group-2, only client B should receive it
-      sendFromManager(hostManager, { groupName: "group-2" }, testMessage);
+      sendFromManager(hostManager, { group: "group-2" }, testMessage);
       await vi.waitFor(() => {
         expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
@@ -863,7 +863,7 @@ describe("ConnectionManager", () => {
       };
 
       // Assert: Client is initially in group-1
-      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { group: "group-1" }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
@@ -880,7 +880,7 @@ describe("ConnectionManager", () => {
 
       // Assert: Host routes messages to the new group after propagation
       // 1. Send to new group, SHOULD be received
-      sendFromManager(hostManager, { groupName: "group-2" }, testMessage);
+      sendFromManager(hostManager, { group: "group-2" }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
@@ -888,7 +888,7 @@ describe("ConnectionManager", () => {
       vi.clearAllMocks();
 
       // 2. Send to old group, should NOT be received
-      sendFromManager(hostManager, { groupName: "group-1" }, testMessage);
+      sendFromManager(hostManager, { group: "group-1" }, testMessage);
       // A short delay to ensure no message arrives if logic is correct
       await new Promise((r) => setTimeout(r, 20));
       expect(client.handlers.onMessage).not.toHaveBeenCalled();

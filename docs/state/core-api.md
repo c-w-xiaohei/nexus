@@ -44,12 +44,12 @@ It defines:
 - the store identity via `token`
 - the initial state factory
 - host-side actions
-- optional convenience config through the store token's `defaultCreate.target`
+- optional convenience config through the store token's `defaultTarget`
 
 ### Notes
 
 - `token` remains the real identity source
-- store default targeting comes from the token's `defaultCreate.target`; Nexus State does not define a second store-level default target source
+- store default targeting comes from the token's `defaultTarget`; Nexus State does not define a second store-level default target source
 - store actions must use serializable arguments/results
 - Nexus State v1 only supports snapshot-mode sync publicly
 
@@ -58,16 +58,16 @@ It defines:
 `createNexusStore()` creates one authoritative store host and returns both the Nexus service registration and a same-context store handle.
 
 ```ts
-const { config, store } = createNexusStore(counterStore);
+const { provider, store } = createNexusStore(counterStore);
 
 nexus.configure({
-  services: [config],
+  providers: [provider],
 });
 
 console.log(store.getState());
 ```
 
-Use `config` with `nexus.configure({ services: [config] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
+Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
 ## `connectNexusStore()`
 

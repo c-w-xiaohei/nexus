@@ -33,8 +33,8 @@ describe("@Expose", () => {
     class TestService {}
     decorator(TestService, context);
 
-    expect(decoratorSnapshotOf(nexus).services.has(token)).toBe(true);
-    expect(decoratorSnapshotOf(nexus).services.get(token)?.targetClass).toBe(
+    expect(decoratorSnapshotOf(nexus).providers.has(token)).toBe(true);
+    expect(decoratorSnapshotOf(nexus).providers.get(token)?.targetClass).toBe(
       TestService,
     );
   });
@@ -53,7 +53,7 @@ describe("@Expose", () => {
     } as ClassDecoratorContext);
 
     expect(
-      decoratorSnapshotOf(nexus).services.get(token)?.options?.policy,
+      decoratorSnapshotOf(nexus).providers.get(token)?.options?.policy,
     ).toBe(policy);
   });
 
@@ -70,7 +70,7 @@ describe("@Expose", () => {
     } as ClassDecoratorContext);
 
     expect(
-      decoratorSnapshotOf(nexus).services.get(token)?.options?.policy,
+      decoratorSnapshotOf(nexus).providers.get(token)?.options?.policy,
     ).toBe(policy);
   });
 
@@ -84,10 +84,10 @@ describe("@Expose", () => {
       kind: "class",
     } as ClassDecoratorContext);
 
-    expect(decoratorSnapshotOf(first).services.get(token)?.targetClass).toBe(
+    expect(decoratorSnapshotOf(first).providers.get(token)?.targetClass).toBe(
       FirstService,
     );
-    expect(decoratorSnapshotOf(second).services.size).toBe(0);
+    expect(decoratorSnapshotOf(second).providers.size).toBe(0);
   });
 
   it("allows different Nexus instances to register the same token id", () => {
@@ -128,9 +128,9 @@ describe("@Expose", () => {
     class SingletonService {}
     Expose(token)(SingletonService, { kind: "class" } as ClassDecoratorContext);
 
-    expect(decoratorSnapshotOf(nexus).services.get(token)?.targetClass).toBe(
+    expect(decoratorSnapshotOf(nexus).providers.get(token)?.targetClass).toBe(
       SingletonService,
     );
-    expect(DecoratorRegistry.snapshot().services.size).toBe(0);
+    expect(DecoratorRegistry.snapshot().providers.size).toBe(0);
   });
 });

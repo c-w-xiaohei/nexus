@@ -1,4 +1,4 @@
-import type { PlatformMetadata, UserMetadata } from "../../types/identity";
+import type { PlatformMeta, EndpointMeta } from "../../types/identity";
 import {
   getValueType,
   LocalResourceType,
@@ -44,8 +44,8 @@ export namespace PayloadProcessor {
   } as const;
 
   export interface Runtime<
-    U extends UserMetadata,
-    _P extends PlatformMetadata,
+    U extends EndpointMeta,
+    _P extends PlatformMeta,
   > {
     readonly resourceManager: ResourceManager.Runtime;
     readonly proxyFactory: ProxyFactory<U>;
@@ -65,7 +65,7 @@ export namespace PayloadProcessor {
     ): TResult<any[], globalThis.Error>;
   }
 
-  export const create = <U extends UserMetadata, P extends PlatformMetadata>(
+  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
     resourceManager: ResourceManager.Runtime,
     proxyFactory: ProxyFactory<U>,
   ): Runtime<U, P> => {

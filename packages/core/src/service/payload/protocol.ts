@@ -36,7 +36,7 @@ export enum PlaceholderType {
   // REGEXP = 'X',
 }
 
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import {
   LocalResourceType,
   type ReviveContext,
@@ -46,13 +46,13 @@ import {
 import { Placeholder } from "./placeholder";
 import { PayloadProcessor } from "./payload-processor";
 
-type SanitizeHandler<U extends UserMetadata, P extends PlatformMetadata> = (
+type SanitizeHandler<U extends EndpointMeta, P extends PlatformMeta> = (
   processor: PayloadProcessor.Runtime<U, P>,
   value: any,
   context: SanitizeContext,
 ) => Placeholder;
 
-type ReviveHandler<U extends UserMetadata, P extends PlatformMetadata> = (
+type ReviveHandler<U extends EndpointMeta, P extends PlatformMeta> = (
   processor: PayloadProcessor.Runtime<U, P>,
   placeholder: Placeholder,
   context: ReviveContext,

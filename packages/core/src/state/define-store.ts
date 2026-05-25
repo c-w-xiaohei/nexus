@@ -2,16 +2,17 @@ import { NexusUsageError } from "@/errors";
 import { Token } from "@/api/token";
 import { z } from "zod";
 import type { CreateOptions } from "@/api/types/config";
-import type { UserMetadata } from "@/types/identity";
+import type { InlineTarget } from "@/api/types/config";
+import type { EndpointMeta } from "@/types/identity";
 import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
   NexusStoreValidationSchemas,
   StoreActionHelpers,
 } from "./types";
-import { createTargetCriteriaSchema } from "./target-schema";
+import { createTargetSchema } from "./target-schema";
 
-export const TargetCriteriaSchema = createTargetCriteriaSchema(
+export const TargetSchema = createTargetSchema(
   "defaultTarget requires at least one of descriptor or matcher",
 );
 
@@ -21,7 +22,7 @@ export const DefineNexusStoreSchema = z.object({
   actions: z.custom<(helpers: unknown) => object>(
     (value) => typeof value === "function",
   ),
-  defaultTarget: TargetCriteriaSchema.optional(),
+  defaultTarget: TargetSchema.optional(),
   sync: z
     .object({
       mode: z.literal("snapshot").optional(),
@@ -57,7 +58,7 @@ export type DefineNexusStoreSchemaInput = z.input<
 export type DefineNexusStoreOptions<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  U extends UserMetadata = UserMetadata,
+  U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
 > = Omit<
@@ -78,21 +79,16 @@ const normalizeTokenDefaultTarget = <
   token: Token<NexusStoreServiceContract<TState, TActions>>,
   defaultTarget: CreateOptions<any, any, any>["target"],
 ): Token<NexusStoreServiceContract<TState, TActions>> => {
-  const nextDefaultTarget = {
-    ...(token.defaultTarget ?? {}),
-    ...defaultTarget,
-  };
-
   return new Token<NexusStoreServiceContract<TState, TActions>>(
     token.id,
-    nextDefaultTarget,
+    { defaultTarget: (defaultTarget ?? undefined) as InlineTarget<object> | undefined },
   );
 };
 
 export const defineNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  U extends UserMetadata = UserMetadata,
+  U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
 >(

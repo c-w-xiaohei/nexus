@@ -176,7 +176,7 @@ function eventFrameId(
   return FRAME_IDS[(subscribeCallIndex - 1) % FRAME_IDS.length];
 }
 
-const { config: registration } = createNexusStore(counterStore);
+const { provider } = createNexusStore(counterStore);
 const host = new Nexus().configure({
   ...usingIframeParent({
     configure: false,
@@ -189,10 +189,10 @@ const host = new Nexus().configure({
     })),
     heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
-  services: [
+  providers: [
     {
-      token: registration.token,
-      implementation: instrumentStore(registration.implementation),
+      token: provider.token,
+      service: instrumentStore(provider.service),
     },
   ],
 });

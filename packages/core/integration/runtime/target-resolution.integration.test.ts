@@ -38,7 +38,7 @@ describe("Nexus L4 Integration: Target Resolution and Discovery", () => {
       const Cs1TokenWithDefault = new Token<IContentScriptService>(
         ContentScriptServiceToken.id,
         {
-          descriptor: { context: "content-script", issueId: "CS1" },
+          defaultTarget: { descriptor: { context: "content-script", issueId: "CS1" } },
         },
       );
 
@@ -200,14 +200,14 @@ describe("Nexus L4 Integration: Target Resolution and Discovery", () => {
     expect(cs2RefreshSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("should broadcast to a service group using groupName", async () => {
+  it("should broadcast to a service group using group", async () => {
     const cs1RefreshSpy = vi.spyOn(world.cs1.service, "refresh");
     const cs2RefreshSpy = vi.spyOn(world.cs2.service, "refresh");
 
     const groupProxy = await world.background.nexus.createMulticast(
       ContentScriptServiceToken,
       {
-        target: { groupName: "issue-pages" },
+        target: { group: "issue-pages" },
         expects: "all",
       },
     );

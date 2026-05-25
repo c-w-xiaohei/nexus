@@ -66,7 +66,7 @@ Start with `@nexus-js/core`, then wire your own endpoint implementation and meta
 
 This route is lower-level, but it is the right one when no first-party adapter exists for your environment.
 
-If you use the decorator path directly, bind decorators to the Nexus instance that owns the local endpoint face. The default singleton can use `@nexus.Endpoint(...)` / `@nexus.Expose(...)`; multi-instance setups should use instance-specific forms such as `@brokerNexus.Endpoint(...)` and `@brokerNexus.Expose(...)`. Keep `configure({ services })` for bootstrap bulk composition or low-level compatibility only.
+If you use the decorator path directly, bind decorators to the Nexus instance that owns the local endpoint face. The default singleton can use `@nexus.Endpoint(...)` / `@nexus.Expose(...)`; multi-instance setups should use instance-specific forms such as `@brokerNexus.Endpoint(...)` and `@brokerNexus.Expose(...)`. Use `configure({ providers })` for bootstrap bulk composition, and prefer `.provide(Token, service)` for ordinary provider registration.
 
 Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
 

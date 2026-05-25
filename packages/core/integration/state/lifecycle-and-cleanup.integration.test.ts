@@ -38,9 +38,9 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [counterStore.token.id]:
-            createNexusStore(counterStore).config.implementation,
+            createNexusStore(counterStore).provider.service,
         },
       },
       leaves: [
@@ -98,9 +98,9 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [counterStore.token.id]:
-            createNexusStore(counterStore).config.implementation,
+            createNexusStore(counterStore).provider.service,
         },
       },
       leaves: [
@@ -308,8 +308,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const createHostService = () =>
-      createNexusStore(definition).config
-        .implementation as CounterActions extends Record<
+      createNexusStore(definition).provider
+        .service as CounterActions extends Record<
         string,
         (...args: any[]) => any
       >
@@ -409,7 +409,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [definition.token.id]: staleService,
         },
       },
@@ -472,8 +472,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const createHostService = () =>
-      createNexusStore(definition).config
-        .implementation as CounterActions extends Record<
+      createNexusStore(definition).provider
+        .service as CounterActions extends Record<
         string,
         (...args: any[]) => any
       >
@@ -573,7 +573,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [definition.token.id]: staleService,
         },
       },

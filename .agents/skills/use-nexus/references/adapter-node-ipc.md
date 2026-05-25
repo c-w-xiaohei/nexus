@@ -6,18 +6,19 @@ For node-ipc, keep contract code shared and adapter code focused on daemon/clien
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { NodeIpcPlatformMeta, NodeIpcUserMeta } from "@nexus-js/node-ipc";
+import type {
+  NodeIpcPlatformMeta,
+  NodeIpcEndpointMeta,
+} from "@nexus-js/node-ipc";
 import type { EchoService } from "./contracts";
 
-const appSpace = new TokenSpace<NodeIpcUserMeta, NodeIpcPlatformMeta>({
+const appSpace = new TokenSpace<NodeIpcEndpointMeta, NodeIpcPlatformMeta>({
   name: "example-app",
 });
 
-const daemonServices = appSpace.tokenSpace("daemon-services", {
-  defaultCreate: {
-    target: {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
+const daemonServices = appSpace.space("daemon-services", {
+  defaultTarget: {
+    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
   },
 });
 
@@ -46,7 +47,7 @@ For function/object style, use `daemonNexus.provide(EchoToken, echoService)`.
 
 ## Client
 
-Use `nexus.create(EchoToken)` when the Token `defaultCreate.target` or unique node-ipc `connectTo` fallback supplies the daemon target.
+Use `nexus.create(EchoToken)` when the Token `defaultTarget` or unique node-ipc `connectTo` fallback supplies the daemon target.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -76,29 +77,35 @@ const echo = await nexus.create(EchoToken, {
 });
 ```
 
-This works because core resolves `create(Token)` through the Token `defaultCreate.target` or the unique node-ipc `connectTo` fallback.
+This works because core resolves `create(Token)` through the Token `defaultTarget` or the unique node-ipc `connectTo` fallback.
 
 ## Authorization
 
 Treat shared-secret pre-auth as an adapter gate. Keep core policy as the authorization authority after adapter pre-auth.
 
-The standard provider path is helper plus `@daemonNexus.Expose(...)` for class services or `.provide(...)` for object services. If you also need to compose daemon policy at bootstrap, ask the helper for pure config with `configure: false` and configure once.
+The standard provider path is helper plus `@daemonNexus.Expose(...)` for class services or `.provide(...)` for object services. If you also need to compose daemon policy at bootstrap, ask the helper for pure config with `configure: false`, combine layers with `composeNexusConfig([...])`, and configure once.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    authToken: process.env.NEXUS_IPC_TOKEN,
-    configure: false,
-  }),
-  policy: {
-    canConnect({ platform }) {
-      return platform.authenticated === true;
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ platform }) {
+          return platform.authenticated === true;
+        },
+      },
     },
-  },
-});
+  ]),
+);
 
 nexus.provide(EchoToken, echoService);
 ```
 
-Do not spread a node-ipc helper result unless `configure: false` is set. Without it, the helper has already configured the shared `nexus` instance and returns a Nexus instance, not a config object.
+Do not spread a node-ipc helper result. Without `configure: false`, the helper has already configured the shared `nexus` instance and returns a Nexus instance, not a config object.

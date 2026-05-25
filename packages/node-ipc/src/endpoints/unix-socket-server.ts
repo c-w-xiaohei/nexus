@@ -6,14 +6,14 @@ import { ResultAsync } from "neverthrow";
 import { NodeIpcError } from "../errors";
 import { UnixSocketPort } from "../ports/unix-socket-port";
 import type { NodeIpcSocketAddress } from "../types/address";
-import type { NodeIpcPlatformMeta, NodeIpcUserMeta } from "../types/meta";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "../types/meta";
 
 export type UnixSocketServerHandle = {
   close(): void;
 };
 
 type EndpointCapabilities = NonNullable<
-  IEndpoint<NodeIpcUserMeta, NodeIpcPlatformMeta>["capabilities"]
+  IEndpoint<NodeIpcEndpointMeta, NodeIpcPlatformMeta>["capabilities"]
 >;
 
 const createCapabilities = (): EndpointCapabilities => {
@@ -29,7 +29,7 @@ const createCapabilities = (): EndpointCapabilities => {
 };
 
 export class UnixSocketServerEndpoint implements IEndpoint<
-  NodeIpcUserMeta,
+  NodeIpcEndpointMeta,
   NodeIpcPlatformMeta
 > {
   readonly capabilities = createCapabilities();

@@ -125,7 +125,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: { tasks: taskServiceImpl },
+        providers: { tasks: taskServiceImpl },
       },
       {
         meta: { id: "client" },

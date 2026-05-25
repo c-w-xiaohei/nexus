@@ -2,7 +2,7 @@ import type {
   IEndpoint,
   NexusConfig,
   NexusInstance,
-  TargetCriteria,
+  Target,
 } from "@nexus-js/core";
 import type { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
@@ -21,7 +21,7 @@ export type IframeChildMeta = {
   frameId: string;
 };
 
-export type IframeUserMeta = IframeParentMeta | IframeChildMeta;
+export type IframeEndpointMeta = IframeParentMeta | IframeChildMeta;
 
 export type IframePlatformMeta = {
   transport: "iframe-postmessage";
@@ -43,7 +43,7 @@ export type IframePlatformMeta = {
 };
 
 export type EndpointCapabilities = NonNullable<
-  IEndpoint<IframeUserMeta, IframePlatformMeta>["capabilities"]
+  IEndpoint<IframeEndpointMeta, IframePlatformMeta>["capabilities"]
 >;
 
 export type WindowLike = Window & {
@@ -99,7 +99,7 @@ export type IframeChildEndpointOptions = {
 
 export type IframeParentOptions = IframeParentEndpointOptions &
   Omit<
-    NexusConfig<IframeUserMeta, IframePlatformMeta>,
+    NexusConfig<IframeEndpointMeta, IframePlatformMeta>,
     "endpoint" | "matchers" | "descriptors"
   > & { configure?: true };
 
@@ -110,11 +110,11 @@ export type IframeParentConfigOptions = Omit<
 
 export type IframeChildOptions = IframeChildEndpointOptions &
   Omit<
-    NexusConfig<IframeUserMeta, IframePlatformMeta>,
+    NexusConfig<IframeEndpointMeta, IframePlatformMeta>,
     "endpoint" | "matchers" | "descriptors"
   > & {
     configure?: true;
-    connectTo?: readonly TargetCriteria<IframeUserMeta, string, string>[];
+    connectTo?: readonly Target<IframeEndpointMeta, string, string>[];
   };
 
 export type IframeChildConfigOptions = Omit<IframeChildOptions, "configure"> & {
@@ -122,10 +122,10 @@ export type IframeChildConfigOptions = Omit<IframeChildOptions, "configure"> & {
 };
 
 export type IframeParentResult = NexusConfig<
-  IframeUserMeta,
+  IframeEndpointMeta,
   IframePlatformMeta
 >;
 export type IframeParentConfigured = NexusInstance<
-  IframeUserMeta,
+  IframeEndpointMeta,
   IframePlatformMeta
 >;

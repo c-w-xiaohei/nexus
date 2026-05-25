@@ -32,7 +32,7 @@ describe("DecoratorRegistry", () => {
     warnSpy.mockRestore();
   });
 
-  it("snapshot() should copy services and clear() should reset all state", () => {
+  it("snapshot() should copy providers and clear() should reset all state", () => {
     DecoratorRegistry.clear();
 
     const token = new Token<object>("service-b");
@@ -41,12 +41,12 @@ describe("DecoratorRegistry", () => {
     });
 
     const snapshot = DecoratorRegistry.snapshot();
-    expect(snapshot.services.size).toBe(1);
+    expect(snapshot.providers.size).toBe(1);
     expect(DecoratorRegistry.hasRegistrations()).toBe(true);
 
     DecoratorRegistry.clear();
     const postClearSnapshot = DecoratorRegistry.snapshot();
-    expect(postClearSnapshot.services.size).toBe(0);
+    expect(postClearSnapshot.providers.size).toBe(0);
     expect(postClearSnapshot.endpoint).toBeNull();
     expect(DecoratorRegistry.hasRegistrations()).toBe(false);
   });

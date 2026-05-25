@@ -45,22 +45,22 @@ const deferred = <T>() => {
 };
 
 describe("createNexusStore", () => {
-  it("translates store definition to ordinary ServiceRegistration", async () => {
+  it("translates store definition to ordinary ServiceProvider", async () => {
     const definition = createCounterDefinition();
-    const { config: registration, store } = createNexusStore(definition);
+    const { provider, store } = createNexusStore(definition);
 
-    expect(registration.token).toBe(definition.token);
-    expect(typeof registration.implementation.subscribe).toBe("function");
-    expect(typeof registration.implementation.unsubscribe).toBe("function");
-    expect(typeof registration.implementation.dispatch).toBe("function");
+    expect(provider.token).toBe(definition.token);
+    expect(typeof provider.service.subscribe).toBe("function");
+    expect(typeof provider.service.unsubscribe).toBe("function");
+    expect(typeof provider.service.dispatch).toBe("function");
     expect(store.getState()).toEqual({ count: 0 });
     expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
 
-    const baseline = await registration.implementation.subscribe(() => {});
+    const baseline = await provider.service.subscribe(() => {});
     expect(baseline.version).toBe(0);
 
     await expect(store.actions.increment(3)).resolves.toBe(3);
-    const after = await registration.implementation.subscribe(() => {});
+    const after = await provider.service.subscribe(() => {});
     expect(after.version).toBe(1);
     expect(after.state.count).toBe(3);
     expect(store.getState()).toEqual({ count: 3 });
@@ -79,9 +79,9 @@ describe("createNexusStore", () => {
 
   it("keeps service subscribe baseline mutations from changing authoritative state", async () => {
     const definition = createCounterDefinition();
-    const { config, store } = createNexusStore(definition);
+    const { provider, store } = createNexusStore(definition);
 
-    const baseline = await config.implementation.subscribe(() => {});
+    const baseline = await provider.service.subscribe(() => {});
     baseline.state.count = 99;
 
     expect(store.getState()).toEqual({ count: 0 });
@@ -194,10 +194,10 @@ describe("createNexusStore", () => {
 
   it("cleans orphan subscriptions on disconnect through layer3 runtime", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
 
     expect(
-      (registration.implementation as { [SERVICE_ON_DISCONNECT]?: unknown })[
+      (registration.service as { [SERVICE_ON_DISCONNECT]?: unknown })[
         SERVICE_ON_DISCONNECT
       ],
     ).toBeTypeOf("function");
@@ -205,9 +205,9 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
+            registration.service as NexusStoreServiceContract<
               object,
               any
             >,
@@ -233,10 +233,10 @@ describe("createNexusStore", () => {
     const disconnectedListener = vi.fn();
     const localListener = vi.fn();
 
-    await registration.implementation.subscribe(localListener);
+    await registration.service.subscribe(localListener);
     await storeProxy.subscribe(disconnectedListener);
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(disconnectedListener).toHaveBeenCalledTimes(1);
       expect(localListener).toHaveBeenCalledTimes(1);
@@ -251,7 +251,7 @@ describe("createNexusStore", () => {
     });
 
     await expect(
-      registration.implementation.dispatch("increment", [1]),
+      registration.service.dispatch("increment", [1]),
     ).resolves.toMatchObject({ result: 2, committedVersion: 2 });
 
     await vi.waitFor(() => {
@@ -262,9 +262,9 @@ describe("createNexusStore", () => {
 
   it("exposes explicit invocation context shape for subscribe binding", () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
 
-    const hooks = registration.implementation as {
+    const hooks = registration.service as {
       [SERVICE_INVOKE_START]?: (invocationContext: {
         sourceConnectionId: string;
         sourceIdentity?: unknown;
@@ -289,15 +289,15 @@ describe("createNexusStore", () => {
 
   it("forwards invocation context into wrapped dispatch path", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
-    const implementation =
-      registration.implementation as NexusStoreServiceContract<
+    const { provider: registration } = createNexusStore(definition);
+    const service =
+      registration.service as NexusStoreServiceContract<
         { count: number },
         { increment(by: number): number }
       >;
 
     const invocation = (
-      implementation as {
+      service as {
         [SERVICE_INVOKE_START]?: (invocationContext: {
           sourceConnectionId: string;
           sourceIdentity?: unknown;
@@ -312,25 +312,25 @@ describe("createNexusStore", () => {
       platform: { from: "popup-forward" },
     });
 
-    await implementation.dispatch("increment", [2], invocation as any);
+    await service.dispatch("increment", [2], invocation as any);
 
-    const baseline = await implementation.subscribe(() => {});
+    const baseline = await service.subscribe(() => {});
     expect(baseline.state.count).toBe(2);
   });
 
   it("passes full trusted invocation identity context through remote dispatch", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const observedDispatchInvocations: unknown[] = [];
-    const implementation = registration.implementation;
-    const originalDispatch = implementation.dispatch.bind(implementation);
+    const service = registration.service;
+    const originalDispatch = service.dispatch.bind(service);
     const wrappedImplementation = Object.create(
-      Object.getPrototypeOf(implementation),
+      Object.getPrototypeOf(service),
     ) as NexusStoreServiceContract<{ count: number }, any> &
-      typeof implementation;
+      typeof service;
     Object.defineProperties(
       wrappedImplementation,
-      Object.getOwnPropertyDescriptors(implementation),
+      Object.getOwnPropertyDescriptors(service),
     );
 
     wrappedImplementation.dispatch = (
@@ -345,7 +345,7 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]: wrappedImplementation,
         },
       },
@@ -382,14 +382,14 @@ describe("createNexusStore", () => {
 
   it("binds async subscribe ownership through hook path and cleans via disconnect hook", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
 
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
+            registration.service as NexusStoreServiceContract<
               object,
               any
             >,
@@ -417,22 +417,22 @@ describe("createNexusStore", () => {
     const remoteListener = vi.fn();
     const localListener = vi.fn();
 
-    await registration.implementation.subscribe(localListener);
+    await registration.service.subscribe(localListener);
     await storeProxy.subscribe(remoteListener);
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(1);
       expect(remoteListener).toHaveBeenCalledTimes(1);
     });
 
     (
-      registration.implementation as {
+      registration.service as {
         [SERVICE_ON_DISCONNECT](connectionId: string): void;
       }
     )[SERVICE_ON_DISCONNECT](clientConnectionId);
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(2);
       expect(remoteListener).toHaveBeenCalledTimes(1);
@@ -441,16 +441,16 @@ describe("createNexusStore", () => {
 
   it("passes invocation context through wrapped store service methods", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
-    const implementation = registration.implementation;
-    const originalSubscribe = implementation.subscribe.bind(implementation);
+    const { provider: registration } = createNexusStore(definition);
+    const service = registration.service;
+    const originalSubscribe = service.subscribe.bind(service);
     const wrappedImplementation = Object.create(
-      Object.getPrototypeOf(implementation),
+      Object.getPrototypeOf(service),
     ) as NexusStoreServiceContract<{ count: number }, any> &
-      typeof implementation;
+      typeof service;
     Object.defineProperties(
       wrappedImplementation,
-      Object.getOwnPropertyDescriptors(implementation),
+      Object.getOwnPropertyDescriptors(service),
     );
     const observedInvocations: unknown[] = [];
 
@@ -462,7 +462,7 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]: wrappedImplementation,
         },
       },
@@ -502,21 +502,21 @@ describe("createNexusStore", () => {
       }
     )[SERVICE_ON_DISCONNECT](clientConnectionId);
 
-    await implementation.dispatch("increment", [1]);
+    await service.dispatch("increment", [1]);
   });
 
   it("binds ownership correctly for overlapping async subscribes from different connections", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const subscribeBarrier = deferred<void>();
     const localListener = vi.fn();
 
-    await registration.implementation.subscribe(localListener);
+    await registration.service.subscribe(localListener);
 
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
+    const originalSubscribe = registration.service.subscribe.bind(
+      registration.service,
     );
-    registration.implementation.subscribe = async (onSync: any) => {
+    registration.service.subscribe = async (onSync: any) => {
       await subscribeBarrier.promise;
       return originalSubscribe(onSync);
     };
@@ -527,8 +527,8 @@ describe("createNexusStore", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
-          [definition.token.id]: registration.implementation,
+        providers: {
+          [definition.token.id]: registration.service,
         },
       },
       leaves: [
@@ -561,7 +561,7 @@ describe("createNexusStore", () => {
     const unsubscribeA = remoteA.subscribe(listenerA);
     const unsubscribeB = remoteB.subscribe(listenerB);
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(1);
       expect(listenerA).toHaveBeenCalledTimes(1);
@@ -580,7 +580,7 @@ describe("createNexusStore", () => {
       expect((popupACm as any).connections.size).toBe(0);
     });
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(2);
       expect(listenerA).toHaveBeenCalledTimes(1);
@@ -599,7 +599,7 @@ describe("createNexusStore", () => {
       expect((popupBCm as any).connections.size).toBe(0);
     });
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(3);
       expect(listenerA).toHaveBeenCalledTimes(1);
@@ -614,16 +614,16 @@ describe("createNexusStore", () => {
 
   it("cleans remote subscription on real disconnect after async subscribe path", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const subscribeGate = deferred<void>();
     const localListener = vi.fn();
 
-    await registration.implementation.subscribe(localListener);
+    await registration.service.subscribe(localListener);
 
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
+    const originalSubscribe = registration.service.subscribe.bind(
+      registration.service,
     );
-    registration.implementation.subscribe = async (onSync: any) => {
+    registration.service.subscribe = async (onSync: any) => {
       await subscribeGate.promise;
       return originalSubscribe(onSync);
     };
@@ -631,9 +631,9 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
+            registration.service as NexusStoreServiceContract<
               object,
               any
             >,
@@ -662,7 +662,7 @@ describe("createNexusStore", () => {
     subscribeGate.resolve();
     await subscribePromise;
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(1);
       expect(remoteListener).toHaveBeenCalledTimes(1);
@@ -676,7 +676,7 @@ describe("createNexusStore", () => {
       ).toHaveLength(0);
     });
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(2);
       expect(remoteListener).toHaveBeenCalledTimes(1);
@@ -685,16 +685,16 @@ describe("createNexusStore", () => {
 
   it("rejects late subscribe completion when connection already disconnected", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const subscribeGate = deferred<void>();
     const localListener = vi.fn();
 
-    await registration.implementation.subscribe(localListener);
+    await registration.service.subscribe(localListener);
 
-    const originalSubscribe = registration.implementation.subscribe.bind(
-      registration.implementation,
+    const originalSubscribe = registration.service.subscribe.bind(
+      registration.service,
     );
-    registration.implementation.subscribe = async (
+    registration.service.subscribe = async (
       onSync: any,
       invocation: any,
     ) => {
@@ -705,9 +705,9 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
+        providers: {
           [definition.token.id]:
-            registration.implementation as NexusStoreServiceContract<
+            registration.service as NexusStoreServiceContract<
               object,
               any
             >,
@@ -747,7 +747,7 @@ describe("createNexusStore", () => {
       }),
     ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
 
-    await registration.implementation.dispatch("increment", [1]);
+    await registration.service.dispatch("increment", [1]);
     await vi.waitFor(() => {
       expect(localListener).toHaveBeenCalledTimes(1);
       expect(remoteListener).toHaveBeenCalledTimes(0);

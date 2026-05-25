@@ -10,7 +10,7 @@ import type {
   IframeFrameTarget,
   IframeParentEndpointOptions,
   IframePlatformMeta,
-  IframeUserMeta,
+  IframeEndpointMeta,
 } from "./types";
 import { originMatches, validateAppId, validateOrigin } from "./validation";
 import { getWindow, postMessageFrom } from "./window";
@@ -25,7 +25,7 @@ type ParentFrameState = IframeFrameTarget & {
  * for each frame: matching origin is not enough when same-origin frames coexist.
  */
 export class IframeParentEndpoint implements IEndpoint<
-  IframeUserMeta,
+  IframeEndpointMeta,
   IframePlatformMeta
 > {
   readonly capabilities: EndpointCapabilities;
@@ -54,7 +54,7 @@ export class IframeParentEndpoint implements IEndpoint<
   }
 
   async connect(
-    targetDescriptor: Partial<IframeUserMeta>,
+    targetDescriptor: Partial<IframeEndpointMeta>,
   ): Promise<[IPort, IframePlatformMeta]> {
     const state = this.resolveFrame(targetDescriptor);
     this.ensureRouter(state);
@@ -182,7 +182,7 @@ export class IframeParentEndpoint implements IEndpoint<
     );
   }
 
-  private resolveFrame(target: Partial<IframeUserMeta>): ParentFrameState {
+  private resolveFrame(target: Partial<IframeEndpointMeta>): ParentFrameState {
     if (target.context !== undefined && target.context !== "iframe-child")
       throw new IframeAdapterError(
         "No iframe matched target descriptor",

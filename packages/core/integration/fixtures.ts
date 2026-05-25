@@ -226,7 +226,7 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
   const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
     center: {
       meta: bgMeta,
-      services: {
+      providers: {
         [BackgroundServiceToken.id]: backgroundService,
       },
       matchers: {
@@ -239,12 +239,12 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
     leaves: [
       {
         meta: cs1Meta,
-        services: { [ContentScriptServiceToken.id]: cs1Service },
+        providers: { [ContentScriptServiceToken.id]: cs1Service },
         cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
       },
       {
         meta: cs2Meta,
-        services: { [ContentScriptServiceToken.id]: cs2Service },
+        providers: { [ContentScriptServiceToken.id]: cs2Service },
         cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
       },
       {

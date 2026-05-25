@@ -103,11 +103,11 @@ await expect(
 
 ## Configuring Services In Tests
 
-`mock.nexus.configure({ services })` records the config and registers services:
+`mock.nexus.configure({ providers })` records the config and registers providers:
 
 ```ts
 mock.nexus.configure({
-  services: [{ token: UserToken, implementation: users }],
+  providers: [{ token: UserToken, service: users }],
 });
 
 expect(mock.calls.configure()).toHaveLength(1);

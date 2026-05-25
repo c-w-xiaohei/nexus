@@ -1,4 +1,4 @@
-import type { ServiceRegistration } from "@/api/types/config";
+import type { ServiceProvider } from "@/api/types/config";
 import {
   type ServiceInvocationContext,
   SERVICE_INVOKE_END,
@@ -43,7 +43,7 @@ export interface CreateNexusStoreResult<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
 > {
-  readonly config: ServiceRegistration<
+  readonly provider: ServiceProvider<
     NexusStoreServiceContract<TState, TActions>
   >;
   readonly store: NexusStoreHandle<TState, TActions>;
@@ -58,7 +58,7 @@ export const createNexusStore = <
   const host = createStoreHost(definition);
   let destroyed = false;
 
-  const implementation: NexusStoreServiceContract<TState, TActions> = {
+  const service: NexusStoreServiceContract<TState, TActions> = {
     subscribe: async (onSync, invocation?: ServiceInvocationContext) => {
       return host.subscribe(onSync, {
         ownerConnectionId: host.resolveSubscriptionOwner(invocation),
@@ -69,7 +69,7 @@ export const createNexusStore = <
       host.dispatch(action, args, invocation),
   };
 
-  const implementationWithHooks = implementation as NexusStoreServiceContract<
+  const implementationWithHooks = service as NexusStoreServiceContract<
     TState,
     TActions
   > & {
@@ -154,9 +154,9 @@ export const createNexusStore = <
   };
 
   return {
-    config: {
+    provider: {
       token: definition.token,
-      implementation: implementationWithHooks,
+      service: implementationWithHooks,
     },
     store,
   };

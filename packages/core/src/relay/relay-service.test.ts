@@ -45,19 +45,19 @@ describe("relayService", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
 
-    const implementation = registration.implementation as TestService & {
+    const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
         invocation: ServiceInvocationContext,
       ): ServiceInvocationContext;
       [SERVICE_INVOKE_END](invocation?: ServiceInvocationContext): void;
     };
 
-    const invocation = implementation[SERVICE_INVOKE_START](createInvocation());
-    const result = await implementation.profile.update(
+    const invocation = service[SERVICE_INVOKE_START](createInvocation());
+    const result = await service.profile.update(
       { name: "Ada" },
       invocation as never,
     );
-    implementation[SERVICE_INVOKE_END](invocation);
+    service[SERVICE_INVOKE_END](invocation);
 
     expect(create).toHaveBeenCalledWith(token, {
       target: { descriptor: { context: "background" } },
@@ -84,14 +84,14 @@ describe("relayService", () => {
       policy: { canCall },
     });
 
-    const implementation = registration.implementation as TestService & {
+    const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
         invocation: ServiceInvocationContext,
       ): ServiceInvocationContext;
     };
-    const invocation = implementation[SERVICE_INVOKE_START](createInvocation());
+    const invocation = service[SERVICE_INVOKE_START](createInvocation());
 
-    await implementation.profile.update({ name: "Lin" }, invocation as never);
+    await service.profile.update({ name: "Lin" }, invocation as never);
 
     expect(canCall).toHaveBeenCalledWith({
       origin: { context: "iframe-leaf" },
@@ -116,15 +116,15 @@ describe("relayService", () => {
       forwardThrough: { create } as any,
       forwardTarget: { descriptor: { context: "background" } },
     });
-    const implementation = registration.implementation as TestService & {
+    const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
         invocation: ServiceInvocationContext,
       ): ServiceInvocationContext;
     };
-    const invocation = implementation[SERVICE_INVOKE_START](createInvocation());
+    const invocation = service[SERVICE_INVOKE_START](createInvocation());
 
     await expect(
-      implementation.profile.update(
+      service.profile.update(
         { name: "Ada", cb: () => undefined } as never,
         invocation as never,
       ),
@@ -148,15 +148,15 @@ describe("relayService", () => {
       forwardThrough: { create } as any,
       forwardTarget: { descriptor: { context: "background" } },
     });
-    const implementation = registration.implementation as TestService & {
+    const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
         invocation: ServiceInvocationContext,
       ): ServiceInvocationContext;
     };
-    const invocation = implementation[SERVICE_INVOKE_START](createInvocation());
+    const invocation = service[SERVICE_INVOKE_START](createInvocation());
 
     await expect(
-      implementation.profile.update({ name: "Ada" }, invocation as never),
+      service.profile.update({ name: "Ada" }, invocation as never),
     ).rejects.toMatchObject({ code: "E_RELAY_PAYLOAD_UNSUPPORTED" });
   });
 
@@ -175,15 +175,15 @@ describe("relayService", () => {
       forwardThrough: { create } as any,
       forwardTarget: { descriptor: { context: "background" } },
     });
-    const implementation = registration.implementation as TestService & {
+    const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
         invocation: ServiceInvocationContext,
       ): ServiceInvocationContext;
     };
-    const invocation = implementation[SERVICE_INVOKE_START](createInvocation());
+    const invocation = service[SERVICE_INVOKE_START](createInvocation());
 
     await expect(
-      implementation.profile.update({ name: "Ada" }, invocation as never),
+      service.profile.update({ name: "Ada" }, invocation as never),
     ).rejects.toMatchObject({ code: "E_RELAY_UPSTREAM_TARGET_NOT_FOUND" });
   });
 
@@ -201,10 +201,10 @@ describe("relayService", () => {
     });
 
     expect(() => {
-      (registration.implementation as any).profile = {};
+      (registration.service as any).profile = {};
     }).toThrow(RelayError);
     expect(() => {
-      (registration.implementation as any).profile = {};
+      (registration.service as any).profile = {};
     }).toThrow(/not supported/i);
   });
 });

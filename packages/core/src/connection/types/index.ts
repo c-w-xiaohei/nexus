@@ -20,7 +20,7 @@ export enum ConnectionStatus {
 /**
  * A serializable object that provides the necessary information for an
  * IEndpoint to establish a new connection. It is a partial representation
- * of the target's UserMetadata.
+ * of the target's EndpointMeta.
  * e.g., `{ context: 'background' }`
  */
 export type Descriptor<U extends object> = Partial<U>;
@@ -37,7 +37,7 @@ export type Matcher<U extends object> = (identity: U) => boolean;
  */
 export type MessageTarget<U extends object> =
   | { readonly connectionId: string }
-  | { readonly groupName: string }
+  | { readonly group: string }
   | { readonly matcher: Matcher<U> };
 
 /**

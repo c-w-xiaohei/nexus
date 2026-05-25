@@ -82,38 +82,48 @@ This metadata is the bridge from adapter pre-auth into core policy.
 
 Use core `canConnect` to require successful pre-auth:
 
-For policy composition, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path remains calling `usingNodeIpcDaemon(...)` directly and publishing providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
+For policy composition, ask the helper for a pure config object with `configure: false`, combine it with policy through `composeNexusConfig([...])`, then pass the result to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path remains calling `usingNodeIpcDaemon(...)` directly and publishing providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    authToken: process.env.NEXUS_IPC_TOKEN,
-    configure: false,
-  }),
-  policy: {
-    canConnect({ platform }) {
-      return platform.authenticated === true;
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ platform }) {
+          return platform.authenticated === true;
+        },
+      },
     },
-  },
-});
+  ]),
+);
 ```
 
 Use core `canCall` to authorize service operations after the connection exists.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    authToken: process.env.NEXUS_IPC_TOKEN,
-    configure: false,
-  }),
-  policy: {
-    canCall({ serviceName, operation }) {
-      return serviceName === "example:admin" && operation === "APPLY";
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canCall({ serviceName, operation }) {
+          return serviceName === "example:admin" && operation === "APPLY";
+        },
+      },
     },
-  },
-});
+  ]),
+);
 ```
 
 For `canConnect`, `canCall`, service-level policy, and metadata trust boundaries, read `docs/auth-and-policy.md`.

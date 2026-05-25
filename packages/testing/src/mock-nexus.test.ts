@@ -290,7 +290,7 @@ describe("createMockNexus", () => {
   it("accepts an empty target when the token has a default target", async () => {
     const tokenWithDefault = new Token<ExampleService>(
       "testing:default-target",
-      { descriptor: { context: "background" } },
+      { defaultTarget: { descriptor: { context: "background" } } },
     );
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     mock.service(tokenWithDefault, createExampleService());
@@ -300,21 +300,17 @@ describe("createMockNexus", () => {
     await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
   });
 
-  it("accepts omitted create options when the token has a defaultCreate target", async () => {
-    const tokenWithDefaultCreate = new Token<ExampleService>(
-      "testing:default-create-target",
+  it("accepts omitted create options when the token has a defaultTarget", async () => {
+    const tokenWithDefaultTarget = new Token<ExampleService>(
+      "testing:default-target-omitted-options",
       {
-        defaultCreate: {
-          target: {
-            descriptor: { context: "background" } as Record<string, unknown>,
-          },
-        },
+        defaultTarget: { descriptor: { context: "background" } },
       },
     );
     const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(tokenWithDefaultCreate, createExampleService());
+    mock.service(tokenWithDefaultTarget, createExampleService());
 
-    const proxy = await mock.nexus.create(tokenWithDefaultCreate);
+    const proxy = await mock.nexus.create(tokenWithDefaultTarget);
 
     await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
   });
@@ -409,7 +405,7 @@ describe("createMockNexus", () => {
     const canConnect = vi.fn(() => true);
     const canCall = vi.fn(() => true);
     const config = {
-      services: [{ token: ExampleToken, implementation: service }],
+      providers: [{ token: ExampleToken, service }],
       matchers: {
         active: (identity: AppMeta) => identity.active === true,
       },
@@ -445,9 +441,7 @@ describe("createMockNexus", () => {
       },
     });
     mock.nexus.configure({
-      services: [
-        { token: ExampleToken, implementation: createExampleService() },
-      ],
+      providers: [{ token: ExampleToken, service: createExampleService() }],
     });
 
     const proxy = await mock.nexus.create(ExampleToken, { target: {} });
@@ -458,9 +452,7 @@ describe("createMockNexus", () => {
   it("rejects unknown named descriptors and matchers during create", async () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     const configured = mock.nexus.configure({
-      services: [
-        { token: ExampleToken, implementation: createExampleService() },
-      ],
+      providers: [{ token: ExampleToken, service: createExampleService() }],
       descriptors: { background: { context: "background" } },
       matchers: { active: (identity) => identity.active === true },
     });
@@ -478,12 +470,14 @@ describe("createMockNexus", () => {
   });
 
   it("rejects unknown named descriptors and matchers in fallback targets", async () => {
-    const tokenWithMissingDefault = new Token<ExampleService>(
-      "testing:missing-default-target",
-      { descriptor: "missing" as never },
-    );
+    expect(
+      () =>
+        new Token<ExampleService>("testing:missing-default-target", {
+          defaultTarget: { descriptor: "missing" as never },
+        }),
+    ).toThrow(NexusUsageError);
+
     const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(tokenWithMissingDefault, createExampleService());
     mock.service(ExampleToken, createExampleService());
     mock.nexus.configure({
       endpoint: {
@@ -493,9 +487,6 @@ describe("createMockNexus", () => {
     });
 
     await expect(
-      mock.nexus.create(tokenWithMissingDefault, { target: {} }),
-    ).rejects.toBeInstanceOf(NexusUsageError);
-    await expect(
       mock.nexus.create(ExampleToken, { target: {} }),
     ).rejects.toBeInstanceOf(NexusUsageError);
   });
@@ -504,7 +495,7 @@ describe("createMockNexus", () => {
     const mock = createMockNexus<AppMeta, PlatformMeta>();
     const service = createExampleService();
     const config = {
-      services: [{ token: ExampleToken, implementation: service }],
+      providers: [{ token: ExampleToken, service }],
     } satisfies NexusConfig<AppMeta, PlatformMeta>;
 
     const result = mock.nexus.safeConfigure(config);
@@ -764,9 +755,9 @@ describe("createMockNexus", () => {
       }),
     });
     const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const { config } = createNexusStore(counterStore);
+    const { provider } = createNexusStore(counterStore);
     mock.nexus.configure({
-      services: [config],
+      providers: [provider],
       endpoint: {
         meta: { context: "background" },
         connectTo: [{ descriptor: { context: "background" } }],

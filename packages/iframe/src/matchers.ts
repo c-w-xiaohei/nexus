@@ -1,16 +1,16 @@
 import { DEFAULT_INSTANCE } from "./constants";
-import type { IframeUserMeta } from "./types";
+import type { IframeEndpointMeta } from "./types";
 
 export const IframeMatchers = {
-  parent: (appId: string) => (identity: IframeUserMeta) =>
+  parent: (appId: string) => (identity: IframeEndpointMeta) =>
     identity.context === "iframe-parent" && identity.appId === appId,
-  child: (appId: string) => (identity: IframeUserMeta) =>
+  child: (appId: string) => (identity: IframeEndpointMeta) =>
     identity.context === "iframe-child" && identity.appId === appId,
-  instance: (name: string) => (identity: IframeUserMeta) =>
+  instance: (name: string) => (identity: IframeEndpointMeta) =>
     (identity.instance ?? DEFAULT_INSTANCE) === name,
-  origin: (origin: string) => (identity: IframeUserMeta) =>
+  origin: (origin: string) => (identity: IframeEndpointMeta) =>
     identity.origin === origin,
-  frame: (frameId: string) => (identity: IframeUserMeta) =>
+  frame: (frameId: string) => (identity: IframeEndpointMeta) =>
     identity.context === "iframe-child" && identity.frameId === frameId,
 };
 

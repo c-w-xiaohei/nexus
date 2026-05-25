@@ -1101,10 +1101,10 @@ describe("iframe adapter RPC integration", () => {
         parentOrigin: "https://parent.test",
         connectTo: [{ descriptor: { context: "iframe-parent", appId: "app" } }],
       }),
-      services: [
+      providers: [
         {
           token: EchoToken,
-          implementation: { echo: (value: string) => value },
+          service: { echo: (value: string) => value },
         },
       ],
     });

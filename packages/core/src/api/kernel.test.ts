@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ServiceRegistration } from "./types/config";
+import type { ServiceProvider } from "./types/config";
 import { NexusKernelBuilder } from "./kernel";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
@@ -12,12 +12,12 @@ describe("NexusKernelBuilder", () => {
 
     const registration = {
       token: { id: "typed-service" },
-      implementation: {},
+      service: {},
       policy: {
         canCall: ({ localIdentity, platform }) =>
           localIdentity.role === "admin" && platform.processId > 0,
       },
-    } satisfies ServiceRegistration<object, UserMeta, PlatformMeta>;
+    } satisfies ServiceProvider<object, UserMeta, PlatformMeta>;
 
     expect(registration.policy.canCall).toBeTypeOf("function");
   });
@@ -100,13 +100,13 @@ describe("NexusKernelBuilder", () => {
 
     expect(result.value.connectionManager).toBeDefined();
     // Verify the merged metadata is present
-    // The connection manager's localUserMetadata should match what we passed in the decorator
-    expect((result.value.connectionManager as any).localUserMetadata).toEqual({
+    // The connection manager's localEndpointMeta should match what we passed in the decorator
+    expect((result.value.connectionManager as any).localEndpointMeta).toEqual({
       context: "bg",
     });
   });
 
-  it("should instantiate services with factory injection", async () => {
+  it("should instantiate providers with factory injection", async () => {
     const nexus = new Nexus();
     const token = new Token<object>("test");
     const serviceMap = new Map();
@@ -249,7 +249,7 @@ describe("NexusKernelBuilder", () => {
     }
   });
 
-  it("should fail duplicate provider ids before class instantiation", async () => {
+  it("should allow decorated providers to replace configured providers by id", async () => {
     const nexus = new Nexus();
     const tokenA = new Token<object>("duplicate-before-instance");
     const tokenB = new Token<object>("duplicate-before-instance");
@@ -262,7 +262,7 @@ describe("NexusKernelBuilder", () => {
           meta: { context: "bg" },
           implementation: { listen: () => {} },
         },
-        services: [{ token: tokenA, implementation: {} }],
+        providers: [{ token: tokenA, service: {} }],
       } as any,
       new Map([
         [
@@ -285,16 +285,14 @@ describe("NexusKernelBuilder", () => {
 
     const result = await builder.build();
 
-    expect(result.isErr()).toBe(true);
+    expect(result.isOk()).toBe(true);
     expect(serviceConstructor).not.toHaveBeenCalled();
-    expect(factory).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledTimes(1);
     if (result.isErr()) {
-      expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
-      expect((result.error as any).context.errors).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
-        ]),
-      );
+      throw result.error;
     }
+    expect(
+      (result.value.engine as any).resourceManager.getExposedService(tokenA.id),
+    ).toEqual({});
   });
 });

@@ -9,7 +9,7 @@ import type {
   IframeParentConfigOptions,
   IframeParentOptions,
   IframePlatformMeta,
-  IframeUserMeta,
+  IframeEndpointMeta,
 } from "./types";
 import { getOrigin } from "./window";
 
@@ -20,16 +20,16 @@ import { getOrigin } from "./window";
  */
 export function usingIframeParent(
   options: IframeParentConfigOptions,
-): NexusConfig<IframeUserMeta, IframePlatformMeta>;
+): NexusConfig<IframeEndpointMeta, IframePlatformMeta>;
 export function usingIframeParent(
   options: IframeParentOptions,
-): NexusInstance<IframeUserMeta, IframePlatformMeta>;
+): NexusInstance<IframeEndpointMeta, IframePlatformMeta>;
 export function usingIframeParent(
   options: IframeParentOptions | IframeParentConfigOptions,
 ) {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const origin = getOrigin(options.localWindow ?? options.window);
-  const config: NexusConfig<IframeUserMeta, IframePlatformMeta> = {
+  const config: NexusConfig<IframeEndpointMeta, IframePlatformMeta> = {
     ...options,
     endpoint: {
       meta: {
@@ -52,7 +52,7 @@ export function usingIframeParent(
           origin: frame.origin,
         },
       ]),
-    ) as Record<string, Partial<IframeUserMeta>>,
+    ) as Record<string, Partial<IframeEndpointMeta>>,
   };
   return options.configure === false ? config : nexus.configure(config);
 }
@@ -64,16 +64,16 @@ export function usingIframeParent(
  */
 export function usingIframeChild(
   options: IframeChildConfigOptions,
-): NexusConfig<IframeUserMeta, IframePlatformMeta>;
+): NexusConfig<IframeEndpointMeta, IframePlatformMeta>;
 export function usingIframeChild(
   options: IframeChildOptions,
-): NexusInstance<IframeUserMeta, IframePlatformMeta>;
+): NexusInstance<IframeEndpointMeta, IframePlatformMeta>;
 export function usingIframeChild(
   options: IframeChildOptions | IframeChildConfigOptions,
 ) {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const frameId = options.frameId ?? "default";
-  const config: NexusConfig<IframeUserMeta, IframePlatformMeta> = {
+  const config: NexusConfig<IframeEndpointMeta, IframePlatformMeta> = {
     ...options,
     endpoint: {
       meta: {

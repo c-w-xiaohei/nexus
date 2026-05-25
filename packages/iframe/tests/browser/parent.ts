@@ -67,10 +67,10 @@ const parent = new Nexus().configure({
     })),
     heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
-  services: [
+  providers: [
     {
       token: ParentEchoToken,
-      implementation: {
+      service: {
         async echoFromParent(value: string) {
           const frameId = value.split(":", 1)[0] ?? "unknown";
           telemetry.parentCalls.push({

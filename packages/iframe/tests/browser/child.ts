@@ -89,10 +89,10 @@ const child = new Nexus().configure({
       { descriptor: { context: "iframe-parent", appId: "browser-app" } },
     ],
   }),
-  services: [
+  providers: [
     {
       token: EchoToken,
-      implementation: {
+      service: {
         async echo(value: string) {
           return `child:${frameId}:${value}`;
         },

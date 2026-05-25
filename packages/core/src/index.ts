@@ -6,6 +6,11 @@ export { Endpoint } from "./api/decorators/endpoint";
 export { Token } from "./api/token";
 export type { TokenOptions } from "./api/token";
 export { TokenSpace } from "./api/token-space";
+export {
+  serviceProvider,
+  defineNexusConfig,
+  composeNexusConfig,
+} from "./api/types/config";
 export type {
   TokenSpaceConfig,
   TokenSpaceDefaultTarget,
@@ -13,8 +18,8 @@ export type {
 } from "./api/token-space";
 
 export type {
-  UserMetadata,
-  PlatformMetadata,
+  EndpointMeta,
+  PlatformMeta,
   ConnectionContext,
 } from "./types/identity";
 export type { IPort, IEndpoint } from "@/transport";
@@ -23,16 +28,16 @@ export type {
   NexusAuthorizationPolicy,
   ConnectionAuthContext,
   EndpointConfig,
-  ServiceRegistration,
+  ServiceProvider,
   AuthorizationPolicy,
   ServiceCallAuthContext,
   CreateOptions,
   CreateMulticastOptions,
-  TargetCriteria,
-  TokenCreateDefaults,
-  NamedDefaultOptIn,
-  TargetDescriptor,
-  TargetMatcher,
+  Target,
+  InlineTarget,
+  MulticastTarget,
+  DescriptorTarget,
+  MatcherTarget,
   MessageTarget,
 } from "./api/types/config"; // 配置和寻址相关类型
 export type {

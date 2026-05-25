@@ -105,7 +105,7 @@ const iframeParentNexus = new Nexus().configure({
     })),
     heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
-  services: [
+  providers: [
     relayService(RelayProfileToken, {
       forwardThrough: chromeNexus,
       forwardTarget: relayHostTarget,

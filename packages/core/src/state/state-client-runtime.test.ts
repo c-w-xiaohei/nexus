@@ -507,9 +507,9 @@ describe("state client runtime and connect APIs", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [counterStore.token.id]:
-            createNexusStore(counterStore).config.implementation,
+            createNexusStore(counterStore).provider.service,
         },
       },
       leaves: [
@@ -553,7 +553,7 @@ describe("state client runtime and connect APIs", () => {
       }),
     });
 
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const network = await createStarNetwork<Meta, { from: string }>({
       center: {
         meta: { context: "background" },
@@ -566,8 +566,8 @@ describe("state client runtime and connect APIs", () => {
             issueId: "CS-ACTIVE",
             url: "github.com/issue/a",
           },
-          services: {
-            [definition.token.id]: registration.implementation,
+          providers: {
+            [definition.token.id]: registration.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -617,8 +617,8 @@ describe("state client runtime and connect APIs", () => {
       }),
     });
 
-    const { config: registration1 } = createNexusStore(definition);
-    const { config: registration2 } = createNexusStore(definition);
+    const { provider: registration1 } = createNexusStore(definition);
+    const { provider: registration2 } = createNexusStore(definition);
 
     const network = await createStarNetwork<Meta, { from: string }>({
       center: {
@@ -632,8 +632,8 @@ describe("state client runtime and connect APIs", () => {
             issueId: "CS-1",
             url: "github.com/issue/1",
           },
-          services: {
-            [definition.token.id]: registration1.implementation,
+          providers: {
+            [definition.token.id]: registration1.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -643,8 +643,8 @@ describe("state client runtime and connect APIs", () => {
             issueId: "CS-2",
             url: "github.com/issue/2",
           },
-          services: {
-            [definition.token.id]: registration2.implementation,
+          providers: {
+            [definition.token.id]: registration2.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -677,15 +677,15 @@ describe("state client runtime and connect APIs", () => {
 
   it("safeConnectNexusStore returns ResultAsync", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
     const network = await createStarNetwork<
       { context: "background" | "popup" },
       { from: string }
     >({
       center: {
         meta: { context: "background" },
-        services: {
-          [definition.token.id]: registration.implementation,
+        providers: {
+          [definition.token.id]: registration.service,
         },
       },
       leaves: [
@@ -2541,13 +2541,13 @@ describe("state client runtime and connect APIs", () => {
 
   it("disconnect behavior composes with host cleanup capability", async () => {
     const definition = createCounterDefinition();
-    const { config: registration } = createNexusStore(definition);
+    const { provider: registration } = createNexusStore(definition);
 
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: {
-          [definition.token.id]: registration.implementation,
+        providers: {
+          [definition.token.id]: registration.service,
         },
       },
       {
@@ -2586,7 +2586,7 @@ describe("state client runtime and connect APIs", () => {
     );
 
     await expect(
-      registration.implementation.dispatch("increment", [1]),
+      registration.service.dispatch("increment", [1]),
     ).resolves.toMatchObject({ result: 2, committedVersion: 2 });
   });
 

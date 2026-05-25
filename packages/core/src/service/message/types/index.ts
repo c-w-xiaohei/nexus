@@ -1,5 +1,5 @@
 import type { NexusMessage } from "@/types/message";
-import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { PlatformMeta, EndpointMeta } from "@/types/identity";
 import type { MessageHandlerCallbacks } from "../../engine";
 import type { PayloadProcessor } from "../../payload/payload-processor";
 import type { ResourceManager } from "../../resource-manager";
@@ -10,8 +10,8 @@ import type { NexusAuthorizationPolicy } from "@/api/types/config";
  * It provides access to all the core L3 managers.
  */
 export interface HandlerContext<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   readonly engine: MessageHandlerCallbacks<U>;
   readonly resourceManager: ResourceManager.Runtime;
@@ -34,8 +34,8 @@ export interface HandlerContext<
  */
 export type MessageHandlerFn<
   T extends NexusMessage,
-  U extends UserMetadata = UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
 > = (
   context: HandlerContext<U, P>,
   message: T,

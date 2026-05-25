@@ -60,7 +60,7 @@ Use this when the handle itself is no longer the right handle.
 Typical causes:
 
 - target change in the React adapter
-- target-semantics drift or handoff (for example, "active tab" now refers to a different tab)
+- target-semantics drift or handoff (for example, caller-owned tab discovery now selects a different tab)
 
 Do not use `stale` for same-target session replacement.
 

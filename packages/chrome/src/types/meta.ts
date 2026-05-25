@@ -1,68 +1,85 @@
-import type { PlatformMetadata } from "@nexus-js/core";
+import type { PlatformMeta } from "@nexus-js/core";
+
+export type ChromeBuiltinContext =
+  | "background"
+  | "content-script"
+  | "popup"
+  | "options-page"
+  | "devtools-page"
+  | "offscreen-document";
+
+type AppMeta<TAppMeta> = [TAppMeta] extends [never]
+  ? { app?: never }
+  : { app: TAppMeta };
+
+export type RejectBuiltinContext<TMeta> = TMeta extends {
+  context: infer TContext;
+}
+  ? TContext extends ChromeBuiltinContext
+    ? never
+    : TMeta
+  : TMeta;
 
 /**
- * Chrome extension user metadata using discriminated union types
+ * Chrome extension endpoint metadata using discriminated union types
  * for type-safe context identification
  */
-export type ChromeUserMeta =
-  | {
-      context: "background";
-      extensionId: string;
-      version?: string;
-      state?: "active" | "inactive" | "suspended";
-    }
-  | {
-      context: "content-script";
-      url: string;
-      origin: string;
-      tabId: number;
-      frameId: number;
-      isActive?: boolean;
-    }
-  | {
-      context: "popup";
-      tabId: number;
-      windowId?: number;
-    }
-  | {
-      context: "options-page";
-      windowId?: number;
-    }
-  | {
-      context: "devtools-page";
-      inspectedTabId: number;
-    }
-  | {
-      context: "offscreen-document";
-      reason: string;
-      tabId?: number;
-    };
+export type ChromeEndpointMeta<
+  TAppMeta = never,
+  TCustomMeta extends { context: string } = never,
+> = ChromeBuiltinEndpointMeta<TAppMeta> | RejectBuiltinContext<TCustomMeta>;
 
-/**
- * Chrome platform-specific metadata from chrome.runtime.Port.sender
- */
-export interface ChromePlatformMeta extends PlatformMetadata {
-  sender?: chrome.runtime.MessageSender;
-}
+export type ChromeBuiltinEndpointMeta<TAppMeta = never> =
+  | ChromeBackgroundMeta<TAppMeta>
+  | ChromeContentScriptMeta<TAppMeta>
+  | ChromePopupMeta<TAppMeta>
+  | ChromeOptionsPageMeta<TAppMeta>
+  | ChromeDevToolsPageMeta<TAppMeta>
+  | ChromeOffscreenDocumentMeta<TAppMeta>;
 
 /**
  * Type helpers for specific contexts
  */
-export type BackgroundMeta = Extract<ChromeUserMeta, { context: "background" }>;
-export type ContentScriptMeta = Extract<
-  ChromeUserMeta,
-  { context: "content-script" }
->;
-export type PopupMeta = Extract<ChromeUserMeta, { context: "popup" }>;
-export type OptionsPageMeta = Extract<
-  ChromeUserMeta,
-  { context: "options-page" }
->;
-export type DevToolsPageMeta = Extract<
-  ChromeUserMeta,
-  { context: "devtools-page" }
->;
-export type OffscreenDocumentMeta = Extract<
-  ChromeUserMeta,
-  { context: "offscreen-document" }
->;
+export type ChromeBackgroundMeta<TAppMeta = never> = {
+  context: "background";
+  extensionId: string;
+  version?: string;
+} & AppMeta<TAppMeta>;
+
+export type ChromeContentScriptMeta<TAppMeta = never> = {
+  context: "content-script";
+  url: string;
+  origin: string;
+  tabId?: number;
+  frameId?: number;
+  isVisible?: boolean;
+} & AppMeta<TAppMeta>;
+
+export type ChromePopupMeta<TAppMeta = never> = {
+  context: "popup";
+  tabId?: number;
+  windowId?: number;
+} & AppMeta<TAppMeta>;
+
+export type ChromeOptionsPageMeta<TAppMeta = never> = {
+  context: "options-page";
+  windowId?: number;
+} & AppMeta<TAppMeta>;
+
+export type ChromeDevToolsPageMeta<TAppMeta = never> = {
+  context: "devtools-page";
+  inspectedTabId: number;
+} & AppMeta<TAppMeta>;
+
+export type ChromeOffscreenDocumentMeta<TAppMeta = never> = {
+  context: "offscreen-document";
+  reason: string;
+  tabId?: number;
+} & AppMeta<TAppMeta>;
+
+/**
+ * Chrome platform-specific metadata from chrome.runtime.Port.sender
+ */
+export interface ChromePlatformMeta extends PlatformMeta {
+  sender?: chrome.runtime.MessageSender;
+}

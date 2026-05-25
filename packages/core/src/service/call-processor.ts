@@ -1,4 +1,4 @@
-import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { PlatformMeta, EndpointMeta } from "@/types/identity";
 import { NexusMessageType } from "@/types/message";
 import type { ApplyMessage, GetMessage, SetMessage } from "@/types/message";
 import type { DispatchCallOptions } from "./engine";
@@ -65,8 +65,8 @@ export namespace CallProcessor {
   } as const;
 
   export interface Dependencies<
-    U extends UserMetadata,
-    P extends PlatformMetadata,
+    U extends EndpointMeta,
+    P extends PlatformMeta,
   > {
     nextMessageId: () => number;
     resolveConnection: (
@@ -86,7 +86,7 @@ export namespace CallProcessor {
     ): ResultAsync<any, globalThis.Error>;
   }
 
-  export const create = <U extends UserMetadata, P extends PlatformMetadata>(
+  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
     deps: Dependencies<U, P>,
   ): Runtime => {
     const logger = new Logger("L3 -> CallProcessor");
@@ -326,7 +326,7 @@ export namespace CallProcessor {
         const timeout =
           options.timeout ?? options.proxyOptions?.timeout ?? 5000;
         const isBroadcast =
-          "matcher" in finalTarget || "groupName" in finalTarget;
+          "matcher" in finalTarget || "group" in finalTarget;
         const pendingStrategy = strategy === "stream" ? "stream" : "all";
 
         const registerResult = Result.fromThrowable(

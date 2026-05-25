@@ -1,5 +1,5 @@
 import type { IEndpoint } from "@/transport";
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { Token } from "./token";
 import type { EndpointOptions } from "./decorators/endpoint";
 import type { ExposeOptions } from "./decorators/expose";
@@ -9,7 +9,7 @@ import { NexusConfigurationError } from "@/errors";
  * A type-safe representation of the service registration data.
  * @internal
  */
-export type ServiceRegistrationData = {
+export type ServiceProviderData = {
   targetClass: new (...args: unknown[]) => object;
   options?: ExposeOptions;
 };
@@ -21,22 +21,22 @@ export type ServiceRegistrationData = {
 export type EndpointRegistrationData = {
   targetClass: new (
     ...args: unknown[]
-  ) => IEndpoint<UserMetadata, PlatformMetadata>;
-  options: EndpointOptions<UserMetadata>;
+  ) => IEndpoint<EndpointMeta, PlatformMeta>;
+  options: EndpointOptions<EndpointMeta>;
 };
 
 export type DecoratorSnapshot = {
-  services: ReadonlyMap<Token<object>, ServiceRegistrationData>;
+  providers: ReadonlyMap<Token<object>, ServiceProviderData>;
   endpoint: EndpointRegistrationData | null;
 };
 
 export namespace DecoratorRegistry {
   /**
-   * Stores all services registered via the @Expose decorator.
+   * Stores all providers registered via the @Expose decorator.
    * Key: Service Token
    * Value: Registration data
    */
-  const servicesMap = new Map<Token<object>, ServiceRegistrationData>();
+  const servicesMap = new Map<Token<object>, ServiceProviderData>();
 
   /**
    * Stores the single endpoint registered via the @Endpoint decorator.
@@ -50,7 +50,7 @@ export namespace DecoratorRegistry {
     servicesMap.size > 0 || endpoint !== null;
 
   export const snapshot = (): Snapshot => ({
-    services: new Map(servicesMap),
+    providers: new Map(servicesMap),
     endpoint,
   });
 
@@ -61,7 +61,7 @@ export namespace DecoratorRegistry {
    */
   export const registerService = (
     token: Token<object>,
-    data: ServiceRegistrationData,
+    data: ServiceProviderData,
   ): void => {
     if (servicesMap.has(token)) {
       console.warn(
@@ -98,7 +98,7 @@ export namespace DecoratorRegistry {
 export class InstanceDecoratorRegistry {
   private readonly servicesMap = new Map<
     Token<object>,
-    ServiceRegistrationData
+    ServiceProviderData
   >();
   private readonly serviceTokenIds = new Set<string>();
   private endpoint: EndpointRegistrationData | null = null;
@@ -109,14 +109,14 @@ export class InstanceDecoratorRegistry {
 
   public snapshot(): DecoratorSnapshot {
     return {
-      services: new Map(this.servicesMap),
+      providers: new Map(this.servicesMap),
       endpoint: this.endpoint,
     };
   }
 
   public registerService(
     token: Token<object>,
-    data: ServiceRegistrationData,
+    data: ServiceProviderData,
   ): void {
     if (this.serviceTokenIds.has(token.id)) {
       throw new NexusConfigurationError(

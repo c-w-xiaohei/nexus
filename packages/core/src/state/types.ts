@@ -1,6 +1,6 @@
 import type { Token } from "@/api/token";
 import type { CreateOptions } from "@/api/types/config";
-import type { UserMetadata } from "@/types/identity";
+import type { EndpointMeta } from "@/types/identity";
 import type { ZodType } from "zod";
 import type {
   ConnectNexusStoreOptionsInput,
@@ -111,7 +111,7 @@ export interface RemoteStore<
 }
 
 export interface ConnectNexusStoreOptions<
-  U extends UserMetadata = UserMetadata,
+  U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
 > extends Omit<ConnectNexusStoreOptionsInput, "target"> {

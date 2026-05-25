@@ -15,7 +15,7 @@ const targetMatcherSchema = z.union([
   ),
 ]);
 
-export const createTargetCriteriaSchema = (message: string) =>
+export const createTargetSchema = (message: string) =>
   z
     .object({
       descriptor: targetDescriptorSchema.optional(),
@@ -30,6 +30,6 @@ export const createTargetCriteriaSchema = (message: string) =>
       },
     );
 
-export const TargetCriteriaSchema = createTargetCriteriaSchema(
+export const TargetSchema = createTargetSchema(
   "target requires at least one of descriptor or matcher",
 );

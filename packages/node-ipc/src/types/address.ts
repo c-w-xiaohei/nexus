@@ -2,14 +2,14 @@ import os from "node:os";
 import path from "node:path";
 import { err, ok, Result } from "neverthrow";
 import { NodeIpcError } from "../errors";
-import type { NodeIpcUserMeta } from "./meta";
+import type { NodeIpcEndpointMeta } from "./meta";
 
 export type NodeIpcSocketAddress =
   | { kind: "path"; path: string }
   | { kind: "abstract"; name: string };
 
 export type NodeIpcAddressResolver = (
-  descriptor: Partial<NodeIpcUserMeta>,
+  descriptor: Partial<NodeIpcEndpointMeta>,
 ) => NodeIpcSocketAddress | null;
 
 type ResolveEnvironment = {
@@ -21,7 +21,7 @@ const MAX_UNIX_SOCKET_PATH_LENGTH = 107;
 
 export namespace NodeIpcAddress {
   export const defaultResolve = (
-    descriptor: Partial<NodeIpcUserMeta>,
+    descriptor: Partial<NodeIpcEndpointMeta>,
     environment: ResolveEnvironment = {},
   ): Result<NodeIpcSocketAddress, NodeIpcError> => {
     if (descriptor.context !== "node-ipc-daemon" || !descriptor.appId) {
@@ -58,7 +58,7 @@ export namespace NodeIpcAddress {
   };
 
   export const resolve = (
-    descriptor: Partial<NodeIpcUserMeta>,
+    descriptor: Partial<NodeIpcEndpointMeta>,
     resolver?: NodeIpcAddressResolver,
   ): Result<NodeIpcSocketAddress, NodeIpcError> => {
     if (!resolver) return defaultResolve(descriptor);

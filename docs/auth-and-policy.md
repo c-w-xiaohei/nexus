@@ -107,7 +107,7 @@ nexus.provide(AdminToken, adminService, {
 });
 ```
 
-`configure({ services })` can also attach service-level policy during bootstrap bulk composition or low-level compatibility setup, but `provide(...)` is the ordinary provider registration path.
+`configure({ providers })` can also attach service-level policy during bootstrap bulk composition, for example `providers: [{ token: AdminToken, service: adminService, policy }]`, but `provide(Token, service, { policy })` is the ordinary provider registration path.
 
 Policy composition is per capability. If a service policy omits `canCall`, Nexus falls back to the global `canCall`. If a service policy provides `canCall`, that service-level hook decides the service call.
 
@@ -131,18 +131,26 @@ When writing policy:
 
 For node-ipc, shared-secret pre-auth sets `platform.authenticated` before core policy runs:
 
-When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then pass that object to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
+When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then combine layers with `composeNexusConfig([...])` before passing the result to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({ appId: "example-app", authToken, configure: false }),
-  policy: {
-    canConnect({ platform }) {
-      return platform.authenticated === true;
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({ appId: "example-app", authToken, configure: false }),
+    {
+      policy: {
+        canConnect({ platform }) {
+          return platform.authenticated === true;
+        },
+      },
     },
-  },
-});
+  ]),
+);
 ```
+
+`composeNexusConfig([...])` applies layers left-to-right; later layers win for the same domain.
 
 The shared secret proves the peer knows the configured token. Core policy still decides whether that authenticated peer may connect and call services.
 

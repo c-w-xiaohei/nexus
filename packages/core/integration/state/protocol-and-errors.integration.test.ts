@@ -133,7 +133,7 @@ const createBackgroundHost = async (
         }),
       },
     },
-    services: [{ token: new Token(tokenId), implementation: service }],
+    providers: [{ token: new Token(tokenId), service: service }],
   });
 
   await vi.waitFor(() => {
@@ -257,7 +257,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [definition.token.id]: malformedService,
         },
       },
@@ -282,7 +282,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [definition.token.id]: timeoutService,
         },
       },
@@ -336,9 +336,9 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     >({
       center: {
         meta: { context: "background" },
-        services: {
+        providers: {
           [counterStore.token.id]:
-            createNexusStore(counterStore).config.implementation,
+            createNexusStore(counterStore).provider.service,
         },
       },
       leaves: [

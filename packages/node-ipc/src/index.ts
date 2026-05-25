@@ -15,7 +15,7 @@ export type {
   NodeIpcClientMeta,
   NodeIpcDaemonMeta,
   NodeIpcPlatformMeta,
-  NodeIpcUserMeta,
+  NodeIpcEndpointMeta,
 } from "./types/meta";
 export type {
   NodeIpcClientConfigOptions,

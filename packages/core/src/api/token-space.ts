@@ -1,10 +1,6 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
-import type {
-  NamedDefaultOptIn,
-  TargetCriteria,
-  TokenCreateDefaults,
-} from "./types/config";
-import { Token, type TokenOptions, validateDefaultCreateTarget } from "./token";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
+import type { InlineTarget } from "./types/config";
+import { Token, type TokenOptions, validateDefaultTarget as validateTokenDefaultTarget } from "./token";
 import { NexusUsageError } from "@/errors";
 import { fn } from "@/utils/fn";
 import { err, ok, type Result } from "neverthrow";
@@ -15,23 +11,15 @@ import { z } from "zod";
  * Supports setting namespace name and default target configuration.
  */
 export interface TokenSpaceConfig<
-  U extends UserMetadata,
-  _P extends PlatformMetadata,
-  M extends string = never,
-  D extends string = never,
+  U extends EndpointMeta,
+  _P extends PlatformMeta,
+  _M extends string = never,
+  _D extends string = never,
 > {
   /** The name of the namespace, which will be used as a prefix for all child Token IDs */
   name: string;
 
-  defaultCreate?: TokenCreateDefaults<U, M, D> | null;
-  namedDefaults?: NamedDefaultOptIn<M, D>["namedDefaults"];
-
-  /**
-   * Optional default target configuration.
-   * Note: Only accepts inline-defined descriptor objects or matcher functions,
-   * not string-form named references, to ensure type safety.
-   */
-  defaultTarget?: TokenSpaceDefaultTarget<U, M, D>;
+  defaultTarget?: InlineTarget<U> | null;
 }
 
 /**
@@ -39,42 +27,18 @@ export interface TokenSpaceConfig<
  * Only allows inline-defined descriptors and matchers, not named references.
  * This ensures type safety and avoids runtime errors from referencing unregistered named entities.
  */
-export interface TokenSpaceDefaultTarget<
-  U extends UserMetadata,
-  M extends string = never,
-  D extends string = never,
-> {
-  /**
-   * Inline-defined descriptor object.
-   * Must be a partial object of UserMetadata, not a string reference.
-   */
-  descriptor?: TargetCriteria<U, M, D>["descriptor"];
-
-  /**
-   * Inline-defined matcher function.
-   * Must be an anonymous function, not a string reference.
-   */
-  matcher?: TargetCriteria<U, M, D>["matcher"];
-}
+export type TokenSpaceDefaultTarget<U extends EndpointMeta> = InlineTarget<U>;
 
 /**
  * Configuration options for child TokenSpace.
  * Allows partial override of parent configuration.
  */
 export interface ChildTokenSpaceConfig<
-  U extends UserMetadata,
-  M extends string = never,
-  D extends string = never,
+  U extends EndpointMeta,
+  _M extends string = never,
+  _D extends string = never,
 > {
-  defaultCreate?: TokenCreateDefaults<U, M, D> | null;
-  namedDefaults?: NamedDefaultOptIn<M, D>["namedDefaults"];
-
-  /**
-   * Optional default target configuration.
-   * If provided, will override the parent's defaultTarget;
-   * If not provided, will inherit the parent's defaultTarget.
-   */
-  defaultTarget?: TokenSpaceDefaultTarget<U, M, D>;
+  defaultTarget?: InlineTarget<U> | null;
 }
 
 const NonEmptyNameSchema = z
@@ -91,7 +55,7 @@ const TokenSpaceDefaultTargetSchema = z
   .object({
     descriptor: z
       .custom<
-        Partial<UserMetadata>
+        Partial<EndpointMeta>
       >((value) => typeof value === "object" && value !== null && !Array.isArray(value))
       .optional(),
     matcher: z
@@ -108,7 +72,7 @@ const TokenSpaceDefaultTargetSchema = z
   )
   .optional();
 
-const validateDefaultTarget = fn(
+const validateTokenSpaceDefaultTarget = fn(
   TokenSpaceDefaultTargetSchema,
   (input) => input,
 );
@@ -117,25 +81,24 @@ const validateDefaultTarget = fn(
  * TokenSpace class: A factory and namespace manager for creating and organizing Tokens.
  *
  * Core features:
- * 1. Context binding: Binds to specific UserMetadata and PlatformMetadata types
+ * 1. Context binding: Binds to specific EndpointMeta and PlatformMeta types
  * 2. Default configuration holder: Holds optional defaultTarget configuration
  * 3. Namespace prefix manager: Manages Token ID prefixes
  * 4. Token factory: Provides token() method to create Token instances
  * 5. Nested namespaces: Supports creating child TokenSpaces
  *
- * @template U UserMetadata type
- * @template P PlatformMetadata type
+ * @template U EndpointMeta type
+ * @template P PlatformMeta type
  */
 export class TokenSpace<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
   M extends string = never,
   D extends string = never,
 > {
   private readonly _name: string;
-  private readonly _defaultCreate?: TokenCreateDefaults<U, M, D>;
+  private readonly _defaultTarget?: InlineTarget<U>;
   private readonly _fullPath: string;
-  private readonly _namedDefaults: boolean;
 
   /**
    * Creates a new TokenSpace instance.
@@ -150,15 +113,12 @@ export class TokenSpace<
     }
 
     this._name = validatedName.value;
-    const defaultCreate = normalizeTokenSpaceDefaultCreate(config);
-    if (defaultCreate.isErr()) {
-      throw defaultCreate.error;
+    const defaultTarget = normalizeTokenSpaceDefaultTarget(config);
+    if (defaultTarget.isErr()) {
+      throw defaultTarget.error;
     }
 
-    this._defaultCreate = defaultCreate.value as
-      | TokenCreateDefaults<U, M, D>
-      | undefined;
-    this._namedDefaults = config.namedDefaults === true;
+    this._defaultTarget = defaultTarget.value;
 
     // Build full path: concatenate with parent path if exists, otherwise use current name
     this._fullPath = parentPath ? `${parentPath}:${this._name}` : this._name;
@@ -181,12 +141,8 @@ export class TokenSpace<
   /**
    * Gets the default target configuration of the current TokenSpace.
    */
-  get defaultTarget(): TokenSpaceDefaultTarget<U, M, D> | undefined {
-    return this._defaultCreate?.target;
-  }
-
-  get defaultCreate(): TokenCreateDefaults<U, M, D> | undefined {
-    return this._defaultCreate;
+  get defaultTarget(): InlineTarget<U> | undefined {
+    return this._defaultTarget;
   }
 
   /**
@@ -198,8 +154,8 @@ export class TokenSpace<
    */
   token<T>(
     serviceName: string,
-    options?: TokenOptions<U, M, D>,
-  ): Token<T, U, M, D> {
+    options?: TokenOptions<U>,
+  ): Token<T, U> {
     return this.safeToken<T>(serviceName, options).match(
       (value) => value,
       (error) => {
@@ -210,8 +166,8 @@ export class TokenSpace<
 
   safeToken<T>(
     serviceName: string,
-    options?: TokenOptions<U, M, D>,
-  ): Result<Token<T, U, M, D>, Error> {
+    options?: TokenOptions<U>,
+  ): Result<Token<T, U>, Error> {
     const validatedServiceName = validateTokenSpaceName(serviceName);
     if (validatedServiceName.isErr()) {
       return err(new NexusUsageError(validatedServiceName.error.message));
@@ -222,9 +178,9 @@ export class TokenSpace<
 
     try {
       return ok(
-        new Token<T, U, M, D>(
+        new Token<T, U>(
           tokenId,
-          options ?? { defaultCreate: this._defaultCreate },
+          options ?? { defaultTarget: this._defaultTarget },
         ),
       );
     } catch (error) {
@@ -239,11 +195,11 @@ export class TokenSpace<
    * @param config Optional configuration object to override or inherit parent configuration
    * @returns Newly created child TokenSpace instance
    */
-  tokenSpace(
+  space(
     name: string,
     config?: ChildTokenSpaceConfig<U, M, D>,
   ): TokenSpace<U, P, M, D> {
-    return this.safeTokenSpace(name, config).match(
+    return this.safeSpace(name, config).match(
       (value) => value,
       (error) => {
         throw error;
@@ -251,7 +207,7 @@ export class TokenSpace<
     );
   }
 
-  safeTokenSpace(
+  safeSpace(
     name: string,
     config?: ChildTokenSpaceConfig<U, M, D>,
   ): Result<TokenSpace<U, P, M, D>, Error> {
@@ -262,15 +218,14 @@ export class TokenSpace<
 
     const mergedConfig = {
       name: validatedName.value,
-      namedDefaults: config?.namedDefaults ?? this._namedDefaults,
     } as TokenSpaceConfig<U, P, M, D>;
 
     if (Object.hasOwn(config ?? {}, "defaultTarget")) {
       mergedConfig.defaultTarget = config?.defaultTarget;
     } else {
-      mergedConfig.defaultCreate = Object.hasOwn(config ?? {}, "defaultCreate")
-        ? config?.defaultCreate
-        : this._defaultCreate;
+      mergedConfig.defaultTarget = Object.hasOwn(config ?? {}, "defaultTarget")
+        ? config?.defaultTarget
+        : this._defaultTarget;
     }
 
     try {
@@ -295,72 +250,27 @@ function normalizeSafeError(error: unknown): Error {
   );
 }
 
-function normalizeTokenSpaceDefaultCreate<
-  U extends UserMetadata,
+function normalizeTokenSpaceDefaultTarget<
+  U extends EndpointMeta,
   M extends string,
   D extends string,
 >(
-  config: TokenSpaceConfig<U, PlatformMetadata, M, D>,
-): Result<TokenCreateDefaults<U, M, D> | undefined, NexusUsageError> {
-  const hasDefaultCreate = Object.hasOwn(config, "defaultCreate");
+  config: TokenSpaceConfig<U, PlatformMeta, M, D>,
+): Result<InlineTarget<U> | undefined, NexusUsageError> {
   const hasDefaultTarget = Object.hasOwn(config, "defaultTarget");
 
-  if (config.defaultTarget && Object.hasOwn(config.defaultTarget, "expects")) {
-    return err(
-      new NexusUsageError(
-        "TokenSpace defaultTarget cannot include expects; pass expects at the create() call-site.",
-        "E_USAGE_DEFAULT_CREATE_CONFLICT",
-      ),
-    );
+  if (!hasDefaultTarget || config.defaultTarget === null) {
+    return ok(undefined);
   }
 
-  if (config.defaultTarget) {
-    const invalidKeys = Object.keys(config.defaultTarget).filter(
-      (key) => key !== "descriptor" && key !== "matcher",
-    );
-    if (invalidKeys.length > 0) {
-      return err(
-        new NexusUsageError(
-          `TokenSpace legacy defaultTarget only supports descriptor and matcher; invalid key(s): ${invalidKeys.join(", ")}.`,
-          "E_USAGE_DEFAULT_CREATE_CONFLICT",
-        ),
-      );
-    }
+  try {
+    validateTokenDefaultTarget(config.defaultTarget);
+  } catch (error) {
+    return err(error as NexusUsageError);
   }
 
-  if (hasDefaultCreate && hasDefaultTarget) {
-    return err(
-      new NexusUsageError(
-        "TokenSpace config cannot mix defaultCreate with legacy defaultTarget.",
-        "E_USAGE_DEFAULT_CREATE_CONFLICT",
-      ),
-    );
-  }
-
-  if (hasDefaultCreate) {
-    try {
-      validateDefaultCreateTarget(config.defaultCreate?.target);
-    } catch (error) {
-      return err(error as NexusUsageError);
-    }
-
-    if (
-      !config.namedDefaults &&
-      hasNamedDefaultTarget(config.defaultCreate?.target)
-    ) {
-      return err(
-        new NexusUsageError(
-          "TokenSpace named defaultCreate descriptor or matcher defaults require names to be opted in by the TokenSpace generic types.",
-          "E_USAGE_INVALID",
-        ),
-      );
-    }
-
-    return ok(config.defaultCreate ?? undefined);
-  }
-
-  const validatedDefaultTarget = validateDefaultTarget(
-    config.defaultTarget as TokenSpaceDefaultTarget<U> | undefined,
+  const validatedDefaultTarget = validateTokenSpaceDefaultTarget(
+    config.defaultTarget as InlineTarget<U> | undefined,
   );
   if (validatedDefaultTarget.isErr()) {
     return err(
@@ -376,18 +286,7 @@ function normalizeTokenSpaceDefaultCreate<
 
   return ok(
     validatedDefaultTarget.value
-      ? {
-          target: validatedDefaultTarget.value as TargetCriteria<U, M, D>,
-        }
+      ? (validatedDefaultTarget.value as InlineTarget<U>)
       : undefined,
-  );
-}
-
-function hasNamedDefaultTarget<U extends UserMetadata>(
-  target: TargetCriteria<U, string, string> | null | undefined,
-): boolean {
-  return (
-    typeof target?.descriptor === "string" ||
-    typeof target?.matcher === "string"
   );
 }

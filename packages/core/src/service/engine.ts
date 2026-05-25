@@ -6,7 +6,7 @@ import type {
   SerializedError,
 } from "@/types/message";
 import { NexusMessageType } from "@/types/message";
-import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { PlatformMeta, EndpointMeta } from "@/types/identity";
 import type { CallTarget, MessageTarget } from "@/connection/types";
 import { Logger } from "@/logger";
 import { toSerializedError } from "@/utils/error";
@@ -45,7 +45,7 @@ type DispatchCallBase = {
   invocationServiceName?: string;
 };
 
-type TargetStaleSubscription<U extends UserMetadata> = {
+type TargetStaleSubscription<U extends EndpointMeta> = {
   readonly callback: () => void;
   readonly staleTarget?: {
     readonly descriptor?: Partial<U>;
@@ -72,7 +72,7 @@ export type DispatchCallOptions =
   | DispatchSetCallOptions
   | DispatchApplyCallOptions;
 
-export interface MessageHandlerCallbacks<U extends UserMetadata> {
+export interface MessageHandlerCallbacks<U extends EndpointMeta> {
   safeSendMessage(
     message: NexusMessage,
     target: MessageTarget<U> | string,
@@ -87,8 +87,8 @@ export interface MessageHandlerCallbacks<U extends UserMetadata> {
 }
 
 export class Engine<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > implements MessageHandlerCallbacks<U> {
   private readonly logger = new Logger("L3 --- Engine");
   private readonly resourceManager: ResourceManager.Runtime;
@@ -109,9 +109,9 @@ export class Engine<
   constructor(
     private readonly connectionManagerState: ConnectionManager<U, P>,
     config: {
-      services?: Record<
+      providers?: Record<
         string,
-        { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+        { service: object; policy?: NexusAuthorizationPolicy<U, P> }
       >;
       policy?: NexusAuthorizationPolicy<U, P>;
     } = {},
@@ -119,8 +119,8 @@ export class Engine<
     this.policy = config.policy;
     this.resourceManager = ResourceManager.create();
 
-    if (config.services) {
-      this.registerServices(config.services);
+    if (config.providers) {
+      this.registerServices(config.providers);
     }
 
     this.proxyFactory = new ProxyFactory<U>(
@@ -234,27 +234,27 @@ export class Engine<
   }
 
   public registerServices(
-    services: Record<
+    providers: Record<
       string,
-      { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+      { service: object; policy?: NexusAuthorizationPolicy<U, P> }
     >,
   ): void {
-    const result = this.safeProvideServicesBatch(services);
+    const result = this.safeProvideServicesBatch(providers);
     if (result.isErr()) {
       throw result.error;
     }
   }
 
   public safeProvideServicesBatch(
-    services: Record<
+    providers: Record<
       string,
-      { implementation: object; policy?: NexusAuthorizationPolicy<U, P> }
+      { service: object; policy?: NexusAuthorizationPolicy<U, P> }
     >,
   ): Result<void, Error> {
     return this.resourceManager.safeRegisterExposedServicesBatch(
-      Object.entries(services).map(([name, registration]) => ({
+      Object.entries(providers).map(([name, registration]) => ({
         name,
-        service: registration.implementation,
+        service: registration.service,
         policy: registration.policy,
       })),
     );
@@ -426,7 +426,7 @@ export class Engine<
   }
 }
 
-function shouldMarkTargetStale<U extends UserMetadata>(input: {
+function shouldMarkTargetStale<U extends EndpointMeta>(input: {
   readonly staleTarget?: {
     readonly descriptor?: Partial<U>;
     readonly matcher?: (identity: U) => boolean;
@@ -446,7 +446,7 @@ function shouldMarkTargetStale<U extends UserMetadata>(input: {
   return wasMatching && !isStillMatching;
 }
 
-function isIdentityMatchingTarget<U extends UserMetadata>(
+function isIdentityMatchingTarget<U extends EndpointMeta>(
   identity: U,
   target: {
     readonly descriptor?: Partial<U>;

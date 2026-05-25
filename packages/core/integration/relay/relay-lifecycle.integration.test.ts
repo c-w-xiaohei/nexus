@@ -238,11 +238,11 @@ async function createRelayHarness() {
       meta: { context: "host" },
       implementation: network.createEndpoint({ context: "host" }),
     },
-    services: [{ token: RelayProfileToken, implementation: profileService }],
+    providers: [{ token: RelayProfileToken, service: profileService }],
   });
 
   const hostCounterService =
-    createNexusStore(counterStore).config.implementation;
+    createNexusStore(counterStore).provider.service;
   const instrumentedCounterService: typeof hostCounterService = {
     subscribe: hostCounterService.subscribe.bind(hostCounterService),
     unsubscribe: hostCounterService.unsubscribe.bind(hostCounterService),
@@ -263,8 +263,8 @@ async function createRelayHarness() {
   }
 
   hostNexus.configure({
-    services: [
-      { token: counterStore.token, implementation: instrumentedCounterService },
+    providers: [
+      { token: counterStore.token, service: instrumentedCounterService },
     ],
   });
 
@@ -281,7 +281,7 @@ async function createRelayHarness() {
       meta: { context: "relay-downstream" },
       implementation: network.createEndpoint({ context: "relay-downstream" }),
     },
-    services: [
+    providers: [
       relayService<
         RelayProfileService,
         RelayMeta,
