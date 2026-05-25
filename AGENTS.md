@@ -202,6 +202,7 @@ pnpm dev
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
 - Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
+- While packages are still in `0.x`, use `minor` for breaking public API cleanup unless the supported runtime/install compatibility matrix is actually narrowed.
 - Use `minor` for new public APIs, new subpath exports, optional capabilities, backward-compatible behavior, and first-party packages following compatible `core` capabilities.
 - Use `major` only when users must change code, a public contract is removed or changed, a supported runtime/install combination is truly dropped, or wire protocol/interoperability becomes incompatible.
 - Do not treat `peerDependencies` range edits as major by themselves; bump major only when the supported compatibility matrix is actually narrowed.

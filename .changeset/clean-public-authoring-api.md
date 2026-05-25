@@ -1,10 +1,10 @@
 ---
-"@nexus-js/core": major
-"@nexus-js/chrome": major
-"@nexus-js/react": major
-"@nexus-js/testing": major
-"@nexus-js/node-ipc": major
-"@nexus-js/iframe": major
+"@nexus-js/core": minor
+"@nexus-js/chrome": minor
+"@nexus-js/react": minor
+"@nexus-js/testing": minor
+"@nexus-js/node-ipc": minor
+"@nexus-js/iframe": minor
 ---
 
 Clean up the public authoring API vocabulary and provider/configuration surface.
