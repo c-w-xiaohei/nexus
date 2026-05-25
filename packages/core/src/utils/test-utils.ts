@@ -9,7 +9,7 @@ import type {
 import { ConnectionManager } from "@/connection/connection-manager";
 import { Engine } from "@/service/engine";
 import type { Descriptor } from "@/connection/types";
-import type { PlatformMetadata } from "@/types/identity";
+import type { PlatformMeta } from "@/types/identity";
 import { expect } from "vitest";
 import type { NexusInstance } from "@/api/types";
 import { Nexus } from "@/api/nexus";
@@ -106,7 +106,7 @@ export async function createConnectionManagerStack<
  */
 export function createNexusTestStack<
   U extends object,
-  P extends PlatformMetadata,
+  P extends PlatformMeta,
 >(setup: { meta: U; cmConfig?: ConnectionManagerConfig<U, P> }) {
   const handlers: ConnectionManagerHandlers<U, P> = {
     onMessage: vi.fn(),
@@ -116,7 +116,7 @@ export function createNexusTestStack<
   const mockEndpoint: IEndpoint<U, P> = {
     listen: vi.fn(),
     connect: vi.fn(async (_descriptor: Partial<U>): Promise<[IPort, P]> => {
-      // Default implementation that creates a mock port pair
+      // Default service that creates a mock port pair
       const [clientPort] = createMockPortPair();
       return [clientPort, { from: "mock" } as P];
     }),
@@ -150,9 +150,9 @@ export function createNexusTestStack<
  */
 export async function createL3Endpoints<
   U extends { id: string },
-  P extends PlatformMetadata & { from?: string },
+  P extends PlatformMeta & { from?: string },
 >(
-  hostSetup: { meta: U; services: Record<string, object> },
+  hostSetup: { meta: U; providers: Record<string, object> },
   clientSetup: {
     meta: U;
     connectTo?: { descriptor: Descriptor<U> }[];
@@ -165,10 +165,10 @@ export async function createL3Endpoints<
     meta: hostSetup.meta,
   });
   const hostEngine = new Engine(hostStack.connectionManager, {
-    services: Object.fromEntries(
-      Object.entries(hostSetup.services).map(([name, implementation]) => [
+    providers: Object.fromEntries(
+      Object.entries(hostSetup.providers).map(([name, service]) => [
         name,
-        { implementation },
+        { service },
       ]),
     ),
   });
@@ -258,17 +258,17 @@ export async function createL3Endpoints<
  */
 export async function createStarNetwork<
   U extends { context: string; issueId?: string },
-  P extends PlatformMetadata,
+  P extends PlatformMeta,
 >(config: {
   center: {
     meta: U;
-    services?: Record<string, object>;
+    providers?: Record<string, object>;
     cmConfig?: ConnectionManagerConfig<U, P>;
     matchers?: Record<string, (identity: U) => boolean>;
   };
   leaves: {
     meta: U;
-    services?: Record<string, object>;
+    providers?: Record<string, object>;
     cmConfig?: ConnectionManagerConfig<U, P>;
   }[];
 }) {
@@ -332,10 +332,10 @@ export async function createStarNetwork<
         }) as unknown as IEndpoint<U, P>["connect"],
       },
     },
-    services: Object.entries(config.center.services ?? {}).map(
-      ([tokenId, implementation]) => ({
+    providers: Object.entries(config.center.providers ?? {}).map(
+      ([tokenId, service]) => ({
         token: new Token(tokenId),
-        implementation,
+        service,
       }),
     ),
     matchers: config.center.matchers,
@@ -363,10 +363,10 @@ export async function createStarNetwork<
         },
         connectTo: leaf.cmConfig?.connectTo,
       },
-      services: Object.entries(leaf.services ?? {}).map(
-        ([tokenId, implementation]) => ({
+      providers: Object.entries(leaf.providers ?? {}).map(
+        ([tokenId, service]) => ({
           token: new Token(tokenId),
-          implementation,
+          service,
         }),
       ),
     });

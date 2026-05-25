@@ -8,7 +8,7 @@ import { NexusError } from "./nexus-error";
 export class NexusTransportError extends NexusError {}
 
 /**
- * Indicates an error occurred when an IEndpoint implementation attempted to establish
+ * Indicates an error occurred when an IEndpoint service attempted to establish
  * a physical connection. Usually caused by underlying platform issues that prevent
  * connection establishment (e.g., target unreachable, platform-specific connection limits).
  *
@@ -22,7 +22,7 @@ export class NexusEndpointConnectError extends NexusTransportError {
 }
 
 /**
- * Indicates an error occurred when an IEndpoint implementation attempted to listen
+ * Indicates an error occurred when an IEndpoint service attempted to listen
  * for incoming connections. Usually caused by underlying platform issues that prevent
  * the listening mechanism from starting (e.g., port occupied, insufficient permissions).
  *

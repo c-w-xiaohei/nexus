@@ -1,153 +1,91 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { IEndpoint } from "@/transport";
 import type { Token } from "../token";
 
-/**
- * Describes the criteria for finding an endpoint, used for unicast targets.
- */
-export interface TargetCriteria<
-  U extends UserMetadata,
-  M extends string,
-  D extends string,
-> {
-  descriptor?: TargetDescriptor<U, D>;
-  matcher?: TargetMatcher<U, M>;
-}
+type AtLeastOne<T> = {
+  [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>;
+}[keyof T];
 
-export interface TokenCreateDefaults<
-  U extends UserMetadata = UserMetadata,
-  M extends string = never,
-  D extends string = never,
-> {
-  target?: TargetCriteria<U, M, D>;
-}
-
-export type NamedDefaultOptIn<M extends string, D extends string> = [
-  M | D,
-] extends [never]
-  ? { namedDefaults?: false | undefined }
-  : { namedDefaults: true };
-
-/**
- * Describes the criteria for finding endpoints, used for multicast targets.
- */
-export interface MulticastTargetCriteria<
-  U extends UserMetadata,
-  M extends string,
-  D extends string,
-> extends TargetCriteria<U, M, D> {
-  /** (可选) 指定一个预定义的服务组名称 */
-  groupName?: string;
-}
-
-/**
- * 连接目标的描述符。
- * 它可以是预先注册的命名描述符（字符串），也可以是内联的元数据部分对象。
- */
-export type TargetDescriptor<
+export type DescriptorTarget<
   U,
   RegisteredDescriptors extends string = string,
 > = Partial<U> | RegisteredDescriptors;
 
-/**
- * 连接目标的匹配器。
- * 它可以是预先注册的命名匹配器（字符串），也可以是内联的谓词函数。
- */
-export type TargetMatcher<U, M extends string> = M | ((identity: U) => boolean);
+export type MatcherTarget<U, M extends string> = M | ((identity: U) => boolean);
 
-/**
- * 定义一个消息的目标。
- * 这是 L4 中用于指定 `create` 方法寻址的核心类型。
- */
-export interface MessageTarget<
-  U extends UserMetadata,
-  RegisteredMatchers extends string = string,
-  RegisteredDescriptors extends string = string,
-> {
-  /** (可选) 直接指定一个连接ID */
-  connectionId?: string;
-  /** (可选) 指定一个预定义的服务组名称 */
-  groupName?: string;
-  /** (可选) 使用匹配器在现有连接中查找 */
-  matcher?: TargetMatcher<U, RegisteredMatchers>;
-  /** (可选) 当找不到连接时，用于发起新连接的蓝图 */
-  descriptor?: TargetDescriptor<U, RegisteredDescriptors>;
-}
-
-/**
- * Options for creating a unicast service proxy (`nexus.create`).
- */
-export interface CreateOptions<
-  U extends UserMetadata,
+export interface Target<
+  U extends EndpointMeta,
   M extends string,
   D extends string,
 > {
-  /** The criteria for finding the target endpoint. */
-  target?: TargetCriteria<U, M, D> | null;
-  /**
-   * The expected number of results.
-   * - 'one': Expects exactly one connection. Throws if 0 or >1 are found. (Default)
-   * - 'first': Expects at least one connection, uses the first one found.
-   */
-  expects?: "one" | "first";
-  /** A timeout in milliseconds for the call. */
-  timeout?: number;
+  descriptor?: DescriptorTarget<U, D>;
+  matcher?: MatcherTarget<U, M>;
 }
 
 /**
- * Options for creating a multicast service proxy (`nexus.createMulticast`).
+ * Token default target criteria. This intentionally allows descriptor,
+ * matcher, or both together, but only as inline values: named descriptor and
+ * matcher strings are resolved at call-sites/config layers, not from tokens.
  */
+export type InlineTarget<U extends EndpointMeta> = AtLeastOne<{
+  descriptor: Partial<U>;
+  matcher: (identity: U) => boolean;
+}>;
+
+export interface MulticastTarget<
+  U extends EndpointMeta,
+  M extends string,
+  D extends string,
+> extends Target<U, M, D> {
+  group?: string;
+}
+
+export interface MessageTarget<
+  U extends EndpointMeta,
+  RegisteredMatchers extends string = string,
+  RegisteredDescriptors extends string = string,
+> {
+  connectionId?: string;
+  group?: string;
+  matcher?: MatcherTarget<U, RegisteredMatchers>;
+  descriptor?: DescriptorTarget<U, RegisteredDescriptors>;
+}
+
+export interface CreateOptions<
+  U extends EndpointMeta,
+  M extends string,
+  D extends string,
+> {
+  target?: Target<U, M, D> | null;
+  expects?: "one" | "first";
+  timeout?: number;
+}
+
 export interface CreateMulticastOptions<
-  U extends UserMetadata,
+  U extends EndpointMeta,
   E extends "all" | "stream",
   M extends string,
   D extends string,
 > {
-  /** The criteria for finding the target endpoint(s). */
-  target: MulticastTargetCriteria<U, M, D>;
-  /**
-   * The expected multicast strategy.
-   * - 'all': Collect results from all matching connections. (Default)
-   * - 'stream': Receive results from all matching connections as a stream.
-   */
+  target: MulticastTarget<U, M, D>;
   expects?: E;
-  /** A timeout in milliseconds for the call. */
   timeout?: number;
 }
 
-/**
- * 定义一个端点的配置。
- */
 export interface EndpointConfig<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
   _RegisteredMatchers extends string = string,
   _RegisteredDescriptors extends string = string,
 > {
-  /** 当前端点的业务身份 */
-  meta: U;
-  /**
-   * （仅在首次配置时需要）L1 的平台适配器实例。
-   * @see IEndpoint
-   */
+  meta?: U;
   implementation?: IEndpoint<U, P>;
-  /**
-   * （可选）声明此端点在初始化时应主动连接的目标。
-   */
-  connectTo?: readonly TargetCriteria<
-    U,
-    _RegisteredMatchers,
-    _RegisteredDescriptors
-  >[];
+  connectTo?: readonly Target<U, _RegisteredMatchers, _RegisteredDescriptors>[];
 }
 
-/**
- * 授权策略，用于精细化控制连接和调用权限。
- * @template U 用户元数据类型
- */
 export interface ConnectionAuthContext<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   readonly localIdentity: U;
   readonly remoteIdentity: U;
@@ -156,8 +94,8 @@ export interface ConnectionAuthContext<
 }
 
 export interface ServiceCallAuthContext<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   readonly localIdentity: U;
   readonly remoteIdentity: U;
@@ -169,85 +107,100 @@ export interface ServiceCallAuthContext<
 }
 
 export interface NexusAuthorizationPolicy<
-  U extends UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
 > {
   canConnect?(context: ConnectionAuthContext<U, P>): boolean | Promise<boolean>;
   canCall?(context: ServiceCallAuthContext<U, P>): boolean | Promise<boolean>;
 }
 
 export type AuthorizationPolicy<
-  U extends UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
 > = NexusAuthorizationPolicy<U, P>;
 
-/**
- * 编程式服务注册的配置项。
- * @template T 服务的接口类型
- */
-export interface ServiceRegistration<
+export interface ServiceProvider<
   T,
-  U extends UserMetadata = UserMetadata,
-  P extends PlatformMetadata = PlatformMetadata,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
 > {
-  /**
-   * 标识服务的 Token。
-   */
-  token: Token<T>;
-
-  /**
-   * 服务的具体实现实例。
-   */
-  implementation: T;
-
-  /**
-   * （可选）为此服务指定一个独立的授权策略。
-   */
+  token: Token<T, any>;
+  service: T;
   policy?: AuthorizationPolicy<U, P>;
 }
 
-/**
- * Nexus 框架的统一配置对象。
- * @template U 用户元数据类型
- * @template P 平台元数据类型
- */
 export interface NexusConfig<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
   _RegisteredMatchers extends string = string,
   _RegisteredDescriptors extends string = string,
 > {
-  /**
-   * （可选）配置当前端点的身份和连接行为。
-   * 在首次配置时，`meta` 和 `implementation` 都是必需的。
-   */
   endpoint?: EndpointConfig<U, P, _RegisteredMatchers, _RegisteredDescriptors>;
-  /**
-   * （可选）注册 L1 的平台适配器实例。
-   * @deprecated 请使用 `endpoint.implementation`
-   */
-  implementation?: IEndpoint<U, P>;
-
-  /**
-   * （可选）编程式注册服务列表。
-   * @see ServiceRegistration
-   */
-  services?: ServiceRegistration<object, U, P>[];
-
-  /**
-   * （可选）注册命名匹配器，用于在 `create` 方法中复用。
-   * Key 是匹配器的名称，Value 是匹配器函数。
-   */
+  providers?: ServiceProvider<object, U, P>[];
   matchers?: Record<string, (identity: U) => boolean>;
-
-  /**
-   * （可选）注册命名寻址描述符，用于在 `create` 或 `connectTo` 中复用。
-   * Key 是描述符的名称，Value 是描述符对象。
-   */
   descriptors?: Record<string, Partial<U>>;
-
-  /**
-   * （可选）定义全局的授权策略。
-   */
   policy?: NexusAuthorizationPolicy<U, P>;
+}
+
+export function serviceProvider<
+  T extends object,
+  U extends EndpointMeta = EndpointMeta,
+  P extends PlatformMeta = PlatformMeta,
+>(
+  token: Token<T, U>,
+  service: T,
+  options?: { policy?: AuthorizationPolicy<U, P> },
+): ServiceProvider<T, U, P> {
+  return { token, service, policy: options?.policy };
+}
+
+export function defineNexusConfig<const T extends NexusConfig<any, any>>(
+  config: T,
+): T {
+  return config;
+}
+
+export function composeNexusConfig<
+  U extends EndpointMeta,
+  P extends PlatformMeta,
+>(layers: readonly NexusConfig<U, P, string, string>[]): NexusConfig<U, P> {
+  const composed: NexusConfig<U, P> = {};
+  const providersById = new Map<string, ServiceProvider<object, U, P>>();
+
+  for (const layer of layers) {
+    if (layer.endpoint) {
+      composed.endpoint = {
+        ...(composed.endpoint ?? {}),
+        ...(Object.hasOwn(layer.endpoint, "meta")
+          ? { meta: layer.endpoint.meta }
+          : {}),
+        ...(Object.hasOwn(layer.endpoint, "implementation")
+          ? { implementation: layer.endpoint.implementation }
+          : {}),
+        ...(Object.hasOwn(layer.endpoint, "connectTo")
+          ? { connectTo: layer.endpoint.connectTo }
+          : {}),
+      };
+    }
+    if (Object.hasOwn(layer, "policy")) {
+      composed.policy = layer.policy;
+    }
+    if (layer.descriptors) {
+      composed.descriptors = {
+        ...(composed.descriptors ?? {}),
+        ...layer.descriptors,
+      };
+    }
+    if (layer.matchers) {
+      composed.matchers = { ...(composed.matchers ?? {}), ...layer.matchers };
+    }
+    for (const provider of layer.providers ?? []) {
+      providersById.set(provider.token.id, provider);
+    }
+  }
+
+  if (providersById.size > 0) {
+    composed.providers = Array.from(providersById.values());
+  }
+  return composed;
 }

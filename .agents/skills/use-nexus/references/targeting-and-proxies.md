@@ -2,6 +2,8 @@
 
 Create proxies from configured consumer contexts.
 
+Read `references/identity-and-metadata.md` when Token `defaultTarget`, target descriptors, matchers, or identity replacement depend on `EndpointMeta`; policy may also inspect adapter-provided `PlatformMeta`.
+
 ```ts
 const settings = await nexus.create(SettingsToken, {
   target: {
@@ -17,12 +19,12 @@ await settings.saveSettings({ theme: "dark" });
 Target resolution order for unicast proxy creation is:
 
 1. explicit non-empty `target` in `nexus.create(...)`
-2. Token `defaultCreate.target`
+2. Token `defaultTarget`
 3. unique endpoint `connectTo` fallback
 
-Keep the explicit target in introductory docs because it is easiest to debug. Use Token defaults for repeated routing intent. Empty targets such as `undefined`, `{}`, or targets whose fields are all `undefined` fall through to `Token.defaultCreate.target` instead of overriding it.
+Keep the explicit target in introductory docs because it is easiest to debug. Use Token defaults for repeated routing intent. Empty targets such as `undefined`, `{}`, or targets whose fields are all `undefined` fall through to `Token.defaultTarget` instead of overriding it.
 
-When relying on a Token `defaultCreate.target` or a unique `connectTo` fallback, call `create(Token)` directly.
+When relying on a Token `defaultTarget` or a unique `connectTo` fallback, call `create(Token)` directly.
 
 ```ts
 const settings = await nexus.create(SettingsToken);
@@ -44,8 +46,8 @@ nexus.configure({
     background: { context: "background" },
   },
   matchers: {
-    activeContentScript: (identity) =>
-      identity.context === "content-script" && identity.isActive === true,
+    visibleContentScript: (identity) =>
+      identity.context === "content-script" && identity.isVisible === true,
   },
 });
 
@@ -54,7 +56,7 @@ const byDescriptor = await nexus.create(SettingsToken, {
 });
 
 const byMatcher = await nexus.create(SettingsToken, {
-  target: { matcher: "activeContentScript" },
+  target: { matcher: "visibleContentScript" },
 });
 ```
 

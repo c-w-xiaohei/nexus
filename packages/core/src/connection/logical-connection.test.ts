@@ -105,7 +105,7 @@ describe("LogicalConnection", () => {
       mockClientHandlers,
       {
         connectionId: "conn-client",
-        localUserMetadata: clientMeta,
+        localEndpointMeta: clientMeta,
         platformMetadata: hostPlatformMeta, // Client gets host's platform meta
         nextMessageId,
       },
@@ -116,7 +116,7 @@ describe("LogicalConnection", () => {
       mockHostHandlers,
       {
         connectionId: "conn-host",
-        localUserMetadata: hostMeta,
+        localEndpointMeta: hostMeta,
         platformMetadata: clientPlatformMeta, // Host gets client's platform meta
         nextMessageId,
       },
@@ -387,7 +387,7 @@ describe("LogicalConnection", () => {
 
         // 3. The host's local metadata has been updated internally.
         // @ts-expect-error - accessing private property for testing
-        expect(hostConnection.localUserMetadata).toEqual(assignmentMeta);
+        expect(hostConnection.localEndpointMeta).toEqual(assignmentMeta);
 
         // 4. The client's remote identity is the new assigned metadata.
         expect(clientConnection.remoteIdentity).toEqual(assignmentMeta);
@@ -626,7 +626,7 @@ describe("LogicalConnection", () => {
         mockClientHandlers,
         {
           connectionId: "conn-fresh",
-          localUserMetadata: clientMeta,
+          localEndpointMeta: clientMeta,
           platformMetadata: hostPlatformMeta,
           nextMessageId: () => 1,
         },

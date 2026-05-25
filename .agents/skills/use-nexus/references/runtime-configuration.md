@@ -2,6 +2,8 @@
 
 Configure every context before useful Nexus work can happen. A host context and a consumer context each need endpoint wiring and identity metadata.
 
+Read `references/identity-and-metadata.md` when choosing what belongs in `endpoint.meta`, adapter helper identity options, `PlatformMeta`, or `updateIdentity(...)` calls.
+
 Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation modules should import the configured instance and use `@xxNexus.Expose(...)` or `xxNexus.provide(...)`; they should not configure endpoints themselves.
 
 ## Adapter Helpers
@@ -11,7 +13,7 @@ Prefer adapter helpers for first-party or adapter-provided runtimes.
 ```ts
 usingBackgroundScript();
 usingContentScript();
-await usingPopup();
+usingPopup({ tabId: activeTabId });
 usingIframeParent({
   appId: "app",
   frames: [{ frameId: "preview", iframe, origin: "https://child.example" }],
@@ -42,8 +44,8 @@ nexus.configure({
     host: { context: "worker", role: "host" },
   },
   matchers: {
-    activeClient: (identity) =>
-      identity.context === "client" && identity.isActive === true,
+    primaryClient: (identity) =>
+      identity.context === "client" && identity.clientRole === "primary",
   },
 });
 ```
@@ -57,8 +59,11 @@ Use `new Nexus()` when one JavaScript context must host independent Nexus runtim
 ```ts
 import { Nexus } from "@nexus-js/core";
 
-const extensionNexus = new Nexus<ExtensionUserMeta, ExtensionPlatformMeta>();
-const brokerNexus = new Nexus<BrokerUserMeta, BrokerPlatformMeta>();
+const extensionNexus = new Nexus<
+  ExtensionEndpointMeta,
+  ExtensionPlatformMeta
+>();
+const brokerNexus = new Nexus<BrokerEndpointMeta, BrokerPlatformMeta>();
 ```
 
 Each instance has its own endpoint, metadata, policy, services, connections, proxies, refs, and decorator registry. It does not share a connection graph with other instances.
@@ -79,7 +84,7 @@ Bridge instances with gateway services. For example, expose a broker-facing serv
 
 Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when the gateway should forward an existing service contract or Nexus State store into another adjacent graph. Configure the relay provider on the downstream-facing instance and pass the upstream-facing instance as `forwardThrough` with an explicit `forwardTarget`.
 
-For a local Nexus State provider, create the authoritative store once with `const { config, store } = createNexusStore(definition)`. Pass `config` through `nexus.configure({ services: [config] })` or `services: [config]`; use `store` only in that same hosting context for local reads, subscriptions, and actions.
+For a local Nexus State provider, create the authoritative store once with `const { provider, store } = createNexusStore(definition)`. Pass `provider` through `nexus.configure({ providers: [provider] })` or `providers: [provider]`; use `store` only in that same hosting context for local reads, subscriptions, and actions.
 
 Do not model Relay as `target.via`, raw message forwarding, or automatic graph merging. The bridge runtime still owns both configured `Nexus` instances and decides exactly which providers are forwarded.
 
@@ -103,17 +108,42 @@ usingNodeIpcClient({
 });
 ```
 
-Use `configure: false` when composing helper output with policy, extra configuration, or a custom `Nexus` instance.
+Use `configure: false` when composing helper output with policy, extra configuration, or a custom `Nexus` instance. Compose with `composeNexusConfig([...])`, not raw object spreading.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    configure: false,
-  }),
-});
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ remoteIdentity }) {
+          return remoteIdentity.appId === "example-app";
+        },
+      },
+    },
+  ]),
+);
 
 nexus.provide(EchoToken, echoService);
 ```
 
-Do not spread a helper result unless `configure: false` is set. Without it, the helper has already configured the shared `nexus` instance and returns a Nexus instance, not a config object.
+Layers apply left-to-right, and later layers win for the same domain.
+
+Domain-aware merge rules:
+
+- omitted fields keep previous layers
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided
+- `endpoint.connectTo: []` clears inherited connection defaults
+- `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
+- `policy: undefined` clears inherited policy when callers intentionally need to remove it
+- `descriptors` and `matchers` merge by key; later duplicate keys win
+- `providers` replace by `token.id`; the later provider replaces both service and policy
+
+Compose structural config before the bootstrap snapshot. After `ready`, structural `configure(...)` calls are rejected; register or replace live providers with `provide(...)`, not `configure({ providers })`.
+
+Do not spread a helper result. Without `configure: false`, the helper has already configured the shared `nexus` instance and returns a Nexus instance, not a config object.

@@ -113,8 +113,8 @@ Use this when the handle itself no longer matches the target you meant to talk t
 
 Typical example:
 
-- you connect to "the active tab"
-- the active tab changes
+- you connect to a caller-discovered tab target
+- the caller chooses a different tab target
 - your old remote store is now stale, not magically rebound
 
 ## Snapshot-Only v1

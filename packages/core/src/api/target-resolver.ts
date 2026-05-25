@@ -1,24 +1,24 @@
-import type { UserMetadata } from "@/types/identity";
+import type { EndpointMeta } from "@/types/identity";
 import { NexusConfigurationError, NexusTargetingError } from "@/errors";
 import type {
-  TargetCriteria,
-  TargetDescriptor,
-  TargetMatcher,
+  Target,
+  DescriptorTarget,
+  MatcherTarget,
 } from "./types/config";
 import { err, ok, type Result } from "neverthrow";
 
-type ResolvedNamedTarget<U extends UserMetadata> = {
+type ResolvedNamedTarget<U extends EndpointMeta> = {
   descriptor?: Partial<U>;
   matcher?: (identity: U) => boolean;
-  groupName?: string;
+  group?: string;
 };
 
 export namespace TargetResolver {
-  export const resolveNamedTarget = <U extends UserMetadata>(
+  export const resolveNamedTarget = <U extends EndpointMeta>(
     target: {
-      descriptor?: TargetDescriptor<U, string>;
-      matcher?: TargetMatcher<U, string>;
-      groupName?: string;
+      descriptor?: DescriptorTarget<U, string>;
+      matcher?: MatcherTarget<U, string>;
+      group?: string;
     },
     namedDescriptors: ReadonlyMap<string, Partial<U>>,
     namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
@@ -61,17 +61,17 @@ export namespace TargetResolver {
     return ok({
       descriptor,
       matcher,
-      groupName: target.groupName,
+      group: target.group,
     });
   };
 
-  export const resolveUnicastTarget = <U extends UserMetadata>(
-    optionsTarget: TargetCriteria<U, string, string> | null | undefined,
-    tokenDefaultTarget: TargetCriteria<U, string, string> | null | undefined,
-    connectTo: readonly TargetCriteria<U, string, string>[] | undefined,
+  export const resolveUnicastTarget = <U extends EndpointMeta>(
+    optionsTarget: Target<U, string, string> | null | undefined,
+    tokenDefaultTarget: Target<U, string, string> | null | undefined,
+    connectTo: readonly Target<U, string, string>[] | undefined,
     tokenId: string,
-  ): Result<TargetCriteria<U, string, string>, NexusTargetingError> => {
-    let finalTarget: TargetCriteria<U, string, string> | null | undefined =
+  ): Result<Target<U, string, string>, NexusTargetingError> => {
+    let finalTarget: Target<U, string, string> | null | undefined =
       optionsTarget;
 
     if (isTargetEmpty(finalTarget) && tokenDefaultTarget) {
@@ -102,7 +102,7 @@ export namespace TargetResolver {
       );
     }
 
-    return ok(finalTarget as TargetCriteria<U, string, string>);
+    return ok(finalTarget as Target<U, string, string>);
   };
 }
 

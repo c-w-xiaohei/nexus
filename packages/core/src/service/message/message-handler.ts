@@ -1,4 +1,4 @@
-import type { PlatformMetadata, UserMetadata } from "@/types/identity";
+import type { PlatformMeta, EndpointMeta } from "@/types/identity";
 import type { NexusMessage } from "@/types/message";
 import { getHandler } from "./handler-map";
 import type { HandlerContext, MessageHandlerFn } from "./types";
@@ -34,7 +34,7 @@ export namespace MessageHandler {
     ): ResultAsync<void, globalThis.Error>;
   }
 
-  export const create = <U extends UserMetadata, P extends PlatformMetadata>(
+  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
     context: HandlerContext<U, P>,
   ): Runtime => {
     const logger = new Logger("L3 <- MessageHandler");

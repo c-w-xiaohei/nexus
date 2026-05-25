@@ -47,8 +47,8 @@ Name a `Nexus` instance after the local graph or endpoint face it represents, no
 Good:
 
 ```ts
-const chromeNexus = new Nexus<ChromeUserMeta, ChromePlatformMeta>();
-const iframeParentNexus = new Nexus<FrameUserMeta, FramePlatformMeta>();
+const chromeNexus = new Nexus<ChromeEndpointMeta, ChromePlatformMeta>();
+const iframeParentNexus = new Nexus<FrameEndpointMeta, FramePlatformMeta>();
 ```
 
 Avoid:
@@ -109,7 +109,7 @@ await profile.update({ name: "Ada" });
 
 The iframe child does not know about the upstream Chrome graph. It calls an adjacent provider in the iframe graph.
 
-Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token `defaultCreate.target` is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token default; configure `forwardThrough` and `forwardTarget` explicitly.
+Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token `defaultTarget` is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token defaultTarget; configure `forwardThrough` and `forwardTarget` explicitly.
 
 ### Service Relay Semantics
 
@@ -131,8 +131,8 @@ This default avoids implicit cross-relay capability bridging. If an application 
 
 ```ts
 type RelayServiceCallContext = {
-  origin: DownstreamUserMeta;
-  relay: DownstreamUserMeta;
+  origin: DownstreamEndpointMeta;
+  relay: DownstreamEndpointMeta;
   platform: DownstreamPlatformMeta;
   tokenId: string;
   path: (string | number)[];
@@ -212,8 +212,8 @@ State relay policies use the same direct-caller identity model:
 
 ```ts
 type RelayStoreSubscribeContext = {
-  origin: DownstreamUserMeta;
-  relay: DownstreamUserMeta;
+  origin: DownstreamEndpointMeta;
+  relay: DownstreamEndpointMeta;
   platform: DownstreamPlatformMeta;
   tokenId: string;
 };

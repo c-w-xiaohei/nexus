@@ -189,7 +189,7 @@ const createBackgroundHost = async (
         }),
       },
     },
-    services: [{ token: new Token(tokenId), implementation: service }],
+    providers: [{ token: new Token(tokenId), service: service }],
   });
 
   await vi.waitFor(() => {

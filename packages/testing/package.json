@@ -39,7 +39,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@nexus-js/core": ">=0.1.2 <1"
+    "@nexus-js/core": ">=1 <2"
   },
   "dependencies": {
     "neverthrow": "8.2.0"

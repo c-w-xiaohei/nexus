@@ -65,7 +65,7 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
 
-    const pending = registration.implementation.subscribe(
+    const pending = registration.service.subscribe(
       vi.fn(),
       createInvocation("alpha"),
     );
@@ -113,7 +113,7 @@ describe("relayNexusStore", () => {
     });
 
     await expect(
-      registration.implementation.subscribe(vi.fn(), createInvocation("alpha")),
+      registration.service.subscribe(vi.fn(), createInvocation("alpha")),
     ).resolves.toMatchObject({
       version: 0,
       state: { count: 0 },
@@ -127,7 +127,7 @@ describe("relayNexusStore", () => {
     });
 
     await expect(
-      registration.implementation.subscribe(vi.fn(), createInvocation("beta")),
+      registration.service.subscribe(vi.fn(), createInvocation("beta")),
     ).resolves.toMatchObject({
       version: 0,
       state: { count: 3 },
@@ -160,12 +160,12 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
     const onSync = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onSync,
       createInvocation("alpha"),
     );
 
-    const pending = registration.implementation.dispatch(
+    const pending = registration.service.dispatch(
       "increment",
       [1],
       createInvocation("alpha"),
@@ -214,13 +214,13 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
     const onSync = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onSync,
       createInvocation("alpha"),
     );
 
     await expect(
-      registration.implementation.dispatch(
+      registration.service.dispatch(
         "increment",
         [0],
         createInvocation("alpha"),
@@ -256,12 +256,12 @@ describe("relayNexusStore", () => {
       policy: { canDispatch },
     });
 
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       vi.fn(),
       createInvocation("alpha"),
     );
     await expect(
-      registration.implementation.dispatch(
+      registration.service.dispatch(
         "increment",
         [1],
         createInvocation("alpha"),
@@ -309,12 +309,12 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
     const onSync = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onSync,
       createInvocation("alpha"),
     );
 
-    const pending = registration.implementation.dispatch(
+    const pending = registration.service.dispatch(
       "increment",
       [1],
       createInvocation("alpha"),
@@ -354,7 +354,7 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
     const onSync = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onSync,
       createInvocation("alpha"),
     );
@@ -373,7 +373,7 @@ describe("relayNexusStore", () => {
       }),
     );
     await expect(
-      registration.implementation.dispatch(
+      registration.service.dispatch(
         "increment",
         [1],
         createInvocation("alpha"),
@@ -411,12 +411,12 @@ describe("relayNexusStore", () => {
       forwardTarget: { descriptor: { context: "background" } },
     });
     const onSync = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onSync,
       createInvocation("alpha"),
     );
 
-    const pending = registration.implementation.dispatch(
+    const pending = registration.service.dispatch(
       "increment",
       [1],
       createInvocation("alpha"),
@@ -436,7 +436,7 @@ describe("relayNexusStore", () => {
     );
     await expect(pending).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
     await expect(
-      registration.implementation.dispatch(
+      registration.service.dispatch(
         "increment",
         [1],
         createInvocation("alpha"),
@@ -466,16 +466,16 @@ describe("relayNexusStore", () => {
     });
     const onAlpha = vi.fn();
     const onBeta = vi.fn();
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onAlpha,
       createInvocation("alpha"),
     );
-    await registration.implementation.subscribe(
+    await registration.service.subscribe(
       onBeta,
       createInvocation("beta"),
     );
 
-    (registration.implementation as any)[SERVICE_ON_DISCONNECT]("alpha");
+    (registration.service as any)[SERVICE_ON_DISCONNECT]("alpha");
     upstreamOnSync({
       type: "snapshot",
       storeInstanceId: "bg-store",

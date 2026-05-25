@@ -62,7 +62,7 @@ function instrumentStore(implementation: StoreImplementation) {
   return wrapper;
 }
 
-const { config: registration } = createNexusStore(counterStore);
+const { provider } = createNexusStore(counterStore);
 const hostNexus = new Nexus().configure({
   ...usingIframeParent({
     configure: false,
@@ -77,11 +77,11 @@ const hostNexus = new Nexus().configure({
     ],
     heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
-  services: [
-    { token: RelayProfileToken, implementation: profileService },
+  providers: [
+    { token: RelayProfileToken, service: profileService },
     {
-      token: registration.token,
-      implementation: instrumentStore(registration.implementation),
+      token: provider.token,
+      service: instrumentStore(provider.service),
     },
   ],
 });

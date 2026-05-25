@@ -4,9 +4,8 @@ import {
   NexusEndpointListenError,
 } from "@nexus-js/core";
 import type {
-  ChromeUserMeta,
+  ChromeEndpointMeta,
   ChromePlatformMeta,
-  ContentScriptMeta,
 } from "../types/meta";
 import { ChromePort } from "../ports/chrome-port";
 
@@ -15,7 +14,7 @@ import { ChromePort } from "../ports/chrome-port";
  * Handles connections from content scripts, popups, and other extension contexts
  */
 export class BackgroundEndpoint
-  implements IEndpoint<ChromeUserMeta, ChromePlatformMeta>
+  implements IEndpoint<ChromeEndpointMeta, ChromePlatformMeta>
 {
   private connectHandler?: (port: IPort, meta?: ChromePlatformMeta) => void;
 
@@ -36,7 +35,7 @@ export class BackgroundEndpoint
   }
 
   async connect(
-    target: Partial<ChromeUserMeta>
+    target: Partial<ChromeEndpointMeta>
   ): Promise<[IPort, ChromePlatformMeta]> {
     try {
       // Background can connect to specific content scripts
@@ -45,16 +44,12 @@ export class BackgroundEndpoint
         typeof target.tabId === "number"
       ) {
         // Type assertion for accessing frameId safely
-        const contentScriptTarget = target as ContentScriptMeta;
         const connectInfo: chrome.tabs.ConnectInfo = {};
-        if (typeof contentScriptTarget.frameId === "number") {
-          connectInfo.frameId = contentScriptTarget.frameId;
+        if (typeof target.frameId === "number") {
+          connectInfo.frameId = target.frameId;
         }
 
-        const port = chrome.tabs.connect(
-          contentScriptTarget.tabId,
-          connectInfo
-        );
+        const port = chrome.tabs.connect(target.tabId, connectInfo);
         const chromePort = new ChromePort(port);
         const platformMeta: ChromePlatformMeta = {
           sender: port.sender,

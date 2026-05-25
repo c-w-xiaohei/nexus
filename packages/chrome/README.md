@@ -72,7 +72,7 @@ import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for popup context
 async function initPopup() {
-  await usingPopup();
+  usingPopup();
 
   const backgroundService = await nexus.create(BackgroundServiceToken);
 
@@ -87,12 +87,12 @@ initPopup();
 ## Features
 
 - **Type-safe communication** between all Chrome extension contexts
-- **Automatic connection management** with retry and reconnection
+- **Chrome runtime port integration** for extension context messaging
 - **Pre-configured matchers** for common scenarios
 - **Zero-configuration setup** for standard use cases
 - **Full TypeScript support** with discriminated union types
 
-Content scripts, popups, and options pages can usually call background services with `nexus.create(Token)` when the Token has a `defaultCreate.target` for the background or the adapter has a unique background `connectTo` fallback. Background-to-content-script calls usually need an explicit descriptor or matcher because there may be many content scripts. After active-tab handoff, an old raw proxy does not drift to the new active tab; call `nexus.create(...)` again.
+Content scripts, popups, and options pages can usually call background services with `nexus.create(Token)` when the Token has a `defaultTarget` for the background or the adapter has a unique background `connectTo` fallback. Background-to-content-script calls usually need an explicit descriptor or matcher because there may be many content scripts. Application code owns tab/window discovery and decides when identity changes require new handles. Raw proxies and refs are session-bound: after disconnect, service worker restart, or other session replacement, application code should recreate handles and decide any retry or rebuild policy explicitly.
 
 For object services, Nexus State stores, or Relay providers, configure the runtime and call `provide(...)` instead of using class decorators:
 
@@ -102,34 +102,49 @@ usingBackgroundScript().provide(BackgroundServiceToken, backgroundService);
 
 ## API Reference
 
-### Factory Functions
+### Config Factories And Runtime Helpers
 
-- `usingBackgroundScript()` - Configure for background script/service worker
-- `usingContentScript()` - Configure for content script (with automatic visibility tracking)
-- `usingPopup()` - Configure for popup (async, gets current tab)
-- `usingOptionsPage()` - Configure for options page
-- `usingDevToolsPage()` - Configure for devtools page
-- `usingOffscreenDocument(reason)` - Configure for offscreen document
+Use `createXConfig(...)` helpers when you need pure config for `composeNexusConfig([...])`. Use `usingX(...)` helpers when you want the helper to configure the shared `nexus` instance immediately and return that instance.
+
+Pure config factories:
+
+- `createBackgroundScriptConfig(options?)`
+- `createContentScriptConfig(options?)`
+- `createPopupConfig(options?)`
+- `createOptionsPageConfig(options?)`
+- `createDevToolsPageConfig(options?)`
+- `createOffscreenDocumentConfig(options)`
+- `createExtensionPageConfig(meta)`
+
+Effectful runtime helpers:
+
+- `usingBackgroundScript(options?)` - Configure for background script/service worker
+- `usingContentScript(options?)` - Configure for content script, including visibility metadata updates
+- `usingPopup(options?)` - Configure for popup; pass caller-discovered `tabId` or `windowId` if your app needs them
+- `usingOptionsPage(options?)` - Configure for options page
+- `usingDevToolsPage(options?)` - Configure for devtools page
+- `usingOffscreenDocument(options)` - Configure for offscreen document
+- `usingExtensionPage(meta)` - Configure for a custom extension page connected to background
 
 ### Pre-defined Matchers
 
 - `any-content-script` - Match any content script
 - `any-popup` - Match any popup
-- `active-content-script` - Match active content scripts
+- `visible-content-script` - Match visible content scripts
 - `background` - Match background script
 
 ### Types
 
-- `ChromeUserMeta` - Discriminated union for all Chrome contexts
+- `ChromeEndpointMeta` - Discriminated union for built-in Chrome contexts plus custom contexts that include a `context` discriminator
 - `ChromePlatformMeta` - Chrome-specific platform metadata
-- Context-specific types: `BackgroundMeta`, `ContentScriptMeta`, etc.
+- Context-specific types: `ChromeBackgroundMeta`, `ChromeContentScriptMeta`, etc.
 
 ## Advanced Usage
 
 ### Custom Matchers
 
 ```typescript
-import { ChromeMatchers } from "@nexus-js/chrome";
+import { ChromeMatchers, type ChromeEndpointMeta } from "@nexus-js/chrome";
 
 // Use built-in matchers
 const githubContentScripts = await nexus.createMulticast(ServiceToken, {
@@ -137,7 +152,7 @@ const githubContentScripts = await nexus.createMulticast(ServiceToken, {
 });
 
 // Custom matcher
-const customMatcher = (identity: ChromeUserMeta) =>
+const customMatcher = (identity: ChromeEndpointMeta) =>
   identity.context === "content-script" &&
   identity.url.includes("special-page");
 ```
@@ -149,7 +164,7 @@ const customMatcher = (identity: ChromeUserMeta) =>
 // Manual updates are also supported:
 nexus.updateIdentity({
   url: window.location.href, // Update URL for SPA navigation
-  isActive: true,
+  isVisible: true,
 });
 ```
 

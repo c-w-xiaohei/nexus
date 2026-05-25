@@ -1,11 +1,11 @@
 import { Token } from "../token";
 import type { AuthorizationPolicy } from "../types/config";
-import type { ServiceRegistrationData } from "../registry";
+import type { ServiceProviderData } from "../registry";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { args, fn } from "@/utils/fn";
 import { z } from "zod";
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 
 /**
  * @Expose 装饰器的高级选项。
@@ -13,7 +13,7 @@ import type { UserMetadata, PlatformMetadata } from "@/types/identity";
 export type ExposeFactoryContext = {
   targetClass: new (...args: unknown[]) => object;
   token: Token<object>;
-  localMeta?: UserMetadata;
+  localMeta?: EndpointMeta;
 };
 
 export interface ExposeOptions {
@@ -21,7 +21,7 @@ export interface ExposeOptions {
    * （可选）为此服务定义一个独立的授权策略。
    * 这会覆盖任何全局定义的策略。
    */
-  policy?: AuthorizationPolicy<UserMetadata, PlatformMetadata>;
+  policy?: AuthorizationPolicy<EndpointMeta, PlatformMeta>;
   /**
    * （可选）提供一个工厂函数来创建服务实例。
    * 这对于需要依赖注入的场景至关重要。
@@ -40,8 +40,8 @@ const ExposeOptionsSchema = z
   .object({
     policy: z
       .custom<
-        AuthorizationPolicy<UserMetadata, PlatformMetadata>
-      >((value) => typeof value === "object" && value !== null && ((value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canConnect === undefined || typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canConnect === "function") && ((value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canCall === undefined || typeof (value as AuthorizationPolicy<UserMetadata, PlatformMetadata>).canCall === "function"))
+        AuthorizationPolicy<EndpointMeta, PlatformMeta>
+      >((value) => typeof value === "object" && value !== null && ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canConnect === undefined || typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canConnect === "function") && ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canCall === undefined || typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canCall === "function"))
       .optional(),
     factory: z
       .custom<ExposeOptions["factory"]>((value) => typeof value === "function")
@@ -64,7 +64,7 @@ const validateExposeInput = fn(
  * @param options （可选）高级配置选项，如 `factory` 用于依赖注入。
  */
 export function createExposeDecorator(registry: {
-  registerService(token: Token<object>, data: ServiceRegistrationData): void;
+  registerService(token: Token<object>, data: ServiceProviderData): void;
 }): <T extends object>(
   token: Token<T>,
   options?: ExposeOptions,
@@ -82,7 +82,7 @@ export function Expose<T extends object>(
 
 function createExposeDecoratorForRegistry(
   registry: {
-    registerService(token: Token<object>, data: ServiceRegistrationData): void;
+    registerService(token: Token<object>, data: ServiceProviderData): void;
   },
   token: Token<object>,
   options?: ExposeOptions,

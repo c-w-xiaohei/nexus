@@ -17,10 +17,10 @@ For Nexus State app code, prefer registering the real store service contract fro
 
 ```ts
 const mock = createMockNexus();
-const { config, store } = createNexusStore(counterStore);
+const { provider, store } = createNexusStore(counterStore);
 
 mock.nexus.configure({
-  services: [config],
+  providers: [provider],
   endpoint: {
     meta: { context: "background" },
     connectTo: [{ descriptor: { context: "background" } }],

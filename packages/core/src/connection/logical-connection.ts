@@ -1,7 +1,7 @@
 import { PortProcessor } from "../transport/port-processor";
 import type {
-  UserMetadata,
-  PlatformMetadata,
+  EndpointMeta,
+  PlatformMeta,
   ConnectionContext,
 } from "../types/identity";
 import type {
@@ -74,8 +74,8 @@ export const LogicalConnectionError = {
  * and acts as the bridge between the ConnectionManager and a low-level PortProcessor.
  */
 export class LogicalConnection<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   public readonly connectionId: string;
   private status: ConnectionStatus = ConnectionStatus.INITIALIZING;
@@ -91,7 +91,7 @@ export class LogicalConnection<
 
   // This connection's own user metadata. It can be reassigned during a
   // "christening" handshake if this is a child context.
-  private localUserMetadata: U;
+  private localEndpointMeta: U;
 
   constructor(
     // Dependencies injected by ConnectionManager
@@ -100,14 +100,14 @@ export class LogicalConnection<
     // Initial state
     config: {
       connectionId: string;
-      localUserMetadata: U;
+      localEndpointMeta: U;
       // For ALL connections, this is the metadata of the remote endpoint discovered by L1.
       platformMetadata: P;
       nextMessageId: () => number;
     },
   ) {
     this.connectionId = config.connectionId;
-    this.localUserMetadata = config.localUserMetadata;
+    this.localEndpointMeta = config.localEndpointMeta;
     this.nextMessageId = config.nextMessageId;
     this.context = {
       platform: config.platformMetadata,
@@ -133,11 +133,11 @@ export class LogicalConnection<
   }
 
   public get localIdentity(): U {
-    return this.localUserMetadata;
+    return this.localEndpointMeta;
   }
 
   public updateLocalIdentity(updates: Partial<U>): void {
-    this.localUserMetadata = { ...this.localUserMetadata, ...updates };
+    this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
   }
 
   public get handshakeRejectionError(): Error | undefined {
@@ -146,11 +146,11 @@ export class LogicalConnection<
 
   /**
    * Starts the handshake process from the active/client side.
-   * @param localUserMetadata The user metadata of the local endpoint.
+   * @param localEndpointMeta The user metadata of the local endpoint.
    * @param assignmentMetadata Optional metadata to be assigned to the remote (child) endpoint.
    */
   public initiateHandshake(
-    localUserMetadata: U,
+    localEndpointMeta: U,
     assignmentMetadata?: U,
   ): Result<void, Error> {
     if (this.status !== ConnectionStatus.INITIALIZING) {
@@ -170,7 +170,7 @@ export class LogicalConnection<
     const handshakeReq: HandshakeReqMessage = {
       type: NexusMessageType.HANDSHAKE_REQ,
       id: this.nextMessageId(),
-      metadata: localUserMetadata,
+      metadata: localEndpointMeta,
       ...(assignmentMetadata && { assigns: assignmentMetadata }),
     };
     const sendResult = this.portProcessor.sendMessage(handshakeReq);
@@ -420,20 +420,20 @@ export class LogicalConnection<
     // If this is a "christening" call, the child adopts the assigned metadata
     // only after authorization has evaluated the pre-assignment local identity.
     if (assignedMetadata) {
-      this.localUserMetadata = assignedMetadata;
+      this.localEndpointMeta = assignedMetadata;
     }
     this._remoteIdentity = remoteIdentity;
 
     this.logger.debug(
       "Verification successful. Sending HANDSHAKE_ACK.",
-      this.localUserMetadata,
+      this.localEndpointMeta,
     );
     // Identity verified, send back our own *final* metadata in the ACK.
     // For a christened child, this is the metadata it was just given.
     const ack: HandshakeAckMessage = {
       type: NexusMessageType.HANDSHAKE_ACK,
       id: req.id,
-      metadata: this.localUserMetadata,
+      metadata: this.localEndpointMeta,
     };
     const ackResult = this.portProcessor.sendMessage(ack);
     if (ackResult.isErr()) {

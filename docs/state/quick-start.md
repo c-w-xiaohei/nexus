@@ -71,18 +71,18 @@ import { nexus } from "@nexus-js/core";
 import { createNexusStore } from "@nexus-js/core/state";
 import { counterStore } from "./counter-store";
 
-const { config, store } = createNexusStore(counterStore);
+const { provider, store } = createNexusStore(counterStore);
 
 nexus.configure({
-  services: [config],
+  providers: [provider],
 });
 
 console.log(store.getState().count);
 ```
 
-Nexus State does not introduce a parallel registry. `config` is ordinary Nexus service registration, and `store` is the same-context authoritative store handle.
+Nexus State does not introduce a parallel registry. `provider` is ordinary Nexus service registration, and `store` is the same-context authoritative store handle.
 
-Store default targeting comes from the store token's `defaultCreate.target`. Nexus State does not define a second store-level default target concept.
+Store default targeting comes from the store token's `defaultTarget`. Nexus State does not define a second store-level default target concept.
 
 ## 3. Connect From Another Context
 

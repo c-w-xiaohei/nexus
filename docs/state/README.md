@@ -4,7 +4,7 @@ Nexus State is the synchronized remote-state subsystem for Nexus. It provides a 
 
 Use this section for Nexus State-specific setup, runtime semantics, and API details.
 
-Create stores with `const { config, store } = createNexusStore(definition)` and register `config` through the ordinary provider path, for example `nexus.configure({ services: [config] })`. Store default targeting comes from the store token's `defaultCreate.target`; Nexus State does not add a separate default target field.
+Create stores with `const { provider, store } = createNexusStore(definition)` and register `provider` through the ordinary provider path, for example `nexus.configure({ providers: [provider] })`. Store default targeting comes from the store token's `defaultTarget`; Nexus State does not add a separate default target field.
 
 For general application-level unit tests with an injectable mock `NexusInstance`, also read `docs/testing/README.md`.
 

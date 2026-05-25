@@ -53,8 +53,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
       },
     });
 
-    const { config: cs1Registration } = createNexusStore(definition);
-    const { config: cs2Registration } = createNexusStore(definition);
+    const { provider: cs1Registration } = createNexusStore(definition);
+    const { provider: cs2Registration } = createNexusStore(definition);
 
     const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
       center: {
@@ -69,8 +69,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: true,
             groups: ["issue-pages"],
           },
-          services: {
-            [definition.token.id]: cs1Registration.implementation,
+          providers: {
+            [definition.token.id]: cs1Registration.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -82,8 +82,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: false,
             groups: ["issue-pages"],
           },
-          services: {
-            [definition.token.id]: cs2Registration.implementation,
+          providers: {
+            [definition.token.id]: cs2Registration.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -144,8 +144,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
       },
     });
 
-    const { config: cs1Registration } = createNexusStore(definition);
-    const { config: cs2Registration } = createNexusStore(definition);
+    const { provider: cs1Registration } = createNexusStore(definition);
+    const { provider: cs2Registration } = createNexusStore(definition);
 
     const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
       center: {
@@ -160,8 +160,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: true,
             groups: ["issue-pages"],
           },
-          services: {
-            [definition.token.id]: cs1Registration.implementation,
+          providers: {
+            [definition.token.id]: cs1Registration.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -173,8 +173,8 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: false,
             groups: ["issue-pages"],
           },
-          services: {
-            [definition.token.id]: cs2Registration.implementation,
+          providers: {
+            [definition.token.id]: cs2Registration.service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
         },
@@ -314,7 +314,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: true,
             groups: ["issue-pages"],
           },
-          services: {
+          providers: {
             [definition.token.id]: cs1Service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
@@ -327,7 +327,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
             isActive: false,
             groups: ["issue-pages"],
           },
-          services: {
+          providers: {
             [definition.token.id]: cs2Service,
           },
           cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },

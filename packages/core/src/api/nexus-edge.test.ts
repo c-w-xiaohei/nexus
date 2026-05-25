@@ -31,14 +31,14 @@ describe("Nexus Safe API Edge Cases", () => {
       }
     });
 
-    it("preserves configured service implementation identity and symbol hooks", async () => {
+    it("preserves configured service service identity and symbol hooks", async () => {
       const nexus = new Nexus();
       const hook = Symbol("service hook");
-      const implementation = {
+      const service = {
         ping: () => "pong",
         [hook]: vi.fn(),
       };
-      const token = new Token<typeof implementation>("service-with-hook");
+      const token = new Token<typeof service>("service-with-hook");
 
       nexus.configure({
         endpoint: {
@@ -47,7 +47,7 @@ describe("Nexus Safe API Edge Cases", () => {
         },
       });
       nexus.configure({
-        services: [{ token, implementation }],
+        providers: [{ token, service }],
       });
 
       await nexus.safeUpdateIdentity({ context: "ready" });
@@ -55,13 +55,13 @@ describe("Nexus Safe API Edge Cases", () => {
       const registered = (
         nexus as any
       ).engine.resourceManager.getExposedService(token.id);
-      expect(registered).toBe(implementation);
-      expect((registered as typeof implementation)[hook]).toBe(
-        implementation[hook],
+      expect(registered).toBe(service);
+      expect((registered as typeof service)[hook]).toBe(
+        service[hook],
       );
     });
 
-    it("appends services across repeated configure calls by reference", async () => {
+    it("appends providers across repeated configure calls by reference", async () => {
       const nexus = new Nexus();
       const first = { ping: () => "first" };
       const second = { ping: () => "second" };
@@ -73,10 +73,10 @@ describe("Nexus Safe API Edge Cases", () => {
           meta: { context: "test" },
           implementation: {},
         },
-        services: [{ token: firstToken, implementation: first }],
+        providers: [{ token: firstToken, service: first }],
       });
       nexus.configure({
-        services: [{ token: secondToken, implementation: second }],
+        providers: [{ token: secondToken, service: second }],
       });
 
       await nexus.safeUpdateIdentity({ context: "ready" });
@@ -110,7 +110,7 @@ describe("Nexus Safe API Edge Cases", () => {
 
       nexus.provide(firstToken, first).provide({
         token: secondToken,
-        implementation: second,
+        service: second,
       });
       nexus.configure({
         endpoint: {
@@ -126,7 +126,7 @@ describe("Nexus Safe API Edge Cases", () => {
       expect(resourceManager.getExposedService(secondToken.id)).toBe(second);
     });
 
-    it("rejects duplicate token ids without partially registering a batch", async () => {
+    it("replaces duplicate token ids and registers the rest of the batch", async () => {
       const nexus = new Nexus();
       const existing = { ping: () => "existing" };
       const duplicate = { ping: () => "duplicate" };
@@ -138,19 +138,11 @@ describe("Nexus Safe API Edge Cases", () => {
       nexus.provide(existingToken, existing);
 
       const result = nexus.safeProvide([
-        { token: sameIdToken, implementation: duplicate },
-        { token: addedToken, implementation: added },
+        { token: sameIdToken, service: duplicate },
+        { token: addedToken, service: added },
       ]);
 
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
-        expect((result.error as any).context.errors).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
-          ]),
-        );
-      }
+      expect(result.isOk()).toBe(true);
 
       nexus.configure({
         endpoint: {
@@ -162,9 +154,9 @@ describe("Nexus Safe API Edge Cases", () => {
 
       const resourceManager = (nexus as any).engine.resourceManager;
       expect(resourceManager.getExposedService(existingToken.id)).toBe(
-        existing,
+        duplicate,
       );
-      expect(resourceManager.getExposedService(addedToken.id)).toBeUndefined();
+      expect(resourceManager.getExposedService(addedToken.id)).toBe(added);
     });
 
     it("live-registers providers after ready", async () => {
@@ -181,20 +173,62 @@ describe("Nexus Safe API Edge Cases", () => {
       ).toBe(service);
     });
 
+    it("live-replaces providers after ready by token id with service and policy", async () => {
+      const nexus = createNexus();
+      await nexus.ready();
+      const token = new Token<object>("provide:live-replace");
+      const first = { ping: () => "first" };
+      const second = { ping: () => "second" };
+      const firstPolicy = { canCall: vi.fn(() => true) };
+      const secondPolicy = { canCall: vi.fn(() => false) };
+
+      expect(nexus.safeProvide(token, first, { policy: firstPolicy }).isOk()).toBe(
+        true,
+      );
+      const result = nexus.safeProvide(token, second, { policy: secondPolicy });
+
+      expect(result.isOk()).toBe(true);
+      expect(
+        (nexus as any).engine.resourceManager.getExposedServiceRecord(token.id),
+      ).toMatchObject({ service: second, policy: secondPolicy });
+    });
+
     it("rejects structural configure after ready", async () => {
       const nexus = createNexus();
       await nexus.ready();
 
       const token = new Token<object>("configure:late-service");
       const cases = [
-        { services: [{ token, implementation: {} }] },
+        { providers: [{ token, service: {} }] },
         { endpoint: { meta: { context: "late" } } },
         { endpoint: { implementation: {} } },
         { endpoint: { connectTo: [{ descriptor: { context: "peer" } }] } },
-        { implementation: {} },
         { policy: {} },
         { matchers: { any: () => true } },
         { descriptors: { peer: { context: "peer" } } },
+      ];
+
+      for (const config of cases) {
+        const result = nexus.safeConfigure(config as any);
+        expect(result.isErr()).toBe(true);
+        if (result.isErr()) {
+          expect((result.error as any).code).toBe("E_NEXUS_ALREADY_READY");
+        }
+      }
+    });
+
+    it("rejects structural configure explicit clears after ready", async () => {
+      const nexus = createNexus();
+      await nexus.ready();
+
+      const cases = [
+        { providers: undefined },
+        { endpoint: { meta: undefined } },
+        { endpoint: { implementation: undefined } },
+        { endpoint: { connectTo: undefined } },
+        { policy: undefined },
+        { matchers: undefined },
+        { descriptors: undefined },
       ];
 
       for (const config of cases) {
@@ -306,13 +340,14 @@ describe("Nexus Safe API Edge Cases", () => {
       const addedToken = new Token<typeof added>("provide:live-added");
 
       expect(nexus.safeProvide(token, existing).isOk()).toBe(true);
+      const validReplacement = { ping: () => "replacement" };
       const result = nexus.safeProvide([
         {
           token: new Token<typeof existing>("provide:live-duplicate"),
-          implementation: {},
+          service: validReplacement,
         },
-        { token: addedToken, implementation: added },
-        { token: {} as any, implementation: null as any },
+        { token: addedToken, service: added },
+        { token: {} as any, service: null as any },
       ]);
 
       expect(result.isErr()).toBe(true);
@@ -320,7 +355,6 @@ describe("Nexus Safe API Edge Cases", () => {
         expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
         expect((result.error as any).context.errors).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
             expect.objectContaining({ code: "E_USAGE_INVALID" }),
           ]),
         );
@@ -330,19 +364,41 @@ describe("Nexus Safe API Edge Cases", () => {
       expect(resourceManager.getExposedService(addedToken.id)).toBeUndefined();
     });
 
+    it("replaces existing providers by token id with service and policy together", async () => {
+      const nexus = new Nexus();
+      const token = new Token<object>("provide:replace");
+      const first = { ping: () => "first" };
+      const second = { ping: () => "second" };
+      const firstPolicy = { canCall: vi.fn(() => true) };
+      const secondPolicy = { canCall: vi.fn(() => false) };
+
+      nexus.provide(token, first, { policy: firstPolicy });
+      nexus.provide({ token, service: second, policy: secondPolicy });
+      nexus.configure({
+        endpoint: { meta: { context: "test" }, implementation: {} },
+      });
+      await nexus.ready();
+
+      const registered = (nexus as any).engine.resourceManager.getExposedServiceRecord(token.id);
+      expect(registered).toMatchObject({
+        service: second,
+        policy: secondPolicy,
+      });
+    });
+
     it("accepts function implementations", async () => {
       const nexus = new Nexus();
-      const implementation = () => "pong";
-      const token = new Token<typeof implementation>("provide:function");
+      const service = () => "pong";
+      const token = new Token<typeof service>("provide:function");
 
-      nexus.provide(token, implementation).configure({
+      nexus.provide(token, service).configure({
         endpoint: { meta: { context: "test" }, implementation: {} },
       });
       await nexus.ready();
 
       expect(
         (nexus as any).engine.resourceManager.getExposedService(token.id),
-      ).toBe(implementation);
+      ).toBe(service);
     });
 
     it("returns an error for invalid provider input instead of throwing", () => {
@@ -386,7 +442,7 @@ describe("Nexus Safe API Edge Cases", () => {
 
       const readyPromise = nexus.ready();
       await vi.waitFor(() => expect(listenStarted).toHaveBeenCalled());
-      (nexus as any).config.services = [{ token, implementation: {} }];
+      (nexus as any).config.providers = [{ token, service: {} }];
 
       releaseListen();
       await readyPromise;
@@ -398,7 +454,7 @@ describe("Nexus Safe API Edge Cases", () => {
 
     it("does not let nested config object mutations pollute the snapshot", async () => {
       let releaseConnect: () => void = () => {};
-      const implementation = {
+      const service = {
         connect: vi.fn(
           () =>
             new Promise<any>((resolve) => {
@@ -409,37 +465,39 @@ describe("Nexus Safe API Edge Cases", () => {
       };
       const meta = { context: "test", version: "before" };
       const connectToTarget = { descriptor: { context: "peer" } };
-      const service = { ping: () => "pong" };
-      const token = new Token<typeof service>("snapshot:nested-service");
-      const registration = { token, implementation: service };
+      const providedService = { ping: () => "pong" };
+      const token = new Token<typeof providedService>(
+        "snapshot:nested-service",
+      );
+      const registration = { token, service: providedService };
       const nexus = new Nexus<any, any>();
 
       nexus.configure({
         endpoint: {
           meta,
-          implementation,
+          implementation: service,
           connectTo: [connectToTarget],
         },
-        services: [registration],
+        providers: [registration],
       });
 
       const readyPromise = nexus.ready();
-      await vi.waitFor(() => expect(implementation.connect).toHaveBeenCalled());
+      await vi.waitFor(() => expect(service.connect).toHaveBeenCalled());
       meta.version = "after";
       connectToTarget.descriptor.context = "mutated";
-      registration.implementation = { ping: () => "mutated" };
+      registration.service = { ping: () => "mutated" };
       releaseConnect();
       await readyPromise;
 
-      expect((nexus as any).connectionManager.localUserMetadata.version).toBe(
+      expect((nexus as any).connectionManager.localEndpointMeta.version).toBe(
         "before",
       );
-      expect(implementation.connect).toHaveBeenCalledWith(
+      expect(service.connect).toHaveBeenCalledWith(
         expect.objectContaining({ context: "peer" }),
       );
       expect(
         (nexus as any).engine.resourceManager.getExposedService(token.id),
-      ).toBe(service);
+      ).toBe(providedService);
     });
 
     it("keeps instance-bound decorator registrations when initialization fails", async () => {
@@ -452,75 +510,50 @@ describe("Nexus Safe API Edge Cases", () => {
       const result = await isolated.safeReady();
       expect(result.isErr()).toBe(true);
       expect(
-        (isolated as any).decoratorRegistry.snapshot().services.has(token),
+        (isolated as any).decoratorRegistry.snapshot().providers.has(token),
       ).toBe(true);
     });
 
-    it("rejects duplicate token ids after decorator services are merged", async () => {
+    it("lets decorator providers replace configured providers with the same id", async () => {
       const token = new Token<object>("decorator:duplicate");
 
       const nexus = new Nexus();
+      class DecoratedService {}
       nexus.Expose(new Token<object>("decorator:duplicate"))(
-        class DecoratedService {},
+        DecoratedService,
         { kind: "class" } as ClassDecoratorContext,
       );
       nexus.configure({
         endpoint: { meta: { context: "test" }, implementation: {} },
-        services: [{ token, implementation: {} }],
+        providers: [{ token, service: {} }],
       });
 
       const result = await nexus.safeReady();
 
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
-        expect((result.error as any).context.errors).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
-          ]),
-        );
-      }
+      expect(result.isOk()).toBe(true);
+      expect(
+        (nexus as any).engine.resourceManager.getExposedService(token.id),
+      ).toBeInstanceOf(DecoratedService);
     });
 
-    it("rejects duplicate service token ids in configure services", async () => {
+    it("lets later configured providers replace earlier providers by id", async () => {
       const nexus = new Nexus();
       const tokenA = new Token<object>("snapshot:duplicate");
       const tokenB = new Token<object>("snapshot:duplicate");
       nexus.configure({
         endpoint: { meta: { context: "test" }, implementation: {} },
-        services: [
-          { token: tokenA, implementation: { first: true } },
-          { token: tokenB, implementation: { second: true } },
+        providers: [
+          { token: tokenA, service: { first: true } },
+          { token: tokenB, service: { second: true } },
         ],
       });
 
       const result = await nexus.safeReady();
 
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect((result.error as any).code).toBe("E_PROVIDER_BATCH_INVALID");
-        expect((result.error as any).context.errors).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ code: "E_PROVIDER_DUPLICATE_TOKEN" }),
-          ]),
-        );
-      }
-    });
-
-    it("rejects endpoint implementation source conflicts", async () => {
-      const nexus = new Nexus();
-      nexus.configure({
-        endpoint: { meta: { context: "test" }, implementation: {} },
-        implementation: {},
-      });
-
-      const result = await nexus.safeReady();
-
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect((result.error as any).code).toBe("E_CONFIGURATION_INVALID");
-        expect(result.error.message).toContain("endpoint implementation");
-      }
+      expect(result.isOk()).toBe(true);
+      expect(
+        (nexus as any).engine.resourceManager.getExposedService(tokenA.id),
+      ).toEqual({ second: true });
     });
 
     it("does not retry demand operations after bootstrap failure", async () => {
@@ -605,7 +638,7 @@ describe("Nexus Safe API Edge Cases", () => {
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
         .mockReturnValue(okAsync([{ connectionId: "conn-default" }] as any));
       const token = new Token<object>("test", {
-        defaultCreate: { target: { descriptor: { context: "ready" } } },
+        defaultTarget: { descriptor: { context: "ready" } },
       });
 
       const result = await nexus.safeCreate(token, { expects: "first" });
@@ -624,7 +657,7 @@ describe("Nexus Safe API Edge Cases", () => {
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
         .mockReturnValue(okAsync([{ connectionId: "conn-explicit" }] as any));
       const token = new Token<object>("test", {
-        defaultCreate: { target: { descriptor: { context: "missing" } } },
+        defaultTarget: { descriptor: { context: "missing" } },
       });
 
       const result = await nexus.safeCreate(token, {
@@ -651,7 +684,7 @@ describe("Nexus Safe API Edge Cases", () => {
         ] as any),
       );
       const token = new Token<object>("test", {
-        defaultCreate: { target: { descriptor: { context: "ready" } } },
+        defaultTarget: { descriptor: { context: "ready" } },
       });
 
       const result = await nexus.safeCreate(token, { expects: "one" });
@@ -677,7 +710,7 @@ describe("Nexus Safe API Edge Cases", () => {
         ] as any),
       );
       const token = new Token<object>("test", {
-        defaultCreate: { target: { descriptor: { context: "ready" } } },
+        defaultTarget: { descriptor: { context: "ready" } },
       });
       const createSpy = vi.spyOn((nexus as any).engine, "createServiceProxy");
 
@@ -700,7 +733,7 @@ describe("Nexus Safe API Edge Cases", () => {
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
         .mockReturnValue(okAsync([{ connectionId: "conn-default" }] as any));
       const token = new Token<object>("test", {
-        defaultCreate: { target: { descriptor: { context: "ready" } } },
+        defaultTarget: { descriptor: { context: "ready" } },
       });
 
       await nexus.safeCreate(token);
@@ -892,7 +925,7 @@ describe("Nexus Safe API Edge Cases", () => {
       );
 
       const explicitToken = new Token<object>("decorator:explicit-target", {
-        defaultCreate: { target: { descriptor: { context: "token-default" } } },
+        defaultTarget: { descriptor: { context: "token-default" } },
       });
       const explicitResult = await nexus.safeCreate(explicitToken, {
         target: { descriptor: { context: "explicit-peer" } },
@@ -905,7 +938,7 @@ describe("Nexus Safe API Edge Cases", () => {
       });
 
       const tokenDefaultOnly = new Token<object>("decorator:token-default", {
-        defaultCreate: { target: { descriptor: { context: "token-default" } } },
+        defaultTarget: { descriptor: { context: "token-default" } },
       });
       const tokenDefaultResult = await nexus.safeCreate(tokenDefaultOnly);
 
@@ -961,7 +994,7 @@ describe("Nexus Safe API Edge Cases", () => {
       const token = new Token<object>("multi");
 
       await nexus.safeCreateMulticast(token, {
-        target: { groupName: "warmup" },
+        target: { group: "warmup" },
       });
 
       // Branch 1: Group Name
@@ -969,12 +1002,12 @@ describe("Nexus Safe API Edge Cases", () => {
       const createSpy = vi.spyOn((nexus as any).engine, "createServiceProxy");
 
       await nexus.safeCreateMulticast(token, {
-        target: { groupName: "g1" },
+        target: { group: "g1" },
       });
       expect(createSpy).toHaveBeenLastCalledWith(
         "multi",
         expect.objectContaining({
-          target: { groupName: "g1" },
+          target: { group: "g1" },
         }),
       );
 
@@ -1014,7 +1047,7 @@ describe("Nexus Safe API Edge Cases", () => {
 
     await expect((isolated as any)._initialize()).rejects.toThrow();
     expect(
-      (isolated as any).decoratorRegistry.snapshot().services.has(token),
+      (isolated as any).decoratorRegistry.snapshot().providers.has(token),
     ).toBe(true);
   });
 

@@ -23,7 +23,7 @@ export namespace ResourceManager {
     getExposedService(name: string): object | undefined;
     getExposedServiceRecord(name: string): ExposedServiceRecord | undefined;
     safeRegisterExposedServicesBatch(
-      services: readonly ExposedServiceBatchRegistration[],
+      providers: readonly ExposedServiceBatchRegistration[],
     ): Result<void, Error>;
     listExposedServices(): readonly object[];
     registerLocalResource(
@@ -88,15 +88,12 @@ export namespace ResourceManager {
     ): ExposedServiceRecord | undefined => exposedServices.get(name);
 
     const safeRegisterExposedServicesBatch = (
-      services: readonly ExposedServiceBatchRegistration[],
+      providers: readonly ExposedServiceBatchRegistration[],
     ): Result<void, Error> => {
       const seen = new Set<string>();
       const duplicateNames = new Set<string>();
-      for (const registration of services) {
-        if (
-          seen.has(registration.name) ||
-          exposedServices.has(registration.name)
-        ) {
+      for (const registration of providers) {
+        if (seen.has(registration.name)) {
           duplicateNames.add(registration.name);
         }
         seen.add(registration.name);
@@ -112,7 +109,7 @@ export namespace ResourceManager {
         );
       }
 
-      for (const registration of services) {
+      for (const registration of providers) {
         logger.debug(
           `Registered exposed service: "${registration.name}"`,
           registration.service,

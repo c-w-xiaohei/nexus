@@ -43,13 +43,11 @@ Create a shared file (e.g., `src/shared/types.ts`):
 
 ```typescript
 // src/shared/types.ts
-import type { ChromeUserMeta, ChromePlatformMeta } from "@nexus-js/chrome";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "@nexus-js/chrome";
 
-// Define your application-specific user metadata by extending ChromeUserMeta
-// For example, if your content script adds a specific 'feature'
-export interface MyUserMeta extends ChromeUserMeta {
-  hasFeatureX?: boolean;
-}
+// Define application-specific endpoint metadata by extending ChromeEndpointMeta.
+// The first type argument adds app metadata shared by all built-in Chrome contexts.
+export type MyEndpointMeta = ChromeEndpointMeta<{ hasFeatureX?: boolean }>;
 
 // You can use or extend ChromePlatformMeta directly
 export type MyPlatformMeta = ChromePlatformMeta;
@@ -60,7 +58,7 @@ Create a shared service contract file (e.g., `src/shared/api.ts`):
 ```typescript
 // src/shared/api.ts
 import { TokenSpace } from "@nexus-js/core";
-import type { MyUserMeta, MyPlatformMeta } from "./types";
+import type { MyEndpointMeta, MyPlatformMeta } from "./types";
 
 // 1. Define the interface for your service
 export interface IMyContentScriptAPI {
@@ -68,15 +66,15 @@ export interface IMyContentScriptAPI {
 }
 
 // 2. Create a TokenSpace for structured token management
-// This allows for hierarchical token IDs and defaultCreate.target inheritance.
-const appSpace = new TokenSpace<MyUserMeta, MyPlatformMeta>({
+// This allows for hierarchical token IDs and defaultTarget inheritance.
+const appSpace = new TokenSpace<MyEndpointMeta, MyPlatformMeta>({
   name: "my-extension",
 });
 
 // 3. Create a sub-space for content script services.
 // Background-to-content-script calls usually choose a tab explicitly, so this
 // example keeps targeting at the create(...) call site.
-const contentScriptSpace = appSpace.tokenSpace("content-script-services");
+const contentScriptSpace = appSpace.space("content-script-services");
 
 // 4. Create a unique Token for the service within the defined space.
 // The full ID will be "my-extension:content-script-services:my-service"
@@ -93,22 +91,10 @@ Your content script (e.g., `src/content-script.ts`) will now use the `usingConte
 // IMPORTANT: This file MUST be imported at the very top of your content script entry file
 import { usingContentScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI, type IMyContentScriptAPI } from "./shared/api";
-import type { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
 // 1. Initialize Nexus for the content script context.
 // This sets up the endpoint, default meta, and connectTo background.
-// Chain .configure() to add your custom user metadata.
-const contentScriptNexus = usingContentScript<
-  MyUserMeta,
-  MyPlatformMeta
->().configure({
-  endpoint: {
-    meta: {
-      url: window.location.href, // Dynamic metadata for the content script
-      // You can also add your custom `hasFeatureX: true` here
-    },
-  },
-});
+const contentScriptNexus = usingContentScript();
 
 // 2. Expose the service implementation using the Token
 @contentScriptNexus.Expose(MyContentScriptAPI)
@@ -132,11 +118,10 @@ Your background script (e.g., `src/background.ts`) will use the `usingBackground
 import { nexus } from "@nexus-js/core";
 import { usingBackgroundScript } from "@nexus-js/chrome"; // Import the factory
 import { MyContentScriptAPI } from "./shared/api";
-import { MyUserMeta, MyPlatformMeta } from "./shared/types"; // Import your custom types
 
 // 1. Initialize Nexus for the background script context.
 // This sets up the endpoint and default meta for the background script.
-usingBackgroundScript<MyUserMeta, MyPlatformMeta>();
+usingBackgroundScript();
 
 // Example function to call the remote service
 async function callContentScript() {

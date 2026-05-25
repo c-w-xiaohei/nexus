@@ -3,7 +3,7 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeUserMeta, ChromePlatformMeta } from "../types/meta";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta";
 import { ChromePort } from "../ports/chrome-port";
 
 /**
@@ -11,7 +11,7 @@ import { ChromePort } from "../ports/chrome-port";
  * that primarily connect to background script (popup, options page, devtools page, etc.)
  */
 export class UIClientEndpoint implements IEndpoint<
-  ChromeUserMeta,
+  ChromeEndpointMeta,
   ChromePlatformMeta
 > {
   capabilities = {
@@ -39,7 +39,7 @@ export class UIClientEndpoint implements IEndpoint<
    * Connect to target, typically background script
    */
   async connect(
-    target: Partial<ChromeUserMeta>,
+    target: Partial<ChromeEndpointMeta>,
   ): Promise<[IPort, ChromePlatformMeta]> {
     try {
       if (target.context === "background") {

@@ -29,7 +29,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 ## Core Rules
 
 - Put service interfaces and Tokens in shared modules imported by every host and consumer context.
-- Prefer `TokenSpace` for hierarchical token IDs and repeated `defaultCreate.target` routing intent.
+- Prefer `TokenSpace` for hierarchical token IDs and repeated `defaultTarget` routing intent.
 - Import service interfaces with `import type` when defining Tokens; do not repeat anonymous service shapes inline.
 - Configure every runtime context from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or bootstrap bulk compatibility.
@@ -37,7 +37,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - For function/object-style providers, helper outputs, State, Relay, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
 - Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
-- Keep explicit targets in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on Token `defaultCreate.target` or unique `connectTo` fallback.
+- Keep explicit targets in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on Token `defaultTarget` or unique `connectTo` fallback.
 - Use `createMockNexus()` from `@nexus-js/testing` for application unit tests at the `NexusInstance` seam; do not use it to claim adapter, transport, authorization, reload, restart, or real lifecycle coverage.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
 

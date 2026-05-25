@@ -9,7 +9,7 @@ import type {
   EndpointCapabilities,
   IframeChildEndpointOptions,
   IframePlatformMeta,
-  IframeUserMeta,
+  IframeEndpointMeta,
   WindowLike,
 } from "./types";
 import { originMatches, validateAppId, validateOrigin } from "./validation";
@@ -20,7 +20,7 @@ import { getWindow, postMessageFrom } from "./window";
  * by the configured parent origin, adapter channel, app id, and optional nonce.
  */
 export class IframeChildEndpoint implements IEndpoint<
-  IframeUserMeta,
+  IframeEndpointMeta,
   IframePlatformMeta
 > {
   readonly capabilities: EndpointCapabilities;
@@ -45,7 +45,7 @@ export class IframeChildEndpoint implements IEndpoint<
   }
 
   async connect(
-    targetDescriptor: Partial<IframeUserMeta>,
+    targetDescriptor: Partial<IframeEndpointMeta>,
   ): Promise<[IPort, IframePlatformMeta]> {
     this.validateParentTarget(targetDescriptor);
     this.ensureRouter();
@@ -161,7 +161,7 @@ export class IframeChildEndpoint implements IEndpoint<
     };
   }
 
-  private validateParentTarget(target: Partial<IframeUserMeta>): void {
+  private validateParentTarget(target: Partial<IframeEndpointMeta>): void {
     if (target.context !== undefined && target.context !== "iframe-parent")
       throw new IframeAdapterError(
         "No iframe parent matched target descriptor",

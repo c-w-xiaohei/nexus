@@ -63,7 +63,7 @@ const echo = await nexus.create(EchoToken);
 console.log(await echo.echo("hello"));
 ```
 
-`create(EchoToken)` works when `EchoToken` has a `defaultCreate.target` for the daemon or when the client has exactly one `connectTo` fallback. If neither is true, Nexus fails instead of guessing. Keep an explicit target while debugging or when several daemons are reachable:
+`create(EchoToken)` works when `EchoToken` has a `defaultTarget` for the daemon or when the client has exactly one `connectTo` fallback. If neither is true, Nexus fails instead of guessing. Keep an explicit target while debugging or when several daemons are reachable:
 
 ```ts
 const echo = await nexus.create(EchoToken, {
@@ -107,24 +107,30 @@ Empty tokens are rejected. Wrong tokens fail before Nexus core receives the sock
 
 Use adapter pre-auth to establish `platform.authenticated`, then use core policy to make authorization decisions.
 
-Policy composition is a low-level bootstrap path. Ask the helper for pure config with `configure: false`, then register the provider with `nexus.provide(...)`.
+Policy composition is a low-level bootstrap path. Ask the helper for pure config with `configure: false`, combine layers with `composeNexusConfig([...])`, then register the provider with `nexus.provide(...)`.
 
 ```ts
-nexus.configure({
-  ...usingNodeIpcDaemon({
-    appId: "example-app",
-    authToken: process.env.NEXUS_IPC_TOKEN,
-    configure: false,
-  }),
-  policy: {
-    canConnect({ platform }) {
-      return platform.authenticated === true;
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ platform }) {
+          return platform.authenticated === true;
+        },
+        canCall({ serviceName, operation }) {
+          return serviceName === "example:echo" && operation === "APPLY";
+        },
+      },
     },
-    canCall({ serviceName, operation }) {
-      return serviceName === "example:echo" && operation === "APPLY";
-    },
-  },
-});
+  ]),
+);
 
 nexus.provide(EchoToken, echoService);
 ```

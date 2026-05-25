@@ -32,7 +32,7 @@ describe("ResourceManager", () => {
       expect(target).toBeUndefined();
     });
 
-    it("rejects duplicate exposed services without overwriting the existing service", () => {
+    it("replaces existing exposed providers", () => {
       const replacement = { echo: () => "replacement" };
 
       resourceManager.registerExposedService("myApi", mockService);
@@ -40,11 +40,8 @@ describe("ResourceManager", () => {
         { name: "myApi", service: replacement },
       ]);
 
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect((result.error as any).code).toBe("E_PROVIDER_DUPLICATE_TOKEN");
-      }
-      expect(resourceManager.getExposedService("myApi")).toBe(mockService);
+      expect(result.isOk()).toBe(true);
+      expect(resourceManager.getExposedService("myApi")).toBe(replacement);
     });
   });
 

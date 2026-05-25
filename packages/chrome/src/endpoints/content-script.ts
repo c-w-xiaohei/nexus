@@ -3,7 +3,7 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeUserMeta, ChromePlatformMeta } from "../types/meta";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta";
 import { ChromePort } from "../ports/chrome-port";
 
 /**
@@ -11,7 +11,7 @@ import { ChromePort } from "../ports/chrome-port";
  * Primarily connects to background script
  */
 export class ContentScriptEndpoint
-  implements IEndpoint<ChromeUserMeta, ChromePlatformMeta>
+  implements IEndpoint<ChromeEndpointMeta, ChromePlatformMeta>
 {
   private connectHandler?: (port: IPort, meta?: ChromePlatformMeta) => void;
 
@@ -32,7 +32,7 @@ export class ContentScriptEndpoint
   }
 
   async connect(
-    target: Partial<ChromeUserMeta>
+    target: Partial<ChromeEndpointMeta>
   ): Promise<[IPort, ChromePlatformMeta]> {
     try {
       // Content script typically connects to background

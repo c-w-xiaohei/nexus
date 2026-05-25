@@ -4,26 +4,24 @@ For iframe integrations, keep contracts shared and keep parent/child setup focus
 
 ## Shared Contract Shape
 
-Use a Token `defaultCreate.target` when the parent repeatedly calls the same child frame.
+Use a Token `defaultTarget` when the parent repeatedly calls the same child frame.
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { IframePlatformMeta, IframeUserMeta } from "@nexus-js/iframe";
+import type { IframePlatformMeta, IframeEndpointMeta } from "@nexus-js/iframe";
 import type { GreetingService } from "./service-contract";
 
-const appSpace = new TokenSpace<IframeUserMeta, IframePlatformMeta>({
+const appSpace = new TokenSpace<IframeEndpointMeta, IframePlatformMeta>({
   name: "iframe-demo",
 });
 
-const childServices = appSpace.tokenSpace("child-services", {
-  defaultCreate: {
-    target: {
-      descriptor: {
-        context: "iframe-child",
-        appId: "iframe-demo",
-        frameId: "preview",
-        origin: "https://child.example.com",
-      },
+const childServices = appSpace.space("child-services", {
+  defaultTarget: {
+    descriptor: {
+      context: "iframe-child",
+      appId: "iframe-demo",
+      frameId: "preview",
+      origin: "https://child.example.com",
     },
   },
 });

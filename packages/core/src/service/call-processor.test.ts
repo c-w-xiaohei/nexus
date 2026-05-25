@@ -1,6 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import { CallProcessor } from "./call-processor";
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { DispatchCallOptions } from "./engine";
 import { PendingCallManager } from "./pending-call-manager";
 import { PayloadProcessor } from "./payload/payload-processor";
@@ -8,7 +8,7 @@ import { ok, okAsync } from "neverthrow";
 
 describe("CallProcessor", () => {
   let processorState: CallProcessor.Runtime;
-  let deps: CallProcessor.Dependencies<UserMetadata, PlatformMetadata>;
+  let deps: CallProcessor.Dependencies<EndpointMeta, PlatformMeta>;
 
   beforeEach(() => {
     vi.clearAllMocks();

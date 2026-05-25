@@ -10,15 +10,15 @@ import type {
   NodeIpcDaemonConfigOptions,
   NodeIpcDaemonOptions,
 } from "./types/options";
-import type { NodeIpcPlatformMeta, NodeIpcUserMeta } from "./types/meta";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta";
 import { NodeIpcError } from "./errors";
 
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonConfigOptions,
-): NexusConfig<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+): NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonOptions,
-): NexusInstance<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonOptions | NodeIpcDaemonConfigOptions,
 ) {
@@ -27,7 +27,7 @@ export function usingNodeIpcDaemon(
     ? validateDaemonAddress(options.address)
     : resolveDaemonAddress(options.appId, instance);
   validateAuthToken(options.authToken);
-  const config: NexusConfig<NodeIpcUserMeta, NodeIpcPlatformMeta> = {
+  const config: NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta> = {
     ...options,
     endpoint: {
       meta: {
@@ -80,15 +80,15 @@ function resolveDaemonAddress(
 
 export function usingNodeIpcClient(
   options: NodeIpcClientConfigOptions,
-): NexusConfig<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+): NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
 export function usingNodeIpcClient(
   options: NodeIpcClientOptions,
-): NexusInstance<NodeIpcUserMeta, NodeIpcPlatformMeta>;
+): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
 export function usingNodeIpcClient(
   options: NodeIpcClientOptions | NodeIpcClientConfigOptions,
 ) {
   validateAuthToken(options.authToken);
-  const config: NexusConfig<NodeIpcUserMeta, NodeIpcPlatformMeta> = {
+  const config: NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta> = {
     ...options,
     endpoint: {
       meta: {

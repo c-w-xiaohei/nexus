@@ -15,5 +15,5 @@ export type {
   IframeParentMeta,
   IframeParentOptions,
   IframePlatformMeta,
-  IframeUserMeta,
+  IframeEndpointMeta,
 } from "./types";

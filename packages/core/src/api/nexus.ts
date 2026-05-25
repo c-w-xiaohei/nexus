@@ -1,13 +1,13 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
-import { merge } from "es-toolkit";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import {
+  composeNexusConfig,
   NexusConfig,
-  ServiceRegistration,
+  ServiceProvider,
   AuthorizationPolicy,
   CreateOptions,
-  TargetMatcher,
+  MatcherTarget,
   CreateMulticastOptions,
-  TargetCriteria,
+  Target,
 } from "./types/config";
 import type { Token } from "./token";
 import { Engine } from "@/service/engine";
@@ -99,18 +99,18 @@ const validateCreateMulticastInput = fn(
 
 const validateUpdateIdentityInput = fn(PlainObjectSchema, (input) => input);
 
-const ServiceRegistrationSchema = z.object({
+const ServiceProviderSchema = z.object({
   token: z.object({ id: z.string().min(1) }),
-  implementation: ServiceImplementationSchema,
+  service: ServiceImplementationSchema,
   policy: z.custom<AuthorizationPolicy<any, any>>().optional(),
 });
 
 type ProviderRegistration<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > = {
-  readonly token: Token<object>;
-  readonly implementation: object;
+  readonly token: Token<object, any>;
+  readonly service: object;
   readonly policy?: AuthorizationPolicy<U, P>;
 };
 
@@ -149,8 +149,8 @@ const deferToNextTick = (work: () => Promise<void>): Promise<void> =>
  * @template RegisteredDescriptors Union type of registered named descriptors
  */
 export class Nexus<
-  U extends UserMetadata = any,
-  P extends PlatformMetadata = any,
+  U extends EndpointMeta = any,
+  P extends PlatformMeta = any,
   RegisteredMatchers extends string = never,
   RegisteredDescriptors extends string = never,
 > implements NexusInstance<U, P, RegisteredMatchers, RegisteredDescriptors> {
@@ -176,7 +176,7 @@ export class Nexus<
   private isInitScheduled = false;
   private readonly liveProviderTokenIds = new Set<string>();
   private bootstrappedConnectToFallback:
-    | readonly TargetCriteria<U, string, string>[]
+    | readonly Target<U, string, string>[]
     | undefined;
 
   // Named entity cache for performance optimization
@@ -200,13 +200,13 @@ export class Nexus<
     const resolveNamedMatcher = (name: string) => this.namedMatchers.get(name);
 
     this.matchers = {
-      and: (...matchers: TargetMatcher<U, RegisteredMatchers>[]) => {
+      and: (...matchers: MatcherTarget<U, RegisteredMatchers>[]) => {
         return MatcherCombinators.and(resolveNamedMatcher, ...matchers);
       },
-      or: (...matchers: TargetMatcher<U, RegisteredMatchers>[]) => {
+      or: (...matchers: MatcherTarget<U, RegisteredMatchers>[]) => {
         return MatcherCombinators.or(resolveNamedMatcher, ...matchers);
       },
-      not: (matcher: TargetMatcher<U, RegisteredMatchers>) => {
+      not: (matcher: MatcherTarget<U, RegisteredMatchers>) => {
         return MatcherCombinators.not(resolveNamedMatcher, matcher);
       },
     };
@@ -241,11 +241,7 @@ export class Nexus<
       return err(lifecycleError.error);
     }
 
-    const { services, ...configWithoutServices } = config;
-    this.config = merge(this.config, configWithoutServices);
-    if (services) {
-      this.config.services = [...(this.config.services ?? []), ...services];
-    }
+    this.config = composeNexusConfig([this.config, config]);
 
     if (config.matchers) {
       for (const name of Object.keys(config.matchers)) {
@@ -271,27 +267,27 @@ export class Nexus<
 
   public provide<T extends object>(
     token: Token<T>,
-    implementation: T,
+    service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): this;
   public provide<T extends object>(
-    registration: ServiceRegistration<T, U, P>,
+    registration: ServiceProvider<T, U, P>,
   ): this;
   public provide(
-    registrations: readonly ServiceRegistration<object, U, P>[],
+    registrations: readonly ServiceProvider<object, U, P>[],
   ): this;
   public provide<T extends object>(
     tokenOrRegistration:
       | Token<T>
-      | ServiceRegistration<T, U, P>
-      | readonly ServiceRegistration<object, U, P>[],
-    implementation?: T,
+      | ServiceProvider<T, U, P>
+      | readonly ServiceProvider<object, U, P>[],
+    service?: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): this {
     return unwrapResultOrThrow(
       this.safeProvide(
         tokenOrRegistration as Token<T>,
-        implementation as T,
+        service as T,
         options,
       ),
     );
@@ -299,26 +295,26 @@ export class Nexus<
 
   public safeProvide<T extends object>(
     token: Token<T>,
-    implementation: T,
+    service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<this, Error>;
   public safeProvide<T extends object>(
-    registration: ServiceRegistration<T, U, P>,
+    registration: ServiceProvider<T, U, P>,
   ): Result<this, Error>;
   public safeProvide(
-    registrations: readonly ServiceRegistration<object, U, P>[],
+    registrations: readonly ServiceProvider<object, U, P>[],
   ): Result<this, Error>;
   public safeProvide<T extends object>(
     tokenOrRegistration:
       | Token<T>
-      | ServiceRegistration<T, U, P>
-      | readonly ServiceRegistration<object, U, P>[],
-    implementation?: T,
+      | ServiceProvider<T, U, P>
+      | readonly ServiceProvider<object, U, P>[],
+    service?: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<this, Error> {
     const normalized = this.normalizeProviderInput(
       tokenOrRegistration,
-      implementation,
+      service,
       options,
     );
     if (normalized.isErr()) {
@@ -330,23 +326,12 @@ export class Nexus<
       return err(lifecycleError.error);
     }
 
-    const duplicateError = this.validateProviderDuplicates(
-      normalized.value,
-      Array.isArray(tokenOrRegistration),
-    );
-    if (duplicateError.isErr()) {
-      return err(duplicateError.error);
-    }
-
     if (this.lifecycleState === "ready" && this.engine) {
       const liveResult = this.engine.safeProvideServicesBatch(
         Object.fromEntries(
           normalized.value.map((registration) => [
             registration.token.id,
-            {
-              implementation: registration.implementation,
-              policy: registration.policy,
-            },
+            { service: registration.service, policy: registration.policy },
           ]),
         ),
       );
@@ -359,14 +344,10 @@ export class Nexus<
       return ok(this);
     }
 
-    this.config.services = [
-      ...(this.config.services ?? []),
-      ...normalized.value.map((registration) => ({
-        token: registration.token,
-        implementation: registration.implementation,
-        policy: registration.policy,
-      })),
-    ];
+    this.config = composeNexusConfig<U, P>([
+      this.config,
+      { providers: normalized.value as ServiceProvider<object, U, P>[] },
+    ]);
 
     return ok(this);
   }
@@ -454,24 +435,23 @@ export class Nexus<
   private isStructuralConfigure(
     config: NexusConfig<U, P, string, string>,
   ): boolean {
-    return Boolean(
-      config.services ||
-      config.policy ||
-      config.matchers ||
-      config.descriptors ||
-      config.endpoint?.meta ||
-      config.endpoint?.implementation ||
-      config.endpoint?.connectTo ||
-      config.implementation,
+    return (
+      Object.hasOwn(config, "providers") ||
+      Object.hasOwn(config, "policy") ||
+      Object.hasOwn(config, "matchers") ||
+      Object.hasOwn(config, "descriptors") ||
+      Object.hasOwn(config.endpoint ?? {}, "meta") ||
+      Object.hasOwn(config.endpoint ?? {}, "implementation") ||
+      Object.hasOwn(config.endpoint ?? {}, "connectTo")
     );
   }
 
   private normalizeProviderInput<T extends object>(
     tokenOrRegistration:
       | Token<T>
-      | ServiceRegistration<T, U, P>
-      | readonly ServiceRegistration<object, U, P>[],
-    implementation?: T,
+      | ServiceProvider<T, U, P>
+      | readonly ServiceProvider<object, U, P>[],
+    service?: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<ProviderRegistration<U, P>[], Error> {
     if (
@@ -497,17 +477,13 @@ export class Nexus<
           "token" in tokenOrRegistration
         ? [tokenOrRegistration]
         : [
-            {
-              token: tokenOrRegistration,
-              implementation,
-              policy: options?.policy,
-            },
+            { token: tokenOrRegistration, service, policy: options?.policy },
           ];
 
     const normalized: ProviderRegistration<U, P>[] = [];
     const validationErrors: Error[] = [];
     for (const registration of registrations) {
-      const validation = ServiceRegistrationSchema.safeParse(registration);
+      const validation = ServiceProviderSchema.safeParse(registration);
       if (!validation.success) {
         validationErrors.push(
           new NexusUsageError(
@@ -521,62 +497,18 @@ export class Nexus<
         continue;
       }
       normalized.push({
-        token: registration.token as Token<object>,
-        implementation: registration.implementation as object,
+        token: registration.token as Token<object, any>,
+        service: registration.service as object,
         policy: registration.policy,
       });
     }
 
-    const duplicateResult = this.validateProviderDuplicates(
-      normalized,
-      Array.isArray(tokenOrRegistration),
-    );
-    const errors = [
-      ...validationErrors,
-      ...(duplicateResult.isErr()
-        ? this.expandProviderBatchError(duplicateResult.error)
-        : []),
-    ];
+    const errors = validationErrors;
 
     if (errors.length > 0) {
       return err(this.createProviderBatchError(errors));
     }
     return ok(normalized);
-  }
-
-  private validateProviderDuplicates(
-    registrations: readonly ProviderRegistration<U, P>[],
-    forceBatchError = false,
-    existingIds = new Set(
-      (this.config.services ?? []).map((entry) => entry.token.id),
-    ),
-  ): Result<void, Error> {
-    for (const tokenId of this.liveProviderTokenIds) {
-      existingIds.add(tokenId);
-    }
-    const seenIds = new Set<string>();
-    const errors: Error[] = [];
-    for (const registration of registrations) {
-      const tokenId = registration.token.id;
-      if (existingIds.has(tokenId) || seenIds.has(tokenId)) {
-        errors.push(
-          new NexusConfigurationError(
-            `Nexus: Provider token id "${tokenId}" is already registered.`,
-            "E_PROVIDER_DUPLICATE_TOKEN",
-            { tokenId },
-          ),
-        );
-      }
-      seenIds.add(tokenId);
-    }
-    if (errors.length > 0) {
-      return err(
-        forceBatchError || errors.length > 1
-          ? this.createProviderBatchError(errors)
-          : errors[0],
-      );
-    }
-    return ok(undefined);
   }
 
   private createProviderBatchError(
@@ -597,37 +529,6 @@ export class Nexus<
         })),
       },
     );
-  }
-
-  private expandProviderBatchError(error: Error): Error[] {
-    if (
-      "code" in error &&
-      (error as { code: string }).code === "E_PROVIDER_BATCH_INVALID" &&
-      "context" in error &&
-      Array.isArray(
-        (error as { context?: { errors?: unknown[] } }).context?.errors,
-      )
-    ) {
-      return (
-        error as {
-          context: {
-            errors: {
-              message: string;
-              code: string;
-              context?: Record<string, unknown>;
-            }[];
-          };
-        }
-      ).context.errors.map(
-        (entry) =>
-          new NexusConfigurationError(
-            entry.message,
-            entry.code as any,
-            entry.context,
-          ),
-      );
-    }
-    return [error];
   }
 
   /**
@@ -713,33 +614,11 @@ export class Nexus<
       namedDescriptors: ReadonlyMap<string, Partial<U>>;
       decoratorSnapshot: DecoratorSnapshot;
       createFallbackConnectTo:
-        | readonly TargetCriteria<U, string, string>[]
+        | readonly Target<U, string, string>[]
         | undefined;
     },
     Error
   > {
-    if (this.config.endpoint?.implementation && this.config.implementation) {
-      return err(
-        new NexusConfigurationError(
-          "Nexus: endpoint implementation is configured from multiple sources.",
-          "E_CONFIGURATION_INVALID",
-        ),
-      );
-    }
-
-    const duplicateResult = this.validateProviderDuplicates(
-      (this.config.services ?? []).map((registration) => ({
-        token: registration.token as Token<object>,
-        implementation: registration.implementation as object,
-        policy: registration.policy,
-      })),
-      true,
-      new Set(),
-    );
-    if (duplicateResult.isErr()) {
-      return err(duplicateResult.error);
-    }
-
     const decoratorSnapshot = this.copyDecoratorSnapshot(
       this.decoratorRegistry.snapshot(),
     );
@@ -766,7 +645,7 @@ export class Nexus<
     snapshot: DecoratorSnapshot,
   ): DecoratorSnapshot {
     return {
-      services: new Map(snapshot.services),
+      providers: new Map(snapshot.providers),
       endpoint: snapshot.endpoint
         ? {
             ...snapshot.endpoint,
@@ -785,7 +664,7 @@ export class Nexus<
   private resolveCreateFallbackConnectTo(
     config: NexusConfig<U, P, string, string>,
     decoratorSnapshot: DecoratorSnapshot,
-  ): readonly TargetCriteria<U, string, string>[] | undefined {
+  ): readonly Target<U, string, string>[] | undefined {
     return (
       config.endpoint?.connectTo ??
       decoratorSnapshot.endpoint?.options.connectTo
@@ -808,9 +687,9 @@ export class Nexus<
     return {
       ...config,
       endpoint,
-      services: config.services?.map((registration) => ({
+      providers: config.providers?.map((registration) => ({
         token: registration.token,
-        implementation: registration.implementation,
+        service: registration.service,
         policy: registration.policy,
       })),
     };
@@ -863,7 +742,7 @@ export class Nexus<
     namedDescriptors: ReadonlyMap<string, Partial<U>>;
     decoratorSnapshot: DecoratorSnapshot;
     createFallbackConnectTo:
-      | readonly TargetCriteria<U, string, string>[]
+      | readonly Target<U, string, string>[]
       | undefined;
   }): ResultAsync<void, Error> {
     if (this.engine) {
@@ -872,7 +751,7 @@ export class Nexus<
 
     const builder = NexusKernelBuilder.create<U, P>(
       snapshot.config,
-      snapshot.decoratorSnapshot.services,
+      snapshot.decoratorSnapshot.providers,
       snapshot.decoratorSnapshot.endpoint,
       this,
       snapshot.namedMatchers,
@@ -972,7 +851,7 @@ export class Nexus<
       ({ engine, connectionManager }) => {
         const finalTargetResult = TargetResolver.resolveUnicastTarget(
           validatedOptions.target,
-          validatedToken.defaultCreate?.target as
+          validatedToken.defaultTarget as
             | CreateOptions<
                 U,
                 RegisteredMatchers,
@@ -1056,13 +935,13 @@ export class Nexus<
   }
 
   private getCreateFallbackConnectTo():
-    | readonly TargetCriteria<U, string, string>[]
+    | readonly Target<U, string, string>[]
     | undefined {
     return this.bootstrappedConnectToFallback;
   }
 
   /**
-   * Create a multicast proxy for interacting with multiple remote services simultaneously.
+   * Create a multicast proxy for interacting with multiple remote providers simultaneously.
    * This method will not fail due to inability to find connections.
    */
   public createMulticast<
@@ -1254,13 +1133,13 @@ export class Nexus<
  */
 export const nexus = new Nexus();
 
-function buildMulticastProxyTarget<U extends UserMetadata>(resolvedTarget: {
+function buildMulticastProxyTarget<U extends EndpointMeta>(resolvedTarget: {
   descriptor?: Partial<U>;
   matcher?: (identity: U) => boolean;
-  groupName?: string;
+  group?: string;
 }): CreateProxyOptions<U>["target"] {
-  if (resolvedTarget.groupName) {
-    return { groupName: resolvedTarget.groupName };
+  if (resolvedTarget.group) {
+    return { group: resolvedTarget.group };
   }
 
   if (resolvedTarget.descriptor) {

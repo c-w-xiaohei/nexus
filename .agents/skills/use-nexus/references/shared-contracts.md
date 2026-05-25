@@ -2,26 +2,26 @@
 
 Define service interfaces and Tokens in shared modules imported by both host and consumer contexts.
 
+Read `references/identity-and-metadata.md` when defining `EndpointMeta` for TokenSpace targeting, Token `defaultTarget`, descriptors, matchers, and identity replacement, or `PlatformMeta` for adapter facts and policy inputs.
+
 ## Tokens
 
-Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultCreate.target` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.
+Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultTarget` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.
 
 Token modules should import existing service interfaces with `import type`. Do not repeat service method shapes inline at token definition sites.
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { ChromePlatformMeta, ChromeUserMeta } from "@nexus-js/chrome";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "@nexus-js/chrome";
 import type { SettingsService } from "./contracts";
 
-const appSpace = new TokenSpace<ChromeUserMeta, ChromePlatformMeta>({
+const appSpace = new TokenSpace<ChromeEndpointMeta, ChromePlatformMeta>({
   name: "my-extension",
 });
 
-const backgroundServices = appSpace.tokenSpace("background-services", {
-  defaultCreate: {
-    target: {
-      descriptor: { context: "background" },
-    },
+const backgroundServices = appSpace.space("background-services", {
+  defaultTarget: {
+    descriptor: { context: "background" },
   },
 });
 

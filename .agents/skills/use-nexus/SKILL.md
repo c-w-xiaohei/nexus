@@ -13,7 +13,7 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 ## Core Rules
 
 - Keep service contracts and Tokens in shared code imported by every context that needs them.
-- Prefer `TokenSpace` when an app needs structured token IDs or `defaultCreate.target` inheritance.
+- Prefer `TokenSpace` when an app needs structured token IDs or `defaultTarget` inheritance.
 - Import existing service types instead of redefining service shapes inline.
 - Define Tokens in shared contract modules and import service interfaces with `import type`; do not repeat anonymous service shapes at token sites.
 - Configure every runtime context only from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
@@ -24,8 +24,8 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Use `new Nexus()` with a named instance such as `backgroundNexus`, `iframeParentNexus`, or `brokerNexus` for multi-instance runtimes; bind decorators and providers to that specific instance.
 - Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
 - Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
-- Keep explicit targets in introductory `nexus.create(...)` examples. When relying on Token `defaultCreate.target` or a unique `connectTo` fallback, call `nexus.create(Token)` directly.
-- For Nexus State providers, use `const { config, store } = createNexusStore(definition)`: pass `config` through `nexus.configure({ services: [config] })` or `services: [config]`, and use `store` only for same-context authoritative consumption.
+- Keep explicit targets in introductory `nexus.create(...)` examples. When relying on Token `defaultTarget` or a unique `connectTo` fallback, call `nexus.create(Token)` directly.
+- For Nexus State providers, use `const { provider, store } = createNexusStore(definition)`: pass `provider` through `nexus.configure({ providers: [provider] })` or `providers: [provider]`, and use `store` only for same-context authoritative consumption.
 - Use `createMockNexus()` from `@nexus-js/testing` for user-level unit tests of code that consumes a `NexusInstance`; use adapter or integration tests for transport, connection, auth, reload, restart, or lifecycle semantics.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
 
@@ -56,18 +56,16 @@ Shared contract:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { AppPlatformMeta, AppUserMeta } from "./runtime-types";
+import type { AppEndpointMeta, AppPlatformMeta } from "./runtime-types";
 import type { PingService } from "./contracts";
 
-const appSpace = new TokenSpace<AppUserMeta, AppPlatformMeta>({
+const appSpace = new TokenSpace<AppEndpointMeta, AppPlatformMeta>({
   name: "my-app",
 });
 
-const services = appSpace.tokenSpace("services", {
-  defaultCreate: {
-    target: {
-      descriptor: { context: "host" },
-    },
+const services = appSpace.space("services", {
+  defaultTarget: {
+    descriptor: { context: "host" },
   },
 });
 
@@ -132,6 +130,7 @@ Start with `references/usage-style.md` for the concise external usage index. Loa
 - `references/shared-contracts.md` - service interfaces, Tokens, `TokenSpace`, and service exposure
 - `references/runtime-configuration.md` - adapter helpers, `nexus.configure(...)`, multi-instance runtimes, and config composition
 - `references/targeting-and-proxies.md` - `nexus.create(...)`, target resolution, descriptors, matchers, proxies, and refs
+- `references/identity-and-metadata.md` - `EndpointMeta`, `PlatformMeta`, field placement, trust boundaries, and metadata consumption
 - `references/adapter-node-ipc.md` - node-ipc daemon/client wiring, `configure: false`, auth gates, and default-target routing
 - `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style

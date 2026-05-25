@@ -1,6 +1,6 @@
 import type {
-  UserMetadata,
-  PlatformMetadata,
+  EndpointMeta,
+  PlatformMeta,
   ConnectionContext,
 } from "../types/identity";
 import type { NexusMessage } from "../types/message";
@@ -14,20 +14,20 @@ export enum ConnectionStatus {
   CLOSED,
 }
 
-export type Descriptor<U extends UserMetadata> = Partial<U>;
+export type Descriptor<U extends EndpointMeta> = Partial<U>;
 
 export type ResolveOptions<
-  U extends UserMetadata,
-  _P extends PlatformMetadata,
+  U extends EndpointMeta,
+  _P extends PlatformMeta,
 > = {
   matcher?: (identity: U) => boolean;
   descriptor?: Descriptor<U>;
   assignmentMetadata?: U;
 };
 
-export type MessageTarget<U extends UserMetadata> =
+export type MessageTarget<U extends EndpointMeta> =
   | { connectionId: string }
-  | { groupName: string }
+  | { group: string }
   | { matcher: (identity: U) => boolean };
 
 /**
@@ -35,13 +35,13 @@ export type MessageTarget<U extends UserMetadata> =
  * It can be a direct target for sending a message (`MessageTarget`) or options
  * for finding/creating a connection first (`ResolveOptions`).
  */
-export type CallTarget<U extends UserMetadata, P extends PlatformMetadata> =
+export type CallTarget<U extends EndpointMeta, P extends PlatformMeta> =
   | MessageTarget<U>
   | ResolveOptions<U, P>;
 
 export interface LogicalConnectionHandlers<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   onVerified(connInfo: { connectionId: string; identity: U }): void;
   onClosed(connInfo: { connectionId: string; identity?: U }): void;
@@ -50,13 +50,13 @@ export interface LogicalConnectionHandlers<
   verify(identity: U, context: ConnectionContext<P>): Promise<boolean>;
 }
 
-export type ConnectToTarget<U extends UserMetadata> =
+export type ConnectToTarget<U extends EndpointMeta> =
   | { descriptor: Descriptor<U> }
   | { matcher: (identity: U) => boolean; descriptor: Descriptor<U> };
 
 export interface ConnectionManagerConfig<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   connectTo?: ConnectToTarget<U>[];
   policy?: NexusAuthorizationPolicy<U, P>;
@@ -64,8 +64,8 @@ export interface ConnectionManagerConfig<
 }
 
 export interface ConnectionManagerHandlers<
-  U extends UserMetadata,
-  _P extends PlatformMetadata,
+  U extends EndpointMeta,
+  _P extends PlatformMeta,
 > {
   onMessage(
     message: NexusMessage,

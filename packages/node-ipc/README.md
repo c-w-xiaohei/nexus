@@ -31,7 +31,7 @@ Public types and errors:
 - `NodeIpcAddress`
 - `NodeIpcAddressResolver`
 - `NodeIpcSocketAddress`
-- `NodeIpcUserMeta`
+- `NodeIpcEndpointMeta`
 - `NodeIpcDaemonMeta`
 - `NodeIpcClientMeta`
 - `NodeIpcPlatformMeta`
@@ -79,7 +79,7 @@ console.log(await echo.echo("hello"));
 - `instance` defaults to `default`
 - Shared-secret pre-auth is optional and configured with `authToken`
 - Core `policy.canConnect` and `policy.canCall` remain the authorization authority after pre-auth
-- `create(EchoToken)` requires a token `defaultCreate.target` or a unique `connectTo` fallback; use explicit `target` plus `expects` for complex daemon topologies
+- `create(EchoToken)` requires a token `defaultTarget` or a unique `connectTo` fallback; use explicit `target` plus `expects` for complex daemon topologies
 - Proxies and refs are session-bound; recreate them after daemon restart or disconnect
 
 ## Error Codes

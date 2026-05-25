@@ -15,7 +15,7 @@ export type NodeIpcClientMeta = {
   groups?: string[];
 };
 
-export type NodeIpcUserMeta = NodeIpcDaemonMeta | NodeIpcClientMeta;
+export type NodeIpcEndpointMeta = NodeIpcDaemonMeta | NodeIpcClientMeta;
 
 export type NodeIpcPlatformMeta = {
   socket: NodeIpcSocketAddress;

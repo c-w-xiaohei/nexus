@@ -26,7 +26,7 @@ export interface IEndpoint<U extends object, P extends object> {
    * @param targetDescriptor An "addressing descriptor" containing user-defined
    *                         metadata (`Partial<U>`) to identify the target.
    * @returns A Promise that resolves to a tuple containing the `IPort` instance
-   *          for the new connection and the discovered `PlatformMetadata` of the remote endpoint.
+   *          for the new connection and the discovered `PlatformMeta` of the remote endpoint.
    */
   connect?(targetDescriptor: Partial<U>): Promise<[IPort, P]>;
 

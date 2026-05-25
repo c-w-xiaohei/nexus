@@ -73,18 +73,13 @@ export async function setupContentScript() {
 
   // Send notification when page loads
   await tabService.sendNotification(`Page loaded: ${window.location.href}`);
-
-  // Update activity status based on visibility
-  document.addEventListener("visibilitychange", () => {
-    void nexus.updateIdentity({ isActive: !document.hidden });
-  });
 }
 
 // ===== Popup =====
 // popup.ts
 export async function setupPopup() {
   // Configure Nexus for popup context
-  await usingPopup();
+  usingPopup();
 
   // Get the background service
   const tabService = await nexus.create(TabServiceToken, {

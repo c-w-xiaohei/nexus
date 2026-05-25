@@ -1,12 +1,12 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { RefWrapper } from "@/types/ref-wrapper";
 import type { Token } from "../token";
 import type {
   NexusConfig,
-  ServiceRegistration,
+  ServiceProvider,
   AuthorizationPolicy,
   CreateOptions,
-  TargetMatcher,
+  MatcherTarget,
   CreateMulticastOptions,
 } from "./config";
 import type { ExposeOptions, NexusClassDecorator } from "../decorators/expose";
@@ -82,8 +82,8 @@ export type Streamified<T> = {
  * This interface evolves its generics as `configure` is called.
  */
 export interface NexusInstance<
-  U extends UserMetadata = any,
-  P extends PlatformMetadata = any,
+  U extends EndpointMeta = any,
+  P extends PlatformMeta = any,
   RegisteredMatchers extends string = never,
   RegisteredDescriptors extends string = never,
 > {
@@ -111,22 +111,22 @@ export interface NexusInstance<
 
   provide<T extends object>(
     token: Token<T>,
-    implementation: T,
+    service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): this;
-  provide<T extends object>(registration: ServiceRegistration<T, U, P>): this;
-  provide(registrations: readonly ServiceRegistration<object, U, P>[]): this;
+  provide<T extends object>(registration: ServiceProvider<T, U, P>): this;
+  provide(registrations: readonly ServiceProvider<object, U, P>[]): this;
 
   safeProvide<T extends object>(
     token: Token<T>,
-    implementation: T,
+    service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<this, Error>;
   safeProvide<T extends object>(
-    registration: ServiceRegistration<T, U, P>,
+    registration: ServiceProvider<T, U, P>,
   ): Result<this, Error>;
   safeProvide(
-    registrations: readonly ServiceRegistration<object, U, P>[],
+    registrations: readonly ServiceProvider<object, U, P>[],
   ): Result<this, Error>;
 
   ready(): Promise<void>;
@@ -235,14 +235,14 @@ export interface NexusInstance<
 }
 
 export interface MatcherUtils<
-  U extends UserMetadata,
+  U extends EndpointMeta,
   RegisteredMatchers extends string,
 > {
   and(
-    ...matchers: TargetMatcher<U, RegisteredMatchers>[]
+    ...matchers: MatcherTarget<U, RegisteredMatchers>[]
   ): (identity: U) => boolean;
   or(
-    ...matchers: TargetMatcher<U, RegisteredMatchers>[]
+    ...matchers: MatcherTarget<U, RegisteredMatchers>[]
   ): (identity: U) => boolean;
-  not(matcher: TargetMatcher<U, RegisteredMatchers>): (identity: U) => boolean;
+  not(matcher: MatcherTarget<U, RegisteredMatchers>): (identity: U) => boolean;
 }

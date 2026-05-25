@@ -336,11 +336,11 @@ export const createReactNexusHarness = async (
     );
 
     const definition = createDefinitionWithInitialState(host.initialCount ?? 0);
-    const { config: registration } = createNexusStore(definition);
+    const { provider } = createNexusStore(definition);
     const activeSubscriptions = new Set<string>();
     subscriptionCounts.set(host.id, activeSubscriptions);
 
-    const implementation = registration.implementation;
+    const implementation = provider.service;
     const wrappedImplementation = {
       ...implementation,
       async subscribe(onSync: Parameters<typeof implementation.subscribe>[0]) {
@@ -359,10 +359,10 @@ export const createReactNexusHarness = async (
         meta: { context: "host", hostId: host.id },
         implementation: hostEndpoint,
       },
-      services: [
+      providers: [
         {
-          token: registration.token,
-          implementation: wrappedImplementation,
+          token: provider.token,
+          service: wrappedImplementation,
         },
       ],
     });

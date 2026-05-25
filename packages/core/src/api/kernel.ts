@@ -1,18 +1,17 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import { ConnectionManager } from "@/connection/connection-manager";
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
 } from "@/connection/types";
 import { Engine } from "@/service/engine";
-import type { NexusConfig, ServiceRegistration } from "./types/config";
-import { merge } from "es-toolkit";
+import type { NexusConfig, ServiceProvider } from "./types/config";
 import type { Token } from "./token";
 import { Transport } from "@/transport";
 import type { NexusMessage } from "@/types/message";
 import type {
   EndpointRegistrationData,
-  ServiceRegistrationData,
+  ServiceProviderData,
 } from "./registry";
 import { NexusConfigurationError } from "@/errors";
 import { TargetResolver } from "./target-resolver";
@@ -22,15 +21,15 @@ import { ResultAsync, errAsync, okAsync } from "neverthrow";
  * A type that represents the assembled L1-L3 kernel components.
  */
 export interface NexusKernel<
-  U extends UserMetadata,
-  P extends PlatformMetadata,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 > {
   engine: Engine<U, P>;
   connectionManager: ConnectionManager<U, P>;
 }
 
 export namespace NexusKernelBuilder {
-  export interface Runtime<U extends UserMetadata, P extends PlatformMetadata> {
+  export interface Runtime<U extends EndpointMeta, P extends PlatformMeta> {
     build(): ResultAsync<
       {
         engine: Engine<U, P>;
@@ -40,9 +39,9 @@ export namespace NexusKernelBuilder {
     >;
   }
 
-  export const create = <U extends UserMetadata, P extends PlatformMetadata>(
+  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
     initialConfig: NexusConfig<U, P, string, string>,
-    serviceRegistry: ReadonlyMap<Token<object>, ServiceRegistrationData>,
+    serviceRegistry: ReadonlyMap<Token<object>, ServiceProviderData>,
     endpointRegistration: EndpointRegistrationData | null,
     _nexusInstance: unknown,
     namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
@@ -61,21 +60,6 @@ export namespace NexusKernelBuilder {
         );
       }
 
-      const providerIds = new Set<string>();
-      for (const registration of finalConfig.services ?? []) {
-        if (providerIds.has(registration.token.id)) {
-          throw createProviderBatchError(registration.token.id);
-        }
-        providerIds.add(registration.token.id);
-      }
-
-      for (const token of serviceRegistry.keys()) {
-        if (providerIds.has(token.id)) {
-          throw createProviderBatchError(token.id);
-        }
-        providerIds.add(token.id);
-      }
-
       if (endpointRegistration) {
         const { targetClass, options } = endpointRegistration;
         const implementation = new targetClass();
@@ -85,11 +69,14 @@ export namespace NexusKernelBuilder {
             meta: options.meta,
             connectTo: options.connectTo,
           },
+        } as NexusConfig<U, P, string, string>;
+        finalConfig = {
+          ...finalConfig,
+          endpoint: { ...(finalConfig.endpoint ?? {}), ...endpointConfig.endpoint },
         };
-        finalConfig = merge(finalConfig, endpointConfig);
       }
 
-      const decoratedServices: ServiceRegistration<object>[] = [];
+      const decoratedServices: ServiceProvider<object, U, P>[] = [];
       const factoryPromises: Promise<void>[] = [];
 
       for (const [
@@ -97,9 +84,9 @@ export namespace NexusKernelBuilder {
         { targetClass, options },
       ] of serviceRegistry.entries()) {
         const createInstance = async () => {
-          let implementation: object;
+          let service: object;
           if (options?.factory) {
-            implementation = await Promise.resolve(
+            service = await Promise.resolve(
               options.factory({
                 targetClass,
                 token,
@@ -107,13 +94,13 @@ export namespace NexusKernelBuilder {
               }),
             );
           } else {
-            implementation = new targetClass();
+            service = new targetClass();
           }
           decoratedServices.push({
             token,
-            implementation,
+            service,
             policy: options?.policy,
-          });
+          } as ServiceProvider<object, U, P>);
         };
         factoryPromises.push(createInstance());
       }
@@ -123,37 +110,8 @@ export namespace NexusKernelBuilder {
       if (decoratedServices.length > 0) {
         finalConfig = {
           ...finalConfig,
-          services: [...(finalConfig.services ?? []), ...decoratedServices],
+          providers: [...(finalConfig.providers ?? []), ...decoratedServices],
         };
-      }
-
-      const seenTokenIds = new Set<string>();
-      const duplicateErrors: NexusConfigurationError[] = [];
-      for (const registration of finalConfig.services ?? []) {
-        const tokenId = registration.token.id;
-        if (seenTokenIds.has(tokenId)) {
-          duplicateErrors.push(
-            new NexusConfigurationError(
-              `Nexus: Provider token id "${tokenId}" is already registered.`,
-              "E_PROVIDER_DUPLICATE_TOKEN",
-              { tokenId },
-            ),
-          );
-        }
-        seenTokenIds.add(tokenId);
-      }
-      if (duplicateErrors.length > 0) {
-        throw new NexusConfigurationError(
-          "Nexus: provider batch registration failed validation.",
-          "E_PROVIDER_BATCH_INVALID",
-          {
-            errors: duplicateErrors.map((error) => ({
-              message: error.message,
-              code: error.code,
-              context: error.context,
-            })),
-          },
-        );
       }
 
       return finalConfig;
@@ -264,28 +222,24 @@ export namespace NexusKernelBuilder {
         );
 
         const servicesForEngine: {
-          services?: Record<
+          providers?: Record<
             string,
             {
-              implementation: object;
-              policy?: ServiceRegistration<object>["policy"];
+              service: object;
+              policy?: ServiceProvider<object, U, P>["policy"];
             }
           >;
         } = {};
-        if (finalConfig.services) {
-          servicesForEngine.services = finalConfig.services.reduce(
-            (
-              acc: NonNullable<typeof servicesForEngine.services>,
-              reg: ServiceRegistration<object>,
-            ) => {
+        if (finalConfig.providers) {
+          servicesForEngine.providers = finalConfig.providers.reduce<
+            NonNullable<typeof servicesForEngine.providers>
+          >((acc, reg) => {
               acc[reg.token.id] = {
-                implementation: reg.implementation,
+                service: reg.service,
                 policy: reg.policy,
               };
               return acc;
-            },
-            {},
-          );
+            }, {});
         }
 
         const engine = new Engine<U, P>(connectionManager, {
@@ -299,26 +253,4 @@ export namespace NexusKernelBuilder {
 
     return { build };
   };
-}
-
-function createProviderBatchError(tokenId: string): NexusConfigurationError {
-  const duplicateError = new NexusConfigurationError(
-    `Nexus: Provider token id "${tokenId}" is already registered.`,
-    "E_PROVIDER_DUPLICATE_TOKEN",
-    { tokenId },
-  );
-
-  return new NexusConfigurationError(
-    "Nexus: provider batch registration failed validation.",
-    "E_PROVIDER_BATCH_INVALID",
-    {
-      errors: [
-        {
-          message: duplicateError.message,
-          code: duplicateError.code,
-          context: duplicateError.context,
-        },
-      ],
-    },
-  );
 }

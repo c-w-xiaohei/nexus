@@ -168,13 +168,13 @@ pnpm dev
 ## Nexus Public Usage Style
 
 - Put service contracts and `Token`s in shared code imported by all participating contexts.
-- Prefer `TokenSpace.defaultCreate.target` for hierarchical token IDs and inherited create defaults.
+- Prefer `TokenSpace.defaultTarget` for hierarchical token IDs and inherited create defaults.
 - Import existing service types instead of redefining service shapes inline.
 - Configure every runtime context before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers like `usingBackgroundScript()` and `usingContentScript()` for standard runtime setup.
 - Use `nexus.configure(...)` for runtime bootstrap configuration: custom endpoints, multi-instance tests, policy, matchers, descriptors, and low-level composition.
 - Use `@xxNexus.Expose(...)` for class services, where `xxNexus` is the configured owner instance. Use `xxNexus.provide(...)` for object services, State stores, Relay providers, runtime-created dependencies, and live provider registration.
-- Use `nexus.create(Token)` when a Token `defaultCreate.target` or unique `connectTo` fallback intentionally supplies the target; use explicit targets plus `expects` in introductory debugging or complex topology examples.
+- Use `nexus.create(Token)` when a Token `defaultTarget` or unique `connectTo` fallback intentionally supplies the target; use explicit targets plus `expects` in introductory debugging or complex topology examples.
 - Raw `nexus.create(...)` proxies and refs are session-bound. Recreate them after disconnect, daemon restart, or session replacement.
 - See `.agents/skills/use-nexus/references/usage-style.md` for detailed external usage style.
 
@@ -202,6 +202,7 @@ pnpm dev
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
 - Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
+- While packages are still in `0.x`, use `minor` for breaking public API cleanup unless the supported runtime/install compatibility matrix is actually narrowed.
 - Use `minor` for new public APIs, new subpath exports, optional capabilities, backward-compatible behavior, and first-party packages following compatible `core` capabilities.
 - Use `major` only when users must change code, a public contract is removed or changed, a supported runtime/install combination is truly dropped, or wire protocol/interoperability becomes incompatible.
 - Do not treat `peerDependencies` range edits as major by themselves; bump major only when the supported compatibility matrix is actually narrowed.

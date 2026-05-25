@@ -21,7 +21,7 @@ describe("Engine", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        services: { testService: mockTestService },
+        providers: { testService: mockTestService },
       },
       { meta: { id: "client" } },
     );

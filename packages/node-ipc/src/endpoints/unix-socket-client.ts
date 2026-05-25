@@ -3,10 +3,10 @@ import type { IEndpoint } from "@nexus-js/core";
 import { NodeIpcError } from "../errors";
 import { UnixSocketPort } from "../ports/unix-socket-port";
 import { NodeIpcAddress, type NodeIpcAddressResolver } from "../types/address";
-import type { NodeIpcPlatformMeta, NodeIpcUserMeta } from "../types/meta";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "../types/meta";
 
 type EndpointCapabilities = NonNullable<
-  IEndpoint<NodeIpcUserMeta, NodeIpcPlatformMeta>["capabilities"]
+  IEndpoint<NodeIpcEndpointMeta, NodeIpcPlatformMeta>["capabilities"]
 >;
 
 const createCapabilities = (): EndpointCapabilities => {
@@ -22,7 +22,7 @@ const createCapabilities = (): EndpointCapabilities => {
 };
 
 export class UnixSocketClientEndpoint implements IEndpoint<
-  NodeIpcUserMeta,
+  NodeIpcEndpointMeta,
   NodeIpcPlatformMeta
 > {
   readonly capabilities = createCapabilities();
@@ -39,7 +39,7 @@ export class UnixSocketClientEndpoint implements IEndpoint<
   }
 
   async connect(
-    targetDescriptor: Partial<NodeIpcUserMeta>,
+    targetDescriptor: Partial<NodeIpcEndpointMeta>,
   ): Promise<[UnixSocketPort, NodeIpcPlatformMeta]> {
     validateAuthToken(this.authToken);
     const address = NodeIpcAddress.resolve(

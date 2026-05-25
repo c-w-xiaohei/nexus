@@ -1,6 +1,6 @@
-import type { UserMetadata, PlatformMetadata } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { IEndpoint } from "@/transport";
-import type { TargetCriteria } from "../types/config";
+import type { Target } from "../types/config";
 import type { EndpointRegistrationData } from "../registry";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
@@ -10,7 +10,7 @@ import { z } from "zod";
 /**
  * `@Endpoint` 装饰器的配置选项
  */
-export interface EndpointOptions<U extends UserMetadata> {
+export interface EndpointOptions<U extends EndpointMeta> {
   /**
    * 当前端点的业务身份。
    */
@@ -18,11 +18,11 @@ export interface EndpointOptions<U extends UserMetadata> {
   /**
    * (可选) 声明此端点在初始化时应主动连接的目标。
    */
-  connectTo?: TargetCriteria<U, string, string>[];
+  connectTo?: Target<U, string, string>[];
 }
 
 const EndpointOptionsSchema = z.object({
-  meta: z.custom<UserMetadata>(
+  meta: z.custom<EndpointMeta>(
     (value) => typeof value === "object" && value !== null,
   ),
   connectTo: z
@@ -56,7 +56,7 @@ const EndpointOptionsSchema = z.object({
 
 const validateEndpointOptions = fn(EndpointOptionsSchema, (input) => input);
 
-export type NexusEndpointDecorator<U extends UserMetadata = UserMetadata> = (
+export type NexusEndpointDecorator<U extends EndpointMeta = EndpointMeta> = (
   targetClass: new (...args: unknown[]) => IEndpoint<U, object>,
   context: ClassDecoratorContext,
 ) => void;
@@ -69,19 +69,19 @@ export type NexusEndpointDecorator<U extends UserMetadata = UserMetadata> = (
  */
 export function createEndpointDecorator(registry: {
   registerEndpoint(data: EndpointRegistrationData): void;
-}): <U extends UserMetadata>(
+}): <U extends EndpointMeta>(
   options: EndpointOptions<U>,
 ) => NexusEndpointDecorator<U> {
   return (options) => createEndpointDecoratorForRegistry(registry, options);
 }
 
-export function Endpoint<U extends UserMetadata>(
+export function Endpoint<U extends EndpointMeta>(
   options: EndpointOptions<U>,
 ): NexusEndpointDecorator<U> {
   return nexus.Endpoint(options);
 }
 
-function createEndpointDecoratorForRegistry<U extends UserMetadata>(
+function createEndpointDecoratorForRegistry<U extends EndpointMeta>(
   registry: { registerEndpoint(data: EndpointRegistrationData): void },
   options: EndpointOptions<U>,
 ) {
@@ -95,7 +95,7 @@ function createEndpointDecoratorForRegistry<U extends UserMetadata>(
   }
 
   return function (
-    targetClass: new (...args: unknown[]) => IEndpoint<U, PlatformMetadata>,
+    targetClass: new (...args: unknown[]) => IEndpoint<U, PlatformMeta>,
     context: ClassDecoratorContext,
   ) {
     if (context.kind !== "class") {
@@ -107,7 +107,7 @@ function createEndpointDecoratorForRegistry<U extends UserMetadata>(
     // 阶段一：仅收集注册意图到新的静态类中。
     registry.registerEndpoint({
       targetClass,
-      options: validatedOptions.value as EndpointOptions<UserMetadata>,
+      options: validatedOptions.value as EndpointOptions<EndpointMeta>,
     });
   };
 }
