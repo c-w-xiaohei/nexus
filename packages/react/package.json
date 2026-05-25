@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/react",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "React adapter for Nexus state hooks",
   "private": false,
   "license": "MIT",
@@ -45,7 +45,7 @@
     "typecheck:browser": "tsc --noEmit -p tsconfig.browser.json"
   },
   "peerDependencies": {
-    "@nexus-js/core": ">=1 <2",
+    "@nexus-js/core": ">=0.4.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
