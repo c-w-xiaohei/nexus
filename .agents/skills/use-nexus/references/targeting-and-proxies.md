@@ -2,6 +2,8 @@
 
 Create proxies from configured consumer contexts.
 
+Read `references/identity-and-metadata.md` when Token `defaultTarget`, target descriptors, matchers, or identity replacement depend on `EndpointMeta`; policy may also inspect adapter-provided `PlatformMeta`.
+
 ```ts
 const settings = await nexus.create(SettingsToken, {
   target: {

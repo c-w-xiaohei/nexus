@@ -2,6 +2,8 @@
 
 Define service interfaces and Tokens in shared modules imported by both host and consumer contexts.
 
+Read `references/identity-and-metadata.md` when defining `EndpointMeta` for TokenSpace targeting, Token `defaultTarget`, descriptors, matchers, and identity replacement, or `PlatformMeta` for adapter facts and policy inputs.
+
 ## Tokens
 
 Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultTarget` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.

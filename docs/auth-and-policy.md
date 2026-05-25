@@ -117,9 +117,11 @@ Resource references returned by a service keep the policy snapshot from the serv
 
 Policy decisions are only as strong as the metadata they rely on.
 
-User metadata is logical identity. It is usually declared by the peer and should not be treated as OS-verified unless the adapter documentation says it is verified.
+EndpointMeta is logical identity. It is usually declared by the peer and should not be treated as OS-verified unless the adapter documentation says it is verified.
 
-Platform metadata is adapter-observed data. It can include facts such as the transport address, an authenticated flag, or adapter-specific context information.
+PlatformMeta is adapter-observed data. It can include facts such as the transport address, an authenticated flag, or adapter-specific context information.
+
+See `docs/identity-and-metadata.md` for the full field placement model and trust boundary guidance.
 
 When writing policy:
 
@@ -169,4 +171,5 @@ At a high level:
 
 - Node IPC adapter: `docs/node-ipc/README.md`
 - Core concepts: `docs/concepts.md`
+- Identity and metadata: `docs/identity-and-metadata.md`
 - Platform selection: `docs/platforms.md`

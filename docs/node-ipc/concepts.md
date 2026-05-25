@@ -56,9 +56,9 @@ The common pattern is:
 3. `policy.canConnect` checks `platform.authenticated`
 4. `policy.canCall` checks service access
 
-## User Metadata vs Platform Metadata
+## Endpoint Metadata vs Platform Metadata
 
-User metadata is logical identity declared by the process.
+Endpoint metadata is logical identity declared by the process.
 
 Daemon metadata shape:
 
@@ -93,7 +93,7 @@ Platform metadata is adapter-observed data:
 }
 ```
 
-The adapter does not currently claim OS-verified peer `pid`, `uid`, or `gid`. Treat `pid` in user metadata as diagnostic self-declared data unless peer credential support is implemented later.
+The adapter does not currently claim OS-verified peer `pid`, `uid`, or `gid`. Treat `pid` in endpoint metadata as diagnostic self-declared data unless peer credential support is implemented later.
 
 ## Framing vs Serialization
 

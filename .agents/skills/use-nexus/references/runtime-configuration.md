@@ -2,6 +2,8 @@
 
 Configure every context before useful Nexus work can happen. A host context and a consumer context each need endpoint wiring and identity metadata.
 
+Read `references/identity-and-metadata.md` when choosing what belongs in `endpoint.meta`, adapter helper identity options, `PlatformMeta`, or `updateIdentity(...)` calls.
+
 Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation modules should import the configured instance and use `@xxNexus.Expose(...)` or `xxNexus.provide(...)`; they should not configure endpoints themselves.
 
 ## Adapter Helpers

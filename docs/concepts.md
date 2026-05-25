@@ -25,6 +25,8 @@ Nexus separates compile-time service shape from runtime identity:
 - shared contracts can be imported by multiple contexts
 - consumers create remote proxies from the token, not concrete classes
 
+`EndpointMeta` and `PlatformMeta` are the two typed metadata channels behind runtime identity. Use `EndpointMeta` for self-described product and routing identity, and use `PlatformMeta` for adapter-observed connection facts and adapter-verified security facts when available. See `docs/identity-and-metadata.md` for field placement, trust boundaries, and type-safety guidance.
+
 ## Expose In One Context, Consume In Another
 
 The core Nexus model is:
@@ -244,6 +246,7 @@ Nexus State is a subsystem, not the product root.
 ## Where To Go Next
 
 - Install/setup flow: `docs/getting-started.md`
+- Identity and metadata: `docs/identity-and-metadata.md`
 - Package choices: `docs/packages.md`
 - Platform model: `docs/platforms.md`
 - Nexus Relay: `docs/relay.md`

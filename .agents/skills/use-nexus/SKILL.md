@@ -130,6 +130,7 @@ Start with `references/usage-style.md` for the concise external usage index. Loa
 - `references/shared-contracts.md` - service interfaces, Tokens, `TokenSpace`, and service exposure
 - `references/runtime-configuration.md` - adapter helpers, `nexus.configure(...)`, multi-instance runtimes, and config composition
 - `references/targeting-and-proxies.md` - `nexus.create(...)`, target resolution, descriptors, matchers, proxies, and refs
+- `references/identity-and-metadata.md` - `EndpointMeta`, `PlatformMeta`, field placement, trust boundaries, and metadata consumption
 - `references/adapter-node-ipc.md` - node-ipc daemon/client wiring, `configure: false`, auth gates, and default-target routing
 - `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style
