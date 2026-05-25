@@ -1,6 +1,6 @@
 import type { Target, ServiceProvider } from "@/api/types/config";
 import type { NexusInstance } from "@/api/types";
-import type { Token } from "@/api/token";
+import { Token } from "@/api/token";
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
@@ -270,9 +270,10 @@ export const relayService = <
   UpstreamU extends EndpointMeta,
   UpstreamP extends PlatformMeta,
 >(
-  token: Token<TService>,
+  token: Token<TService, DownstreamU> | Token<TService>,
   options: RelayServiceOptions<DownstreamU, DownstreamP, UpstreamU, UpstreamP>,
-): ServiceProvider<TService> => {
+): ServiceProvider<TService, DownstreamU, DownstreamP> => {
+  const upstreamToken = new Token<TService, UpstreamU>(token.id);
   let activeInvocation: ServiceInvocationContext | undefined;
 
   const createPathProxy = (path: (string | number)[]): unknown =>
@@ -335,9 +336,9 @@ export const relayService = <
         }
 
         try {
-          const upstream = await options.forwardThrough.create(token, {
+          const upstream = await options.forwardThrough.create(upstreamToken, {
             target: options.forwardTarget as any,
-          });
+          } as any);
           let cursor: any = upstream;
           for (const segment of path) {
             cursor = cursor[segment];
@@ -401,14 +402,24 @@ export const relayNexusStore = <
   UpstreamU extends EndpointMeta,
   UpstreamP extends PlatformMeta,
 >(
-  definition: NexusStoreDefinition<TState, TActions>,
+  definition:
+    | NexusStoreDefinition<TState, TActions, DownstreamU>
+    | NexusStoreDefinition<TState, TActions>,
   options: RelayNexusStoreOptions<
     DownstreamU,
     DownstreamP,
     UpstreamU,
     UpstreamP
   >,
-): ServiceProvider<NexusStoreServiceContract<TState, TActions>> => {
+): ServiceProvider<
+  NexusStoreServiceContract<TState, TActions>,
+  DownstreamU,
+  DownstreamP
+> => {
+  const upstreamToken = new Token<
+    NexusStoreServiceContract<TState, TActions>,
+    UpstreamU
+  >(definition.token.id);
   const relayStoreInstanceId = createRelaySessionId();
   let downstreamVersion = 0;
   let latestState: TState | null = null;
@@ -581,9 +592,9 @@ export const relayNexusStore = <
 
     upstreamHandlePromise = (async () => {
       try {
-        const service = (await options.forwardThrough.create(definition.token, {
+        const service = (await options.forwardThrough.create(upstreamToken, {
           target: options.forwardTarget as any,
-        })) as UpstreamStoreHandle<TState, TActions>["service"];
+        } as any)) as UpstreamStoreHandle<TState, TActions>["service"];
 
         service[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?.(() => {
           emitTerminal("source-disconnected");

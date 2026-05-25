@@ -67,7 +67,7 @@ export interface CreateMulticastOptions<
   M extends string,
   D extends string,
 > {
-  target: MulticastTarget<U, M, D>;
+  target?: MulticastTarget<U, M, D> | null;
   expects?: E;
   timeout?: number;
 }
@@ -147,7 +147,7 @@ export function serviceProvider<
   U extends EndpointMeta = EndpointMeta,
   P extends PlatformMeta = PlatformMeta,
 >(
-  token: Token<T, U>,
+  token: Token<T, any>,
   service: T,
   options?: { policy?: AuthorizationPolicy<U, P> },
 ): ServiceProvider<T, U, P> {

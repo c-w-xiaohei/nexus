@@ -26,6 +26,66 @@ export type GetDescriptors<T> = T extends { descriptors: infer D }
   ? keyof D & string
   : never;
 
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
+export type TokenEndpointMeta<TToken> =
+  TToken extends Token<infer _T, infer U> ? U : never;
+
+type TokenEndpointMetaProperty<TToken> = TToken extends {
+  readonly __metadata?: infer U;
+}
+  ? NonNullable<U>
+  : never;
+
+export type TokenService<TToken> =
+  TToken extends Token<infer T, infer _U> ? T : never;
+
+export type RuntimeCreateMetadata<
+  U extends EndpointMeta,
+  TokenU extends EndpointMeta,
+> =
+  IsAny<TokenU> extends true
+    ? never
+    : U extends TokenU
+      ? TokenU
+      : EndpointMeta extends TokenU
+        ? TokenU
+        : never;
+
+export type RuntimeCreateMetadataCheck<
+  U extends EndpointMeta,
+  TokenU extends EndpointMeta,
+> = RuntimeCreateMetadata<U, TokenU> extends never ? [token: never] : [];
+
+export type RuntimeCreateToken<
+  U extends EndpointMeta,
+  TToken extends Token<any, any>,
+> =
+  IsAny<TokenEndpointMetaProperty<TToken>> extends true
+    ? never
+    : U extends TokenEndpointMetaProperty<TToken>
+      ? TToken
+      : EndpointMeta extends TokenEndpointMetaProperty<TToken>
+        ? TToken
+        : never;
+
+export type RuntimeCreateTokenCheck<
+  U extends EndpointMeta,
+  TToken extends Token<any, any>,
+> = RuntimeCreateToken<U, TToken> extends never ? [token: never] : [];
+
+export type RuntimeCreateArgs<
+  U extends EndpointMeta,
+  TToken extends Token<any, any>,
+  O,
+> = RuntimeCreateToken<U, TToken> extends never
+  ? [token: never, options?: O]
+  : [token: TToken, options?: O];
+
+export type RuntimeCreateTokenParam<T extends object, U extends EndpointMeta> =
+  | Token<T, U>
+  | Token<T>;
+
 /**
  * A Nexus-specific version of the standard `PromiseSettledResult`.
  * It provides a typed `reason` for rejected promises.
@@ -110,7 +170,7 @@ export interface NexusInstance<
   >;
 
   provide<T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): this;
@@ -118,7 +178,7 @@ export interface NexusInstance<
   provide(registrations: readonly ServiceProvider<object, U, P>[]): this;
 
   safeProvide<T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<this, Error>;
@@ -143,12 +203,12 @@ export interface NexusInstance<
    * @throws {NexusTargetingError} If a unique connection cannot be found.
    */
   create<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): Promise<Asyncified<T>>;
 
   safeCreate<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): ResultAsync<Asyncified<T>, Error>;
 
@@ -170,8 +230,8 @@ export interface NexusInstance<
       RegisteredDescriptors
     >,
   >(
-    token: Token<T>,
-    options: O,
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
   ): Promise<Allified<T>>;
 
   createMulticast<
@@ -183,8 +243,8 @@ export interface NexusInstance<
       RegisteredDescriptors
     >,
   >(
-    token: Token<T>,
-    options: O,
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
   ): Promise<Streamified<T>>;
 
   safeCreateMulticast<
@@ -196,8 +256,8 @@ export interface NexusInstance<
       RegisteredDescriptors
     >,
   >(
-    token: Token<T>,
-    options: O,
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
   ): ResultAsync<Allified<T>, Error>;
 
   safeCreateMulticast<
@@ -209,8 +269,8 @@ export interface NexusInstance<
       RegisteredDescriptors
     >,
   >(
-    token: Token<T>,
-    options: O,
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
   ): ResultAsync<Streamified<T>, Error>;
 
   /**
@@ -225,7 +285,7 @@ export interface NexusInstance<
   safeRelease(proxy: object): Result<void, Error>;
 
   readonly Expose: <T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     options?: ExposeOptions,
   ) => NexusClassDecorator<T>;
   readonly Endpoint: (options: EndpointOptions<U>) => NexusEndpointDecorator<U>;

@@ -26,7 +26,7 @@ export type EndpointRegistrationData = {
 };
 
 export type DecoratorSnapshot = {
-  providers: ReadonlyMap<Token<object>, ServiceProviderData>;
+  providers: ReadonlyMap<Token<object, any>, ServiceProviderData>;
   endpoint: EndpointRegistrationData | null;
 };
 
@@ -36,7 +36,7 @@ export namespace DecoratorRegistry {
    * Key: Service Token
    * Value: Registration data
    */
-  const servicesMap = new Map<Token<object>, ServiceProviderData>();
+  const servicesMap = new Map<Token<object, any>, ServiceProviderData>();
 
   /**
    * Stores the single endpoint registered via the @Endpoint decorator.
@@ -60,7 +60,7 @@ export namespace DecoratorRegistry {
    * @param data The service's registration metadata.
    */
   export const registerService = (
-    token: Token<object>,
+    token: Token<object, any>,
     data: ServiceProviderData,
   ): void => {
     if (servicesMap.has(token)) {
@@ -97,7 +97,7 @@ export namespace DecoratorRegistry {
 
 export class InstanceDecoratorRegistry {
   private readonly servicesMap = new Map<
-    Token<object>,
+    Token<object, any>,
     ServiceProviderData
   >();
   private readonly serviceTokenIds = new Set<string>();
@@ -115,7 +115,7 @@ export class InstanceDecoratorRegistry {
   }
 
   public registerService(
-    token: Token<object>,
+    token: Token<object, any>,
     data: ServiceProviderData,
   ): void {
     if (this.serviceTokenIds.has(token.id)) {

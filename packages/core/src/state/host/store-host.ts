@@ -8,6 +8,7 @@ import { Result, ResultAsync, err, errAsync, ok } from "neverthrow";
 import type {
   ActionArgs,
   ActionResult,
+  ActionFunction,
   NexusStoreDefinition,
   NexusStoreServiceContract,
   NexusStoreValidationSchemas,
@@ -113,7 +114,7 @@ class StoreHostEntity<
   private readonly actions: TActions;
   private readonly validation?: NexusStoreValidationSchemas<TState, TActions>;
 
-  public constructor(definition: NexusStoreDefinition<TState, TActions>) {
+  public constructor(definition: NexusStoreDefinition<TState, TActions, any>) {
     this.validation = definition.validation;
     const initialSnapshot = this.validateStateOrThrow(
       definition.state(),
@@ -602,9 +603,9 @@ class StoreHostEntity<
 
 export const createStoreHost = <
   TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
+  TActions extends Record<string, ActionFunction>,
 >(
-  definition: NexusStoreDefinition<TState, TActions>,
+  definition: NexusStoreDefinition<TState, TActions, any>,
 ): StoreHostRuntime<TState, TActions> => {
   return new StoreHostEntity(definition);
 };

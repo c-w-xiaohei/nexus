@@ -1,4 +1,7 @@
-import type { NexusInstance } from "@/api/types";
+import type { Asyncified, RuntimeCreateToken } from "@/api/types";
+import type { Token } from "@/api/token";
+import type { CreateOptions } from "@/api/types/config";
+import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import {
   Result,
   ResultAsync,
@@ -30,8 +33,18 @@ import {
 } from "@/types/symbols";
 
 type ActionFunction = (...args: any[]) => any;
-type SafeCreateNexusLike = Pick<NexusInstance<any, any>, "safeCreate">;
-type CreateNexusLike = Pick<NexusInstance<any, any>, "create">;
+type SafeCreateNexusLike<U extends EndpointMeta, P extends PlatformMeta> = {
+  safeCreate<TToken extends Token<any, any>>(
+    token: TToken & RuntimeCreateToken<U, NoInfer<TToken>>,
+    options?: CreateOptions<U, never, never>,
+  ): RA<Asyncified<TToken extends Token<infer T, infer _U> ? T : never>, Error>;
+} & { readonly __platformMeta?: P };
+type CreateNexusLike<U extends EndpointMeta, P extends PlatformMeta> = {
+  create<TToken extends Token<any, any>>(
+    token: TToken & RuntimeCreateToken<U, NoInfer<TToken>>,
+    options?: CreateOptions<U, never, never>,
+  ): Promise<Asyncified<TToken extends Token<infer T, infer _U> ? T : never>>;
+} & { readonly __platformMeta?: P };
 
 type SafeActionError =
   | NexusStoreActionError
@@ -107,10 +120,12 @@ const normalizeConnectHandshakeError = (
 export const safeConnectNexusStore = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 >(
-  nexus: SafeCreateNexusLike,
-  definition: NexusStoreDefinition<TState, TActions>,
-  options: ConnectNexusStoreOptions = {},
+  nexus: SafeCreateNexusLike<U, P>,
+  definition: NexusStoreDefinition<TState, TActions, U>,
+  options: ConnectNexusStoreOptions<U> = {},
 ): RA<
   RemoteStore<TState, TActions>,
   NexusStoreConnectError | NexusStoreProtocolError | NexusStoreDisconnectedError
@@ -145,14 +160,12 @@ export const safeConnectNexusStore = <
   >;
 
   try {
-    safeCreateResult = nexus
-      .safeCreate(definition.token, createOptions as any)
-      .mapErr(
-        (error) =>
-          new NexusStoreConnectError("Failed to create store proxy.", {
-            cause: error,
-          }),
-      ) as RA<
+    safeCreateResult = nexus.safeCreate(definition.token, createOptions).mapErr(
+      (error) =>
+        new NexusStoreConnectError("Failed to create store proxy.", {
+          cause: error,
+        }),
+    ) as RA<
       NexusStoreServiceContract<TState, TActions>,
       NexusStoreConnectError
     >;
@@ -400,18 +413,23 @@ export const safeConnectNexusStore = <
 export const connectNexusStore = async <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
+  U extends EndpointMeta,
+  P extends PlatformMeta,
 >(
-  nexus: SafeCreateNexusLike | CreateNexusLike,
-  definition: NexusStoreDefinition<TState, TActions>,
-  options: ConnectNexusStoreOptions = {},
+  nexus: SafeCreateNexusLike<U, P> | CreateNexusLike<U, P>,
+  definition: NexusStoreDefinition<TState, TActions, U>,
+  options: ConnectNexusStoreOptions<U> = {},
 ): Promise<RemoteStore<TState, TActions>> => {
-  const safeNexus: SafeCreateNexusLike =
+  const safeNexus: SafeCreateNexusLike<U, P> =
     "safeCreate" in nexus
       ? { safeCreate: nexus.safeCreate.bind(nexus) }
       : {
-          safeCreate: (token, createOptions) =>
+          safeCreate: <TToken extends Token<any, any>>(
+            token: TToken & RuntimeCreateToken<U, NoInfer<TToken>>,
+            createOptions?: CreateOptions<U, never, never>,
+          ) =>
             ResultAsync.fromPromise(
-              nexus.create(token as any, createOptions as any),
+              nexus.create<TToken>(token, createOptions),
               (error) =>
                 error instanceof Error ? error : new Error(String(error)),
             ),

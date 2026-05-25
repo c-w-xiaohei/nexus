@@ -46,6 +46,9 @@ export type {
   Asyncified,
   Allified,
   Streamified,
+  RuntimeCreateToken,
+  RuntimeCreateTokenParam,
+  TokenService,
 } from "./api/types"; // Nexus 实例和代理相关类型
 // 错误类
 export {

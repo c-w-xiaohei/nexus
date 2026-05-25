@@ -9,10 +9,7 @@ import type { NexusConfig, ServiceProvider } from "./types/config";
 import type { Token } from "./token";
 import { Transport } from "@/transport";
 import type { NexusMessage } from "@/types/message";
-import type {
-  EndpointRegistrationData,
-  ServiceProviderData,
-} from "./registry";
+import type { EndpointRegistrationData, ServiceProviderData } from "./registry";
 import { NexusConfigurationError } from "@/errors";
 import { TargetResolver } from "./target-resolver";
 import { ResultAsync, errAsync, okAsync } from "neverthrow";
@@ -20,10 +17,7 @@ import { ResultAsync, errAsync, okAsync } from "neverthrow";
 /**
  * A type that represents the assembled L1-L3 kernel components.
  */
-export interface NexusKernel<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
+export interface NexusKernel<U extends EndpointMeta, P extends PlatformMeta> {
   engine: Engine<U, P>;
   connectionManager: ConnectionManager<U, P>;
 }
@@ -41,7 +35,7 @@ export namespace NexusKernelBuilder {
 
   export const create = <U extends EndpointMeta, P extends PlatformMeta>(
     initialConfig: NexusConfig<U, P, string, string>,
-    serviceRegistry: ReadonlyMap<Token<object>, ServiceProviderData>,
+    serviceRegistry: ReadonlyMap<Token<object, any>, ServiceProviderData>,
     endpointRegistration: EndpointRegistrationData | null,
     _nexusInstance: unknown,
     namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
@@ -72,7 +66,10 @@ export namespace NexusKernelBuilder {
         } as NexusConfig<U, P, string, string>;
         finalConfig = {
           ...finalConfig,
-          endpoint: { ...(finalConfig.endpoint ?? {}), ...endpointConfig.endpoint },
+          endpoint: {
+            ...(finalConfig.endpoint ?? {}),
+            ...endpointConfig.endpoint,
+          },
         };
       }
 
@@ -234,12 +231,12 @@ export namespace NexusKernelBuilder {
           servicesForEngine.providers = finalConfig.providers.reduce<
             NonNullable<typeof servicesForEngine.providers>
           >((acc, reg) => {
-              acc[reg.token.id] = {
-                service: reg.service,
-                policy: reg.policy,
-              };
-              return acc;
-            }, {});
+            acc[reg.token.id] = {
+              service: reg.service,
+              policy: reg.policy,
+            };
+            return acc;
+          }, {});
         }
 
         const engine = new Engine<U, P>(connectionManager, {

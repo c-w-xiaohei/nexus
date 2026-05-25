@@ -1,4 +1,5 @@
 import type { ServiceProvider } from "@/api/types/config";
+import type { EndpointMeta } from "@/types/identity";
 import {
   type ServiceInvocationContext,
   SERVICE_INVOKE_END,
@@ -42,9 +43,11 @@ export interface NexusStoreHandle<
 export interface CreateNexusStoreResult<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
+  U extends EndpointMeta,
 > {
   readonly provider: ServiceProvider<
-    NexusStoreServiceContract<TState, TActions>
+    NexusStoreServiceContract<TState, TActions>,
+    U
   >;
   readonly store: NexusStoreHandle<TState, TActions>;
 }
@@ -52,9 +55,10 @@ export interface CreateNexusStoreResult<
 export const createNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
+  U extends EndpointMeta,
 >(
-  definition: NexusStoreDefinition<TState, TActions>,
-): CreateNexusStoreResult<TState, TActions> => {
+  definition: NexusStoreDefinition<TState, TActions, U>,
+): CreateNexusStoreResult<TState, TActions, U> => {
   const host = createStoreHost(definition);
   let destroyed = false;
 

@@ -12,7 +12,7 @@ import type { EndpointMeta, PlatformMeta } from "@/types/identity";
  */
 export type ExposeFactoryContext = {
   targetClass: new (...args: unknown[]) => object;
-  token: Token<object>;
+  token: Token<object, any>;
   localMeta?: EndpointMeta;
 };
 
@@ -64,17 +64,21 @@ const validateExposeInput = fn(
  * @param options （可选）高级配置选项，如 `factory` 用于依赖注入。
  */
 export function createExposeDecorator(registry: {
-  registerService(token: Token<object>, data: ServiceProviderData): void;
+  registerService(token: Token<object, any>, data: ServiceProviderData): void;
 }): <T extends object>(
-  token: Token<T>,
+  token: Token<T, any>,
   options?: ExposeOptions,
 ) => NexusClassDecorator<T> {
   return (token, options) =>
-    createExposeDecoratorForRegistry(registry, token as Token<object>, options);
+    createExposeDecoratorForRegistry(
+      registry,
+      token as Token<object, any>,
+      options,
+    );
 }
 
 export function Expose<T extends object>(
-  token: Token<T>,
+  token: Token<T, any>,
   options?: ExposeOptions,
 ): NexusClassDecorator<T> {
   return nexus.Expose(token, options);
@@ -82,9 +86,9 @@ export function Expose<T extends object>(
 
 function createExposeDecoratorForRegistry(
   registry: {
-    registerService(token: Token<object>, data: ServiceProviderData): void;
+    registerService(token: Token<object, any>, data: ServiceProviderData): void;
   },
-  token: Token<object>,
+  token: Token<object, any>,
   options?: ExposeOptions,
 ) {
   const validatedInput = validateExposeInput(token, options);

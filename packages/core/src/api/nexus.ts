@@ -18,6 +18,7 @@ import type {
   Asyncified,
   Allified,
   Streamified,
+  RuntimeCreateTokenParam,
 } from "./types";
 import type { CreateProxyOptions } from "@/service/proxy-factory";
 import { InstanceDecoratorRegistry, type DecoratorSnapshot } from "./registry";
@@ -87,11 +88,13 @@ const validateCreateMulticastInput = fn(
     ["token", z.object({ id: z.string() })],
     [
       "options",
-      z.object({
-        target: PlainObjectSchema,
-        expects: z.enum(["all", "stream"]).optional(),
-        timeout: z.number().optional(),
-      }),
+      z
+        .object({
+          target: PlainObjectSchema.nullish(),
+          expects: z.enum(["all", "stream"]).optional(),
+          timeout: z.number().optional(),
+        })
+        .optional(),
     ],
   ] as const),
   (token, options) => ({ token, options }),
@@ -105,10 +108,7 @@ const ServiceProviderSchema = z.object({
   policy: z.custom<AuthorizationPolicy<any, any>>().optional(),
 });
 
-type ProviderRegistration<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> = {
+type ProviderRegistration<U extends EndpointMeta, P extends PlatformMeta> = {
   readonly token: Token<object, any>;
   readonly service: object;
   readonly policy?: AuthorizationPolicy<U, P>;
@@ -266,19 +266,17 @@ export class Nexus<
   }
 
   public provide<T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): this;
   public provide<T extends object>(
     registration: ServiceProvider<T, U, P>,
   ): this;
-  public provide(
-    registrations: readonly ServiceProvider<object, U, P>[],
-  ): this;
+  public provide(registrations: readonly ServiceProvider<object, U, P>[]): this;
   public provide<T extends object>(
     tokenOrRegistration:
-      | Token<T>
+      | Token<T, any>
       | ServiceProvider<T, U, P>
       | readonly ServiceProvider<object, U, P>[],
     service?: T,
@@ -286,7 +284,7 @@ export class Nexus<
   ): this {
     return unwrapResultOrThrow(
       this.safeProvide(
-        tokenOrRegistration as Token<T>,
+        tokenOrRegistration as Token<T, any>,
         service as T,
         options,
       ),
@@ -294,7 +292,7 @@ export class Nexus<
   }
 
   public safeProvide<T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     service: T,
     options?: { policy?: AuthorizationPolicy<U, P> },
   ): Result<this, Error>;
@@ -306,7 +304,7 @@ export class Nexus<
   ): Result<this, Error>;
   public safeProvide<T extends object>(
     tokenOrRegistration:
-      | Token<T>
+      | Token<T, any>
       | ServiceProvider<T, U, P>
       | readonly ServiceProvider<object, U, P>[],
     service?: T,
@@ -448,7 +446,7 @@ export class Nexus<
 
   private normalizeProviderInput<T extends object>(
     tokenOrRegistration:
-      | Token<T>
+      | Token<T, any>
       | ServiceProvider<T, U, P>
       | readonly ServiceProvider<object, U, P>[],
     service?: T,
@@ -476,9 +474,7 @@ export class Nexus<
           tokenOrRegistration !== null &&
           "token" in tokenOrRegistration
         ? [tokenOrRegistration]
-        : [
-            { token: tokenOrRegistration, service, policy: options?.policy },
-          ];
+        : [{ token: tokenOrRegistration, service, policy: options?.policy }];
 
     const normalized: ProviderRegistration<U, P>[] = [];
     const validationErrors: Error[] = [];
@@ -613,9 +609,7 @@ export class Nexus<
       namedMatchers: ReadonlyMap<string, (identity: U) => boolean>;
       namedDescriptors: ReadonlyMap<string, Partial<U>>;
       decoratorSnapshot: DecoratorSnapshot;
-      createFallbackConnectTo:
-        | readonly Target<U, string, string>[]
-        | undefined;
+      createFallbackConnectTo: readonly Target<U, string, string>[] | undefined;
     },
     Error
   > {
@@ -741,9 +735,7 @@ export class Nexus<
     namedMatchers: ReadonlyMap<string, (identity: U) => boolean>;
     namedDescriptors: ReadonlyMap<string, Partial<U>>;
     decoratorSnapshot: DecoratorSnapshot;
-    createFallbackConnectTo:
-      | readonly Target<U, string, string>[]
-      | undefined;
+    createFallbackConnectTo: readonly Target<U, string, string>[] | undefined;
   }): ResultAsync<void, Error> {
     if (this.engine) {
       return okAsync(undefined);
@@ -821,15 +813,22 @@ export class Nexus<
    * @throws {NexusTargetingError} If no connection is found or multiple connections are found that do not meet expectations
    */
   public async create<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
   ): Promise<Asyncified<T>> {
-    return unwrapResultAsyncOrThrow(this.safeCreate(token, options));
+    return unwrapResultAsyncOrThrow(this.safeCreateUnsafe(token, options));
   }
 
   public safeCreate<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
+  ): ResultAsync<Asyncified<T>, Error> {
+    return this.safeCreateUnsafe(token, options);
+  }
+
+  private safeCreateUnsafe<T extends object>(
+    token: Token<T, U> | Token<T>,
+    options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): ResultAsync<Asyncified<T>, Error> {
     const validatedInput = validateCreateInput(token, options);
     if (validatedInput.isErr()) {
@@ -952,7 +951,10 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(token: Token<T>, options: O): Promise<Allified<T>>;
+  >(
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
+  ): Promise<Allified<T>>;
   public createMulticast<
     T extends object,
     const O extends CreateMulticastOptions<
@@ -961,15 +963,18 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(token: Token<T>, options: O): Promise<Streamified<T>>;
+  >(
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
+  ): Promise<Streamified<T>>;
   public async createMulticast<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options: CreateMulticastOptions<
       U,
       "all" | "stream",
       RegisteredMatchers,
       RegisteredDescriptors
-    >,
+    > = {},
   ): Promise<Allified<T> | Streamified<T>> {
     return unwrapResultAsyncOrThrow(
       this.safeCreateMulticastCore(token, options),
@@ -977,7 +982,7 @@ export class Nexus<
   }
 
   private safeCreateMulticastCore<T extends object>(
-    token: Token<T>,
+    token: Token<T, U> | Token<T>,
     options: CreateMulticastOptions<
       U,
       "all" | "stream",
@@ -997,11 +1002,29 @@ export class Nexus<
     }
 
     const validatedToken = token;
-    const validatedOptions = options;
+    const validatedOptions = options ?? {};
 
     return this.safeEnsureKernelReady().andThen(({ engine }) => {
-      const resolvedTarget = TargetResolver.resolveNamedTarget(
+      const finalTargetResult = TargetResolver.resolveUnicastTarget(
         validatedOptions.target,
+        validatedToken.defaultTarget as
+          | CreateMulticastOptions<
+              U,
+              "all" | "stream",
+              RegisteredMatchers,
+              RegisteredDescriptors
+            >["target"]
+          | undefined,
+        undefined,
+        validatedToken.id,
+      );
+
+      if (finalTargetResult.isErr()) {
+        return errAsync(finalTargetResult.error);
+      }
+
+      const resolvedTarget = TargetResolver.resolveNamedTarget(
+        finalTargetResult.value,
         this.namedDescriptors,
         this.namedMatchers,
       );
@@ -1032,7 +1055,10 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(token: Token<T>, options: O): ResultAsync<Allified<T>, Error>;
+  >(
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
+  ): ResultAsync<Allified<T>, Error>;
   public safeCreateMulticast<
     T extends object,
     const O extends CreateMulticastOptions<
@@ -1041,15 +1067,18 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(token: Token<T>, options: O): ResultAsync<Streamified<T>, Error>;
+  >(
+    token: RuntimeCreateTokenParam<T, U>,
+    options?: O,
+  ): ResultAsync<Streamified<T>, Error>;
   public safeCreateMulticast<T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options: CreateMulticastOptions<
       U,
       "all" | "stream",
       RegisteredMatchers,
       RegisteredDescriptors
-    >,
+    > = {},
   ): ResultAsync<Allified<T> | Streamified<T>, Error> {
     return this.safeCreateMulticastCore(token, options);
   }
