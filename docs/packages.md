@@ -97,6 +97,7 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 - `@nexus-js/react`
   - React bindings for Nexus State
+  - Provides `createRemoteStoreScope(...)` for provider-based shared remote store connections plus low-level hooks for direct connections and selectors
   - Depends on `@nexus-js/core` and works with stores imported from `@nexus-js/core/state`
 
 ## Testing Package

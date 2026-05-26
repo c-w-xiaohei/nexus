@@ -6,6 +6,7 @@ This Nexus State guide covers `@nexus-js/react`.
 
 ```ts
 import {
+  createRemoteStoreScope,
   NexusProvider,
   useNexus,
   useRemoteStore,
@@ -33,9 +34,60 @@ const nexus = useNexus();
 
 It fails fast outside `NexusProvider` on purpose.
 
+## `createRemoteStoreScope()`
+
+Recommended React pattern for shared remote stores. Declare the store connection once near the subtree that needs it, then consume selector, actions, status, or the raw remote result from children.
+
+```tsx
+import { createRemoteStoreScope } from "@nexus-js/react";
+import { counterStore } from "./counter-store";
+
+const CounterScope = createRemoteStoreScope(counterStore);
+
+function CounterPanel() {
+  return (
+    <CounterScope.Provider
+      options={{ target: { descriptor: { context: "background" } } }}
+    >
+      <CounterButton />
+      <CounterStatus />
+    </CounterScope.Provider>
+  );
+}
+
+function CounterButton() {
+  const count = CounterScope.useSelector((state) => state.count, {
+    fallback: 0,
+  });
+  const actions = CounterScope.useActions();
+  const status = CounterScope.useStatus();
+
+  if (!actions || status.type !== "ready") {
+    return <button disabled>{count}</button>;
+  }
+
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
+}
+
+function CounterStatus() {
+  const status = CounterScope.useStatus();
+  const error = CounterScope.useError();
+
+  if (status.type === "disconnected") {
+    return <span>Disconnected: {error?.message}</span>;
+  }
+
+  return <span>{status.type}</span>;
+}
+```
+
+Scope hooks fail fast outside `RemoteStoreScope.Provider`. The scope provider still depends on `NexusProvider` because it delegates to `useRemoteStore()` internally.
+
+The scope does not add a registry, retry manager, replay policy, or action fallback. `useActions()` returns `null` until the underlying remote store exists, so callers keep explicit control over disabled UI, recovery, and replay decisions.
+
 ## `useRemoteStore()`
 
-Main hook for connecting to a remote Nexus State store.
+Low-level hook for connecting directly to a remote Nexus State store. Use it when one component owns the connection lifecycle or when you need direct composition around the raw remote result. For shared subtree usage, prefer `createRemoteStoreScope()` so leaf components do not each start their own store connection.
 
 ```tsx
 const remote = useRemoteStore(counterStore, {
@@ -62,7 +114,34 @@ type UseRemoteStoreResult<TState, TActions> = {
 
 ## Loading And Error UI
 
-The simplest pattern is to branch on `status`, `store`, and `error` directly.
+With a scope, branch on `useStatus()`, `useActions()`, and `useError()` in the leaf components that render lifecycle UI.
+
+```tsx
+function CounterView() {
+  const count = CounterScope.useSelector((state) => state.count, {
+    fallback: 0,
+  });
+  const actions = CounterScope.useActions();
+  const status = CounterScope.useStatus();
+  const error = CounterScope.useError();
+
+  if (status.type === "initializing") {
+    return <span>Loading...</span>;
+  }
+
+  if (status.type === "disconnected") {
+    return <span>Disconnected: {error?.message}</span>;
+  }
+
+  if (!actions || status.type !== "ready") {
+    return <span>Unavailable</span>;
+  }
+
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
+}
+```
+
+For direct low-level usage, branch on `status`, `store`, and `error` from `useRemoteStore()`.
 
 ```tsx
 function CounterView() {
@@ -101,6 +180,8 @@ const count = useStoreSelector(remote, (state) => state.count, {
   fallback: 0,
 });
 ```
+
+When using a remote store scope, prefer `CounterScope.useSelector(...)`; it delegates to this hook with the shared remote result from context.
 
 ### Fallback semantics
 
@@ -170,22 +251,30 @@ This preserves the raw core rule (old handle is terminal) while giving React a c
 ## Example
 
 ```tsx
-function Counter() {
-  const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
-  });
+const CounterScope = createRemoteStoreScope(counterStore);
 
-  const count = useStoreSelector(remote, (state) => state.count, {
+function Counter() {
+  return (
+    <CounterScope.Provider
+      options={{ target: { descriptor: { context: "background" } } }}
+    >
+      <CounterButton />
+    </CounterScope.Provider>
+  );
+}
+
+function CounterButton() {
+  const count = CounterScope.useSelector((state) => state.count, {
     fallback: 0,
   });
+  const actions = CounterScope.useActions();
+  const status = CounterScope.useStatus();
 
-  if (!remote.store || remote.status.type !== "ready") {
+  if (!actions || status.type !== "ready") {
     return <span>Loading...</span>;
   }
 
-  return (
-    <button onClick={() => remote.store.actions.increment(1)}>{count}</button>
-  );
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
 }
 ```
 
