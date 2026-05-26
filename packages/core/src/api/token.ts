@@ -9,6 +9,7 @@ export interface TokenOptions<U extends EndpointMeta = EndpointMeta> {
 export class Token<T, U extends EndpointMeta = EndpointMeta> {
   declare readonly __shape?: T;
   declare readonly __metadata?: U;
+  declare __metadataInvariant: (metadata: U) => U;
 
   public readonly id: string;
   public readonly defaultTarget?: InlineTarget<U>;
@@ -53,7 +54,9 @@ export function validateDefaultTarget(target: unknown): void {
   const matcher = input.matcher;
   const descriptorIsInvalid =
     hasDescriptor &&
-    (descriptor === null || typeof descriptor !== "object" || Array.isArray(descriptor));
+    (descriptor === null ||
+      typeof descriptor !== "object" ||
+      Array.isArray(descriptor));
   const matcherIsInvalid = hasMatcher && typeof matcher !== "function";
 
   if (descriptorIsInvalid || matcherIsInvalid) {

@@ -5,9 +5,11 @@ import type { CreateOptions } from "@/api/types/config";
 import type { InlineTarget } from "@/api/types/config";
 import type { EndpointMeta } from "@/types/identity";
 import type {
+  ActionFunction,
   NexusStoreDefinition,
   NexusStoreServiceContract,
   NexusStoreValidationSchemas,
+  StoreTokenMetadata,
   StoreActionHelpers,
 } from "./types";
 import { createTargetSchema } from "./target-schema";
@@ -33,7 +35,12 @@ export const DefineNexusStoreSchema = z.object({
       state: z
         .custom<{
           safeParse: (value: unknown) => { success: boolean };
-        }>((value) => typeof value === "object" && value !== null && typeof (value as { safeParse?: unknown }).safeParse === "function")
+        }>(
+          (value) =>
+            typeof value === "object" &&
+            value !== null &&
+            typeof (value as { safeParse?: unknown }).safeParse === "function",
+        )
         .optional(),
       actionResults: z
         .record(
@@ -57,7 +64,7 @@ export type DefineNexusStoreSchemaInput = z.input<
 
 export type DefineNexusStoreOptions<
   TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
+  TActions extends Record<string, ActionFunction>,
   U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
@@ -65,35 +72,81 @@ export type DefineNexusStoreOptions<
   DefineNexusStoreSchemaInput,
   "token" | "state" | "actions" | "defaultTarget" | "validation"
 > & {
-  token: Token<NexusStoreServiceContract<TState, TActions>>;
+  token: Token<NexusStoreServiceContract<TState, TActions>, U>;
   state: () => TState;
   actions: (helpers: StoreActionHelpers<TState>) => TActions;
   defaultTarget?: CreateOptions<U, M, D>["target"];
   validation?: NexusStoreValidationSchemas<TState, TActions>;
 };
 
-const normalizeTokenDefaultTarget = <
+export type DefineNexusStoreOptionsWithToken<
   TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
->(
-  token: Token<NexusStoreServiceContract<TState, TActions>>,
-  defaultTarget: CreateOptions<any, any, any>["target"],
-): Token<NexusStoreServiceContract<TState, TActions>> => {
-  return new Token<NexusStoreServiceContract<TState, TActions>>(
-    token.id,
-    { defaultTarget: (defaultTarget ?? undefined) as InlineTarget<object> | undefined },
-  );
+  TActions extends Record<string, ActionFunction>,
+  TToken extends Token<NexusStoreServiceContract<TState, TActions>, any>,
+  M extends string = string,
+  D extends string = string,
+> = Omit<
+  DefineNexusStoreOptions<TState, TActions, StoreTokenMetadata<TToken>, M, D>,
+  "token"
+> & {
+  token: TToken;
 };
 
-export const defineNexusStore = <
+const normalizeTokenDefaultTarget = <
   TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
+  TActions extends Record<string, ActionFunction>,
+  U extends EndpointMeta,
+>(
+  token: Token<NexusStoreServiceContract<TState, TActions>, U>,
+  defaultTarget: CreateOptions<any, any, any>["target"],
+): Token<NexusStoreServiceContract<TState, TActions>, U> => {
+  return new Token<NexusStoreServiceContract<TState, TActions>, U>(token.id, {
+    defaultTarget: (defaultTarget ?? undefined) as InlineTarget<U> | undefined,
+  });
+};
+
+export function defineNexusStore<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+  const TOptions extends DefineNexusStoreOptionsWithToken<
+    TState,
+    TActions,
+    Token<NexusStoreServiceContract<TState, TActions>, any>
+  > = DefineNexusStoreOptionsWithToken<
+    TState,
+    TActions,
+    Token<NexusStoreServiceContract<TState, TActions>, any>
+  >,
+  TToken extends TOptions["token"] = TOptions["token"],
+  U extends EndpointMeta = StoreTokenMetadata<TToken>,
+>(options: TOptions): NexusStoreDefinition<TState, TActions, U>;
+export function defineNexusStore<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+  TToken extends Token<NexusStoreServiceContract<TState, TActions>, any>,
+  M extends string = string,
+  D extends string = string,
+>(
+  options: DefineNexusStoreOptionsWithToken<TState, TActions, TToken, M, D>,
+): NexusStoreDefinition<TState, TActions, StoreTokenMetadata<TToken>>;
+export function defineNexusStore<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
   U extends EndpointMeta = EndpointMeta,
   M extends string = string,
   D extends string = string,
 >(
   options: DefineNexusStoreOptions<TState, TActions, U, M, D>,
-): NexusStoreDefinition<TState, TActions> => {
+): NexusStoreDefinition<TState, TActions, U>;
+export function defineNexusStore<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+  U extends EndpointMeta = EndpointMeta,
+  M extends string = string,
+  D extends string = string,
+>(
+  options: DefineNexusStoreOptions<TState, TActions, U, M, D>,
+): NexusStoreDefinition<TState, TActions, U> {
   const parsed = DefineNexusStoreSchema.safeParse(options);
   if (!parsed.success) {
     throw new NexusUsageError(
@@ -104,7 +157,10 @@ export const defineNexusStore = <
   }
 
   const token = options.defaultTarget
-    ? normalizeTokenDefaultTarget(options.token, options.defaultTarget)
+    ? normalizeTokenDefaultTarget<TState, TActions, U>(
+        options.token,
+        options.defaultTarget,
+      )
     : options.token;
 
   return {
@@ -114,4 +170,4 @@ export const defineNexusStore = <
     sync: options.sync,
     validation: options.validation,
   };
-};
+}

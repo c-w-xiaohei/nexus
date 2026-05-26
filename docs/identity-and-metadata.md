@@ -164,5 +164,6 @@ The `context`, `tenantId`, `region`, and `capabilities` fields are `EndpointMeta
 - Treat `remoteIdentity` as peer-declared unless your adapter documents stronger guarantees.
 - Put shared metadata types next to shared Tokens so every context imports the same model.
 - Use `new TokenSpace<EndpointMeta, PlatformMeta>({ name: "..." })` and instance `.space("...")` calls so token defaults, descriptors, and matchers stay type-aligned.
+- Runtime-specific tokens keep their endpoint metadata through Nexus public APIs. A `Token<Service, ChromeEndpointMeta>` can be provided, exposed, registered as a store provider, and passed to a Chrome-typed runtime without an adapter-local cast or `asRuntimeToken` shim. Calls that read `token.defaultTarget`, such as `create(...)`, still reject tokens from unrelated endpoint metadata domains.
 - Use `updateIdentity(...)` only for changes that affect routing, policy, diagnostics, or lifecycle behavior.
 - Recreate raw `nexus.create(...)` proxies after session replacement, connection loss, or identity changes that should retarget future calls.

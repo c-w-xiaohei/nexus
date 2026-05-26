@@ -109,7 +109,7 @@ await profile.update({ name: "Ada" });
 
 The iframe child does not know about the upstream Chrome graph. It calls an adjacent provider in the iframe graph.
 
-Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token `defaultTarget` is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token defaultTarget; configure `forwardThrough` and `forwardTarget` explicitly.
+Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token `defaultTarget` is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token defaultTarget; configure `forwardThrough` and `forwardTarget` explicitly. Internally, relay forwards through a no-default upstream token with the same id, so downstream token metadata and defaults do not leak into upstream targeting.
 
 ### Service Relay Semantics
 

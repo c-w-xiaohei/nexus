@@ -12,7 +12,10 @@ import type {
 } from "./protocol";
 import type { ServiceInvocationContext } from "@/service/service-invocation-hooks";
 
-type ActionFunction = (...args: any[]) => any;
+export type ActionFunction = (...args: any[]) => any;
+
+export type StoreTokenMetadata<TToken> =
+  TToken extends Token<infer _T, infer U> ? U : never;
 
 export type ActionArgs<
   TActions extends Record<string, ActionFunction>,
@@ -74,8 +77,9 @@ export interface NexusStoreServiceContract<
 export interface NexusStoreDefinition<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
+  U extends EndpointMeta = EndpointMeta,
 > {
-  token: Token<NexusStoreServiceContract<TState, TActions>>;
+  token: Token<NexusStoreServiceContract<TState, TActions>, U>;
   state: () => TState;
   actions: (helpers: StoreActionHelpers<TState>) => TActions;
   sync?: {

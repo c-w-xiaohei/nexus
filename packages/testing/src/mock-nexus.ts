@@ -9,6 +9,7 @@ import {
   type NexusConfig,
   type NexusInstance,
   type PlatformMeta,
+  type RuntimeCreateTokenParam,
   type Target,
 } from "@nexus-js/core";
 import { err, errAsync, ok, okAsync, type Result } from "neverthrow";
@@ -65,12 +66,12 @@ export interface MockNexus<
     RegisteredMatchers,
     RegisteredDescriptors
   >;
-  service<T extends object>(token: Token<T>, implementation: T): void;
-  failCreate<T extends object>(token: Token<T>, error: Error): void;
-  clear<T extends object>(token?: Token<T>): void;
+  service<T extends object>(token: Token<T, any>, implementation: T): void;
+  failCreate<T extends object>(token: Token<T, any>, error: Error): void;
+  clear<T extends object>(token?: Token<T, any>): void;
   readonly calls: {
     create<T extends object>(
-      token?: Token<T>,
+      token?: Token<T, any>,
     ): readonly MockNexusCreateCall<
       U,
       RegisteredMatchers,
@@ -129,7 +130,7 @@ const isPlainRuntimeObject = (
 ): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isToken = <T extends object>(token: unknown): token is Token<T> =>
+const isToken = <T extends object>(token: unknown): token is Token<T, any> =>
   token instanceof Token;
 
 const resolveNamedTarget = <U extends EndpointMeta>(
@@ -249,7 +250,7 @@ export function createMockNexus<
   let policy: NexusConfig<U, P>["policy"] | undefined;
 
   const registerService = <T extends object>(
-    token: Token<T>,
+    token: Token<T, any>,
     implementation: T,
   ): void => {
     services.set(token.id, {
@@ -263,13 +264,13 @@ export function createMockNexus<
     M extends string = RegisteredMatchers,
     D extends string = RegisteredDescriptors,
   >(
-    token: Token<T> | unknown,
+    token: Token<T, U> | unknown,
     options: CreateOptions<U, M, D> | unknown = {},
   ): Result<Asyncified<T>, Error> => {
     if (!isToken<T>(token)) {
       return err(invalidTokenError());
     }
-    const typedToken = token as unknown as Token<T, U>;
+    const typedToken = token;
     if (!isPlainRuntimeObject(options)) {
       return err(invalidCreateOptionsError());
     }
@@ -339,9 +340,7 @@ export function createMockNexus<
     const registered = services.get(typedToken.id);
     if (!registered) return err(serviceNotFoundError(typedToken.id));
 
-    return ok<Asyncified<T>, Error>(
-      createAsyncProxy(registered.service as T),
-    );
+    return ok<Asyncified<T>, Error>(createAsyncProxy(registered.service as T));
   };
 
   const configure = <const T extends NexusConfig<U, P>>(
@@ -447,7 +446,7 @@ export function createMockNexus<
     unwrapResultOrThrow(safeConfigure(config));
 
   const create = async <T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ): Promise<Asyncified<T>> => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
@@ -459,7 +458,7 @@ export function createMockNexus<
   };
 
   const safeCreate = <T extends object>(
-    token: Token<T>,
+    token: RuntimeCreateTokenParam<T, U>,
     options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
   ) => {
     const result = resolveCreate<T, RegisteredMatchers, RegisteredDescriptors>(
