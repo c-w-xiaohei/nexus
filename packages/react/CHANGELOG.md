@@ -1,5 +1,11 @@
 # @nexus-js/react
 
+## 0.3.1
+
+### Patch Changes
+
+- 9e2e79c: Allow React 19 applications to install the React bindings without peer dependency conflicts.
+
 ## 0.3.0
 
 ### Minor Changes
