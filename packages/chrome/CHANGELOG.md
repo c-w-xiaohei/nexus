@@ -1,5 +1,12 @@
 # @nexus-js/chrome
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [7ddeeb7]
+  - @nexus-js/core@0.5.0
+
 ## 0.3.0
 
 ### Minor Changes
