@@ -35,11 +35,14 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or bootstrap bulk compatibility.
 - For class-style services, import the concrete runtime instance and use `@xxNexus.Expose(Token)`.
 - For function/object-style providers, helper outputs, State, Relay, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
+- For React Nexus State subtree sharing, prefer `createRemoteStoreScope(...)` from `@nexus-js/react`: let the scope provider create one shared remote store connection and let leaf components consume `useSelector`, `useActions`, `useStatus`, and `useError` from that scope.
+- Keep `useRemoteStore(...)` plus `useStoreSelector(...)` for low-level or direct-handle React usage where one component intentionally owns the remote store lifecycle.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
 - Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
 - Keep explicit targets in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on Token `defaultTarget` or unique `connectTo` fallback.
 - Use `createMockNexus()` from `@nexus-js/testing` for application unit tests at the `NexusInstance` seam; do not use it to claim adapter, transport, authorization, reload, restart, or real lifecycle coverage.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
+- Do not add consumer-side import shims, preload wrappers, or dynamic-import facades around `@nexus-js/react` unless you have verified a published package import-time compatibility bug. The normal expectation is that static imports from `@nexus-js/react` work directly.
 
 ## Focused References
 

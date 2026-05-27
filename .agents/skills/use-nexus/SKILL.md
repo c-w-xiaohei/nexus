@@ -24,6 +24,8 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - Use `new Nexus()` with a named instance such as `backgroundNexus`, `iframeParentNexus`, or `brokerNexus` for multi-instance runtimes; bind decorators and providers to that specific instance.
 - Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
 - Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
+- For React Nexus State subtree sharing, prefer `createRemoteStoreScope(...)` from `@nexus-js/react` so one provider owns a remote store connection and leaf components consume selectors, actions, status, and errors from that shared scope.
+- Keep `useRemoteStore(...)` and `useStoreSelector(...)` as the low-level React path for components that intentionally own a direct remote handle lifecycle or need custom orchestration around the raw remote result.
 - Keep explicit targets in introductory `nexus.create(...)` examples. When relying on Token `defaultTarget` or a unique `connectTo` fallback, call `nexus.create(Token)` directly.
 - For Nexus State providers, use `const { provider, store } = createNexusStore(definition)`: pass `provider` through `nexus.configure({ providers: [provider] })` or `providers: [provider]`, and use `store` only for same-context authoritative consumption.
 - Use `createMockNexus()` from `@nexus-js/testing` for user-level unit tests of code that consumes a `NexusInstance`; use adapter or integration tests for transport, connection, auth, reload, restart, or lifecycle semantics.
@@ -134,7 +136,7 @@ Start with `references/usage-style.md` for the concise external usage index. Loa
 - `references/adapter-node-ipc.md` - node-ipc daemon/client wiring, `configure: false`, auth gates, and default-target routing
 - `references/adapter-iframe.md` - iframe parent/child setup, origins, nonce, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization boundaries, lifecycle, and documentation style
-- `references/testing.md` - `createMockNexus()`, React provider injection, call assertions, and testing boundaries
+- `references/testing.md` - `createMockNexus()`, React provider/scope testing patterns, call assertions, and testing boundaries
 
 Also point readers to the public GitHub docs when they need more context. Prefer exact links over vague repository references:
 

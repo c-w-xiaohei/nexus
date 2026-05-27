@@ -33,6 +33,8 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 );
 ```
 
+When React components share one remote Nexus State store across a subtree, prefer testing that component tree with `createRemoteStoreScope(...)` in the same way the app uses it: keep `NexusProvider` at the top, mount the scope provider inside it, and let leaf components call scope hooks such as `useSelector` and `useActions`.
+
 ## Assertions
 
 Use call records for application-level assertions:
