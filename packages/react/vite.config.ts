@@ -3,6 +3,14 @@ import dts from "vite-plugin-dts";
 import reactSwc from "@vitejs/plugin-react-swc";
 import path from "path";
 
+const externalPackages = ["react", "react-dom", "@nexus-js/core"];
+
+const isExternalDependency = (id: string) => {
+  return externalPackages.some(
+    (packageName) => id === packageName || id.startsWith(`${packageName}/`),
+  );
+};
+
 export default defineConfig({
   plugins: [
     reactSwc(),
@@ -19,12 +27,7 @@ export default defineConfig({
       fileName: (format) => `index.${format === "es" ? "mjs" : "js"}`,
     },
     rollupOptions: {
-      external: [
-        "react",
-        "react-dom",
-        "@nexus-js/core",
-        "@nexus-js/core/state",
-      ],
+      external: isExternalDependency,
       output: {
         globals: {
           react: "React",
