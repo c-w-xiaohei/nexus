@@ -1,5 +1,15 @@
 # @nexus-js/react
 
+## 0.4.0
+
+### Minor Changes
+
+- 0bada0f: Add `createRemoteStoreScope(...)` for provider-based shared remote store connections in React subtrees.
+
+### Patch Changes
+
+- 2b0808a: Fix React 19 import-time compatibility by externalizing React and ReactDOM subpath runtime imports from the published bundle.
+
 ## 0.3.1
 
 ### Patch Changes
