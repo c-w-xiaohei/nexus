@@ -7,6 +7,7 @@ import type {
   RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { NexusProvider } from "./provider";
+import { createRemoteStoreScope } from "./create-remote-store-scope";
 import { useNexus } from "./use-nexus";
 import { useRemoteStore } from "./use-remote-store";
 import { useStoreSelector } from "./use-store-selector";
@@ -144,9 +145,161 @@ describe("react adapter", () => {
     const entry = await import("./index");
 
     expect(typeof entry.NexusProvider).toBe("function");
+    expect(typeof entry.createRemoteStoreScope).toBe("function");
     expect(typeof entry.useNexus).toBe("function");
     expect(typeof entry.useRemoteStore).toBe("function");
     expect(typeof entry.useStoreSelector).toBe("function");
+  });
+
+  it("remote store scope Provider connects once and shares result, actions, and status", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+    const remote = createFakeRemoteStore(
+      { count: 5 },
+      { type: "ready", storeInstanceId: "instance:scope", version: 5 },
+    );
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const CounterScope = createRemoteStoreScope(definition);
+    const startCalls = connectSpy.mock.calls.length;
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus as never}>
+        <CounterScope.Provider options={{ target: { descriptor: "bg" } }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
+
+    const { result } = renderHook(
+      () => {
+        const firstRemote = CounterScope.useRemoteStore();
+        const secondRemote = CounterScope.useRemoteStore();
+        const firstActions = CounterScope.useActions();
+        const secondActions = CounterScope.useActions();
+        const status = CounterScope.useStatus();
+
+        return {
+          firstRemote,
+          secondRemote,
+          firstActions,
+          secondActions,
+          status,
+        };
+      },
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.firstRemote.store).toBe(remote);
+      expect(result.current.secondRemote.store).toBe(remote);
+      expect(result.current.firstActions).toBe(remote.actions);
+      expect(result.current.secondActions).toBe(remote.actions);
+      expect(result.current.status.type).toBe("ready");
+    });
+    expect(getConnectCallsFrom(startCalls)).toBe(1);
+  });
+
+  it("remote store scope useSelector subscribes to the shared store", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+    const remote = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:selector", version: 1 },
+    );
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const CounterScope = createRemoteStoreScope(definition);
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus as never}>
+        <CounterScope.Provider options={{ target: { descriptor: "bg" } }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
+
+    const { result } = renderHook(
+      () => CounterScope.useSelector((state) => state.count, { fallback: -1 }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).toBe(1);
+    });
+
+    remote.pushState({ count: 2 });
+
+    await waitFor(() => {
+      expect(result.current).toBe(2);
+    });
+  });
+
+  it("remote store scope useActions returns null before ready and actions after ready", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:actions", version: 0 },
+    );
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const CounterScope = createRemoteStoreScope(definition);
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus as never}>
+        <CounterScope.Provider options={{ target: { descriptor: "bg" } }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
+
+    const { result } = renderHook(() => CounterScope.useActions(), { wrapper });
+
+    expect(result.current).toBeNull();
+
+    await waitFor(() => {
+      expect(result.current).toBe(remote.actions);
+    });
+  });
+
+  it("remote store scope hooks fail fast outside scope Provider", () => {
+    const CounterScope = createRemoteStoreScope(definition);
+
+    expect(() => renderHook(() => CounterScope.useRemoteStore())).toThrowError(
+      /RemoteStoreScope\.Provider/i,
+    );
+    expect(() =>
+      renderHook(() =>
+        CounterScope.useSelector((state) => state.count, { fallback: -1 }),
+      ),
+    ).toThrowError(/RemoteStoreScope\.Provider/i);
+    expect(() => renderHook(() => CounterScope.useActions())).toThrowError(
+      /RemoteStoreScope\.Provider/i,
+    );
+    expect(() => renderHook(() => CounterScope.useStatus())).toThrowError(
+      /RemoteStoreScope\.Provider/i,
+    );
+    expect(() => renderHook(() => CounterScope.useError())).toThrowError(
+      /RemoteStoreScope\.Provider/i,
+    );
+  });
+
+  it("remote store scope Provider requires NexusProvider through useRemoteStore", () => {
+    const CounterScope = createRemoteStoreScope(definition);
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <CounterScope.Provider>{children}</CounterScope.Provider>
+    );
+
+    expect(() =>
+      renderHook(() => CounterScope.useStatus(), { wrapper }),
+    ).toThrowError(/NexusProvider/i);
   });
 
   it("NexusProvider exposes nexus instance", () => {

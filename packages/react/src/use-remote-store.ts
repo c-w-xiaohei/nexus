@@ -57,13 +57,13 @@ const toMatcherKey = (matcher: unknown): string | null => {
   return next;
 };
 
-const toTargetKey = (options: ConnectNexusStoreOptions): string =>
+const toTargetKey = (options: ConnectNexusStoreOptions<any>): string =>
   JSON.stringify({
     descriptor: options.target?.descriptor ?? null,
     matcher: toMatcherKey(options.target?.matcher),
   });
 
-const toOptionKey = (options: ConnectNexusStoreOptions): string =>
+const toOptionKey = (options: ConnectNexusStoreOptions<any>): string =>
   JSON.stringify({
     timeout: options.timeout ?? null,
     target: JSON.parse(toTargetKey(options)),
@@ -92,9 +92,10 @@ const clearStoreStale = (target: RemoteStore<any, any>): void => {
 export const useRemoteStore = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
+  U extends object = object,
 >(
-  definition: NexusStoreDefinition<TState, TActions>,
-  options: ConnectNexusStoreOptions = {},
+  definition: NexusStoreDefinition<TState, TActions, U>,
+  options: ConnectNexusStoreOptions<U> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
   const nexus = useNexus();
   const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(

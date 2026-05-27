@@ -230,38 +230,38 @@ If you only need the Nexus State headless runtime, you can stop after step 4.
 If you are building a React app, wrap your tree with `NexusProvider` first.
 
 ```tsx
-import {
-  NexusProvider,
-  useRemoteStore,
-  useStoreSelector,
-} from "@nexus-js/react";
+import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
+
+const CounterScope = createRemoteStoreScope(counterStore);
 
 function App() {
   return (
     <NexusProvider nexus={nexus}>
-      <CounterView />
+      <CounterScope.Provider
+        options={{ target: { descriptor: { context: "background" } } }}
+      >
+        <CounterView />
+      </CounterScope.Provider>
     </NexusProvider>
   );
 }
 
 function CounterView() {
-  const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
-  });
-
-  const count = useStoreSelector(remote, (state) => state.count, {
+  const count = CounterScope.useSelector((state) => state.count, {
     fallback: 0,
   });
+  const actions = CounterScope.useActions();
+  const status = CounterScope.useStatus();
 
-  if (!remote.store || remote.status.type !== "ready") {
+  if (!actions || status.type !== "ready") {
     return <span>Loading...</span>;
   }
 
-  return (
-    <button onClick={() => remote.store.actions.increment(1)}>{count}</button>
-  );
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
 }
 ```
+
+The scope provider creates one shared remote store connection for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately.
 
 ## What To Read Next
 
