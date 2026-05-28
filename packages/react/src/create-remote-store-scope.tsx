@@ -1,11 +1,14 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
-  ConnectNexusStoreOptions,
   NexusStoreDefinition,
   RemoteActions,
   RemoteStoreStatus,
 } from "@nexus-js/core/state";
-import { useRemoteStore, type UseRemoteStoreResult } from "./use-remote-store";
+import {
+  useRemoteStore,
+  type UseRemoteStoreOptions,
+  type UseRemoteStoreResult,
+} from "./use-remote-store";
 import {
   useStoreSelector,
   type UseStoreSelectorOptions,
@@ -30,7 +33,7 @@ export interface RemoteStoreScope<
 }
 
 export interface RemoteStoreScopeProviderProps<U extends object = object> {
-  readonly options?: ConnectNexusStoreOptions<U>;
+  readonly options?: UseRemoteStoreOptions<U>;
   readonly children: ReactNode;
 }
 

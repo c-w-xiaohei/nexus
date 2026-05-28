@@ -28,6 +28,11 @@ export interface UseRemoteStoreResult<
   readonly error: Error | null;
 }
 
+export type UseRemoteStoreOptions<U extends object = object> =
+  ConnectNexusStoreOptions<U> & {
+    readonly reconnectKey?: string | number | boolean | null;
+  };
+
 const INITIALIZING_STATUS: RemoteStoreStatus = { type: "initializing" };
 
 const matcherIdentityMap = new WeakMap<MatcherFunction, string>();
@@ -95,8 +100,9 @@ export const useRemoteStore = <
   U extends object = object,
 >(
   definition: NexusStoreDefinition<TState, TActions, U>,
-  options: ConnectNexusStoreOptions<U> = {},
+  options: UseRemoteStoreOptions<U> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
+  const { reconnectKey = null, ...connectOptions } = options;
   const nexus = useNexus();
   const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(
     null,
@@ -109,8 +115,8 @@ export const useRemoteStore = <
   const lastStatusRef = useRef<RemoteStoreStatus>(INITIALIZING_STATUS);
   const connectVersionRef = useRef(0);
 
-  const targetKey = useMemo(() => toTargetKey(options), [options]);
-  const optionKey = useMemo(() => toOptionKey(options), [options]);
+  const targetKey = useMemo(() => toTargetKey(connectOptions), [connectOptions]);
+  const optionKey = useMemo(() => toOptionKey(connectOptions), [connectOptions]);
 
   useEffect(() => {
     connectVersionRef.current += 1;
@@ -174,7 +180,7 @@ export const useRemoteStore = <
 
     let cancelled = false;
 
-    void connectNexusStore(nexus, definition, options)
+    void connectNexusStore(nexus, definition, connectOptions)
       .then((remote) => {
         if (cancelled || version !== connectVersionRef.current) {
           remote.destroy();
@@ -222,7 +228,7 @@ export const useRemoteStore = <
     return () => {
       cancelled = true;
     };
-  }, [definition, nexus, optionKey, targetKey]);
+  }, [definition, nexus, optionKey, reconnectKey, targetKey]);
 
   useEffect(() => {
     return () => {

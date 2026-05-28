@@ -9,6 +9,7 @@ import {
   createRemoteStoreScope,
   NexusProvider,
   useNexus,
+  useNexusService,
   useRemoteStore,
   useStoreSelector,
 } from "@nexus-js/react";
@@ -33,6 +34,34 @@ const nexus = useNexus();
 ```
 
 It fails fast outside `NexusProvider` on purpose.
+
+## `useNexusService()`
+
+React helper for one-shot Nexus service calls. It reads the injected Nexus instance and creates a fresh session-bound proxy for each call, which keeps service usage aligned with the core `nexus.create(Token, options?)` lifecycle.
+
+```tsx
+const greeting = useNexusService(GreetingServiceToken, {
+  target: { descriptor: { context: "background" } },
+});
+
+async function greetAda() {
+  return await greeting.call((service) => service.greet("Ada"));
+}
+```
+
+Safe-style usage returns a `ResultAsync` and does not invoke the callback when proxy creation fails.
+
+```tsx
+const result = await greeting.safeCall((service) => service.greet("Ada"));
+
+if (result.isErr()) {
+  return <span>{result.error.message}</span>;
+}
+
+return <span>{result.value}</span>;
+```
+
+The hook deliberately does not cache service proxies, track pending state, retry, or apply app-specific error policy. Render loading and error UI in your component, and use `create()` or `safeCreate()` directly when you need to compose proxy creation yourself.
 
 ## `createRemoteStoreScope()`
 
@@ -95,6 +124,15 @@ const remote = useRemoteStore(counterStore, {
 });
 ```
 
+Pass `reconnectKey` when the same target should be explicitly reacquired, for example after your app observes a background restart or session replacement. The key is React-only orchestration state; it is not forwarded to the core store connector.
+
+```tsx
+const remote = useRemoteStore(counterStore, {
+  target: { descriptor: { context: "background" } },
+  reconnectKey: sessionEpoch,
+});
+```
+
 Return shape:
 
 ```ts
@@ -111,6 +149,7 @@ type UseRemoteStoreResult<TState, TActions> = {
 - on target replacement: the old handle becomes stale internally, while the hook result moves back through replacement setup with `store: null`
 - failed connect or replacement attempts are explicit, not disguised as ongoing initialization
 - raw handles do not auto-heal; hook behavior is orchestration that may acquire a replacement handle
+- changing `reconnectKey` rebuilds the handle for the same target without changing core session-bound semantics
 
 ## Loading And Error UI
 
@@ -200,11 +239,11 @@ In practice, React code usually responds by rendering fallback UI and letting `u
 
 This is higher-layer rebuild behavior. It should not be interpreted as raw handle auto-healing: old terminal handles remain terminal.
 
-For same-target session loss, do not assume guaranteed automatic retry/rebuild from the hook alone. Reacquisition is guaranteed only when the consumer remounts, hook inputs change, or your app explicitly orchestrates a rebuild trigger.
+For same-target session loss, do not assume guaranteed automatic retry/rebuild from the hook alone. Reacquisition is guaranteed only when the consumer remounts, hook inputs change, or your app explicitly changes `reconnectKey`.
 
 ### Same-target session loss pattern (explicit reacquire)
 
-If your app must stay on the same target (for example `{ context: "background" }`) after a restart/session-loss event, reacquire by remounting the `useRemoteStore()` consumer and letting the hook create a new handle.
+If your app must stay on the same target (for example `{ context: "background" }`) after a restart/session-loss event, reacquire by changing `reconnectKey` and letting the hook create a new handle.
 
 ```tsx
 function CounterBoundary() {
@@ -212,15 +251,22 @@ function CounterBoundary() {
 
   return (
     <CounterRemote
-      key={`background-${sessionEpoch}`}
+      reconnectKey={sessionEpoch}
       onReconnect={() => setSessionEpoch((value) => value + 1)}
     />
   );
 }
 
-function CounterRemote({ onReconnect }: { onReconnect(): void }) {
+function CounterRemote({
+  reconnectKey,
+  onReconnect,
+}: {
+  reconnectKey: number;
+  onReconnect(): void;
+}) {
   const remote = useRemoteStore(counterStore, {
     target: { descriptor: { context: "background" } },
+    reconnectKey,
   });
 
   const count = useStoreSelector(remote, (state) => state.count, {

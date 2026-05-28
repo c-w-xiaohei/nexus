@@ -1,6 +1,8 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { errAsync, okAsync } from "neverthrow";
+import { Token } from "@nexus-js/core";
 import type {
   NexusStoreDefinition,
   RemoteStore,
@@ -9,6 +11,7 @@ import type {
 import { NexusProvider } from "./provider";
 import { createRemoteStoreScope } from "./create-remote-store-scope";
 import { useNexus } from "./use-nexus";
+import { useNexusService } from "./use-nexus-service";
 import { useRemoteStore } from "./use-remote-store";
 import { useStoreSelector } from "./use-store-selector";
 
@@ -20,6 +23,15 @@ interface CounterActions {
   [key: string]: (...args: any[]) => any;
   increment(by: number): Promise<number>;
 }
+
+interface GreetingService {
+  greet(name: string): Promise<string>;
+  fail(): Promise<void>;
+}
+
+const GreetingServiceToken = new Token<GreetingService>(
+  "service:greeting:react",
+);
 
 interface MinimalNexus {
   create: (...args: unknown[]) => Promise<unknown>;
@@ -147,8 +159,90 @@ describe("react adapter", () => {
     expect(typeof entry.NexusProvider).toBe("function");
     expect(typeof entry.createRemoteStoreScope).toBe("function");
     expect(typeof entry.useNexus).toBe("function");
+    expect(typeof entry.useNexusService).toBe("function");
     expect(typeof entry.useRemoteStore).toBe("function");
     expect(typeof entry.useStoreSelector).toBe("function");
+  });
+
+  it("useNexusService call creates a fresh service proxy for each invocation", async () => {
+    const service = {
+      greet: vi.fn(async (name: string) => `hello:${name}`),
+      fail: vi.fn(async () => undefined),
+    } satisfies GreetingService;
+    const nexus = {
+      create: vi.fn(async () => service),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+
+    const { result } = renderHook(
+      () => useNexusService(GreetingServiceToken),
+      { wrapper: createWrapper(nexus) },
+    );
+
+    await expect(
+      result.current.call((remote) => remote.greet("ada")),
+    ).resolves.toBe("hello:ada");
+    await expect(
+      result.current.call((remote) => remote.greet("grace")),
+    ).resolves.toBe("hello:grace");
+
+    expect(nexus.create).toHaveBeenCalledTimes(2);
+    expect(nexus.create).toHaveBeenNthCalledWith(
+      1,
+      GreetingServiceToken,
+      undefined,
+    );
+    expect(service.greet).toHaveBeenNthCalledWith(1, "ada");
+    expect(service.greet).toHaveBeenNthCalledWith(2, "grace");
+  });
+
+  it("useNexusService safeCall returns create failures without invoking the callback", async () => {
+    const createError = new Error("missing target");
+    const service = {
+      greet: vi.fn(async (name: string) => `hello:${name}`),
+      fail: vi.fn(async () => undefined),
+    } satisfies GreetingService;
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(() => errAsync(createError)),
+    } satisfies MinimalNexus;
+
+    const { result } = renderHook(
+      () => useNexusService(GreetingServiceToken),
+      { wrapper: createWrapper(nexus) },
+    );
+
+    const outcome = await result.current.safeCall((remote) =>
+      remote.greet("ada"),
+    );
+
+    expect(outcome.isErr()).toBe(true);
+    expect(outcome._unsafeUnwrapErr()).toBe(createError);
+    expect(service.greet).not.toHaveBeenCalled();
+  });
+
+  it("useNexusService safeCall normalizes method failures", async () => {
+    const service = {
+      greet: vi.fn(async (name: string) => `hello:${name}`),
+      fail: vi.fn(async () => {
+        throw "remote failed";
+      }),
+    } satisfies GreetingService;
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(() => okAsync(service)),
+    } satisfies MinimalNexus;
+
+    const { result } = renderHook(
+      () => useNexusService(GreetingServiceToken),
+      { wrapper: createWrapper(nexus) },
+    );
+
+    const outcome = await result.current.safeCall((remote) => remote.fail());
+
+    expect(outcome.isErr()).toBe(true);
+    expect(outcome._unsafeUnwrapErr()).toBeInstanceOf(Error);
+    expect(outcome._unsafeUnwrapErr().message).toBe("remote failed");
   });
 
   it("remote store scope Provider connects once and shares result, actions, and status", async () => {
@@ -557,6 +651,56 @@ describe("react adapter", () => {
     });
 
     expect(getConnectCallsFrom(startCalls)).toBe(2);
+  });
+
+  it("reconnectKey reconnects the same target without forwarding the key", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+    const firstStore = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:reconnect:1", version: 1 },
+    );
+    const secondStore = createFakeRemoteStore(
+      { count: 2 },
+      { type: "ready", storeInstanceId: "instance:reconnect:2", version: 2 },
+    );
+    connectSpy
+      .mockResolvedValueOnce(firstStore)
+      .mockResolvedValueOnce(secondStore);
+
+    const wrapper = createWrapper(nexus);
+    const { result, rerender } = renderHook(
+      ({ reconnectKey }) =>
+        useRemoteStore(definition, {
+          target: { descriptor: "same-target" },
+          reconnectKey,
+        }),
+      {
+        initialProps: { reconnectKey: 0 },
+        wrapper,
+      },
+    );
+
+    await waitFor(() => {
+      expect(result.current.store).toBe(firstStore);
+      expect(result.current.status.type).toBe("ready");
+    });
+
+    rerender({ reconnectKey: 1 });
+
+    await waitFor(() => {
+      expect(result.current.store).toBe(secondStore);
+      expect(result.current.status.type).toBe("ready");
+    });
+
+    expect(connectSpy).toHaveBeenCalledTimes(2);
+    expect(connectSpy.mock.calls[1]?.[2]).toEqual({
+      target: { descriptor: "same-target" },
+    });
+    expect(firstStore.getStatus().type).toBe("destroyed");
   });
 
   it("initial connect failure reports disconnected status instead of initializing", async () => {
