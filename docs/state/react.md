@@ -126,6 +126,8 @@ const remote = useRemoteStore(counterStore, {
 
 Pass `reconnectKey` when the same target should be explicitly reacquired, for example after your app observes a background restart or session replacement. The key is React-only orchestration state; it is not forwarded to the core store connector.
 
+Changing `reconnectKey` only asks the React hook to acquire a new remote store handle for the same definition and connector options. It does not replay store actions, revive old handles, or retry failed business actions.
+
 ```tsx
 const remote = useRemoteStore(counterStore, {
   target: { descriptor: { context: "background" } },

@@ -43,6 +43,7 @@ interface FakeRemoteStore<TState extends object> extends RemoteStore<
   Record<string, (...args: any[]) => any>
 > {
   [key: symbol]: unknown;
+  staleMarkerCalls: number;
   pushState(nextState: TState): void;
   setStatus(nextStatus: RemoteStoreStatus): void;
 }
@@ -69,8 +70,12 @@ const createFakeRemoteStore = (
   let state = initialState;
   let status = initialStatus;
   const listeners = new Set<(snapshot: CounterState) => void>();
+  let staleMarkerCalls = 0;
 
   return {
+    get staleMarkerCalls() {
+      return staleMarkerCalls;
+    },
     actions: {
       async increment(by: number) {
         state = { count: state.count + by };
@@ -106,6 +111,7 @@ const createFakeRemoteStore = (
       status = nextStatus;
     },
     [markStaleSymbol]() {
+      staleMarkerCalls += 1;
       const lastKnownVersion =
         status.type === "ready"
           ? status.version
@@ -174,10 +180,9 @@ describe("react adapter", () => {
       safeCreate: vi.fn(),
     } satisfies MinimalNexus;
 
-    const { result } = renderHook(
-      () => useNexusService(GreetingServiceToken),
-      { wrapper: createWrapper(nexus) },
-    );
+    const { result } = renderHook(() => useNexusService(GreetingServiceToken), {
+      wrapper: createWrapper(nexus),
+    });
 
     await expect(
       result.current.call((remote) => remote.greet("ada")),
@@ -207,10 +212,9 @@ describe("react adapter", () => {
       safeCreate: vi.fn(() => errAsync(createError)),
     } satisfies MinimalNexus;
 
-    const { result } = renderHook(
-      () => useNexusService(GreetingServiceToken),
-      { wrapper: createWrapper(nexus) },
-    );
+    const { result } = renderHook(() => useNexusService(GreetingServiceToken), {
+      wrapper: createWrapper(nexus),
+    });
 
     const outcome = await result.current.safeCall((remote) =>
       remote.greet("ada"),
@@ -233,10 +237,9 @@ describe("react adapter", () => {
       safeCreate: vi.fn(() => okAsync(service)),
     } satisfies MinimalNexus;
 
-    const { result } = renderHook(
-      () => useNexusService(GreetingServiceToken),
-      { wrapper: createWrapper(nexus) },
-    );
+    const { result } = renderHook(() => useNexusService(GreetingServiceToken), {
+      wrapper: createWrapper(nexus),
+    });
 
     const outcome = await result.current.safeCall((remote) => remote.fail());
 
@@ -360,6 +363,72 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current).toBe(remote.actions);
+    });
+  });
+
+  it("remote store scope Provider reconnectKey reconnects the same target without forwarding the key", async () => {
+    clearConnectSpy();
+    const nexus = {
+      create: vi.fn(),
+      safeCreate: vi.fn(),
+    } satisfies MinimalNexus;
+    const firstStore = createFakeRemoteStore(
+      { count: 1 },
+      {
+        type: "ready",
+        storeInstanceId: "instance:scope-reconnect:1",
+        version: 1,
+      },
+    );
+    const secondStore = createFakeRemoteStore(
+      { count: 2 },
+      {
+        type: "ready",
+        storeInstanceId: "instance:scope-reconnect:2",
+        version: 2,
+      },
+    );
+    connectSpy
+      .mockResolvedValueOnce(firstStore)
+      .mockResolvedValueOnce(secondStore);
+
+    const CounterScope = createRemoteStoreScope(definition);
+    let reconnectKey = 0;
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus as never}>
+        <CounterScope.Provider
+          options={{
+            target: { descriptor: "same-target" },
+            reconnectKey,
+          }}
+        >
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
+
+    const { result, rerender } = renderHook(
+      () => CounterScope.useSelector((state) => state.count, { fallback: -1 }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).toBe(1);
+    });
+
+    reconnectKey = 1;
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current).toBe(2);
+    });
+
+    expect(connectSpy).toHaveBeenCalledTimes(2);
+    expect(connectSpy.mock.calls[0]?.[2]).toEqual({
+      target: { descriptor: "same-target" },
+    });
+    expect(connectSpy.mock.calls[1]?.[2]).toEqual({
+      target: { descriptor: "same-target" },
     });
   });
 
@@ -700,6 +769,7 @@ describe("react adapter", () => {
     expect(connectSpy.mock.calls[1]?.[2]).toEqual({
       target: { descriptor: "same-target" },
     });
+    expect(firstStore.staleMarkerCalls).toBe(0);
     expect(firstStore.getStatus().type).toBe("destroyed");
   });
 
@@ -795,15 +865,10 @@ describe("react adapter", () => {
     const markerStore = createFakeRemoteStore(
       { count: 1 },
       { type: "ready", storeInstanceId: "instance:marker-old", version: 1 },
-    ) as FakeRemoteStore<CounterState> & { staleMarkerCalls?: number };
-    markerStore.staleMarkerCalls = 0;
+    );
 
     const markerSymbol = Symbol.for("nexus.state.remote-store.mark-stale");
-    markerStore[markerSymbol] = function markStale(this: {
-      staleMarkerCalls?: number;
-    }) {
-      this.staleMarkerCalls = (this.staleMarkerCalls ?? 0) + 1;
-    };
+    markerStore[markerSymbol] = vi.fn(markerStore[markerSymbol] as () => void);
 
     const nextStore = createFakeRemoteStore(
       { count: 2 },
@@ -835,7 +900,7 @@ describe("react adapter", () => {
       expect(result.current.store).toBe(nextStore);
     });
 
-    expect(markerStore.staleMarkerCalls).toBe(1);
+    expect(markerStore[markerSymbol]).toHaveBeenCalledTimes(1);
   });
 
   it("failed reconnect reports disconnected and keeps last selected value", async () => {
