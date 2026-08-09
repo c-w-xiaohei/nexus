@@ -1,165 +1,169 @@
 # Nexus
 
-Nexus is a **powerful**, **type-safe**, and **default-safe** cross-context communication framework designed to simplify Inter-Process Communication (IPC) in modern JavaScript environments like Chrome Extensions, Electron applications, Web Workers, and iframes. It abstracts away the complexities of underlying communication channels, allowing you to focus on your application's business logic.
+**Type-safe services instead of cross-context message protocols.**
+
+[![Quality Check](https://github.com/c-w-xiaohei/nexus/actions/workflows/quality-check.yml/badge.svg)](https://github.com/c-w-xiaohei/nexus/actions/workflows/quality-check.yml)
+[![npm](https://img.shields.io/npm/v/@nexus-js/core)](https://www.npmjs.com/package/@nexus-js/core)
+[![license](https://img.shields.io/npm/l/@nexus-js/core)](https://www.npmjs.com/package/@nexus-js/core)
+
+Nexus connects Chrome extension contexts, iframes, workers, and local Node processes through one TypeScript service model. Define a contract once, get compile-time checks from provider to caller, select targets explicitly, and use the same runtime semantics for RPC, remote resources, authorization, lifecycle, and synchronized state.
+
+```mermaid
+flowchart LR
+  A[Popup / Content Script] -->|"nexus.create(Token)"| B[Background]
+  C[Iframe Child] -->|"nexus.create(Token)"| D[Parent]
+  E[Node Client] -->|"nexus.create(Token)"| F[Daemon]
+```
 
 ## Why Nexus?
 
-Traditional cross-context communication often leads to fragmented APIs, boilerplate code, hidden performance pitfalls, and complex asynchronous state management. Nexus addresses these challenges by providing:
+Cross-context applications often start with a few message names and handlers. As the application grows, those messages accumulate duplicated payload types, manual routing, hidden target selection, and ad hoc disconnect handling.
 
-- **Unified Abstraction:** A single, consistent API (`nexus` singleton) across different platforms.
-- **Declarative APIs:** Use instance-bound decorators such as `@nexus.Expose(...)` / `@nexus.Endpoint(...)`, `nexus.provide(...)`, and bootstrap configuration to define your communication intent.
-- **End-to-end Type Safety:** Leveraging TypeScript to provide robust compile-time checks and an excellent developer experience.
-- **Robust Resource Management:** Handles the lifecycle of remote resources and connections automatically.
-- **Familiar Paradigms:** Nexus maps cross-context communication to intuitive local programming concepts: `@nexus.Expose(...)` for class service providers, `nexus.provide(...)` for object providers, `nexus.create(...)` for session-bound remote proxies, and `Token` as the service identity.
+Nexus gives you:
 
-## Quick Start
+- **Keep service calls type-safe end to end.** One `Token<T>` connects the provider implementation, method arguments, return values, and remote caller to the same TypeScript contract.
+- **Stop duplicating message names and payload types.** Import the shared contract from every participating context instead of maintaining parallel protocol definitions.
+- **Make target selection explicit.** Select tabs, frames, and processes with descriptors or matchers instead of hidden global discovery.
+- **Treat disconnects as real lifecycle events.** Session-bound proxies do not silently survive service worker, iframe, or daemon replacement.
+- **Use the same model across supported runtimes.** First-party adapters connect Chrome extension contexts, iframes, and local Node processes.
+- **Go beyond request/response RPC when needed.** Add callbacks, remote resources, synchronized state, authorization, and explicit relays without inventing another protocol.
 
-This section provides a brief example of how to set up and use Nexus for basic cross-context communication.
+## Quick Start: Chrome Extension
 
-### Installation
-
-Clone the repository and install dependencies:
-
-```bash
-git clone https://github.com/c-w-xiaohei/nexus.git
-pnpm install -w
-```
-
-### Build
-
-Build all packages in the monorepo:
+Install the core runtime and Chrome adapter:
 
 ```bash
-pnpm build
+pnpm add @nexus-js/core @nexus-js/chrome
 ```
 
-### Example Usage (Chrome Extension Scenario)
+Define the contract and token in code shared by both contexts:
 
-Let's imagine a Chrome Extension where a **Background Script** wants to call a method on a **Content Script** running in a browser tab. This example leverages `@nexus-js/chrome` for simplified setup.
+```ts
+// shared/settings.ts
+import { Token } from "@nexus-js/core";
 
-**1. Define Shared Types and Service Contract**
-
-Create a shared file (e.g., `src/shared/types.ts`):
-
-```typescript
-// src/shared/types.ts
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "@nexus-js/chrome";
-
-// Define application-specific endpoint metadata by extending ChromeEndpointMeta.
-// The first type argument adds app metadata shared by all built-in Chrome contexts.
-export type MyEndpointMeta = ChromeEndpointMeta<{ hasFeatureX?: boolean }>;
-
-// You can use or extend ChromePlatformMeta directly
-export type MyPlatformMeta = ChromePlatformMeta;
-```
-
-Create a shared service contract file (e.g., `src/shared/api.ts`):
-
-```typescript
-// src/shared/api.ts
-import { TokenSpace } from "@nexus-js/core";
-import type { MyEndpointMeta, MyPlatformMeta } from "./types";
-
-// 1. Define the interface for your service
-export interface IMyContentScriptAPI {
-  getMessage(): Promise<string>;
+export interface SettingsService {
+  getTheme(): Promise<"light" | "dark">;
+  setTheme(theme: "light" | "dark"): Promise<void>;
 }
 
-// 2. Create a TokenSpace for structured token management
-// This allows for hierarchical token IDs and defaultTarget inheritance.
-const appSpace = new TokenSpace<MyEndpointMeta, MyPlatformMeta>({
-  name: "my-extension",
-});
-
-// 3. Create a sub-space for content script services.
-// Background-to-content-script calls usually choose a tab explicitly, so this
-// example keeps targeting at the create(...) call site.
-const contentScriptSpace = appSpace.space("content-script-services");
-
-// 4. Create a unique Token for the service within the defined space.
-// The full ID will be "my-extension:content-script-services:my-service"
-export const MyContentScriptAPI =
-  contentScriptSpace.token<IMyContentScriptAPI>("my-service");
+export const SettingsToken = new Token<SettingsService>("example:settings");
 ```
 
-**2. Configure and Expose Service in Content Script**
+Provide the service from the background context:
 
-Your content script (e.g., `src/content-script.ts`) will now use the `usingContentScript` factory for a streamlined setup:
+```ts
+// background.ts
+import { usingBackgroundScript } from "@nexus-js/chrome";
+import { SettingsToken, type SettingsService } from "./shared/settings";
 
-```typescript
-// src/content-script.ts
-// IMPORTANT: This file MUST be imported at the very top of your content script entry file
-import { usingContentScript } from "@nexus-js/chrome"; // Import the factory
-import { MyContentScriptAPI, type IMyContentScriptAPI } from "./shared/api";
+const settings: SettingsService = {
+  async getTheme() {
+    const result = await chrome.storage.local.get("theme");
+    return result.theme === "dark" ? "dark" : "light";
+  },
+  async setTheme(theme) {
+    await chrome.storage.local.set({ theme });
+  },
+};
 
-// 1. Initialize Nexus for the content script context.
-// This sets up the endpoint, default meta, and connectTo background.
-const contentScriptNexus = usingContentScript();
-
-// 2. Expose the service implementation using the Token
-@contentScriptNexus.Expose(MyContentScriptAPI)
-class ContentScriptService implements IMyContentScriptAPI {
-  async getMessage(): Promise<string> {
-    console.log("Content Script received request for message.");
-    return "Hello from Content Script!";
-  }
-}
+usingBackgroundScript().provide(SettingsToken, settings);
 ```
 
-The class decorator registers provider intent on `contentScriptNexus`. Make sure this module is imported before the runtime bootstrap snapshot so the decorator runs; Nexus does not scan files or require manual `new ContentScriptService()` for this class-service path.
+Create a typed proxy from a content script or popup:
 
-**3. Configure and Consume Service in Background Script**
-
-Your background script (e.g., `src/background.ts`) will use the `usingBackgroundScript` factory and `nexus.create` to call the remote service:
-
-```typescript
-// src/background.ts
-// IMPORTANT: This file MUST be imported at the very top of your background script entry file
+```ts
+// content.ts
 import { nexus } from "@nexus-js/core";
-import { usingBackgroundScript } from "@nexus-js/chrome"; // Import the factory
-import { MyContentScriptAPI } from "./shared/api";
+import { usingContentScript } from "@nexus-js/chrome";
+import { SettingsToken } from "./shared/settings";
 
-// 1. Initialize Nexus for the background script context.
-// This sets up the endpoint and default meta for the background script.
-usingBackgroundScript();
+usingContentScript();
 
-// Example function to call the remote service
-async function callContentScript() {
-  try {
-    // 2. Create a proxy for the remote service.
-    // Content scripts are usually many, so choose the target at the call site.
-    // The "any-content-script" matcher is provided by usingBackgroundScript().
-    const remoteContentScript = await nexus.create(MyContentScriptAPI, {
-      target: {
-        matcher: "any-content-script", // Use the named matcher provided by the Chrome adapter
-      },
-      expects: "first",
-    });
+async function main() {
+  const settings = await nexus.create(SettingsToken, {
+    target: { descriptor: { context: "background" } },
+  });
 
-    if (remoteContentScript) {
-      // 3. Call the remote method as if it were local
-      const message = await remoteContentScript.getMessage();
-      console.log("Received message from content script:", message);
-    } else {
-      console.log("No content script found to connect to.");
-    }
-  } catch (error) {
-    console.error("Failed to call content script:", error);
-  }
+  await settings.setTheme("dark");
+  console.log(await settings.getTheme());
 }
 
-// In a real Chrome Extension, you would trigger this call
-// based on an event, e.g., chrome.action.onClicked, or chrome.tabs.onUpdated.
-// For demonstration, let's call it after a short delay:
-// Ensure the content script has time to connect.
-setTimeout(() => {
-  console.log("Attempting to call content script...");
-  callContentScript();
-}, 3000); // Adjust delay as needed
+void main();
 ```
+
+### What Just Happened?
+
+1. `Token<T>` connected a stable runtime service identity to its TypeScript contract.
+2. Both contexts configured their own Nexus endpoint.
+3. The background context provided the service implementation.
+4. The content script selected the background and created a typed, session-bound proxy.
+
+Calls through the proxy are asynchronous and type-checked end to end.
+
+See the [Chrome adapter guide](packages/chrome/README.md) for popup, options page, DevTools, offscreen document, metadata, and multi-content-script targeting.
+
+## Choose Your Runtime
+
+| Use case                        | Install                                 | Start here                                  |
+| ------------------------------- | --------------------------------------- | ------------------------------------------- |
+| Chrome extension contexts       | `@nexus-js/core` + `@nexus-js/chrome`   | [Chrome adapter](packages/chrome/README.md) |
+| Parent page and iframe          | `@nexus-js/core` + `@nexus-js/iframe`   | [Iframe guide](docs/iframe/README.md)       |
+| Local daemon and clients        | `@nexus-js/core` + `@nexus-js/node-ipc` | [Node IPC guide](docs/node-ipc/README.md)   |
+| Worker or custom transport      | `@nexus-js/core`                        | [Platform guide](docs/platforms.md)         |
+| Remote synchronized state       | `@nexus-js/core`                        | [Nexus State](docs/state/README.md)         |
+| React bindings for remote state | `@nexus-js/core` + `@nexus-js/react`    | [React guide](docs/state/react.md)          |
+| Application unit tests          | `@nexus-js/testing`                     | [Testing guide](docs/testing/README.md)     |
+
+`@nexus-js/core/state` and `@nexus-js/core/relay` are subpath exports of `@nexus-js/core`, not separately installed packages. See the [package map](docs/packages.md) for install and import details.
+
+## Advanced Capabilities
+
+Once the basic service path works, Nexus can use the same identity, targeting, and lifecycle model for:
+
+- [synchronized remote state](docs/state/README.md) and [React bindings](docs/state/react.md)
+- callbacks and disposable remote resources
+- [connection and service authorization](docs/auth-and-policy.md)
+- [explicit service and store relays](docs/relay.md) across adjacent Nexus graphs
+- [custom transport endpoints](docs/platforms.md#worker--custom-runtime)
+
+Nexus does not hide topology behind ambient discovery. If a target is ambiguous, application code must choose the intended endpoint or explicitly choose a multicast strategy.
+
+## Lifecycle And Safety
+
+Remote proxies and references are session-bound. After a disconnect, Chrome service worker restart, daemon restart, or other session replacement, recreate the handle and apply retry policy at the application boundary.
+
+Nexus makes this explicit because retry safety depends on the operation. It cannot infer whether repeating a remote mutation is valid for your application.
+
+For production use, read:
+
+- [Concepts and lifecycle](docs/concepts.md)
+- [Authorization and policy](docs/auth-and-policy.md)
+- [State lifecycle and errors](docs/state/lifecycle-and-errors.md)
+- [Node IPC runtime compatibility](docs/node-ipc/runtime-compatibility.md)
 
 ## Documentation
 
-- Product docs: `docs/README.md`
-- Package map: `docs/packages.md`
-- Testing Nexus application code: `docs/testing/README.md`
+- **Start using Nexus:** [Getting started](docs/getting-started.md)
+- **Choose packages and adapters:** [Package map](docs/packages.md) and [platform guide](docs/platforms.md)
+- **Understand targeting and lifecycle:** [Core concepts](docs/concepts.md)
+- **Synchronize remote state:** [Nexus State](docs/state/README.md)
+- **Forward services between graphs:** [Nexus Relay](docs/relay.md)
+- **Test application code:** [Testing guide](docs/testing/README.md)
+- **Browse all documentation:** [Documentation home](docs/README.md)
+
+## Repository Development
+
+This repository is a pnpm/Turbo monorepo. To work on Nexus itself:
+
+```bash
+git clone https://github.com/c-w-xiaohei/nexus.git
+cd nexus
+pnpm install -w
+pnpm build
+pnpm test
+```
+
+## License
+
+MIT
