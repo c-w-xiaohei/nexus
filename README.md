@@ -8,6 +8,56 @@
 
 Nexus connects Chrome extension contexts, iframes, workers, and local Node processes through one TypeScript service model. Define a contract once, get compile-time checks from provider to caller, select targets explicitly, and use the same runtime semantics for RPC, remote resources, authorization, lifecycle, and synchronized state.
 
+## Install
+
+Install the core runtime and the adapter for your environment. For a Chrome extension:
+
+```bash
+# pnpm
+pnpm add @nexus-js/core @nexus-js/chrome
+
+# npm
+npm install @nexus-js/core @nexus-js/chrome
+
+# yarn
+yarn add @nexus-js/core @nexus-js/chrome
+
+# bun
+bun add @nexus-js/core @nexus-js/chrome
+```
+
+Use `@nexus-js/iframe` or `@nexus-js/node-ipc` instead of `@nexus-js/chrome` for those runtimes. The [package map](docs/packages.md) covers every package and subpath export.
+
+### AI Coding Skill
+
+Nexus includes a `use-nexus` skill that helps coding agents follow its public API, targeting, lifecycle, adapter, State, Relay, and testing conventions. Install it with [`npx skills`](https://skills.sh/).
+
+Project-level installation:
+
+```bash
+npx skills add c-w-xiaohei/nexus --skill use-nexus -y
+```
+
+Global installation:
+
+```bash
+npx skills add c-w-xiaohei/nexus --skill use-nexus -g -y
+```
+
+Install it only for selected agents:
+
+```bash
+npx skills add c-w-xiaohei/nexus --skill use-nexus --agent claude-code cursor -y
+```
+
+Or use it once without installing:
+
+```bash
+npx skills use c-w-xiaohei/nexus@use-nexus
+```
+
+Then ask your coding agent to use the `use-nexus` skill when writing or reviewing Nexus application code. The skill is a compact usage guide; use the linked documentation for non-trivial architecture, policy, and lifecycle decisions.
+
 ```mermaid
 flowchart LR
   A[Popup / Content Script] -->|"nexus.create(Token)"| B[Background]
@@ -29,12 +79,6 @@ Nexus gives you:
 - **Go beyond request/response RPC when needed.** Add callbacks, remote resources, synchronized state, authorization, and explicit relays without inventing another protocol.
 
 ## Quick Start: Chrome Extension
-
-Install the core runtime and Chrome adapter:
-
-```bash
-pnpm add @nexus-js/core @nexus-js/chrome
-```
 
 Define the contract and token in code shared by both contexts:
 
@@ -151,16 +195,6 @@ For production use, read:
 - **Forward services between graphs:** [Nexus Relay](docs/relay.md)
 - **Test application code:** [Testing guide](docs/testing/README.md)
 - **Browse all documentation:** [Documentation home](docs/README.md)
-
-## AI Coding Agents
-
-Nexus includes a `use-nexus` skill that helps coding agents follow its public API, targeting, lifecycle, adapter, State, Relay, and testing conventions. Install it in your project with [`npx skills`](https://skills.sh/):
-
-```bash
-npx skills add c-w-xiaohei/nexus --skill use-nexus
-```
-
-Then ask your coding agent to use the `use-nexus` skill when writing or reviewing Nexus application code. The skill is a compact usage guide; use the linked documentation for non-trivial architecture, policy, and lifecycle decisions.
 
 ## Repository Development
 
