@@ -152,6 +152,16 @@ For production use, read:
 - **Test application code:** [Testing guide](docs/testing/README.md)
 - **Browse all documentation:** [Documentation home](docs/README.md)
 
+## AI Coding Agents
+
+Nexus includes a `use-nexus` skill that helps coding agents follow its public API, targeting, lifecycle, adapter, State, Relay, and testing conventions. Install it in your project with [`npx skills`](https://skills.sh/):
+
+```bash
+npx skills add c-w-xiaohei/nexus --skill use-nexus
+```
+
+Then ask your coding agent to use the `use-nexus` skill when writing or reviewing Nexus application code. The skill is a compact usage guide; use the linked documentation for non-trivial architecture, policy, and lifecycle decisions.
+
 ## Repository Development
 
 This repository is a pnpm/Turbo monorepo. To work on Nexus itself:
