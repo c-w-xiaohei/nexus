@@ -5,7 +5,11 @@ export {
   type RemoteStoreScopeProviderProps,
 } from "./create-remote-store-scope";
 export { useNexus } from "./use-nexus";
-export { useRemoteStore, type UseRemoteStoreResult } from "./use-remote-store";
+export {
+  useRemoteStore,
+  type UseRemoteStoreOptions,
+  type UseRemoteStoreResult,
+} from "./use-remote-store";
 export {
   useStoreSelector,
   type UseStoreSelectorOptions,

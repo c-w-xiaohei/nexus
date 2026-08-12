@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import {
   connectNexusStore,
   type ConnectNexusStoreOptions,
@@ -17,7 +17,11 @@ const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
 );
 
 type ActionFunction = (...args: any[]) => any;
-type MatcherFunction = (...args: unknown[]) => unknown;
+
+interface TargetIdentity {
+  readonly descriptorKey: string;
+  readonly matcher: unknown;
+}
 
 export interface UseRemoteStoreResult<
   TState extends object,
@@ -26,48 +30,39 @@ export interface UseRemoteStoreResult<
   readonly store: RemoteStore<TState, TActions> | null;
   readonly status: RemoteStoreStatus;
   readonly error: Error | null;
+  readonly reconnect: () => void;
 }
+
+export type UseRemoteStoreOptions<U extends object = object> =
+  ConnectNexusStoreOptions<U> & {
+    readonly reconnectKey?: string | number | boolean | null;
+  };
 
 const INITIALIZING_STATUS: RemoteStoreStatus = { type: "initializing" };
 
-const matcherIdentityMap = new WeakMap<MatcherFunction, string>();
-let matcherIdentitySequence = 0;
-
-const toMatcherKey = (matcher: unknown): string | null => {
-  if (typeof matcher === "undefined") {
-    return null;
-  }
-
-  if (typeof matcher === "string") {
-    return `named:${matcher}`;
-  }
-
-  if (typeof matcher !== "function") {
-    return null;
-  }
-
-  const matcherFn = matcher as MatcherFunction;
-  const existing = matcherIdentityMap.get(matcherFn);
-  if (existing) {
-    return existing;
-  }
-
-  const next = `fn:${++matcherIdentitySequence}`;
-  matcherIdentityMap.set(matcherFn, next);
-  return next;
-};
-
-const toTargetKey = (options: ConnectNexusStoreOptions<any>): string =>
-  JSON.stringify({
+const toTargetIdentity = (
+  options: ConnectNexusStoreOptions<any>,
+): TargetIdentity => ({
+  descriptorKey: JSON.stringify({
     descriptor: options.target?.descriptor ?? null,
-    matcher: toMatcherKey(options.target?.matcher),
-  });
+  }),
+  matcher: options.target?.matcher ?? null,
+});
 
-const toOptionKey = (options: ConnectNexusStoreOptions<any>): string =>
-  JSON.stringify({
-    timeout: options.timeout ?? null,
-    target: JSON.parse(toTargetKey(options)),
-  });
+const sameTarget = (left: TargetIdentity, right: TargetIdentity): boolean =>
+  left.descriptorKey === right.descriptorKey && left.matcher === right.matcher;
+
+const getLastKnownVersion = (status: RemoteStoreStatus): number | null => {
+  if (status.type === "ready") {
+    return status.version;
+  }
+
+  if (status.type === "disconnected" || status.type === "stale") {
+    return status.lastKnownVersion;
+  }
+
+  return null;
+};
 
 const sameStatus = (
   left: RemoteStoreStatus,
@@ -95,86 +90,89 @@ export const useRemoteStore = <
   U extends object = object,
 >(
   definition: NexusStoreDefinition<TState, TActions, U>,
-  options: ConnectNexusStoreOptions<U> = {},
+  options: UseRemoteStoreOptions<U> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
+  const { reconnectKey = null, ...connectOptions } = options;
   const nexus = useNexus();
   const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(
     null,
   );
   const [status, setStatus] = useState<RemoteStoreStatus>(INITIALIZING_STATUS);
   const [error, setError] = useState<Error | null>(null);
+  const [manualReconnectRevision, reconnect] = useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
   const activeStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
   const staleStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
-  const activeTargetKeyRef = useRef<string | null>(null);
+  const activeTargetRef = useRef<TargetIdentity | null>(null);
+  const lastConnectedStoreRef = useRef<RemoteStore<TState, TActions> | null>(
+    null,
+  );
+  const lastConnectedTargetRef = useRef<TargetIdentity | null>(null);
+  const effectTargetRef = useRef<TargetIdentity | null>(null);
   const lastStatusRef = useRef<RemoteStoreStatus>(INITIALIZING_STATUS);
   const connectVersionRef = useRef(0);
 
-  const targetKey = useMemo(() => toTargetKey(options), [options]);
-  const optionKey = useMemo(() => toOptionKey(options), [options]);
+  const target = toTargetIdentity(connectOptions);
+  const timeout = connectOptions.timeout ?? null;
+  const targetChangedBeforeEffect =
+    effectTargetRef.current !== null &&
+    !sameTarget(effectTargetRef.current, target);
+  const renderStatus: RemoteStoreStatus = targetChangedBeforeEffect
+    ? {
+        type: "stale",
+        lastKnownVersion: getLastKnownVersion(lastStatusRef.current),
+        reason: "target-changed",
+      }
+    : status;
 
   useEffect(() => {
+    effectTargetRef.current = target;
     connectVersionRef.current += 1;
     const version = connectVersionRef.current;
 
     const previousStore = activeStoreRef.current;
-    let previousLastKnownVersion: number | null = null;
-    let shouldSetStale = false;
+    const previousStatus = previousStore?.getStatus();
+    const previousLastKnownVersion = previousStatus
+      ? getLastKnownVersion(previousStatus)
+      : null;
 
-    if (previousStore) {
-      const previousStatus = previousStore.getStatus();
-      if (previousStatus.type === "ready") {
-        previousLastKnownVersion = previousStatus.version;
-      } else if (
-        previousStatus.type === "disconnected" ||
-        previousStatus.type === "stale"
-      ) {
-        previousLastKnownVersion = previousStatus.lastKnownVersion;
-      }
-    }
-
-    if (
-      staleStoreRef.current !== null &&
-      staleStoreRef.current !== previousStore
-    ) {
-      clearStoreStale(staleStoreRef.current);
-      staleStoreRef.current.destroy();
-      staleStoreRef.current = null;
-    }
-
-    if (previousStore) {
-      const previousStatus = previousStore.getStatus();
+    if (previousStore && previousStatus) {
       if (
         (previousStatus.type === "ready" ||
           previousStatus.type === "stale" ||
           previousStatus.type === "disconnected") &&
-        activeTargetKeyRef.current !== null &&
-        activeTargetKeyRef.current !== targetKey
+        activeTargetRef.current !== null &&
+        !sameTarget(activeTargetRef.current, target)
       ) {
         markStoreStale(previousStore);
 
         staleStoreRef.current = previousStore;
-        shouldSetStale = true;
       } else {
         clearStoreStale(previousStore);
         previousStore.destroy();
       }
 
       activeStoreRef.current = null;
-      activeTargetKeyRef.current = null;
+      activeTargetRef.current = null;
+    } else if (
+      lastConnectedStoreRef.current &&
+      lastConnectedTargetRef.current !== null &&
+      !sameTarget(lastConnectedTargetRef.current, target)
+    ) {
+      markStoreStale(lastConnectedStoreRef.current);
     }
 
     setStore(null);
 
-    if (!shouldSetStale) {
-      staleStoreRef.current = null;
-    }
     setStatus(INITIALIZING_STATUS);
     lastStatusRef.current = INITIALIZING_STATUS;
     setError(null);
 
     let cancelled = false;
 
-    void connectNexusStore(nexus, definition, options)
+    void connectNexusStore(nexus, definition, connectOptions)
       .then((remote) => {
         if (cancelled || version !== connectVersionRef.current) {
           remote.destroy();
@@ -189,7 +187,9 @@ export const useRemoteStore = <
 
         clearStoreStale(remote);
         activeStoreRef.current = remote;
-        activeTargetKeyRef.current = targetKey;
+        activeTargetRef.current = target;
+        lastConnectedStoreRef.current = remote;
+        lastConnectedTargetRef.current = target;
         setStore(remote);
         const nextStatus = remote.getStatus();
         setStatus(nextStatus);
@@ -201,7 +201,6 @@ export const useRemoteStore = <
         }
 
         if (staleStoreRef.current) {
-          clearStoreStale(staleStoreRef.current);
           staleStoreRef.current.destroy();
           staleStoreRef.current = null;
         }
@@ -222,14 +221,22 @@ export const useRemoteStore = <
     return () => {
       cancelled = true;
     };
-  }, [definition, nexus, optionKey, targetKey]);
+  }, [
+    definition,
+    manualReconnectRevision,
+    nexus,
+    reconnectKey,
+    target.descriptorKey,
+    target.matcher,
+    timeout,
+  ]);
 
   useEffect(() => {
     return () => {
       const activeStore = activeStoreRef.current;
       if (activeStore) {
         activeStoreRef.current = null;
-        activeTargetKeyRef.current = null;
+        activeTargetRef.current = null;
         clearStoreStale(activeStore);
         activeStore.destroy();
       }
@@ -278,8 +285,9 @@ export const useRemoteStore = <
   }, [store]);
 
   return {
-    store,
-    status,
+    store: targetChangedBeforeEffect ? null : store,
+    status: renderStatus,
     error,
+    reconnect,
   };
 };

@@ -42,15 +42,19 @@ Treat refs as lifecycle-scoped ownership handles, not global durable identities.
 
 ## Why does React sometimes keep the last selected value?
 
-Because keeping continuity during replacement or a failed new connection attempt can be more useful than falling back immediately.
+For a same-target replacement, keeping the last ready selected value can avoid unnecessary loading flicker while the replacement is pending or after that attempt fails.
 
-But this does not mean old target data is silently reused for a new target. Cross-target replacement is handled differently.
+After a failed same-target attempt, `status: "disconnected"` and `error` still mean there is no ready replacement; the retained value does not make a handle usable or indicate success. It does not apply to a target change. A target change is a stale handoff: selectors immediately return their configured fallback until the new target is ready, so old target data cannot appear as the new target's value.
 
-## Does `useRemoteStore()` guarantee same-target auto-rebuild after session loss?
+## Does `useRemoteStore()` automatically rebuild after session loss?
 
 No.
 
-`useRemoteStore()` is a higher-layer orchestration API over terminal raw-handle semantics. Same-target session loss does not guarantee automatic retry/rebuild unless your app remounts the consumer, changes hook inputs, or explicitly triggers a reconnect flow.
+`useRemoteStore()` is a higher-layer orchestration API over terminal raw-handle semantics. Change `reconnectKey` for an external committed session/lifecycle revision or call its stable `reconnect()` command to trigger a replacement acquisition attempt. This does not revive the old handle, replay actions, guarantee target availability, or add automatic retry/backoff behavior.
+
+## Does a remote store scope support both reconnect controls?
+
+Yes. `createRemoteStoreScope(definition)` accepts `reconnectKey` through `Provider` options, and `Scope.useRemoteStore().reconnect()` exposes the provider's shared stable command to every child. The provider owns one shared acquisition for the scope.
 
 ## Does Nexus State v1 support patches?
 

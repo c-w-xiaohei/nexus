@@ -234,11 +234,14 @@ import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
 
 const CounterScope = createRemoteStoreScope(counterStore);
 
-function App() {
+function App({ sessionEpoch }: { sessionEpoch: number }) {
   return (
     <NexusProvider nexus={nexus}>
       <CounterScope.Provider
-        options={{ target: { descriptor: { context: "background" } } }}
+        options={{
+          target: { descriptor: { context: "background" } },
+          reconnectKey: sessionEpoch,
+        }}
       >
         <CounterView />
       </CounterScope.Provider>
@@ -247,6 +250,7 @@ function App() {
 }
 
 function CounterView() {
+  const { reconnect } = CounterScope.useRemoteStore();
   const count = CounterScope.useSelector((state) => state.count, {
     fallback: 0,
   });
@@ -254,7 +258,7 @@ function CounterView() {
   const status = CounterScope.useStatus();
 
   if (!actions || status.type !== "ready") {
-    return <span>Loading...</span>;
+    return <button onClick={reconnect}>Reconnect</button>;
   }
 
   return <button onClick={() => actions.increment(1)}>{count}</button>;
@@ -262,6 +266,8 @@ function CounterView() {
 ```
 
 The scope provider creates one shared remote store connection for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately.
+
+For React session/lifecycle replacement, pass an external committed revision through scope provider `reconnectKey`, or call `const { reconnect } = CounterScope.useRemoteStore()` at the top level of a scope leaf and invoke it from an interaction. Both trigger a replacement acquisition attempt; see `docs/state/react.md` and `docs/state/lifecycle-and-errors.md` for lifecycle and selector handoff semantics.
 
 ## What To Read Next
 
