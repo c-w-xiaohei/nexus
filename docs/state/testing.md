@@ -69,8 +69,12 @@ Use React tests when you want to verify:
 - provider wiring
 - `useNexus()` fail-fast behavior
 - `useRemoteStore()` lifecycle semantics
+- `reconnectKey` changes and stable `reconnect()` commands
+- disposal of a pending acquisition that resolves after a newer request
+- scope sharing, including shared reconnect controls
 - selector fallback behavior
-- target handoff behavior
+- same-target continuity after a failed replacement, with `disconnected` status/error
+- immediate cross-target fallback handoff, including after a same-target failure
 
 Current examples live in:
 
@@ -89,6 +93,8 @@ Use integration tests when you need to prove:
 - host-side cleanup removes orphaned remote resources/subscriptions
 - reconnect paths rebuild handles/resources explicitly instead of reusing terminal ones
 - restart/session-loss paths require explicit reacquire/rebuild semantics
+
+Use React adapter tests for hook-level replacement semantics. Use real multi-context integration tests for actual restart, transport, and session behavior.
 
 Current examples live in:
 

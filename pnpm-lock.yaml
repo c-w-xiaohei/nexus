@@ -170,10 +170,6 @@ importers:
         version: 4.0.18(@types/node@24.10.2)(jsdom@26.1.0)
 
   packages/react:
-    dependencies:
-      neverthrow:
-        specifier: 8.2.0
-        version: 8.2.0
     devDependencies:
       '@nexus-js/core':
         specifier: workspace:*

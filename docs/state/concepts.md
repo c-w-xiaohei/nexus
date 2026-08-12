@@ -95,8 +95,9 @@ Headless core behavior:
 Hook-level behavior:
 
 - hooks expose UI-oriented lifecycle (`status`, `store`, `error`) during initial load and replacement
-- hook code can keep rendering continuity while replacement is in progress
-- same-target session loss does not imply guaranteed automatic retry/rebuild unless the app remounts, changes hook inputs, or explicitly orchestrates reconnect
+- `reconnectKey` represents an external committed session/lifecycle revision, while stable `reconnect()` is an imperative request; both feed the same replacement path
+- same-target replacement can preserve a selector's last ready value even after an attempt fails, but `disconnected` status and `error` mean no ready replacement exists; a target change is a stale handoff and selectors immediately use fallback until the new target is ready
+- same-target session loss does not imply automatic retry/rebuild; an explicit control only triggers a replacement acquisition attempt
 - this is higher-layer orchestration, not in-place healing of a terminal raw handle
 
 ## Stale vs Disconnected

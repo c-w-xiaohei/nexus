@@ -50,8 +50,11 @@ After a `RemoteStore` exists, later transport loss or replacement-attempt failur
 Hook layer (`useRemoteStore`):
 
 - exposes status/error fields suitable for rendering initial loading, failure, and replacement progress
-- may retain UI continuity during replacement setup
+- changing `reconnectKey` or calling stable `reconnect()` triggers a replacement acquisition attempt using current committed inputs
+- may retain a last ready selector value when same-target replacement is pending or fails; `disconnected` status and `error` still mean no ready replacement exists
+- target changes instead use selector fallback immediately until the new target is ready, including after a same-target failure
 - still does not revive terminal raw handles in place
+- does not guarantee that a target is available or that a replacement attempt succeeds
 
 ## `stale`
 
@@ -120,6 +123,8 @@ These are different ideas:
 Nexus State supports replacement.
 
 It does not treat a terminal `RemoteStore` instance as something that silently recovers in place.
+
+React replacement controls are orchestration, not a core retry policy. `useRemoteStore(definition, { reconnectKey })` responds to an external committed lifecycle revision, while `reconnect()` is a stable command for callbacks and interactions. They feed the same replacement path, can be used together, and neither replays an action.
 
 The same distinction applies to raw core handles:
 

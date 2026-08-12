@@ -6,10 +6,6 @@ export {
 } from "./create-remote-store-scope";
 export { useNexus } from "./use-nexus";
 export {
-  useNexusService,
-  type UseNexusServiceResult,
-} from "./use-nexus-service";
-export {
   useRemoteStore,
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,

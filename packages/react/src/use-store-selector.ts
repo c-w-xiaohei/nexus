@@ -2,17 +2,6 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { RemoteStore } from "@nexus-js/core/state";
 import type { UseRemoteStoreResult } from "./use-remote-store";
 
-const isStoreStaleByAdapterMarker = (store: RemoteStore<any, any>): boolean => {
-  if (staleStores.has(store)) {
-    return true;
-  }
-
-  const marker = (store as unknown as Record<symbol, unknown>)[
-    Symbol.for("nexus.state.remote-store.mark-stale")
-  ];
-  return typeof marker !== "undefined" && store.getStatus().type === "stale";
-};
-
 const staleStores = new WeakSet<RemoteStore<any, any>>();
 
 export const markStoreAsAdapterStale = (store: RemoteStore<any, any>): void => {
@@ -64,12 +53,16 @@ export const useStoreSelector = <
   const selectedFromStore = useSyncExternalStore(
     subscribe,
     () => {
+      if (remote.status.type === "stale") {
+        return options.fallback;
+      }
+
       if (!remote.store) {
         if (!lastReadyRef.current) {
           return options.fallback;
         }
 
-        if (isStoreStaleByAdapterMarker(lastReadyRef.current.store)) {
+        if (staleStores.has(lastReadyRef.current.store)) {
           return options.fallback;
         }
 
