@@ -8,11 +8,11 @@ import {
   useRemoteStore,
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,
-} from "./use-remote-store";
+} from "./use-remote-store.js";
 import {
   useStoreSelector,
   type UseStoreSelectorOptions,
-} from "./use-store-selector";
+} from "./use-store-selector.js";
 
 type ActionFunction = (...args: any[]) => any;
 

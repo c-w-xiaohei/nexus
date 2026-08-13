@@ -1,32 +1,32 @@
-import type { Target, ServiceProvider } from "@/api/types/config";
-import type { NexusInstance } from "@/api/types";
-import { Token } from "@/api/token";
+import type { Target, ServiceProvider } from "../api/types/config.js";
+import type { NexusInstance } from "../api/types/index.js";
+import { Token } from "../api/token.js";
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
   SERVICE_ON_DISCONNECT,
   type ServiceInvocationContext,
-} from "@/service/service-invocation-hooks";
+} from "../service/service-invocation-hooks.js";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
   RELEASE_PROXY_SYMBOL,
-} from "@/types/symbols";
-import { isRefWrapper } from "@/types/ref-wrapper";
-import type { PlatformMeta, EndpointMeta } from "@/types/identity";
+} from "../types/symbols.js";
+import { isRefWrapper } from "../types/ref-wrapper.js";
+import type { PlatformMeta, EndpointMeta } from "../types/identity.js";
 import {
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-} from "@/state/errors";
+} from "../state/errors.js";
 import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
-} from "@/state/types";
+} from "../state/types.js";
 import type {
   SnapshotEnvelope,
   TerminalEnvelope,
   TerminalReason,
-} from "@/state/protocol";
+} from "../state/protocol.js";
 
 export interface RelayBaseContext<U, P> {
   origin: U;

@@ -173,10 +173,11 @@ export async function createL3Endpoints<
     ),
   });
   hostStack.handlers.onMessage = (msg, connId) =>
-    hostEngine.safeOnMessage(msg, connId).match(
-      () => undefined,
-      () => undefined,
-    );
+    void hostEngine
+      .safeOnMessage(msg, connId)
+      .then((result) =>
+        result.match({ ok: () => undefined, err: () => undefined }),
+      );
   hostStack.handlers.onDisconnect = (connId) => hostEngine.onDisconnect(connId);
 
   // The host's mock endpoint will listen for incoming connections.
@@ -193,10 +194,11 @@ export async function createL3Endpoints<
   });
   const clientEngine = new Engine(clientStack.connectionManager);
   clientStack.handlers.onMessage = (msg, connId) =>
-    clientEngine.safeOnMessage(msg, connId).match(
-      () => undefined,
-      () => undefined,
-    );
+    void clientEngine
+      .safeOnMessage(msg, connId)
+      .then((result) =>
+        result.match({ ok: () => undefined, err: () => undefined }),
+      );
   clientStack.handlers.onDisconnect = (connId) =>
     clientEngine.onDisconnect(connId);
 

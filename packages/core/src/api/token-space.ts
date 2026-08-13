@@ -1,9 +1,14 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import type { InlineTarget } from "./types/config";
-import { Token, type TokenOptions, validateDefaultTarget as validateTokenDefaultTarget } from "./token";
-import { NexusUsageError } from "@/errors";
-import { fn } from "@/utils/fn";
-import { err, ok, type Result } from "neverthrow";
+import type { EndpointMeta, PlatformMeta } from "../types/identity.js";
+import type { InlineTarget } from "./types/config.js";
+import {
+  Token,
+  type TokenOptions,
+  validateDefaultTarget as validateTokenDefaultTarget,
+} from "./token.js";
+import { NexusUsageError } from "../errors/index.js";
+import { fn } from "../utils/fn.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import { z } from "zod";
 
 /**
@@ -54,9 +59,10 @@ const validateTokenSpaceName = fn(NonEmptyNameSchema, (name) => name);
 const TokenSpaceDefaultTargetSchema = z
   .object({
     descriptor: z
-      .custom<
-        Partial<EndpointMeta>
-      >((value) => typeof value === "object" && value !== null && !Array.isArray(value))
+      .custom<Partial<EndpointMeta>>(
+        (value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+      )
       .optional(),
     matcher: z
       .custom<unknown>((value) => typeof value === "function")
@@ -152,16 +158,13 @@ export class TokenSpace<
    * @param serviceName Local name of the Token within the current namespace
    * @returns Newly created Token instance with ID as full path concatenated with service name
    */
-  token<T>(
-    serviceName: string,
-    options?: TokenOptions<U>,
-  ): Token<T, U> {
-    return this.safeToken<T>(serviceName, options).match(
-      (value) => value,
-      (error) => {
+  token<T>(serviceName: string, options?: TokenOptions<U>): Token<T, U> {
+    return this.safeToken<T>(serviceName, options).match({
+      ok: (value) => value,
+      err: (error) => {
         throw error;
       },
-    );
+    });
   }
 
   safeToken<T>(
@@ -199,12 +202,12 @@ export class TokenSpace<
     name: string,
     config?: ChildTokenSpaceConfig<U, M, D>,
   ): TokenSpace<U, P, M, D> {
-    return this.safeSpace(name, config).match(
-      (value) => value,
-      (error) => {
+    return this.safeSpace(name, config).match({
+      ok: (value) => value,
+      err: (error) => {
         throw error;
       },
-    );
+    });
   }
 
   safeSpace(

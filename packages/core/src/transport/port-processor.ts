@@ -1,8 +1,9 @@
-import type { NexusMessage } from "../types/message";
-import type { IPort } from "./types/port";
-import type { ISerializer } from "./serializers/interface";
-import { NexusProtocolError } from "../errors/transport-errors";
-import { err, ok, type Result } from "neverthrow";
+import type { NexusMessage } from "../types/message.js";
+import type { IPort } from "./types/port.js";
+import type { ISerializer } from "./serializers/interface.js";
+import { NexusProtocolError } from "../errors/transport-errors.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 export interface PortProcessorHandlers {
   onLogicalMessage: (message: NexusMessage) => void;

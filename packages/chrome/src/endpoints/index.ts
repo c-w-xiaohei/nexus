@@ -2,6 +2,6 @@
  * Chrome endpoint implementations
  */
 
-export { BackgroundEndpoint } from "./background";
-export { ContentScriptEndpoint } from "./content-script";
-export { UIClientEndpoint } from "./ui-client";
+export { BackgroundEndpoint } from "./background.js";
+export { ContentScriptEndpoint } from "./content-script.js";
+export { UIClientEndpoint } from "./ui-client.js";

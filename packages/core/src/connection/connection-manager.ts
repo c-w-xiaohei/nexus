@@ -1,25 +1,26 @@
-import { Transport } from "../transport/transport";
+import { Transport } from "../transport/transport.js";
 import type {
   PortProcessor,
   PortProcessorHandlers,
-} from "../transport/port-processor";
-import type { IdentityUpdateMessage, NexusMessage } from "../types/message";
-import { NexusMessageType } from "../types/message";
+} from "../transport/port-processor.js";
+import type { IdentityUpdateMessage, NexusMessage } from "../types/message.js";
+import { NexusMessageType } from "../types/message.js";
 import type {
   ConnectionContext,
   PlatformMeta,
   EndpointMeta,
-} from "../types/identity";
-import { LogicalConnection } from "./logical-connection";
+} from "../types/identity.js";
+import { LogicalConnection } from "./logical-connection.js";
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
   Descriptor,
   MessageTarget,
   ResolveOptions,
-} from "./types";
-import { Logger } from "@/logger";
-import { ResultAsync, err, errAsync, ok, type Result } from "neverthrow";
+} from "./types.js";
+import { Logger } from "../logger.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 type ConnectionManagerErrorCode =
   | "E_HANDSHAKE_FAILED"
@@ -113,9 +114,8 @@ export class ConnectionManager<
   private nextConnectionOrdinal = 1;
   private nextMessageOrdinal = 1;
   private initialized = false;
-  private initializationInFlight: ResultAsync<
-    void,
-    ConnectionManagerError
+  private initializationInFlight: Promise<
+    Result<void, ConnectionManagerError>
   > | null = null;
 
   constructor(
@@ -138,93 +138,99 @@ export class ConnectionManager<
     );
   }
 
-  public safeInitialize(): ResultAsync<void, ConnectionManagerError> {
+  public async safeInitialize(): Promise<Result<void, ConnectionManagerError>> {
     if (this.initialized) {
-      return ResultAsync.fromSafePromise(Promise.resolve(undefined));
+      return ok(undefined);
     }
     if (this.initializationInFlight) {
       return this.initializationInFlight;
     }
 
-    this.initializationInFlight = Transport.safeListen(
+    const initialization = Transport.safeListen(
       this.transport,
       (createProcessor, platformMetadata) => {
         const connectionId = this.allocateConnectionId();
-        void ResultAsync.fromPromise(
-          this.acceptIncomingConnection({
-            connectionId,
-            platformMetadata: (platformMetadata ?? {}) as P,
-            createProcessor,
-          }),
-          (error) =>
+        void Result.tryPromise({
+          try: () =>
+            this.acceptIncomingConnection({
+              connectionId,
+              platformMetadata: (platformMetadata ?? {}) as P,
+              createProcessor,
+            }),
+          catch: (error) =>
             connectionManagerErrorFromUnknown(error, {
               message: `Unexpected error accepting incoming connection #${connectionId}`,
               context: { connectionId },
             }),
-        ).match(
-          () => undefined,
-          (error) => {
-            this.logger.error(
-              `Unexpected error accepting incoming connection #${connectionId}`,
-              error,
-            );
-          },
+        }).then((result) =>
+          result.match({
+            ok: () => undefined,
+            err: (error) => {
+              this.logger.error(
+                `Unexpected error accepting incoming connection #${connectionId}`,
+                error,
+              );
+            },
+          }),
         );
       },
-    )
-      .mapErr((error) =>
-        connectionManagerErrorFromUnknown(error, {
-          message: "Failed to start connection manager listener",
+    ).then((listenResult) =>
+      listenResult
+        .mapError((error) =>
+          connectionManagerErrorFromUnknown(error, {
+            message: "Failed to start connection manager listener",
+          }),
+        )
+        .map(() => {
+          this.initialized = true;
+          // Pre-warm is asynchronous fire-and-forget. This method returns once
+          // listener activation succeeds (or fails with Result error).
+          this.preWarmConnections();
         }),
-      )
-      .map(() => {
-        this.initialized = true;
-        // Pre-warm is asynchronous fire-and-forget. This method returns once
-        // listener activation succeeds (or fails with Result error).
-        this.preWarmConnections();
-      })
-      .andTee(() => {
-        this.initializationInFlight = null;
-      })
-      .orTee(() => {
-        this.initializationInFlight = null;
-      });
-
+    );
+    this.initializationInFlight = initialization.then((value) => {
+      this.initializationInFlight = null;
+      return value;
+    });
     return this.initializationInFlight;
   }
 
   public safeResolveConnection(
     options: ResolveOptions<U, P>,
-  ): ResultAsync<LogicalConnection<U, P> | null, ConnectionManagerError> {
+  ): Promise<Result<LogicalConnection<U, P> | null, ConnectionManagerError>> {
     const initializedCheck = this.ensureInitialized("safeResolveConnection");
     if (initializedCheck.isErr()) {
-      return errAsync(initializedCheck.error);
+      return Promise.resolve(err(initializedCheck.error));
     }
 
-    return ResultAsync.fromPromise(this.resolveConnectionUnsafe(options), (e) =>
-      connectionManagerErrorFromUnknown(e, {
-        message: "Failed to resolve connection",
-        context: { options },
-      }),
-    );
+    return Result.tryPromise({
+      try: () => this.resolveConnectionUnsafe(options),
+      catch: (e) =>
+        connectionManagerErrorFromUnknown(e, {
+          message: "Failed to resolve connection",
+          context: { options },
+        }),
+    });
   }
 
   public safeResolveConnections(
     options: ResolveOptions<U, P>,
-  ): ResultAsync<readonly LogicalConnection<U, P>[], ConnectionManagerError> {
+  ): Promise<
+    Result<readonly LogicalConnection<U, P>[], ConnectionManagerError>
+  > {
     const initializedCheck = this.ensureInitialized("safeResolveConnections");
     if (initializedCheck.isErr()) {
-      return errAsync(initializedCheck.error);
+      return Promise.resolve(err(initializedCheck.error));
     }
 
-    return ResultAsync.fromPromise(
-      this.resolveConnectionsUnsafe(options),
-      (e) =>
+    return Result.tryPromise({
+      try: () => this.resolveConnectionsUnsafe(options),
+      catch: (e) =>
         connectionManagerErrorFromUnknown(e, {
           message: "Failed to resolve connections",
           context: { options },
         }),
-    );
+    });
   }
 
   public safeSendMessage(
@@ -324,20 +330,22 @@ export class ConnectionManager<
 
     for (const target of this.config.connectTo) {
       this.logger.info("Initiating pre-warmed connection.", target);
-      this.safeResolveConnection(target).match(
-        () => undefined,
-        (error) => {
-          console.error(
-            "Nexus DEV: Failed to establish pre-warmed connection for target:",
-            target,
-            error,
-          );
-          this.logger.error(
-            "Failed to establish pre-warmed connection.",
-            target,
-            error,
-          );
-        },
+      void this.safeResolveConnection(target).then((result) =>
+        result.match({
+          ok: () => undefined,
+          err: (error) => {
+            console.error(
+              "Nexus DEV: Failed to establish pre-warmed connection for target:",
+              target,
+              error,
+            );
+            this.logger.error(
+              "Failed to establish pre-warmed connection.",
+              target,
+              error,
+            );
+          },
+        }),
       );
     }
   }
@@ -495,9 +503,8 @@ export class ConnectionManager<
       input.connectionId,
       connection,
       pendingMessages,
-    ).match(
-      () => undefined,
-      () => undefined,
+    ).then((result) =>
+      result.match({ ok: () => undefined, err: () => undefined }),
     );
 
     if (disconnectedBeforeReady) {
@@ -720,15 +727,17 @@ export class ConnectionManager<
           return;
         }
 
-        void connection.safeHandleMessage(message).match(
-          () => undefined,
-          (error) => {
-            this.logger.error(
-              `Unhandled error while processing incoming message on #${options.connectionId}`,
-              error,
-            );
-            connection.close();
-          },
+        void connection.safeHandleMessage(message).then((result) =>
+          result.match({
+            ok: () => undefined,
+            err: (error) => {
+              this.logger.error(
+                `Unhandled error while processing incoming message on #${options.connectionId}`,
+                error,
+              );
+              connection.close();
+            },
+          }),
         );
       },
       onDisconnect: () => {
@@ -897,10 +906,7 @@ function isDeepMatch(target: any, source: any): boolean {
   return true;
 }
 
-function findReadyConnections<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
->(
+function findReadyConnections<U extends EndpointMeta, P extends PlatformMeta>(
   connections: ReadonlyMap<string, LogicalConnection<U, P>>,
   options: ResolveOptions<U, P>,
 ): readonly LogicalConnection<U, P>[] {
@@ -1030,44 +1036,43 @@ function broadcastIdentityUpdate<
   return ok(undefined);
 }
 
-function flushBufferedMessages<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
->(
+function flushBufferedMessages<U extends EndpointMeta, P extends PlatformMeta>(
   logger: Logger,
   connectionId: string,
   connection: LogicalConnection<U, P>,
   pendingMessages: NexusMessage[],
-): ResultAsync<void, ConnectionManagerError> {
+): Promise<Result<void, ConnectionManagerError>> {
   const messages = pendingMessages.splice(0);
 
-  let chain: ResultAsync<void, ConnectionManagerError> =
-    ResultAsync.fromSafePromise(Promise.resolve()).mapErr((error) =>
-      connectionManagerErrorFromUnknown(error, {
-        message: `Failed to initialize buffered message processing chain for #${connectionId}`,
-        context: { connectionId },
-      }),
-    );
+  let chain: Promise<Result<void, ConnectionManagerError>> = Promise.resolve(
+    ok(undefined),
+  );
 
   for (const message of messages) {
-    chain = chain.andThen(() =>
-      connection.safeHandleMessage(message).mapErr((error) =>
-        connectionManagerErrorFromUnknown(error, {
-          message: `Unhandled error while processing queued message on #${connectionId}`,
-          context: { connectionId, messageId: message.id ?? "N/A" },
-        }),
+    chain = chain.then((result) =>
+      result.andThenAsync(() =>
+        connection.safeHandleMessage(message).then((next) =>
+          next.mapError((error) =>
+            connectionManagerErrorFromUnknown(error, {
+              message: `Unhandled error while processing queued message on #${connectionId}`,
+              context: { connectionId, messageId: message.id ?? "N/A" },
+            }),
+          ),
+        ),
       ),
     );
   }
 
-  return chain.orElse((error) => {
-    logger.error(
-      `Unhandled error while processing queued message on #${connectionId}`,
-      error,
-    );
-    connection.close();
-    return errAsync(error);
-  });
+  return chain.then((result) =>
+    result.tryRecover((error) => {
+      logger.error(
+        `Unhandled error while processing queued message on #${connectionId}`,
+        error,
+      );
+      connection.close();
+      return err(error);
+    }),
+  );
 }
 
 function registerGroups(

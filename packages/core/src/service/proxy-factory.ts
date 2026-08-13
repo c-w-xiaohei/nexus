@@ -1,11 +1,11 @@
-import type { EndpointMeta } from "../types/identity";
-import type { DispatchCallOptions } from "./engine";
-import type { ResourceManager } from "./resource-manager";
-import type { CallTarget, ResolveOptions } from "@/connection/types";
-import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { Logger } from "@/logger";
-import type { ResultAsync } from "neverthrow";
-import { NexusResourceError } from "@/errors/resource-errors";
+import type { EndpointMeta } from "../types/identity.js";
+import type { DispatchCallOptions } from "./engine.js";
+import type { ResourceManager } from "./resource-manager.js";
+import type { CallTarget, ResolveOptions } from "../connection/types.js";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
+import { Logger } from "../logger.js";
+import type { Result } from "better-result";
+import { NexusResourceError } from "../errors/resource-errors.js";
 
 type ReleaseContext = {
   resourceId: string;
@@ -36,7 +36,7 @@ export interface CreateProxyOptions<U extends EndpointMeta> {
 export interface ProxyFactoryCallbacks {
   safeDispatchCall(
     options: DispatchCallOptions,
-  ): ResultAsync<any, globalThis.Error>;
+  ): Promise<Result<any, globalThis.Error>>;
   dispatchRelease(resourceId: string, connectionId: string): void;
 }
 
@@ -90,16 +90,16 @@ export class ProxyFactory<U extends EndpointMeta> {
     return value;
   }
 
-  private unwrapResultAsync<T>(
-    value: ResultAsync<T, globalThis.Error>,
+  private unwrapResult<T>(
+    value: Promise<Result<T, globalThis.Error>>,
   ): Promise<T> {
-    return value.match(
-      (okValue) => okValue,
-      (error) => {
-        this.logger.error("Safe call failed", error);
-        throw error;
-      },
-    );
+    return value.then((result) => {
+      if (result.isErr()) {
+        this.logger.error("Safe call failed", result.error);
+        throw result.error;
+      }
+      return result.value;
+    });
   }
 
   private isInternalAccess(prop: string | symbol): boolean {
@@ -124,7 +124,7 @@ export class ProxyFactory<U extends EndpointMeta> {
               return undefined;
             }
 
-            let result: ResultAsync<any, globalThis.Error>;
+            let result: Promise<Result<any, globalThis.Error>>;
             try {
               result = this.engine.safeDispatchCall(
                 config.buildCallOptions("GET", path),
@@ -133,7 +133,7 @@ export class ProxyFactory<U extends EndpointMeta> {
               const rejected = toRejectedPromise(error);
               return rejected.then.bind(rejected);
             }
-            const unwrapped = this.unwrapResultAsync(result);
+            const unwrapped = this.unwrapResult(result);
             return unwrapped.then.bind(unwrapped);
           }
 
@@ -156,7 +156,7 @@ export class ProxyFactory<U extends EndpointMeta> {
         apply: (_target, _thisArg, args) => {
           try {
             return this.trackFireAndForget(
-              this.unwrapResultAsync(
+              this.unwrapResult(
                 this.engine.safeDispatchCall(
                   config.buildCallOptions("APPLY", path, { args }),
                 ),
@@ -171,7 +171,7 @@ export class ProxyFactory<U extends EndpointMeta> {
               set: (_target: any, prop: string | symbol, value: any) => {
                 try {
                   this.trackFireAndForget(
-                    this.unwrapResultAsync(
+                    this.unwrapResult(
                       this.engine.safeDispatchCall(
                         config.buildCallOptions(
                           "SET",

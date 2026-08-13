@@ -7,7 +7,7 @@ import {
   safeConnectNexusStore,
   type NexusStoreServiceContract,
   type StoreTokenMetadata,
-} from "./index";
+} from "./index.js";
 
 interface CounterState {
   count: number;

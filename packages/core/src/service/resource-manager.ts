@@ -2,11 +2,12 @@ import {
   LocalResourceRecord,
   LocalResourceType,
   RemoteProxyRecord,
-} from "./types";
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
-import { NexusConfigurationError } from "@/errors";
-import { Logger } from "@/logger";
-import { err, ok, type Result } from "neverthrow";
+} from "./types/index.js";
+import type { NexusAuthorizationPolicy } from "../api/types/config.js";
+import { NexusConfigurationError } from "../errors/index.js";
+import { Logger } from "../logger.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 export namespace ResourceManager {
   export interface ExposedServiceRecord {

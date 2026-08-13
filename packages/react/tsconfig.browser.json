@@ -6,6 +6,9 @@
     "tests/browser/**/*.tsx"
   ],
   "compilerOptions": {
+    "paths": {
+      "@nexus-js/react": ["./src/index.ts"]
+    },
     "types": ["@playwright/test", "vite/client"]
   }
 }

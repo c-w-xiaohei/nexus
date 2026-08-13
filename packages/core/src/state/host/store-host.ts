@@ -3,8 +3,9 @@ import {
   NexusStoreActionError,
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-} from "../errors";
-import { Result, ResultAsync, err, errAsync, ok } from "neverthrow";
+} from "../errors.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import type {
   ActionArgs,
   ActionResult,
@@ -12,13 +13,13 @@ import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
   NexusStoreValidationSchemas,
-} from "../types";
+} from "../types.js";
 import {
   DispatchRequestEnvelopeSchema,
   type DispatchResultEnvelope,
-} from "../protocol";
-import type { ServiceInvocationContext } from "@/service/service-invocation-hooks";
-import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+} from "../protocol.js";
+import type { ServiceInvocationContext } from "../../service/service-invocation-hooks.js";
+import { RELEASE_PROXY_SYMBOL } from "../../types/symbols.js";
 
 interface SubscriptionRecord<TState extends object> {
   readonly onSync: (event: {
@@ -226,37 +227,17 @@ class StoreHostEntity<
     version: number;
     state: TState;
   }> {
-    return ResultAsync.fromSafePromise(Promise.resolve(this.safeEnsureActive()))
-      .andThen((active) =>
-        active.isErr()
-          ? errAsync(active.error)
-          : ResultAsync.fromSafePromise(Promise.resolve(undefined)),
-      )
-      .andThen(() => {
-        const ownerConnectionId = options?.ownerConnectionId;
-        if (
-          ownerConnectionId &&
-          this.disconnectedConnections.has(ownerConnectionId)
-        ) {
-          return errAsync(
-            new NexusStoreDisconnectedError(
-              "Nexus State host subscription owner connection is already disconnected.",
-            ),
-          );
-        }
-
-        return ResultAsync.fromSafePromise(Promise.resolve(undefined));
-      })
-      .map(() => {
-        const ownerConnectionId = options?.ownerConnectionId;
-        return this.addSubscription(onSync, ownerConnectionId);
-      })
-      .match(
-        (value) => value,
-        (error) => {
-          throw error;
-        },
+    const active = this.safeEnsureActive();
+    if (active.isErr()) throw active.error;
+    if (
+      options?.ownerConnectionId &&
+      this.disconnectedConnections.has(options.ownerConnectionId)
+    ) {
+      throw new NexusStoreDisconnectedError(
+        "Nexus State host subscription owner connection is already disconnected.",
       );
+    }
+    return this.addSubscription(onSync, options?.ownerConnectionId);
   }
 
   public async unsubscribe(subscriptionId: string): Promise<void> {
@@ -276,15 +257,15 @@ class StoreHostEntity<
       void,
       NexusStoreProtocolError
     > => {
-      const parsedDispatchRequestResult = Result.fromThrowable(
-        () =>
+      const parsedDispatchRequestResult = Result.try({
+        try: () =>
           DispatchRequestEnvelopeSchema.safeParse({
             type: "dispatch-request",
             action,
             args,
           }),
-        (error) => error,
-      )();
+        catch: (error) => error,
+      });
       if (parsedDispatchRequestResult.isErr()) {
         return err(
           new NexusStoreProtocolError("Invalid dispatch request envelope.", {
@@ -319,59 +300,64 @@ class StoreHostEntity<
       );
       this.workingSnapshot = this.cloneSnapshot(previousSnapshot);
 
-      const run = await (
-        actionFnResult.isErr()
-          ? ResultAsync.fromPromise<
-              ActionResult<TActions, K>,
-              NexusStoreProtocolError | NexusStoreDisconnectedError
-            >(Promise.reject(actionFnResult.error), (error) => error as any)
-          : ResultAsync.fromPromise(
+      const run = actionFnResult.isErr()
+        ? actionFnResult
+        : await Result.tryPromise({
+            try: () =>
               Promise.resolve().then(() =>
                 actionFnResult.value(
                   ...((args ?? []) as ActionArgs<TActions, K>),
                 ),
               ),
-              (error) =>
-                new NexusStoreActionError("Store action failed.", {
-                  cause: error,
-                }),
-            )
-      )
-        .map((result) => {
-          const activeBeforeCommit = this.safeEnsureActive();
-          if (activeBeforeCommit.isErr()) {
-            throw activeBeforeCommit.error;
-          }
+            catch: (error) =>
+              new NexusStoreActionError("Store action failed.", {
+                cause: error,
+              }),
+          });
+      const completed: Result<
+        DispatchResultEnvelope & { result: ActionResult<TActions, K> },
+        Error
+      > = run.isErr()
+        ? err(run.error)
+        : (() => {
+            try {
+              const result = run.value;
+              const activeBeforeCommit = this.safeEnsureActive();
+              if (activeBeforeCommit.isErr()) {
+                throw activeBeforeCommit.error;
+              }
 
-          const committedSnapshot = this.validateStateOrThrow(
-            this.workingSnapshot,
-            "Invalid store state payload.",
-          );
-          const validatedResult = this.validateActionResultOrThrow(
-            action,
-            result,
-          );
+              const committedSnapshot = this.validateStateOrThrow(
+                this.workingSnapshot,
+                "Invalid store state payload.",
+              );
+              const validatedResult = this.validateActionResultOrThrow(
+                action,
+                result,
+              );
 
-          this.localStore.setState({ snapshot: committedSnapshot });
-          this.version += 1;
-          this.emitSnapshot(committedSnapshot);
+              this.localStore.setState({ snapshot: committedSnapshot });
+              this.version += 1;
+              this.emitSnapshot(committedSnapshot);
 
-          return {
-            type: "dispatch-result" as const,
-            committedVersion: this.version,
-            result: validatedResult,
-          };
-        })
-        .mapErr((error) => {
-          this.workingSnapshot = this.cloneSnapshot(previousSnapshot);
-          return error;
-        });
+              return ok({
+                type: "dispatch-result" as const,
+                committedVersion: this.version,
+                result: validatedResult,
+              });
+            } catch (error) {
+              return err(
+                error instanceof Error ? error : new Error(String(error)),
+              );
+            }
+          })();
 
-      if (run.isErr()) {
-        throw run.error;
+      if (completed.isErr()) {
+        this.workingSnapshot = this.cloneSnapshot(previousSnapshot);
+        throw completed.error;
       }
 
-      return run.value;
+      return completed.value;
     };
 
     const run = this.dispatchChain.then(execute, execute);

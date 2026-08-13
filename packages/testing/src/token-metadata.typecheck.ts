@@ -1,5 +1,5 @@
 import { Token } from "@nexus-js/core";
-import { createMockNexus } from "./index";
+import { createMockNexus } from "./index.js";
 
 interface PingService {
   ping(): string;

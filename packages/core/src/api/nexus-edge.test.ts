@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { Nexus } from "./nexus";
 import { NexusUsageError } from "../errors/usage-errors";
 import { Token } from "./token";
-import { okAsync } from "neverthrow";
+import { Result } from "better-result";
+const { ok } = Result;
 describe("Nexus Safe API Edge Cases", () => {
   const waitForLifecycleState = async (nexus: Nexus, state: string) => {
     await vi.waitFor(() => {
@@ -56,9 +57,7 @@ describe("Nexus Safe API Edge Cases", () => {
         nexus as any
       ).engine.resourceManager.getExposedService(token.id);
       expect(registered).toBe(service);
-      expect((registered as typeof service)[hook]).toBe(
-        service[hook],
-      );
+      expect((registered as typeof service)[hook]).toBe(service[hook]);
     });
 
     it("appends providers across repeated configure calls by reference", async () => {
@@ -182,9 +181,9 @@ describe("Nexus Safe API Edge Cases", () => {
       const firstPolicy = { canCall: vi.fn(() => true) };
       const secondPolicy = { canCall: vi.fn(() => false) };
 
-      expect(nexus.safeProvide(token, first, { policy: firstPolicy }).isOk()).toBe(
-        true,
-      );
+      expect(
+        nexus.safeProvide(token, first, { policy: firstPolicy }).isOk(),
+      ).toBe(true);
       const result = nexus.safeProvide(token, second, { policy: secondPolicy });
 
       expect(result.isOk()).toBe(true);
@@ -379,7 +378,9 @@ describe("Nexus Safe API Edge Cases", () => {
       });
       await nexus.ready();
 
-      const registered = (nexus as any).engine.resourceManager.getExposedServiceRecord(token.id);
+      const registered = (
+        nexus as any
+      ).engine.resourceManager.getExposedServiceRecord(token.id);
       expect(registered).toMatchObject({
         service: second,
         policy: secondPolicy,
@@ -519,10 +520,9 @@ describe("Nexus Safe API Edge Cases", () => {
 
       const nexus = new Nexus();
       class DecoratedService {}
-      nexus.Expose(new Token<object>("decorator:duplicate"))(
-        DecoratedService,
-        { kind: "class" } as ClassDecoratorContext,
-      );
+      nexus.Expose(new Token<object>("decorator:duplicate"))(DecoratedService, {
+        kind: "class",
+      } as ClassDecoratorContext);
       nexus.configure({
         endpoint: { meta: { context: "test" }, implementation: {} },
         providers: [{ token, service: {} }],
@@ -636,7 +636,9 @@ describe("Nexus Safe API Edge Cases", () => {
       await nexus.safeUpdateIdentity({ context: "ready" });
       const resolveSpy = vi
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
-        .mockReturnValue(okAsync([{ connectionId: "conn-default" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-default" }] as any)),
+        );
       const token = new Token<object>("test", {
         defaultTarget: { descriptor: { context: "ready" } },
       });
@@ -655,7 +657,9 @@ describe("Nexus Safe API Edge Cases", () => {
       await nexus.safeUpdateIdentity({ context: "ready" });
       const resolveSpy = vi
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
-        .mockReturnValue(okAsync([{ connectionId: "conn-explicit" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-explicit" }] as any)),
+        );
       const token = new Token<object>("test", {
         defaultTarget: { descriptor: { context: "missing" } },
       });
@@ -678,10 +682,9 @@ describe("Nexus Safe API Edge Cases", () => {
         (nexus as any).connectionManager,
         "safeResolveConnections",
       ).mockReturnValue(
-        okAsync([
-          { connectionId: "conn-1" },
-          { connectionId: "conn-2" },
-        ] as any),
+        Promise.resolve(
+          ok([{ connectionId: "conn-1" }, { connectionId: "conn-2" }] as any),
+        ),
       );
       const token = new Token<object>("test", {
         defaultTarget: { descriptor: { context: "ready" } },
@@ -704,10 +707,12 @@ describe("Nexus Safe API Edge Cases", () => {
         (nexus as any).connectionManager,
         "safeResolveConnections",
       ).mockReturnValue(
-        okAsync([
-          { connectionId: "conn-first" },
-          { connectionId: "conn-second" },
-        ] as any),
+        Promise.resolve(
+          ok([
+            { connectionId: "conn-first" },
+            { connectionId: "conn-second" },
+          ] as any),
+        ),
       );
       const token = new Token<object>("test", {
         defaultTarget: { descriptor: { context: "ready" } },
@@ -731,7 +736,9 @@ describe("Nexus Safe API Edge Cases", () => {
       await nexus.safeUpdateIdentity({ context: "ready" });
       const resolveSpy = vi
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
-        .mockReturnValue(okAsync([{ connectionId: "conn-default" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-default" }] as any)),
+        );
       const token = new Token<object>("test", {
         defaultTarget: { descriptor: { context: "ready" } },
       });
@@ -757,7 +764,9 @@ describe("Nexus Safe API Edge Cases", () => {
       const token = new Token<object>("decorator:connect-to-fallback");
       const safeResolveConnections = vi
         .fn()
-        .mockReturnValue(okAsync([{ connectionId: "conn-fallback" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-fallback" }] as any)),
+        );
 
       nexus.Endpoint({
         meta: { context: "self" },
@@ -813,7 +822,9 @@ describe("Nexus Safe API Edge Cases", () => {
       await nexus.ready();
       const resolveSpy = vi
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
-        .mockReturnValue(okAsync([{ connectionId: "conn-frozen" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-frozen" }] as any)),
+        );
 
       const liveEndpoint = (nexus as any).decoratorRegistry.snapshot().endpoint;
       expect(liveEndpoint).not.toBeNull();
@@ -856,7 +867,9 @@ describe("Nexus Safe API Edge Cases", () => {
       await nexus.ready();
       const resolveSpy = vi
         .spyOn((nexus as any).connectionManager, "safeResolveConnections")
-        .mockReturnValue(okAsync([{ connectionId: "conn-configured" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-configured" }] as any)),
+        );
 
       (nexus as any).config.endpoint.connectTo[0].descriptor.context =
         "mutated-peer";
@@ -904,7 +917,9 @@ describe("Nexus Safe API Edge Cases", () => {
       const nexus = new Nexus<any, any>();
       const safeResolveConnections = vi
         .fn()
-        .mockReturnValue(okAsync([{ connectionId: "conn-priority" }] as any));
+        .mockReturnValue(
+          Promise.resolve(ok([{ connectionId: "conn-priority" }] as any)),
+        );
 
       nexus.Endpoint({
         meta: { context: "self" },
@@ -914,14 +929,16 @@ describe("Nexus Safe API Edge Cases", () => {
       } as ClassDecoratorContext);
 
       vi.spyOn(nexus as any, "safeEnsureKernelReady").mockReturnValue(
-        okAsync({
-          engine: {
-            createServiceProxy: vi.fn(() => ({})),
-          },
-          connectionManager: {
-            safeResolveConnections,
-          },
-        } as any),
+        Promise.resolve(
+          ok({
+            engine: {
+              createServiceProxy: vi.fn(() => ({})),
+            },
+            connectionManager: {
+              safeResolveConnections,
+            },
+          } as any),
+        ),
       );
 
       const explicitToken = new Token<object>("decorator:explicit-target", {

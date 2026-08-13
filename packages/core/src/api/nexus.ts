@@ -1,4 +1,4 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "../types/identity.js";
 import {
   composeNexusConfig,
   NexusConfig,
@@ -8,10 +8,10 @@ import {
   MatcherTarget,
   CreateMulticastOptions,
   Target,
-} from "./types/config";
-import type { Token } from "./token";
-import { Engine } from "@/service/engine";
-import { ConnectionManager } from "@/connection/connection-manager";
+} from "./types/config.js";
+import type { Token } from "./token.js";
+import { Engine } from "../service/engine.js";
+import { ConnectionManager } from "../connection/connection-manager.js";
 import type {
   NexusInstance,
   MatcherUtils,
@@ -19,31 +19,28 @@ import type {
   Allified,
   Streamified,
   RuntimeCreateTokenParam,
-} from "./types";
-import type { CreateProxyOptions } from "@/service/proxy-factory";
-import { InstanceDecoratorRegistry, type DecoratorSnapshot } from "./registry";
-import { createExposeDecorator } from "./decorators/expose";
-import { createEndpointDecorator } from "./decorators/endpoint";
-import { REF_WRAPPER_SYMBOL, RefWrapper } from "@/types/ref-wrapper";
-import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { NexusKernelBuilder } from "./kernel";
+} from "./types/index.js";
+import type { CreateProxyOptions } from "../service/proxy-factory.js";
+import {
+  InstanceDecoratorRegistry,
+  type DecoratorSnapshot,
+} from "./registry.js";
+import { createExposeDecorator } from "./decorators/expose.js";
+import { createEndpointDecorator } from "./decorators/endpoint.js";
+import { REF_WRAPPER_SYMBOL, RefWrapper } from "../types/ref-wrapper.js";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
+import { NexusKernelBuilder } from "./kernel.js";
 import {
   NexusConfigurationError,
   NexusTargetingError,
   NexusUsageError,
-} from "@/errors";
-import {
-  ResultAsync,
-  err,
-  errAsync,
-  ok,
-  okAsync,
-  type Result,
-} from "neverthrow";
-import { args, fn } from "@/utils/fn";
+} from "../errors/index.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import { args, fn } from "../utils/fn.js";
 import { z } from "zod";
-import { TargetResolver } from "./target-resolver";
-import { MatcherCombinators } from "./matcher-utils";
+import { TargetResolver } from "./target-resolver.js";
+import { MatcherCombinators } from "./matcher-utils.js";
 
 // Type utilities for extracting matcher and descriptor names from config objects
 type GetMatchers<T> = T extends { matchers: infer M }
@@ -114,23 +111,16 @@ type ProviderRegistration<U extends EndpointMeta, P extends PlatformMeta> = {
   readonly policy?: AuthorizationPolicy<U, P>;
 };
 
-const unwrapResultOrThrow = <T>(result: Result<T, Error>): T =>
-  result.match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+const unwrapResultOrThrow = <T>(result: Result<T, Error>): T => {
+  if (result.isErr()) {
+    throw result.error;
+  }
+  return result.value;
+};
 
-const unwrapResultAsyncOrThrow = <T>(
-  result: ResultAsync<T, Error>,
-): Promise<T> =>
-  result.match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+const unwrapResultPromiseOrThrow = async <T>(
+  result: Promise<Result<T, Error>>,
+): Promise<T> => unwrapResultOrThrow(await result);
 
 const deferToNextTick = (work: () => Promise<void>): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -351,11 +341,11 @@ export class Nexus<
   }
 
   public ready(): Promise<void> {
-    return unwrapResultAsyncOrThrow(this.safeReady());
+    return unwrapResultPromiseOrThrow(this.safeReady());
   }
 
-  public safeReady(): ResultAsync<void, Error> {
-    return this.safeEnsureKernelReady().map(() => undefined);
+  public async safeReady(): Promise<Result<void, Error>> {
+    return (await this.safeEnsureKernelReady()).map(() => undefined);
   }
 
   private safeAssertCanProvide(): Result<void, Error> {
@@ -736,9 +726,9 @@ export class Nexus<
     namedDescriptors: ReadonlyMap<string, Partial<U>>;
     decoratorSnapshot: DecoratorSnapshot;
     createFallbackConnectTo: readonly Target<U, string, string>[] | undefined;
-  }): ResultAsync<void, Error> {
+  }): Promise<Result<void, Error>> {
     if (this.engine) {
-      return okAsync(undefined);
+      return Promise.resolve(ok(undefined));
     }
 
     const builder = NexusKernelBuilder.create<U, P>(
@@ -750,22 +740,26 @@ export class Nexus<
       snapshot.namedDescriptors,
     );
 
-    return builder.build().andThen((kernel) => {
-      this.lifecycleState = "bootstrapping";
-      return kernel.connectionManager.safeInitialize().map(() => {
-        this.engine = kernel.engine;
-        this.connectionManager = kernel.connectionManager;
-        this.bootstrappedConnectToFallback = snapshot.createFallbackConnectTo;
-      });
-    });
+    return builder.build().then((kernelResult) =>
+      kernelResult.andThenAsync(async (kernel) => {
+        this.lifecycleState = "bootstrapping";
+        return (await kernel.connectionManager.safeInitialize()).map(() => {
+          this.engine = kernel.engine;
+          this.connectionManager = kernel.connectionManager;
+          this.bootstrappedConnectToFallback = snapshot.createFallbackConnectTo;
+        });
+      }),
+    );
   }
 
-  private safeEnsureKernelReady(): ResultAsync<
-    { engine: Engine<U, P>; connectionManager: ConnectionManager<U, P> },
-    Error
+  private async safeEnsureKernelReady(): Promise<
+    Result<
+      { engine: Engine<U, P>; connectionManager: ConnectionManager<U, P> },
+      Error
+    >
   > {
     if (this.lifecycleState === "failed") {
-      return errAsync(
+      return err(
         this.terminalBootstrapError ??
           new NexusConfigurationError(
             "Nexus: bootstrap has already failed.",
@@ -777,25 +771,28 @@ export class Nexus<
     this.scheduleInit();
 
     if (!this.initializationPromise) {
-      return errAsync(
+      return err(
         new NexusConfigurationError(
           "Nexus: Initialization was not scheduled correctly.",
         ),
       );
     }
 
-    return ResultAsync.fromPromise(this.initializationPromise, (error) =>
-      error instanceof Error ? error : new Error(String(error)),
-    ).andThen(() => {
+    const initialized = await Result.tryPromise({
+      try: () => this.initializationPromise!,
+      catch: (error) =>
+        error instanceof Error ? error : new Error(String(error)),
+    });
+    return initialized.andThen(() => {
       if (!this.engine || !this.connectionManager) {
-        return errAsync(
+        return err(
           new NexusConfigurationError(
             "Nexus: Core is not initialized yet. Please check endpoint configuration.",
           ),
         );
       }
 
-      return okAsync({
+      return ok({
         engine: this.engine,
         connectionManager: this.connectionManager,
       });
@@ -816,29 +813,31 @@ export class Nexus<
     token: RuntimeCreateTokenParam<T, U>,
     options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
   ): Promise<Asyncified<T>> {
-    return unwrapResultAsyncOrThrow(this.safeCreateUnsafe(token, options));
+    return unwrapResultPromiseOrThrow(this.safeCreateUnsafe(token, options));
   }
 
   public safeCreate<T extends object>(
     token: RuntimeCreateTokenParam<T, U>,
     options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors> = {},
-  ): ResultAsync<Asyncified<T>, Error> {
+  ): Promise<Result<Asyncified<T>, Error>> {
     return this.safeCreateUnsafe(token, options);
   }
 
   private safeCreateUnsafe<T extends object>(
     token: Token<T, U> | Token<T>,
     options: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
-  ): ResultAsync<Asyncified<T>, Error> {
+  ): Promise<Result<Asyncified<T>, Error>> {
     const validatedInput = validateCreateInput(token, options);
     if (validatedInput.isErr()) {
-      return errAsync(
-        new NexusUsageError(
-          "Nexus: Invalid create() input.",
-          "E_USAGE_INVALID",
-          {
-            cause: validatedInput.error,
-          },
+      return Promise.resolve(
+        err(
+          new NexusUsageError(
+            "Nexus: Invalid create() input.",
+            "E_USAGE_INVALID",
+            {
+              cause: validatedInput.error,
+            },
+          ),
         ),
       );
     }
@@ -846,8 +845,8 @@ export class Nexus<
     const validatedToken = token;
     const validatedOptions = options;
 
-    return this.safeEnsureKernelReady().andThen(
-      ({ engine, connectionManager }) => {
+    return this.safeEnsureKernelReady().then((readyResult) =>
+      readyResult.andThenAsync(async ({ engine, connectionManager }) => {
         const finalTargetResult = TargetResolver.resolveUnicastTarget(
           validatedOptions.target,
           validatedToken.defaultTarget as
@@ -862,7 +861,7 @@ export class Nexus<
         );
 
         if (finalTargetResult.isErr()) {
-          return errAsync(finalTargetResult.error);
+          return err(finalTargetResult.error);
         }
 
         const finalTarget = finalTargetResult.value;
@@ -875,7 +874,7 @@ export class Nexus<
         );
 
         if (resolvedTarget.isErr()) {
-          return errAsync(resolvedTarget.error);
+          return err(resolvedTarget.error);
         }
 
         return connectionManager
@@ -883,53 +882,55 @@ export class Nexus<
             descriptor: resolvedTarget.value.descriptor,
             matcher: resolvedTarget.value.matcher,
           })
-          .andThen((connections) => {
-            if (connections.length === 0) {
-              return errAsync(
-                new NexusTargetingError(
-                  `Failed to create proxy for "${validatedToken.id}". No active connection found matching the criteria.`,
-                  "E_TARGET_NO_MATCH",
-                  { token: validatedToken.id, target: finalTarget },
-                ),
+          .then((connectionsResult) =>
+            connectionsResult.andThen((connections) => {
+              if (connections.length === 0) {
+                return err(
+                  new NexusTargetingError(
+                    `Failed to create proxy for "${validatedToken.id}". No active connection found matching the criteria.`,
+                    "E_TARGET_NO_MATCH",
+                    { token: validatedToken.id, target: finalTarget },
+                  ),
+                );
+              }
+
+              if (expects === "one" && connections.length !== 1) {
+                return err(
+                  new NexusTargetingError(
+                    `Failed to create proxy for "${validatedToken.id}". Expected exactly one matching connection but found ${connections.length}.`,
+                    "E_TARGET_UNEXPECTED_COUNT",
+                    {
+                      token: validatedToken.id,
+                      target: finalTarget,
+                      count: connections.length,
+                    },
+                  ),
+                );
+              }
+
+              const connection = connections[0];
+
+              const proxyOptions: CreateProxyOptions<U> = {
+                target: {
+                  connectionId: connection.connectionId,
+                },
+                staleTarget: {
+                  descriptor: resolvedTarget.value.descriptor,
+                  matcher: resolvedTarget.value.matcher,
+                },
+                strategy: expects,
+                timeout,
+              };
+
+              return ok(
+                engine.createServiceProxy<T>(
+                  validatedToken.id,
+                  proxyOptions,
+                ) as Asyncified<T>,
               );
-            }
-
-            if (expects === "one" && connections.length !== 1) {
-              return errAsync(
-                new NexusTargetingError(
-                  `Failed to create proxy for "${validatedToken.id}". Expected exactly one matching connection but found ${connections.length}.`,
-                  "E_TARGET_UNEXPECTED_COUNT",
-                  {
-                    token: validatedToken.id,
-                    target: finalTarget,
-                    count: connections.length,
-                  },
-                ),
-              );
-            }
-
-            const connection = connections[0];
-
-            const proxyOptions: CreateProxyOptions<U> = {
-              target: {
-                connectionId: connection.connectionId,
-              },
-              staleTarget: {
-                descriptor: resolvedTarget.value.descriptor,
-                matcher: resolvedTarget.value.matcher,
-              },
-              strategy: expects,
-              timeout,
-            };
-
-            return okAsync(
-              engine.createServiceProxy<T>(
-                validatedToken.id,
-                proxyOptions,
-              ) as Asyncified<T>,
-            );
-          });
-      },
+            }),
+          );
+      }),
     );
   }
 
@@ -951,10 +952,7 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(
-    token: RuntimeCreateTokenParam<T, U>,
-    options?: O,
-  ): Promise<Allified<T>>;
+  >(token: RuntimeCreateTokenParam<T, U>, options?: O): Promise<Allified<T>>;
   public createMulticast<
     T extends object,
     const O extends CreateMulticastOptions<
@@ -963,10 +961,7 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  >(
-    token: RuntimeCreateTokenParam<T, U>,
-    options?: O,
-  ): Promise<Streamified<T>>;
+  >(token: RuntimeCreateTokenParam<T, U>, options?: O): Promise<Streamified<T>>;
   public async createMulticast<T extends object>(
     token: RuntimeCreateTokenParam<T, U>,
     options: CreateMulticastOptions<
@@ -976,7 +971,7 @@ export class Nexus<
       RegisteredDescriptors
     > = {},
   ): Promise<Allified<T> | Streamified<T>> {
-    return unwrapResultAsyncOrThrow(
+    return unwrapResultPromiseOrThrow(
       this.safeCreateMulticastCore(token, options),
     );
   }
@@ -989,14 +984,16 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     >,
-  ): ResultAsync<Allified<T> | Streamified<T>, Error> {
+  ): Promise<Result<Allified<T> | Streamified<T>, Error>> {
     const validatedInput = validateCreateMulticastInput(token, options);
     if (validatedInput.isErr()) {
-      return errAsync(
-        new NexusUsageError(
-          "Nexus: Invalid createMulticast() input.",
-          "E_USAGE_INVALID",
-          { cause: validatedInput.error },
+      return Promise.resolve(
+        err(
+          new NexusUsageError(
+            "Nexus: Invalid createMulticast() input.",
+            "E_USAGE_INVALID",
+            { cause: validatedInput.error },
+          ),
         ),
       );
     }
@@ -1004,47 +1001,49 @@ export class Nexus<
     const validatedToken = token;
     const validatedOptions = options ?? {};
 
-    return this.safeEnsureKernelReady().andThen(({ engine }) => {
-      const finalTargetResult = TargetResolver.resolveUnicastTarget(
-        validatedOptions.target,
-        validatedToken.defaultTarget as
-          | CreateMulticastOptions<
-              U,
-              "all" | "stream",
-              RegisteredMatchers,
-              RegisteredDescriptors
-            >["target"]
-          | undefined,
-        undefined,
-        validatedToken.id,
-      );
+    return this.safeEnsureKernelReady().then((readyResult) =>
+      readyResult.andThen(({ engine }) => {
+        const finalTargetResult = TargetResolver.resolveUnicastTarget(
+          validatedOptions.target,
+          validatedToken.defaultTarget as
+            | CreateMulticastOptions<
+                U,
+                "all" | "stream",
+                RegisteredMatchers,
+                RegisteredDescriptors
+              >["target"]
+            | undefined,
+          undefined,
+          validatedToken.id,
+        );
 
-      if (finalTargetResult.isErr()) {
-        return errAsync(finalTargetResult.error);
-      }
+        if (finalTargetResult.isErr()) {
+          return err(finalTargetResult.error);
+        }
 
-      const resolvedTarget = TargetResolver.resolveNamedTarget(
-        finalTargetResult.value,
-        this.namedDescriptors,
-        this.namedMatchers,
-      );
+        const resolvedTarget = TargetResolver.resolveNamedTarget(
+          finalTargetResult.value,
+          this.namedDescriptors,
+          this.namedMatchers,
+        );
 
-      if (resolvedTarget.isErr()) {
-        return errAsync(resolvedTarget.error);
-      }
+        if (resolvedTarget.isErr()) {
+          return err(resolvedTarget.error);
+        }
 
-      const proxyOptions: CreateProxyOptions<U> = {
-        target: buildMulticastProxyTarget(resolvedTarget.value),
-        strategy: validatedOptions.expects ?? "all",
-        timeout: validatedOptions.timeout,
-      };
+        const proxyOptions: CreateProxyOptions<U> = {
+          target: buildMulticastProxyTarget(resolvedTarget.value),
+          strategy: validatedOptions.expects ?? "all",
+          timeout: validatedOptions.timeout,
+        };
 
-      return okAsync(
-        engine.createServiceProxy<T>(validatedToken.id, proxyOptions) as
-          | Allified<T>
-          | Streamified<T>,
-      );
-    });
+        return ok(
+          engine.createServiceProxy<T>(validatedToken.id, proxyOptions) as
+            | Allified<T>
+            | Streamified<T>,
+        );
+      }),
+    );
   }
 
   public safeCreateMulticast<
@@ -1058,7 +1057,7 @@ export class Nexus<
   >(
     token: RuntimeCreateTokenParam<T, U>,
     options?: O,
-  ): ResultAsync<Allified<T>, Error>;
+  ): Promise<Result<Allified<T>, Error>>;
   public safeCreateMulticast<
     T extends object,
     const O extends CreateMulticastOptions<
@@ -1070,7 +1069,7 @@ export class Nexus<
   >(
     token: RuntimeCreateTokenParam<T, U>,
     options?: O,
-  ): ResultAsync<Streamified<T>, Error>;
+  ): Promise<Result<Streamified<T>, Error>>;
   public safeCreateMulticast<T extends object>(
     token: RuntimeCreateTokenParam<T, U>,
     options: CreateMulticastOptions<
@@ -1079,7 +1078,7 @@ export class Nexus<
       RegisteredMatchers,
       RegisteredDescriptors
     > = {},
-  ): ResultAsync<Allified<T> | Streamified<T>, Error> {
+  ): Promise<Result<Allified<T> | Streamified<T>, Error>> {
     return this.safeCreateMulticastCore(token, options);
   }
 
@@ -1088,15 +1087,17 @@ export class Nexus<
    * @param updates An object containing the metadata fields to update.
    */
   public async updateIdentity(updates: Partial<U>): Promise<void> {
-    return unwrapResultAsyncOrThrow(this.safeUpdateIdentity(updates));
+    return unwrapResultPromiseOrThrow(this.safeUpdateIdentity(updates));
   }
 
-  public safeUpdateIdentity(updates: Partial<U>): ResultAsync<void, Error> {
+  public async safeUpdateIdentity(
+    updates: Partial<U>,
+  ): Promise<Result<void, Error>> {
     const validation = validateUpdateIdentityInput(
       updates as unknown as object,
     );
     if (validation.isErr()) {
-      return errAsync(
+      return err(
         new NexusUsageError(
           "Nexus: Invalid updateIdentity() input.",
           "E_USAGE_INVALID",
@@ -1105,14 +1106,16 @@ export class Nexus<
       );
     }
 
-    return this.safeEnsureKernelReady().andThen(({ connectionManager }) => {
-      const result = connectionManager.safeUpdateLocalIdentity(updates);
-      if (result.isErr()) {
-        return errAsync(result.error);
-      }
+    return (await this.safeEnsureKernelReady()).andThen(
+      ({ connectionManager }) => {
+        const result = connectionManager.safeUpdateLocalIdentity(updates);
+        if (result.isErr()) {
+          return err(result.error);
+        }
 
-      return okAsync(undefined);
-    });
+        return ok(undefined);
+      },
+    );
   }
 
   public ref<T extends object>(target: T): RefWrapper<T> {

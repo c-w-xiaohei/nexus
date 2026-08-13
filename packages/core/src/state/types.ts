@@ -1,6 +1,6 @@
-import type { Token } from "@/api/token";
-import type { CreateOptions } from "@/api/types/config";
-import type { EndpointMeta } from "@/types/identity";
+import type { Token } from "../api/token.js";
+import type { CreateOptions } from "../api/types/config.js";
+import type { EndpointMeta } from "../types/identity.js";
 import type { ZodType } from "zod";
 import type {
   ConnectNexusStoreOptionsInput,
@@ -9,8 +9,8 @@ import type {
   SubscribeResult,
   TerminalEnvelope,
   TerminalReason,
-} from "./protocol";
-import type { ServiceInvocationContext } from "@/service/service-invocation-hooks";
+} from "./protocol.js";
+import type { ServiceInvocationContext } from "../service/service-invocation-hooks.js";
 
 export type ActionFunction = (...args: any[]) => any;
 

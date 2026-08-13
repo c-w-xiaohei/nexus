@@ -1,5 +1,5 @@
-import { IframeAdapterError } from "./errors";
-import type { WindowLike } from "./types";
+import { IframeAdapterError } from "./errors.js";
+import type { WindowLike } from "./types.js";
 
 export function getWindow(localWindow?: Window): Window {
   if (localWindow) return localWindow;

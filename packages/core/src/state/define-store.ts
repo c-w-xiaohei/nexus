@@ -1,9 +1,9 @@
-import { NexusUsageError } from "@/errors";
-import { Token } from "@/api/token";
+import { NexusUsageError } from "../errors/index.js";
+import { Token } from "../api/token.js";
 import { z } from "zod";
-import type { CreateOptions } from "@/api/types/config";
-import type { InlineTarget } from "@/api/types/config";
-import type { EndpointMeta } from "@/types/identity";
+import type { CreateOptions } from "../api/types/config.js";
+import type { InlineTarget } from "../api/types/config.js";
+import type { EndpointMeta } from "../types/identity.js";
 import type {
   ActionFunction,
   NexusStoreDefinition,
@@ -11,8 +11,8 @@ import type {
   NexusStoreValidationSchemas,
   StoreTokenMetadata,
   StoreActionHelpers,
-} from "./types";
-import { createTargetSchema } from "./target-schema";
+} from "./types.js";
+import { createTargetSchema } from "./target-schema.js";
 
 export const TargetSchema = createTargetSchema(
   "defaultTarget requires at least one of descriptor or matcher",

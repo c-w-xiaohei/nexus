@@ -2,7 +2,7 @@ import type {
   MessageId,
   NexusMessage,
   NexusMessageType,
-} from "../types/message";
+} from "../types/message.js";
 
 export namespace ChunkReassembler {
   type ChunkSession = {

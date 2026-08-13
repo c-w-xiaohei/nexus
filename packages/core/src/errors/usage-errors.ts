@@ -1,5 +1,5 @@
-import { NexusError } from "./nexus-error";
-import type { NexusErrorOptions } from "./nexus-error";
+import { NexusError } from "./nexus-error.js";
+import type { NexusErrorOptions } from "./nexus-error.js";
 
 export type NexusConfigurationErrorCode =
   | "E_CONFIGURATION_INVALID"

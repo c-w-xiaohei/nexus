@@ -11,14 +11,14 @@ describe("Placeholder", () => {
     it("should create a string with payload", () => {
       const p = new Placeholder(PlaceholderType.RESOURCE, "res-123");
       expect(p.toString()).toBe(
-        `${PLACEHOLDER_PREFIX}${PlaceholderType.RESOURCE}${PAYLOAD_SEPARATOR}res-123`
+        `${PLACEHOLDER_PREFIX}${PlaceholderType.RESOURCE}${PAYLOAD_SEPARATOR}res-123`,
       );
     });
 
     it("should create a string without payload", () => {
       const p = new Placeholder(PlaceholderType.UNDEFINED);
       expect(p.toString()).toBe(
-        `${PLACEHOLDER_PREFIX}${PlaceholderType.UNDEFINED}`
+        `${PLACEHOLDER_PREFIX}${PlaceholderType.UNDEFINED}`,
       );
     });
   });

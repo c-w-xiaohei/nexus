@@ -3,8 +3,8 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta";
-import { ChromePort } from "../ports/chrome-port";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta.js";
+import { ChromePort } from "../ports/chrome-port.js";
 
 /**
  * Generic UI client endpoint implementation for Chrome extension contexts

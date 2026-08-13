@@ -292,4 +292,4 @@ import { safeConnectNexusStore } from "@nexus-js/core/state";
 const result = await safeConnectNexusStore(nexus, counterStore, options);
 ```
 
-If your app already uses `Result` / `ResultAsync`, the safe APIs fit naturally. If not, start with throw-style and move to safe-style where you need tighter control.
+If your app already uses better-result `Result` / `Promise<Result>`, the safe APIs fit naturally. If not, start with throw-style and move to safe-style where you need tighter control.

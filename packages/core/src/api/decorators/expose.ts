@@ -1,11 +1,11 @@
-import { Token } from "../token";
-import type { AuthorizationPolicy } from "../types/config";
-import type { ServiceProviderData } from "../registry";
-import { nexus } from "../nexus";
-import { NexusUsageError } from "@/errors";
-import { args, fn } from "@/utils/fn";
+import { Token } from "../token.js";
+import type { AuthorizationPolicy } from "../types/config.js";
+import type { ServiceProviderData } from "../registry.js";
+import { nexus } from "../nexus.js";
+import { NexusUsageError } from "../../errors/index.js";
+import { args, fn } from "../../utils/fn.js";
 import { z } from "zod";
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
 
 /**
  * @Expose 装饰器的高级选项。
@@ -39,9 +39,19 @@ export type NexusClassDecorator<T extends object = object> = (
 const ExposeOptionsSchema = z
   .object({
     policy: z
-      .custom<
-        AuthorizationPolicy<EndpointMeta, PlatformMeta>
-      >((value) => typeof value === "object" && value !== null && ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canConnect === undefined || typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canConnect === "function") && ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canCall === undefined || typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>).canCall === "function"))
+      .custom<AuthorizationPolicy<EndpointMeta, PlatformMeta>>(
+        (value) =>
+          typeof value === "object" &&
+          value !== null &&
+          ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
+            .canConnect === undefined ||
+            typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
+              .canConnect === "function") &&
+          ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
+            .canCall === undefined ||
+            typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
+              .canCall === "function"),
+      )
       .optional(),
     factory: z
       .custom<ExposeOptions["factory"]>((value) => typeof value === "function")

@@ -6,11 +6,11 @@ import {
   type RemoteStore,
   type RemoteStoreStatus,
 } from "@nexus-js/core/state";
-import { useNexus } from "./use-nexus";
+import { useNexus } from "./use-nexus.js";
 import {
   clearStoreAsAdapterStale,
   markStoreAsAdapterStale,
-} from "./use-store-selector";
+} from "./use-store-selector.js";
 
 const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
   "nexus.state.remote-store.mark-stale",

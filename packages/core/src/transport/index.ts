@@ -6,14 +6,14 @@
  * `IEndpoint`) required for creating platform-specific adapters.
  */
 
-export { Transport } from "./transport";
-export { VirtualPortRouter } from "./virtual-port";
+export { Transport } from "./transport.js";
+export { VirtualPortRouter } from "./virtual-port/index.js";
 export {
   VirtualPortCloseError,
   VirtualPortConnectError,
   VirtualPortListenError,
   VirtualPortProtocolError,
-} from "./virtual-port";
-export type { IPort } from "./types/port";
-export type { IEndpoint } from "./types/endpoint";
-export type { ISerializer } from "./serializers/interface";
+} from "./virtual-port/index.js";
+export type { IPort } from "./types/port.js";
+export type { IEndpoint } from "./types/endpoint.js";
+export type { ISerializer } from "./serializers/interface.js";

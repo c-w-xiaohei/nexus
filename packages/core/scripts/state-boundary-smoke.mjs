@@ -9,7 +9,7 @@ const pkgDir = path.resolve(thisDir, "..");
 
 const requiredArtifacts = [
   "dist/state/index.mjs",
-  "dist/state/index.js",
+  "dist/state/index.cjs",
   "dist/state/index.d.ts",
 ];
 

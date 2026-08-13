@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { Nexus, Token } from "@nexus-js/core";
 import type { NexusInstance } from "@nexus-js/core";
-import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory";
-import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server";
-import type { NodeIpcSocketAddress } from "./types/address";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta";
+import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory.js";
+import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server.js";
+import type { NodeIpcSocketAddress } from "./types/address.js";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta.js";
 
 export type EchoService = {
   echo(input: string): string;

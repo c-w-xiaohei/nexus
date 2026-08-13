@@ -10,7 +10,7 @@ const forbiddenPatterns = [
   "jsxDEV",
 ];
 
-const distFiles = ["dist/index.mjs", "dist/index.js"];
+const distFiles = ["dist/index.mjs", "dist/index.cjs"];
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",

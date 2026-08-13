@@ -1,4 +1,4 @@
-import type { EndpointMeta } from "@/types/identity";
+import type { EndpointMeta } from "../types/identity.js";
 
 type MatcherResolver<U extends EndpointMeta> = (
   name: string,

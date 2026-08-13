@@ -22,46 +22,37 @@ interface TestPlatformMeta {
 const initializeManager = <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
 ): Promise<void> =>
-  manager.safeInitialize().match(
-    () => undefined,
-    (error) => {
-      throw error;
-    },
-  );
+  manager.safeInitialize().then((result) => {
+    if (result.isErr()) throw result.error;
+  });
 
 const resolveManager = async <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
   options: any,
 ) =>
-  manager.safeResolveConnection(options).match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+  manager.safeResolveConnection(options).then((result) => {
+    if (result.isErr()) throw result.error;
+    return result.value;
+  });
 
 const resolveManagerCandidates = async <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
   options: any,
 ) =>
-  manager.safeResolveConnections(options).match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+  manager.safeResolveConnections(options).then((result) => {
+    if (result.isErr()) throw result.error;
+    return result.value;
+  });
 
 const sendFromManager = <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
   target: any,
   message: any,
-): string[] =>
-  manager.safeSendMessage(target, message).match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+): string[] => {
+  const result = manager.safeSendMessage(target, message);
+  if (result.isErr()) throw result.error;
+  return result.value;
+};
 
 const updateManagerIdentity = <U extends object, P extends object>(
   manager: ConnectionManager<U, P>,
@@ -337,7 +328,7 @@ describe("ConnectionManager", () => {
 
       const failed = await hostManager.safeInitialize();
 
-      expect(failed._unsafeUnwrapErr()).toMatchObject({
+      expect(failed.error).toMatchObject({
         name: "ConnectionManagerOperationFailedError",
         code: "E_UNKNOWN",
       });

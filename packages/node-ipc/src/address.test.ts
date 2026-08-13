@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { NodeIpcAddress } from "./types/address";
 
+const unwrap = <T, E>(result: import("better-result").Result<T, E>): T => {
+  if (result.isErr()) throw result.error;
+  return result.value;
+};
+
 describe("NodeIpcAddress", () => {
   it("resolves daemon descriptors under XDG runtime dir with default instance", () => {
     const result = NodeIpcAddress.defaultResolve(
       { context: "node-ipc-daemon", appId: "cli" },
       { env: { XDG_RUNTIME_DIR: "/run/user/1000" }, uid: 1000 },
-    )._unsafeUnwrap();
+    );
+    const value = unwrap(result);
 
-    expect(result).toEqual({
+    expect(value).toEqual({
       kind: "path",
       path: "/run/user/1000/nexus/cli/default.sock",
     });
@@ -18,9 +24,10 @@ describe("NodeIpcAddress", () => {
     const result = NodeIpcAddress.defaultResolve(
       { context: "node-ipc-daemon", appId: "cli", instance: "preview" },
       { env: {}, uid: 501 },
-    )._unsafeUnwrap();
+    );
+    const value = unwrap(result);
 
-    expect(result).toEqual({
+    expect(value).toEqual({
       kind: "path",
       path: "/tmp/nexus-501/cli/preview.sock",
     });
@@ -32,7 +39,10 @@ describe("NodeIpcAddress", () => {
       () => null,
     );
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_INVALID");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
   });
 
   it("validates Unix socket path length", () => {
@@ -41,7 +51,10 @@ describe("NodeIpcAddress", () => {
       path: `/${"a".repeat(108)}`,
     });
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_PATH_TOO_LONG");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_PATH_TOO_LONG" });
+    }
   });
 
   it("preserves default resolver path-too-long errors through resolve", () => {
@@ -50,7 +63,7 @@ describe("NodeIpcAddress", () => {
       appId: "a".repeat(120),
     });
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_PATH_TOO_LONG");
+    expect(result.isErr()).toBe(true);
   });
 
   it("rejects default appId and instance path traversal segments", () => {
@@ -63,10 +76,16 @@ describe("NodeIpcAddress", () => {
       { env: { XDG_RUNTIME_DIR: "/run/user/1000" }, uid: 1000 },
     );
 
-    expect(appResult._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_INVALID");
-    expect(instanceResult._unsafeUnwrapErr().code).toBe(
-      "E_IPC_ADDRESS_INVALID",
-    );
+    expect(appResult.isErr()).toBe(true);
+    expect(instanceResult.isErr()).toBe(true);
+    if (appResult.isErr()) {
+      expect(appResult.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
+    if (instanceResult.isErr()) {
+      expect(instanceResult.error).toMatchObject({
+        code: "E_IPC_ADDRESS_INVALID",
+      });
+    }
   });
 
   it("rejects relative custom socket paths", () => {
@@ -75,7 +94,10 @@ describe("NodeIpcAddress", () => {
       path: "tmp/app.sock",
     });
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_INVALID");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
   });
 
   it("turns custom resolver throws into address invalid", () => {
@@ -86,6 +108,9 @@ describe("NodeIpcAddress", () => {
       },
     );
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_INVALID");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
   });
 });

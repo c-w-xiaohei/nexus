@@ -1,4 +1,4 @@
-import { IframeAdapterError } from "./errors";
+import { IframeAdapterError } from "./errors.js";
 
 export function validateAppId(appId: string): void {
   if (!appId)

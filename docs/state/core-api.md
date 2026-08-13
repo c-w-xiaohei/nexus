@@ -101,6 +101,8 @@ const result = await safeConnectNexusStore(nexus, counterStore, options);
 
 if (result.isErr()) {
   console.error(result.error);
+} else {
+  const remote = result.value;
 }
 ```
 
@@ -116,7 +118,7 @@ Use throw-style APIs when:
 
 Use safe-style APIs when:
 
-- your codebase already composes `Result` / `ResultAsync`
+- your codebase already composes better-result `Result` / `Promise<Result>`
 - you want explicit error branching without exceptions
 - you are writing orchestration or infrastructure code where failure handling is part of the flow
 
@@ -157,6 +159,12 @@ Single safe helper for Nexus State action invocation.
 
 ```ts
 const result = await safeInvokeStoreAction(remote, "increment", [1]);
+
+if (result.isErr()) {
+  console.error(result.error.code, result.error.message);
+} else {
+  console.log(result.value);
+}
 ```
 
 This exists to avoid generating a second mirrored `safeActions.*` tree for every store.

@@ -1,6 +1,6 @@
-import type { NexusMessage } from "../../types/message";
-import type { NexusProtocolError } from "../../errors/transport-errors";
-import type { Result } from "neverthrow";
+import type { NexusMessage } from "../../types/message.js";
+import type { NexusProtocolError } from "../../errors/transport-errors.js";
+import type { Result } from "better-result";
 
 /**
  * Defines the standard interface for a serializer, responsible for converting

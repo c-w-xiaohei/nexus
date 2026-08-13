@@ -1,4 +1,4 @@
-import type { NodeIpcEndpointMeta } from "./types/meta";
+import type { NodeIpcEndpointMeta } from "./types/meta.js";
 
 export const NodeIpcMatchers = {
   daemon: (appId: string) => (identity: NodeIpcEndpointMeta) =>

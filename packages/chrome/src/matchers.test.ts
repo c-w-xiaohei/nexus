@@ -9,14 +9,14 @@ describe("ChromeMatchers", () => {
         url: "https://example.com/page",
         origin: "https://example.com",
         isVisible: true,
-      })
+      }),
     ).toBe(true);
     expect(
       ChromeMatchers.visibleContentScript({
         context: "content-script",
         url: "https://example.com/page",
         origin: "https://example.com",
-      })
+      }),
     ).toBe(false);
   });
 
@@ -29,14 +29,14 @@ describe("ChromeMatchers", () => {
         url: "https://example.com/page",
         origin: "https://example.com",
         tabId: 123,
-      })
+      }),
     ).toBe(true);
     expect(
       inTab({
         context: "content-script",
         url: "https://example.com/page",
         origin: "https://example.com",
-      })
+      }),
     ).toBe(false);
   });
 
@@ -50,7 +50,7 @@ describe("ChromeMatchers", () => {
         origin: "https://example.com",
         tabId: 123,
         frameId: 5,
-      })
+      }),
     ).toBe(true);
     expect(
       inFrame({
@@ -58,7 +58,7 @@ describe("ChromeMatchers", () => {
         url: "https://example.com/page",
         origin: "https://example.com",
         tabId: 123,
-      })
+      }),
     ).toBe(false);
   });
 });

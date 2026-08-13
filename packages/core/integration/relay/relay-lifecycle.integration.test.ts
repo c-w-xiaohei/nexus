@@ -241,8 +241,7 @@ async function createRelayHarness() {
     providers: [{ token: RelayProfileToken, service: profileService }],
   });
 
-  const hostCounterService =
-    createNexusStore(counterStore).provider.service;
+  const hostCounterService = createNexusStore(counterStore).provider.service;
   const instrumentedCounterService: typeof hostCounterService = {
     subscribe: hostCounterService.subscribe.bind(hostCounterService),
     unsubscribe: hostCounterService.unsubscribe.bind(hostCounterService),

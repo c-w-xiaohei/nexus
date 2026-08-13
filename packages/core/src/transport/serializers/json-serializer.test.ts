@@ -58,7 +58,7 @@ describe("JsonSerializer", () => {
         resourceId: "resource-1",
         path: ["state"],
         invocationServiceName: "CounterStore",
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(
       JSON.stringify([1, "get-1", "resource-1", ["state"], "CounterStore"]),
     );
@@ -71,7 +71,7 @@ describe("JsonSerializer", () => {
         path: ["state"],
         invocationServiceName: "CounterStore",
         value: 42,
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(
       JSON.stringify([2, "set-1", "resource-1", ["state"], "CounterStore", 42]),
     );
@@ -84,7 +84,7 @@ describe("JsonSerializer", () => {
         path: ["actions", "increment"],
         invocationServiceName: "CounterStore",
         args: ["alpha", 1],
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(
       JSON.stringify([
         3,
@@ -104,7 +104,7 @@ describe("JsonSerializer", () => {
         id: "get-1",
         resourceId: "resource-1",
         path: ["state"],
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(JSON.stringify([1, "get-1", "resource-1", ["state"]]));
 
     expect(
@@ -114,7 +114,7 @@ describe("JsonSerializer", () => {
         resourceId: "resource-1",
         path: ["state"],
         value: 42,
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(JSON.stringify([2, "set-1", "resource-1", ["state"], 42]));
 
     expect(
@@ -124,7 +124,7 @@ describe("JsonSerializer", () => {
         resourceId: "resource-1",
         path: ["actions", "increment"],
         args: ["alpha", 1],
-      })._unsafeUnwrap(),
+      }).unwrap(),
     ).toBe(
       JSON.stringify([
         3,
@@ -139,7 +139,7 @@ describe("JsonSerializer", () => {
   it("decodes legacy GET, SET, and APPLY packets without invocation service names", () => {
     const getMessage = JsonSerializer.safeDeserialize(
       JSON.stringify([1, "get-1", "resource-1", ["state"]]),
-    )._unsafeUnwrap();
+    ).unwrap();
     expect(getMessage).toEqual({
       type: NexusMessageType.GET,
       id: "get-1",
@@ -147,13 +147,13 @@ describe("JsonSerializer", () => {
       path: ["state"],
     });
     expect(getMessage).not.toHaveProperty("invocationServiceName");
-    expect(JsonSerializer.safeSerialize(getMessage)._unsafeUnwrap()).toBe(
+    expect(JsonSerializer.safeSerialize(getMessage).unwrap()).toBe(
       JSON.stringify([1, "get-1", "resource-1", ["state"]]),
     );
 
     const setMessage = JsonSerializer.safeDeserialize(
       JSON.stringify([2, "set-1", "resource-1", ["state"], 42]),
-    )._unsafeUnwrap();
+    ).unwrap();
     expect(setMessage).toEqual({
       type: NexusMessageType.SET,
       id: "set-1",
@@ -162,7 +162,7 @@ describe("JsonSerializer", () => {
       value: 42,
     });
     expect(setMessage).not.toHaveProperty("invocationServiceName");
-    expect(JsonSerializer.safeSerialize(setMessage)._unsafeUnwrap()).toBe(
+    expect(JsonSerializer.safeSerialize(setMessage).unwrap()).toBe(
       JSON.stringify([2, "set-1", "resource-1", ["state"], 42]),
     );
 
@@ -174,7 +174,7 @@ describe("JsonSerializer", () => {
         ["actions", "increment"],
         ["alpha", 1],
       ]),
-    )._unsafeUnwrap();
+    ).unwrap();
     expect(applyMessage).toEqual({
       type: NexusMessageType.APPLY,
       id: "apply-1",
@@ -183,7 +183,7 @@ describe("JsonSerializer", () => {
       args: ["alpha", 1],
     });
     expect(applyMessage).not.toHaveProperty("invocationServiceName");
-    expect(JsonSerializer.safeSerialize(applyMessage)._unsafeUnwrap()).toBe(
+    expect(JsonSerializer.safeSerialize(applyMessage).unwrap()).toBe(
       JSON.stringify([
         3,
         "apply-1",

@@ -1,5 +1,14 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { err } from "neverthrow";
+import { Result } from "better-result";
+const { err } = Result;
+
+const unwrapAsync = async <T, E>(
+  promise: Promise<Result<T, E>>,
+): Promise<T> => {
+  const result = await promise;
+  if (result.isErr()) throw result.error;
+  return result.value;
+};
 import { PortProcessor } from "../port-processor";
 import { JsonSerializer } from "../serializers/json-serializer";
 import { BinarySerializer } from "../serializers/binary-serializer";
@@ -79,9 +88,8 @@ describe("VirtualPortRouter", () => {
     });
     expect(listenResult.isOk()).toBe(true);
 
-    const connectResult = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
+    const connectResult = await unwrapAsync(
+      VirtualPortRouter.safeConnect(client),
     );
     const clientProcessor = PortProcessor.create(
       connectResult,
@@ -114,10 +122,7 @@ describe("VirtualPortRouter", () => {
       port.onDisconnect(serverDisconnect),
     );
 
-    await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    await unwrapAsync(VirtualPortRouter.safeConnect(client));
     bus.left.send.mockImplementation(
       (message: unknown, transfer?: Transferable[]) => {
         bus.left.sent.push({ message, transfer });
@@ -140,10 +145,7 @@ describe("VirtualPortRouter", () => {
     VirtualPortRouter.safeListen(server, (port) =>
       port.onDisconnect(serverDisconnect),
     );
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
 
     expect(VirtualPortRouter.safeClose(client).isOk()).toBe(true);
@@ -163,10 +165,7 @@ describe("VirtualPortRouter", () => {
     VirtualPortRouter.safeListen(server, (port) =>
       port.onDisconnect(serverDisconnect),
     );
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
 
     port.close();
@@ -184,7 +183,7 @@ describe("VirtualPortRouter", () => {
     const result = await VirtualPortRouter.safeConnect(client);
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().message).toContain("closed");
+    expect(result.error.message).toContain("closed");
   });
 
   it("rejects and settles when the peer is not listening", async () => {
@@ -200,8 +199,8 @@ describe("VirtualPortRouter", () => {
     const result = await resultPromise;
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().message).toContain("listener-unavailable");
-    expect(result._unsafeUnwrapErr().context).toEqual(
+    expect(result.error.message).toContain("listener-unavailable");
+    expect(result.error.context).toEqual(
       expect.objectContaining({ reason: "listener-unavailable" }),
     );
     expect(bus.right.sent).toEqual(
@@ -232,7 +231,7 @@ describe("VirtualPortRouter", () => {
     const result = await VirtualPortRouter.safeConnect(client);
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().message).toContain("Failed to send");
+    expect(result.error.message).toContain("Failed to send");
     expect(client).not.toHaveProperty("channels");
     await vi.advanceTimersByTimeAsync(100);
   });
@@ -254,7 +253,7 @@ describe("VirtualPortRouter", () => {
     const result = await VirtualPortRouter.safeConnect(client);
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().context).toEqual(
+    expect(result.error.context).toEqual(
       expect.objectContaining({ originalError: sendError }),
     );
     await vi.advanceTimersByTimeAsync(100);
@@ -272,7 +271,7 @@ describe("VirtualPortRouter", () => {
     const result = await resultPromise;
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().message).toContain("timed out");
+    expect(result.error.message).toContain("timed out");
   });
 
   it("times out heartbeats after three misses", async () => {
@@ -290,10 +289,7 @@ describe("VirtualPortRouter", () => {
       port.onDisconnect(serverDisconnect),
     );
 
-    await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    await unwrapAsync(VirtualPortRouter.safeConnect(client));
     bus.left.send.mockImplementation(
       (message: unknown, transfer?: Transferable[]) => {
         bus.left.sent.push({ message, transfer });
@@ -321,10 +317,7 @@ describe("VirtualPortRouter", () => {
       port.onDisconnect(serverDisconnect),
     );
 
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
     bus.left.send.mockImplementation(
       (message: unknown, transfer?: Transferable[]) => {
@@ -352,10 +345,7 @@ describe("VirtualPortRouter", () => {
       port.onMessage(serverMessages),
     );
 
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
 
     port.postMessage("before-close");
     const data = bus.left.sent.find(
@@ -410,10 +400,7 @@ describe("VirtualPortRouter", () => {
       port.onMessage(serverMessages),
     );
 
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
     const connect = bus.left.sent.find(
       (packet) =>
@@ -440,10 +427,7 @@ describe("VirtualPortRouter", () => {
       port.onMessage(serverMessages),
     );
 
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
     const connect = bus.left.sent.find(
       (packet) =>
@@ -492,17 +476,14 @@ describe("VirtualPortRouter", () => {
     });
     const clientDisconnect = vi.fn();
     VirtualPortRouter.safeListen(server, () => undefined);
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     port.onDisconnect(clientDisconnect);
 
     const result = VirtualPortRouter.safeClose(client);
     await vi.advanceTimersByTimeAsync(100);
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().context).toEqual(
+    expect(result.error.context).toEqual(
       expect.objectContaining({ originalError: unsubscribeError }),
     );
     expect(clientDisconnect).toHaveBeenCalledOnce();
@@ -533,10 +514,7 @@ describe("VirtualPortRouter", () => {
     const server = VirtualPortRouter.create({ bus: bus.right });
     const client = VirtualPortRouter.create({ bus: bus.left });
     VirtualPortRouter.safeListen(server, () => undefined);
-    const port = await VirtualPortRouter.safeConnect(client).match(
-      (value) => value,
-      (error) => Promise.reject(error),
-    );
+    const port = await unwrapAsync(VirtualPortRouter.safeConnect(client));
     const buffer = new ArrayBuffer(8);
 
     port.postMessage("payload", [buffer]);
@@ -561,9 +539,8 @@ describe("VirtualPortRouter", () => {
         onDisconnect: vi.fn(),
       });
     });
-    const jsonPort = await VirtualPortRouter.safeConnect(jsonClient).match(
-      (value) => value,
-      (error) => Promise.reject(error),
+    const jsonPort = await unwrapAsync(
+      VirtualPortRouter.safeConnect(jsonClient),
     );
     PortProcessor.create(jsonPort, JsonSerializer.serializer, {
       onLogicalMessage: vi.fn(),
@@ -581,9 +558,8 @@ describe("VirtualPortRouter", () => {
         onDisconnect: vi.fn(),
       });
     });
-    const binaryPort = await VirtualPortRouter.safeConnect(binaryClient).match(
-      (value) => value,
-      (error) => Promise.reject(error),
+    const binaryPort = await unwrapAsync(
+      VirtualPortRouter.safeConnect(binaryClient),
     );
     PortProcessor.create(binaryPort, BinarySerializer.serializer, {
       onLogicalMessage: vi.fn(),

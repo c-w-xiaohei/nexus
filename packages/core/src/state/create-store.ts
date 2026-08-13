@@ -1,19 +1,19 @@
-import type { ServiceProvider } from "@/api/types/config";
-import type { EndpointMeta } from "@/types/identity";
+import type { ServiceProvider } from "../api/types/config.js";
+import type { EndpointMeta } from "../types/identity.js";
 import {
   type ServiceInvocationContext,
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
   SERVICE_ON_DISCONNECT,
-} from "@/service/service-invocation-hooks";
-import { createStoreHost } from "./host/store-host";
+} from "../service/service-invocation-hooks.js";
+import { createStoreHost } from "./host/store-host.js";
 import type {
   ActionArgs,
   ActionResult,
   NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteActions,
-} from "./types";
+} from "./types.js";
 
 const ignoredActionProxyKeys = new Set([
   "then",

@@ -12,8 +12,9 @@ import {
   type RuntimeCreateTokenParam,
   type Target,
 } from "@nexus-js/core";
-import { err, errAsync, ok, okAsync, type Result } from "neverthrow";
-import { NexusMockError } from "./errors";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import { NexusMockError } from "./errors.js";
 
 type GetMatchers<T> = T extends { matchers: infer M }
   ? keyof M & string
@@ -465,13 +466,17 @@ export function createMockNexus<
       token,
       options ?? {},
     );
-    return result.isErr() ? errAsync(result.error) : okAsync(result.value);
+    return Promise.resolve(
+      result.isErr() ? err(result.error) : ok(result.value),
+    );
   };
 
   const safeUpdateIdentity = (updates: Partial<U>) =>
     isPlainRuntimeObject(updates)
-      ? okAsync(updateIdentity(updates)).andThen(() => okAsync(undefined))
-      : errAsync(invalidIdentityUpdatesError());
+      ? Promise.resolve(ok(updateIdentity(updates))).then((result) =>
+          result.andThen(() => ok(undefined)),
+        )
+      : Promise.resolve(err(invalidIdentityUpdatesError()));
 
   const publicUpdateIdentity = async (updates: Partial<U>): Promise<void> => {
     const result = await safeUpdateIdentity(updates);
@@ -495,7 +500,8 @@ export function createMockNexus<
     create,
     safeCreate,
     createMulticast: () => Promise.reject(unsupportedOperationError()),
-    safeCreateMulticast: () => errAsync(unsupportedOperationError()),
+    safeCreateMulticast: () =>
+      Promise.resolve(err(unsupportedOperationError())),
     updateIdentity: publicUpdateIdentity,
     safeUpdateIdentity,
     ref,

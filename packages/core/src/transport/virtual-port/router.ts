@@ -1,12 +1,13 @@
-import { err, errAsync, ok, ResultAsync, type Result } from "neverthrow";
-import type { IPort } from "../types/port";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import type { IPort } from "../types/port.js";
 import {
   VirtualPortCloseError,
   VirtualPortConnectError,
   VirtualPortListenError,
-} from "./errors";
-import { VirtualPortProtocol } from "./protocol";
-import { createVirtualPort } from "./virtual-port";
+} from "./errors.js";
+import { VirtualPortProtocol } from "./protocol.js";
+import { createVirtualPort } from "./virtual-port.js";
 
 type ChannelState = "connecting" | "open" | "closed";
 
@@ -120,13 +121,11 @@ export namespace VirtualPortRouter {
     return ok(undefined);
   };
 
-  export const safeConnect = (
+  export const safeConnect = async (
     context: Context,
-  ): ResultAsync<IPort, VirtualPortConnectError> => {
+  ): Promise<Result<IPort, VirtualPortConnectError>> => {
     if (context.closed) {
-      return errAsync(
-        new VirtualPortConnectError("Virtual port router is closed"),
-      );
+      return err(new VirtualPortConnectError("Virtual port router is closed"));
     }
 
     const channelId = createId("vp-channel");
@@ -157,13 +156,15 @@ export namespace VirtualPortRouter {
       }
     });
 
-    return ResultAsync.fromPromise(promise, (error) =>
-      error instanceof VirtualPortConnectError
-        ? error
-        : new VirtualPortConnectError("Failed to connect virtual port", {
-            originalError: error,
-          }),
-    );
+    return Result.tryPromise({
+      try: () => promise,
+      catch: (error) =>
+        error instanceof VirtualPortConnectError
+          ? error
+          : new VirtualPortConnectError("Failed to connect virtual port", {
+              originalError: error,
+            }),
+    });
   };
 
   export const safeClose = (

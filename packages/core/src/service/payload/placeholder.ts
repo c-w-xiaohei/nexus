@@ -2,7 +2,7 @@ import {
   PLACEHOLDER_PREFIX,
   PAYLOAD_SEPARATOR,
   PlaceholderType,
-} from "./protocol";
+} from "./protocol.js";
 
 /**
  * A class-based representation of a serialized placeholder string.
@@ -12,7 +12,7 @@ import {
 export class Placeholder {
   constructor(
     public readonly type: PlaceholderType,
-    public readonly payload?: string
+    public readonly payload?: string,
   ) {}
 
   /**

@@ -1,5 +1,5 @@
-import { NexusError } from "./nexus-error";
-import type { SerializedError } from "@/types/message";
+import { NexusError } from "./nexus-error.js";
+import type { SerializedError } from "../types/message.js";
 
 export type NexusTargetingErrorCode =
   | "E_TARGET_NO_MATCH"

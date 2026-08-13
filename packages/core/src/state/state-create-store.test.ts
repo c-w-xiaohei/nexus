@@ -207,10 +207,7 @@ describe("createNexusStore", () => {
         meta: { id: "host" },
         providers: {
           [definition.token.id]:
-            registration.service as NexusStoreServiceContract<
-              object,
-              any
-            >,
+            registration.service as NexusStoreServiceContract<object, any>,
         },
       },
       {
@@ -290,11 +287,10 @@ describe("createNexusStore", () => {
   it("forwards invocation context into wrapped dispatch path", async () => {
     const definition = createCounterDefinition();
     const { provider: registration } = createNexusStore(definition);
-    const service =
-      registration.service as NexusStoreServiceContract<
-        { count: number },
-        { increment(by: number): number }
-      >;
+    const service = registration.service as NexusStoreServiceContract<
+      { count: number },
+      { increment(by: number): number }
+    >;
 
     const invocation = (
       service as {
@@ -326,8 +322,7 @@ describe("createNexusStore", () => {
     const originalDispatch = service.dispatch.bind(service);
     const wrappedImplementation = Object.create(
       Object.getPrototypeOf(service),
-    ) as NexusStoreServiceContract<{ count: number }, any> &
-      typeof service;
+    ) as NexusStoreServiceContract<{ count: number }, any> & typeof service;
     Object.defineProperties(
       wrappedImplementation,
       Object.getOwnPropertyDescriptors(service),
@@ -389,10 +384,7 @@ describe("createNexusStore", () => {
         meta: { id: "host" },
         providers: {
           [definition.token.id]:
-            registration.service as NexusStoreServiceContract<
-              object,
-              any
-            >,
+            registration.service as NexusStoreServiceContract<object, any>,
         },
       },
       {
@@ -446,8 +438,7 @@ describe("createNexusStore", () => {
     const originalSubscribe = service.subscribe.bind(service);
     const wrappedImplementation = Object.create(
       Object.getPrototypeOf(service),
-    ) as NexusStoreServiceContract<{ count: number }, any> &
-      typeof service;
+    ) as NexusStoreServiceContract<{ count: number }, any> & typeof service;
     Object.defineProperties(
       wrappedImplementation,
       Object.getOwnPropertyDescriptors(service),
@@ -633,10 +624,7 @@ describe("createNexusStore", () => {
         meta: { id: "host" },
         providers: {
           [definition.token.id]:
-            registration.service as NexusStoreServiceContract<
-              object,
-              any
-            >,
+            registration.service as NexusStoreServiceContract<object, any>,
         },
       },
       {
@@ -694,10 +682,7 @@ describe("createNexusStore", () => {
     const originalSubscribe = registration.service.subscribe.bind(
       registration.service,
     );
-    registration.service.subscribe = async (
-      onSync: any,
-      invocation: any,
-    ) => {
+    registration.service.subscribe = async (onSync: any, invocation: any) => {
       await subscribeGate.promise;
       return originalSubscribe(onSync, invocation);
     };
@@ -707,10 +692,7 @@ describe("createNexusStore", () => {
         meta: { id: "host" },
         providers: {
           [definition.token.id]:
-            registration.service as NexusStoreServiceContract<
-              object,
-              any
-            >,
+            registration.service as NexusStoreServiceContract<object, any>,
         },
       },
       {

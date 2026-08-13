@@ -8,6 +8,11 @@ import type { NodeIpcSocketAddress } from "./types/address";
 
 const roots: string[] = [];
 
+const unwrap = <T, E>(result: import("better-result").Result<T, E>): T => {
+  if (result.isErr()) throw result.error;
+  return result.value;
+};
+
 const tempSocket = async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-node-ipc-"));
   roots.push(root);
@@ -30,9 +35,12 @@ describe("Unix socket stale cleanup", () => {
 
     const result = await endpoint.safeListen(() => {});
 
-    expect(result._unsafeUnwrapErr().code).toBe(
-      "E_IPC_STALE_SOCKET_CLEANUP_FAILED",
-    );
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({
+        code: "E_IPC_STALE_SOCKET_CLEANUP_FAILED",
+      });
+    }
     await expect(fs.readFile(address.path, "utf8")).resolves.toBe("stale");
   });
 
@@ -42,11 +50,14 @@ describe("Unix socket stale cleanup", () => {
     const second = new UnixSocketServerEndpoint(address);
     const closer: UnixSocketServerHandle = await first
       .safeListen(() => {})
-      .then((result) => result._unsafeUnwrap() as UnixSocketServerHandle);
+      .then((result) => unwrap(result) as UnixSocketServerHandle);
 
     const result = await second.safeListen(() => {});
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_IN_USE");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_IN_USE" });
+    }
     closer.close();
   });
 
@@ -68,7 +79,10 @@ describe("Unix socket stale cleanup", () => {
 
     const result = await endpoint.safeListen(() => {});
 
-    expect(result._unsafeUnwrapErr().code).toBe("E_IPC_ADDRESS_INVALID");
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
     await expect(fs.lstat(socketPath)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -97,7 +111,7 @@ describe("Unix socket stale cleanup", () => {
       const result = await endpoint.safeListen(() => {});
 
       expect(result.isOk()).toBe(true);
-      result._unsafeUnwrap().close();
+      unwrap(result).close();
       getuid.mockRestore();
     },
   );
@@ -116,9 +130,10 @@ describe("Unix socket stale cleanup", () => {
 
       const result = await endpoint.safeListen(() => {});
 
-      expect(result._unsafeUnwrapErr()).toMatchObject({
-        code: "E_IPC_ADDRESS_INVALID",
-      });
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+      }
       await expect(fs.lstat(socketPath)).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -140,9 +155,10 @@ describe("Unix socket stale cleanup", () => {
 
       const result = await endpoint.safeListen(() => {});
 
-      expect(result._unsafeUnwrapErr()).toMatchObject({
-        code: "E_IPC_ADDRESS_INVALID",
-      });
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+      }
       await expect(fs.lstat(socketPath)).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -162,9 +178,12 @@ describe("Unix socket stale cleanup", () => {
 
     const result = await endpoint.safeListen(() => {});
 
-    expect(result._unsafeUnwrapErr()).toMatchObject({
-      name: "NodeIpcError",
-      code: "E_IPC_ADDRESS_INVALID",
-    });
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toMatchObject({
+        name: "NodeIpcError",
+        code: "E_IPC_ADDRESS_INVALID",
+      });
+    }
   });
 });

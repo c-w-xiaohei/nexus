@@ -1,4 +1,4 @@
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import type { NexusAuthorizationPolicy } from "../../api/types/config.js";
 
 /**
  * This barrel file will export all types and interfaces specific to Layer 3.

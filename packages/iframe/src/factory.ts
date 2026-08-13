@@ -1,8 +1,8 @@
 import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
-import { IframeChildEndpoint } from "./child-endpoint";
-import { DEFAULT_INSTANCE } from "./constants";
-import { baseMatchers } from "./matchers";
-import { IframeParentEndpoint } from "./parent-endpoint";
+import { IframeChildEndpoint } from "./child-endpoint.js";
+import { DEFAULT_INSTANCE } from "./constants.js";
+import { baseMatchers } from "./matchers.js";
+import { IframeParentEndpoint } from "./parent-endpoint.js";
 import type {
   IframeChildConfigOptions,
   IframeChildOptions,
@@ -10,8 +10,8 @@ import type {
   IframeParentOptions,
   IframePlatformMeta,
   IframeEndpointMeta,
-} from "./types";
-import { getOrigin } from "./window";
+} from "./types.js";
+import { getOrigin } from "./window.js";
 
 /**
  * Builds or applies a parent iframe Nexus configuration. With `configure:false`,

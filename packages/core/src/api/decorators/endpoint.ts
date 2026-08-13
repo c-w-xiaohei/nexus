@@ -1,10 +1,10 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import type { IEndpoint } from "@/transport";
-import type { Target } from "../types/config";
-import type { EndpointRegistrationData } from "../registry";
-import { nexus } from "../nexus";
-import { NexusUsageError } from "@/errors";
-import { fn } from "@/utils/fn";
+import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
+import type { IEndpoint } from "../../transport/index.js";
+import type { Target } from "../types/config.js";
+import type { EndpointRegistrationData } from "../registry.js";
+import { nexus } from "../nexus.js";
+import { NexusUsageError } from "../../errors/index.js";
+import { fn } from "../../utils/fn.js";
 import { z } from "zod";
 
 /**

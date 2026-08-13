@@ -1,4 +1,4 @@
-import { NexusError } from "./nexus-error";
+import { NexusError } from "./nexus-error.js";
 
 export type NexusConnectionErrorCode =
   | "E_CONN_CLOSED"

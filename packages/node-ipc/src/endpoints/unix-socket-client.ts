@@ -1,9 +1,15 @@
 import net from "node:net";
 import type { IEndpoint } from "@nexus-js/core";
-import { NodeIpcError } from "../errors";
-import { UnixSocketPort } from "../ports/unix-socket-port";
-import { NodeIpcAddress, type NodeIpcAddressResolver } from "../types/address";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "../types/meta";
+import { NodeIpcError } from "../errors.js";
+import { UnixSocketPort } from "../ports/unix-socket-port.js";
+import {
+  NodeIpcAddress,
+  type NodeIpcAddressResolver,
+} from "../types/address.js";
+import type {
+  NodeIpcPlatformMeta,
+  NodeIpcEndpointMeta,
+} from "../types/meta.js";
 
 type EndpointCapabilities = NonNullable<
   IEndpoint<NodeIpcEndpointMeta, NodeIpcPlatformMeta>["capabilities"]
@@ -42,15 +48,12 @@ export class UnixSocketClientEndpoint implements IEndpoint<
     targetDescriptor: Partial<NodeIpcEndpointMeta>,
   ): Promise<[UnixSocketPort, NodeIpcPlatformMeta]> {
     validateAuthToken(this.authToken);
-    const address = NodeIpcAddress.resolve(
+    const addressResult = NodeIpcAddress.resolve(
       targetDescriptor,
       this.resolveAddress,
-    ).match(
-      (value) => value,
-      (error) => {
-        throw error;
-      },
     );
+    if (addressResult.isErr()) throw addressResult.error;
+    const address = addressResult.value;
     if (address.kind !== "path")
       throw new NodeIpcError(
         "Abstract sockets are reserved but not implemented",

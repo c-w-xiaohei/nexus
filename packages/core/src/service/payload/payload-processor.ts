@@ -1,25 +1,26 @@
-import type { PlatformMeta, EndpointMeta } from "../../types/identity";
+import type { PlatformMeta, EndpointMeta } from "../../types/identity.js";
 import {
   getValueType,
   LocalResourceType,
   type ReviveContext,
   type SanitizeContext,
   ValueType,
-} from "../types";
-import type { ProxyFactory } from "../proxy-factory";
-import type { ResourceManager } from "../resource-manager";
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
-import { isRefWrapper } from "@/types/ref-wrapper";
-import { Placeholder } from "./placeholder";
+} from "../types/index.js";
+import type { ProxyFactory } from "../proxy-factory.js";
+import type { ResourceManager } from "../resource-manager.js";
+import type { NexusAuthorizationPolicy } from "../../api/types/config.js";
+import { isRefWrapper } from "../../types/ref-wrapper.js";
+import { Placeholder } from "./placeholder.js";
 import {
   ESCAPE_CHAR,
   PLACEHOLDER_PREFIX,
   PlaceholderType,
   REVIVER_TABLE_CONFIG,
   SANITIZER_TABLE_CONFIG,
-} from "./protocol";
-import { Logger } from "@/logger";
-import { Result, err, ok, type Result as TResult } from "neverthrow";
+} from "./protocol.js";
+import { Logger } from "../../logger.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 export namespace PayloadProcessor {
   type ErrorCode = "E_PROTOCOL_ERROR";
@@ -43,26 +44,23 @@ export namespace PayloadProcessor {
     UnsupportedType: UnsupportedTypeError,
   } as const;
 
-  export interface Runtime<
-    U extends EndpointMeta,
-    _P extends PlatformMeta,
-  > {
+  export interface Runtime<U extends EndpointMeta, _P extends PlatformMeta> {
     readonly resourceManager: ResourceManager.Runtime;
     readonly proxyFactory: ProxyFactory<U>;
     safeSanitize(
       args: any[],
       targetConnectionId: string,
-    ): TResult<any[], globalThis.Error>;
+    ): Result<any[], globalThis.Error>;
     safeSanitizeFromService(
       args: any[],
       targetConnectionId: string,
       serviceName: string,
       servicePolicy?: NexusAuthorizationPolicy<any, any>,
-    ): TResult<any[], globalThis.Error>;
+    ): Result<any[], globalThis.Error>;
     safeRevive(
       args: any[],
       sourceConnectionId: string,
-    ): TResult<any[], globalThis.Error>;
+    ): Result<any[], globalThis.Error>;
   }
 
   export const create = <U extends EndpointMeta, P extends PlatformMeta>(
@@ -195,7 +193,7 @@ export namespace PayloadProcessor {
     const safeSanitize = (
       args: any[],
       targetConnectionId: string,
-    ): TResult<any[], globalThis.Error> =>
+    ): Result<any[], globalThis.Error> =>
       safeSanitizeWithContext(args, { targetConnectionId });
 
     function safeSanitizeFromService(
@@ -203,7 +201,7 @@ export namespace PayloadProcessor {
       targetConnectionId: string,
       serviceName: string,
       servicePolicyOverride?: NexusAuthorizationPolicy<any, any>,
-    ): TResult<any[], globalThis.Error> {
+    ): Result<any[], globalThis.Error> {
       const servicePolicy =
         arguments.length >= 4
           ? servicePolicyOverride
@@ -218,20 +216,20 @@ export namespace PayloadProcessor {
     const safeSanitizeWithContext = (
       args: any[],
       context: SanitizeContext,
-    ): TResult<any[], globalThis.Error> => {
-      const result = Result.fromThrowable(
-        () => {
+    ): Result<any[], globalThis.Error> => {
+      const result = Result.try({
+        try: () => {
           const sanitized = internalSanitize(args, context);
           return Array.isArray(sanitized) ? sanitized : [sanitized];
         },
-        (error) =>
+        catch: (error) =>
           error instanceof globalThis.Error
             ? error
             : new Error.UnsupportedType(
                 `Nexus serialization error: ${String(error)}`,
                 { context: { ...context } },
               ),
-      )();
+      });
 
       if (result.isErr()) {
         return err(result.error);
@@ -243,20 +241,20 @@ export namespace PayloadProcessor {
     const safeRevive = (
       args: any[],
       sourceConnectionId: string,
-    ): TResult<any[], globalThis.Error> => {
-      const result = Result.fromThrowable(
-        () => {
+    ): Result<any[], globalThis.Error> => {
+      const result = Result.try({
+        try: () => {
           const revived = internalRevive(args, { sourceConnectionId });
           return Array.isArray(revived) ? revived : [revived];
         },
-        (error) =>
+        catch: (error) =>
           error instanceof globalThis.Error
             ? error
             : new Error.UnsupportedType(
                 `Nexus revive error: ${String(error)}`,
                 { context: { sourceConnectionId } },
               ),
-      )();
+      });
 
       if (result.isErr()) {
         return err(result.error);

@@ -1,5 +1,5 @@
-import type { NexusMessage } from "../../types/message";
-import type { ConnectionContext } from "../../types/identity";
+import type { NexusMessage } from "../../types/message.js";
+import type { ConnectionContext } from "../../types/identity.js";
 
 /**
  * Represents the status of a logical connection.
@@ -98,4 +98,4 @@ export type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
   ResolveOptions,
-} from "./manager";
+} from "./manager.js";

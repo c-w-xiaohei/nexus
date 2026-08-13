@@ -1,7 +1,7 @@
-export { VirtualPortRouter } from "./router";
+export { VirtualPortRouter } from "./router.js";
 export {
   VirtualPortCloseError,
   VirtualPortConnectError,
   VirtualPortListenError,
   VirtualPortProtocolError,
-} from "./errors";
+} from "./errors.js";

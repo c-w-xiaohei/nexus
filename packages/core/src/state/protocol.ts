@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TargetSchema } from "./target-schema";
+import { TargetSchema } from "./target-schema.js";
 
 export const SubscribeResultSchema = z.object({
   storeInstanceId: z.string(),

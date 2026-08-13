@@ -1,11 +1,15 @@
-import type { EndpointMeta } from "@/types/identity";
-import { NexusConfigurationError, NexusTargetingError } from "@/errors";
+import type { EndpointMeta } from "../types/identity.js";
+import {
+  NexusConfigurationError,
+  NexusTargetingError,
+} from "../errors/index.js";
 import type {
   Target,
   DescriptorTarget,
   MatcherTarget,
-} from "./types/config";
-import { err, ok, type Result } from "neverthrow";
+} from "./types/config.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 type ResolvedNamedTarget<U extends EndpointMeta> = {
   descriptor?: Partial<U>;

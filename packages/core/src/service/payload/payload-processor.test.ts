@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ok, type Result } from "neverthrow";
+import { Result, type Result as ResultType } from "better-result";
+const { ok } = Result;
 import { PayloadProcessor } from "./payload-processor";
 import { ResourceManager } from "../resource-manager";
 import { ProxyFactory } from "../proxy-factory";
@@ -10,13 +11,10 @@ import { ESCAPE_CHAR, PlaceholderType } from "./protocol";
 
 vi.mock("../proxy-factory");
 
-const unwrap = <T>(result: Result<T, globalThis.Error>): T =>
-  result.match(
-    (value) => value,
-    (error) => {
-      throw error;
-    },
-  );
+const unwrap = <T>(result: Result<T, globalThis.Error>): T => {
+  if (result.isErr()) throw result.error;
+  return result.value;
+};
 
 describe("PayloadProcessor", () => {
   let resourceManager: ResourceManager.Runtime;

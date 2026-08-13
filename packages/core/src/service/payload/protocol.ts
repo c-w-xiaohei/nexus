@@ -36,15 +36,15 @@ export enum PlaceholderType {
   // REGEXP = 'X',
 }
 
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
+import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
 import {
   LocalResourceType,
   type ReviveContext,
   type SanitizeContext,
   ValueType,
-} from "../types";
-import { Placeholder } from "./placeholder";
-import { PayloadProcessor } from "./payload-processor";
+} from "../types/index.js";
+import { Placeholder } from "./placeholder.js";
+import { PayloadProcessor } from "./payload-processor.js";
 
 type SanitizeHandler<U extends EndpointMeta, P extends PlatformMeta> = (
   processor: PayloadProcessor.Runtime<U, P>,

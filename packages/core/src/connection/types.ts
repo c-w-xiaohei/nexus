@@ -2,9 +2,9 @@ import type {
   EndpointMeta,
   PlatformMeta,
   ConnectionContext,
-} from "../types/identity";
-import type { NexusMessage } from "../types/message";
-import type { NexusAuthorizationPolicy } from "../api/types/config";
+} from "../types/identity.js";
+import type { NexusMessage } from "../types/message.js";
+import type { NexusAuthorizationPolicy } from "../api/types/config.js";
 
 export enum ConnectionStatus {
   INITIALIZING,
@@ -16,10 +16,7 @@ export enum ConnectionStatus {
 
 export type Descriptor<U extends EndpointMeta> = Partial<U>;
 
-export type ResolveOptions<
-  U extends EndpointMeta,
-  _P extends PlatformMeta,
-> = {
+export type ResolveOptions<U extends EndpointMeta, _P extends PlatformMeta> = {
   matcher?: (identity: U) => boolean;
   descriptor?: Descriptor<U>;
   assignmentMetadata?: U;

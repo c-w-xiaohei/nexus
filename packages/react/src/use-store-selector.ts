@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { RemoteStore } from "@nexus-js/core/state";
-import type { UseRemoteStoreResult } from "./use-remote-store";
+import type { UseRemoteStoreResult } from "./use-remote-store.js";
 
 const staleStores = new WeakSet<RemoteStore<any, any>>();
 

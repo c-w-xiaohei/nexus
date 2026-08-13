@@ -1,17 +1,17 @@
 import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
-import { UnixSocketClientEndpoint } from "./endpoints/unix-socket-client";
-import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server";
-import { NodeIpcMatchers } from "./matchers";
-import { NodeIpcAddress } from "./types/address";
-import type { NodeIpcSocketAddress } from "./types/address";
+import { UnixSocketClientEndpoint } from "./endpoints/unix-socket-client.js";
+import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server.js";
+import { NodeIpcMatchers } from "./matchers.js";
+import { NodeIpcAddress } from "./types/address.js";
+import type { NodeIpcSocketAddress } from "./types/address.js";
 import type {
   NodeIpcClientConfigOptions,
   NodeIpcClientOptions,
   NodeIpcDaemonConfigOptions,
   NodeIpcDaemonOptions,
-} from "./types/options";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta";
-import { NodeIpcError } from "./errors";
+} from "./types/options.js";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta.js";
+import { NodeIpcError } from "./errors.js";
 
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonConfigOptions,
@@ -54,28 +54,22 @@ export function usingNodeIpcDaemon(
 function validateDaemonAddress(
   address: NodeIpcSocketAddress,
 ): NodeIpcSocketAddress {
-  return NodeIpcAddress.validate(address).match(
-    (validated) => validated,
-    (error) => {
-      throw error;
-    },
-  );
+  const result = NodeIpcAddress.validate(address);
+  if (result.isErr()) throw result.error;
+  return result.value;
 }
 
 function resolveDaemonAddress(
   appId: string,
   instance: string,
 ): NodeIpcSocketAddress {
-  return NodeIpcAddress.defaultResolve({
+  const result = NodeIpcAddress.defaultResolve({
     context: "node-ipc-daemon",
     appId,
     instance,
-  }).match(
-    (address) => address,
-    (error) => {
-      throw error;
-    },
-  );
+  });
+  if (result.isErr()) throw result.error;
+  return result.value;
 }
 
 export function usingNodeIpcClient(

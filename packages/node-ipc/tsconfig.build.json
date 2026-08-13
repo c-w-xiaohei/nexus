@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.declaration.json",
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "src/**/*.integration.test.ts",
+    "src/integration-test-utils.ts",
+    "src/**/*.test-d.ts",
+    "src/**/*.test.ts"
+  ],
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"]
+  }
+}
