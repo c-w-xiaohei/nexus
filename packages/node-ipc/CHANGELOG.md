@@ -1,5 +1,16 @@
 # @nexus-js/node-ipc
 
+## 0.4.0
+
+### Minor Changes
+
+- 14c4348: Replace the safe async APIs with `Promise<Result<T, E>>` backed by `better-result`, preserving structured Nexus error behavior and package loading compatibility.
+
+### Patch Changes
+
+- Updated dependencies [14c4348]
+  - @nexus-js/core@0.6.0
+
 ## 0.3.1
 
 ### Patch Changes

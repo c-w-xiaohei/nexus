@@ -1,5 +1,15 @@
 # @nexus-js/react
 
+## 0.5.0
+
+### Minor Changes
+
+- c1c937c: Add declarative `reconnectKey` replacement, stable `reconnect()` commands, and shared reconnect controls for React remote store scopes.
+
+### Patch Changes
+
+- 14c4348: Replace the safe async APIs with `Promise<Result<T, E>>` backed by `better-result`, preserving structured Nexus error behavior and package loading compatibility.
+
 ## 0.4.0
 
 ### Minor Changes
