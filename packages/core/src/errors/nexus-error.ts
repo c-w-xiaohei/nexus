@@ -1,4 +1,4 @@
-import type { SerializedError } from "@/types/message";
+import type { SerializedError } from "../types/message.js";
 
 export type NexusErrorCode =
   | "E_UNKNOWN"

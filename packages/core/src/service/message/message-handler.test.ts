@@ -14,7 +14,8 @@ import {
   type ReleaseMessage,
 } from "../../types/message";
 import { LocalResourceType } from "../types";
-import { err, ok } from "neverthrow";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
@@ -98,12 +99,7 @@ describe("MessageHandler", () => {
       sourceConnectionId,
     );
     expect(result.isErr()).toBe(true);
-    result.match(
-      () => undefined,
-      (error) => {
-        expect(error.message).toContain("No message handler found");
-      },
-    );
+    expect(result.error.message).toContain("No message handler found");
   });
 
   describe("APPLY Handler", () => {

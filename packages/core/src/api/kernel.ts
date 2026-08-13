@@ -1,18 +1,22 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import { ConnectionManager } from "@/connection/connection-manager";
+import type { EndpointMeta, PlatformMeta } from "../types/identity.js";
+import { ConnectionManager } from "../connection/connection-manager.js";
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
-} from "@/connection/types";
-import { Engine } from "@/service/engine";
-import type { NexusConfig, ServiceProvider } from "./types/config";
-import type { Token } from "./token";
-import { Transport } from "@/transport";
-import type { NexusMessage } from "@/types/message";
-import type { EndpointRegistrationData, ServiceProviderData } from "./registry";
-import { NexusConfigurationError } from "@/errors";
-import { TargetResolver } from "./target-resolver";
-import { ResultAsync, errAsync, okAsync } from "neverthrow";
+} from "../connection/types.js";
+import { Engine } from "../service/engine.js";
+import type { NexusConfig, ServiceProvider } from "./types/config.js";
+import type { Token } from "./token.js";
+import { Transport } from "../transport/index.js";
+import type { NexusMessage } from "../types/message.js";
+import type {
+  EndpointRegistrationData,
+  ServiceProviderData,
+} from "./registry.js";
+import { NexusConfigurationError } from "../errors/index.js";
+import { TargetResolver } from "./target-resolver.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 /**
  * A type that represents the assembled L1-L3 kernel components.
@@ -24,12 +28,14 @@ export interface NexusKernel<U extends EndpointMeta, P extends PlatformMeta> {
 
 export namespace NexusKernelBuilder {
   export interface Runtime<U extends EndpointMeta, P extends PlatformMeta> {
-    build(): ResultAsync<
-      {
-        engine: Engine<U, P>;
-        connectionManager: ConnectionManager<U, P>;
-      },
-      Error
+    build(): Promise<
+      Result<
+        {
+          engine: Engine<U, P>;
+          connectionManager: ConnectionManager<U, P>;
+        },
+        Error
+      >
     >;
   }
 
@@ -114,139 +120,146 @@ export namespace NexusKernelBuilder {
       return finalConfig;
     };
 
-    const build = (): ResultAsync<
-      {
-        engine: Engine<U, P>;
-        connectionManager: ConnectionManager<U, P>;
-      },
-      Error
+    const build = (): Promise<
+      Result<
+        {
+          engine: Engine<U, P>;
+          connectionManager: ConnectionManager<U, P>;
+        },
+        Error
+      >
     > =>
-      ResultAsync.fromPromise(bootstrapConfig(), (error) =>
-        error instanceof Error ? error : new Error(String(error)),
-      ).andThen((finalConfig) => {
-        if (
-          !finalConfig.endpoint?.implementation ||
-          !finalConfig.endpoint?.meta
-        ) {
-          return errAsync(
-            new NexusConfigurationError(
-              "Nexus initialization failed: Endpoint 'implementation' and 'meta' must be provided in the configuration, either via nexus.configure() or the @Endpoint decorator.",
-            ),
-          );
-        }
-
-        const engineRef: { current: Engine<U, P> | null } = {
-          current: null,
-        };
-
-        const handlers: ConnectionManagerHandlers<U, P> = {
-          onMessage: (message: NexusMessage, sourceConnectionId: string) => {
-            if (!engineRef.current) {
-              return;
-            }
-
-            return engineRef.current
-              .safeOnMessage(message, sourceConnectionId)
-              .match(
-                () => undefined,
-                () => undefined,
-              );
-          },
-          onDisconnect: (connectionId: string) => {
-            engineRef.current?.onDisconnect(connectionId);
-          },
-          onIdentityUpdated: (connectionId, newIdentity, oldIdentity) => {
-            if (JSON.stringify(newIdentity) === JSON.stringify(oldIdentity)) {
-              return;
-            }
-
-            engineRef.current?.onConnectionTargetStale(
-              connectionId,
-              newIdentity,
-              oldIdentity,
-            );
-          },
-        };
-
-        const resolvedConnectTo: NonNullable<
-          ConnectionManagerConfig<U, P>["connectTo"]
-        > = [];
-
-        for (const target of finalConfig.endpoint.connectTo ?? []) {
-          const resolved = TargetResolver.resolveNamedTarget(
-            target,
-            namedDescriptors,
-            namedMatchers,
-            "in connectTo",
-          );
-          if (resolved.isErr()) {
-            return errAsync(resolved.error);
-          }
-
-          if (!resolved.value.descriptor) {
-            return errAsync(
+      Result.tryPromise({
+        try: bootstrapConfig,
+        catch: (error) =>
+          error instanceof Error ? error : new Error(String(error)),
+      }).then((bootstrapResult) =>
+        bootstrapResult.andThenAsync(async (finalConfig) => {
+          if (
+            !finalConfig.endpoint?.implementation ||
+            !finalConfig.endpoint?.meta
+          ) {
+            return err(
               new NexusConfigurationError(
-                "Nexus: connectTo targets must include a descriptor.",
+                "Nexus initialization failed: Endpoint 'implementation' and 'meta' must be provided in the configuration, either via nexus.configure() or the @Endpoint decorator.",
               ),
             );
           }
 
-          resolvedConnectTo.push(
-            resolved.value.matcher
-              ? {
-                  descriptor: resolved.value.descriptor,
-                  matcher: resolved.value.matcher,
-                }
-              : {
-                  descriptor: resolved.value.descriptor,
-                },
-          );
-        }
+          const engineRef: { current: Engine<U, P> | null } = {
+            current: null,
+          };
 
-        const cmConfig: ConnectionManagerConfig<U, P> = {
-          connectTo:
-            resolvedConnectTo.length > 0 ? resolvedConnectTo : undefined,
-          policy: finalConfig.policy,
-        };
+          const handlers: ConnectionManagerHandlers<U, P> = {
+            onMessage: (message: NexusMessage, sourceConnectionId: string) => {
+              if (!engineRef.current) {
+                return;
+              }
 
-        const transport = Transport.create(finalConfig.endpoint.implementation);
+              void engineRef.current
+                .safeOnMessage(message, sourceConnectionId)
+                .then((result) =>
+                  result.match({ ok: () => undefined, err: () => undefined }),
+                );
+            },
+            onDisconnect: (connectionId: string) => {
+              engineRef.current?.onDisconnect(connectionId);
+            },
+            onIdentityUpdated: (connectionId, newIdentity, oldIdentity) => {
+              if (JSON.stringify(newIdentity) === JSON.stringify(oldIdentity)) {
+                return;
+              }
 
-        const connectionManager = new ConnectionManager<U, P>(
-          cmConfig,
-          transport,
-          handlers,
-          finalConfig.endpoint.meta,
-        );
+              engineRef.current?.onConnectionTargetStale(
+                connectionId,
+                newIdentity,
+                oldIdentity,
+              );
+            },
+          };
 
-        const servicesForEngine: {
-          providers?: Record<
-            string,
-            {
-              service: object;
-              policy?: ServiceProvider<object, U, P>["policy"];
+          const resolvedConnectTo: NonNullable<
+            ConnectionManagerConfig<U, P>["connectTo"]
+          > = [];
+
+          for (const target of finalConfig.endpoint.connectTo ?? []) {
+            const resolved = TargetResolver.resolveNamedTarget(
+              target,
+              namedDescriptors,
+              namedMatchers,
+              "in connectTo",
+            );
+            if (resolved.isErr()) {
+              return err(resolved.error);
             }
-          >;
-        } = {};
-        if (finalConfig.providers) {
-          servicesForEngine.providers = finalConfig.providers.reduce<
-            NonNullable<typeof servicesForEngine.providers>
-          >((acc, reg) => {
-            acc[reg.token.id] = {
-              service: reg.service,
-              policy: reg.policy,
-            };
-            return acc;
-          }, {});
-        }
 
-        const engine = new Engine<U, P>(connectionManager, {
-          ...servicesForEngine,
-          policy: finalConfig.policy,
-        });
-        engineRef.current = engine;
+            if (!resolved.value.descriptor) {
+              return err(
+                new NexusConfigurationError(
+                  "Nexus: connectTo targets must include a descriptor.",
+                ),
+              );
+            }
 
-        return okAsync({ engine, connectionManager });
-      });
+            resolvedConnectTo.push(
+              resolved.value.matcher
+                ? {
+                    descriptor: resolved.value.descriptor,
+                    matcher: resolved.value.matcher,
+                  }
+                : {
+                    descriptor: resolved.value.descriptor,
+                  },
+            );
+          }
+
+          const cmConfig: ConnectionManagerConfig<U, P> = {
+            connectTo:
+              resolvedConnectTo.length > 0 ? resolvedConnectTo : undefined,
+            policy: finalConfig.policy,
+          };
+
+          const transport = Transport.create(
+            finalConfig.endpoint.implementation,
+          );
+
+          const connectionManager = new ConnectionManager<U, P>(
+            cmConfig,
+            transport,
+            handlers,
+            finalConfig.endpoint.meta,
+          );
+
+          const servicesForEngine: {
+            providers?: Record<
+              string,
+              {
+                service: object;
+                policy?: ServiceProvider<object, U, P>["policy"];
+              }
+            >;
+          } = {};
+          if (finalConfig.providers) {
+            servicesForEngine.providers = finalConfig.providers.reduce<
+              NonNullable<typeof servicesForEngine.providers>
+            >((acc, reg) => {
+              acc[reg.token.id] = {
+                service: reg.service,
+                policy: reg.policy,
+              };
+              return acc;
+            }, {});
+          }
+
+          const engine = new Engine<U, P>(connectionManager, {
+            ...servicesForEngine,
+            policy: finalConfig.policy,
+          });
+          engineRef.current = engine;
+
+          return ok({ engine, connectionManager });
+        }),
+      );
 
     return { build };
   };

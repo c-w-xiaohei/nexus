@@ -1,6 +1,6 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import type { RefWrapper } from "@/types/ref-wrapper";
-import type { Token } from "../token";
+import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
+import type { RefWrapper } from "../../types/ref-wrapper.js";
+import type { Token } from "../token.js";
 import type {
   NexusConfig,
   ServiceProvider,
@@ -8,14 +8,17 @@ import type {
   CreateOptions,
   MatcherTarget,
   CreateMulticastOptions,
-} from "./config";
-import type { ExposeOptions, NexusClassDecorator } from "../decorators/expose";
+} from "./config.js";
+import type {
+  ExposeOptions,
+  NexusClassDecorator,
+} from "../decorators/expose.js";
 import type {
   EndpointOptions,
   NexusEndpointDecorator,
-} from "../decorators/endpoint";
-import type { SerializedError } from "@/types/message";
-import type { Result, ResultAsync } from "neverthrow";
+} from "../decorators/endpoint.js";
+import type { SerializedError } from "../../types/message.js";
+import type { Result } from "better-result";
 
 // 类型工具，用于从配置对象中提取匹配器和描述符的名称
 export type GetMatchers<T> = T extends { matchers: infer M }
@@ -78,9 +81,10 @@ export type RuntimeCreateArgs<
   U extends EndpointMeta,
   TToken extends Token<any, any>,
   O,
-> = RuntimeCreateToken<U, TToken> extends never
-  ? [token: never, options?: O]
-  : [token: TToken, options?: O];
+> =
+  RuntimeCreateToken<U, TToken> extends never
+    ? [token: never, options?: O]
+    : [token: TToken, options?: O];
 
 export type RuntimeCreateTokenParam<T extends object, U extends EndpointMeta> =
   | Token<T, U>
@@ -190,7 +194,7 @@ export interface NexusInstance<
   ): Result<this, Error>;
 
   ready(): Promise<void>;
-  safeReady(): ResultAsync<void, Error>;
+  safeReady(): Promise<Result<void, Error>>;
 
   /**
    * Creates a proxy for a single remote service.
@@ -210,7 +214,7 @@ export interface NexusInstance<
   safeCreate<T extends object>(
     token: RuntimeCreateTokenParam<T, U>,
     options?: CreateOptions<U, RegisteredMatchers, RegisteredDescriptors>,
-  ): ResultAsync<Asyncified<T>, Error>;
+  ): Promise<Result<Asyncified<T>, Error>>;
 
   /**
    * Creates a multicast proxy to interact with multiple remote services simultaneously.
@@ -258,7 +262,7 @@ export interface NexusInstance<
   >(
     token: RuntimeCreateTokenParam<T, U>,
     options?: O,
-  ): ResultAsync<Allified<T>, Error>;
+  ): Promise<Result<Allified<T>, Error>>;
 
   safeCreateMulticast<
     T extends object,
@@ -271,14 +275,14 @@ export interface NexusInstance<
   >(
     token: RuntimeCreateTokenParam<T, U>,
     options?: O,
-  ): ResultAsync<Streamified<T>, Error>;
+  ): Promise<Result<Streamified<T>, Error>>;
 
   /**
    * Updates the identity of the current endpoint.
    * @param updates A partial object of the user metadata to update.
    */
   updateIdentity(updates: Partial<U>): Promise<void>;
-  safeUpdateIdentity(updates: Partial<U>): ResultAsync<void, Error>;
+  safeUpdateIdentity(updates: Partial<U>): Promise<Result<void, Error>>;
   ref<T extends object>(target: T): RefWrapper<T>;
   safeRef<T extends object>(target: T): Result<RefWrapper<T>, Error>;
   release(proxy: object): void;

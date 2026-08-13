@@ -6,7 +6,8 @@ import { createMockPortPair } from "../utils/test-utils";
 import type { GetMessage } from "@/types/message";
 import { NexusMessageType } from "@/types/message";
 import type { ISerializer } from "./serializers/interface";
-import { err, ok } from "neverthrow";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import { NexusProtocolError } from "@/errors";
 
 describe("PortProcessor", () => {

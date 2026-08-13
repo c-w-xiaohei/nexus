@@ -1,5 +1,4 @@
 import { defineConfig } from "vitest/config";
-import dts from "vite-plugin-dts";
 import reactSwc from "@vitejs/plugin-react-swc";
 import path from "path";
 
@@ -12,19 +11,13 @@ const isExternalDependency = (id: string) => {
 };
 
 export default defineConfig({
-  plugins: [
-    reactSwc(),
-    dts({
-      insertTypesEntry: true,
-      exclude: ["**/*.test.ts", "**/*.test.tsx"],
-    }),
-  ],
+  plugins: [reactSwc()],
   build: {
     lib: {
       entry: path.resolve(__dirname, "src/index.ts"),
       name: "NexusReact",
       formats: ["es", "cjs"],
-      fileName: (format) => `index.${format === "es" ? "mjs" : "js"}`,
+      fileName: (format) => `index.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
       external: isExternalDependency,

@@ -3,7 +3,6 @@
   "include": ["src", "integration", "vite.config.ts"],
   "exclude": ["node_modules", "dist"],
   "compilerOptions": {
-    "baseUrl": ".",
     "jsx": "react-jsx"
   }
 }

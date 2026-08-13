@@ -5,7 +5,10 @@
  * higher-level package integration scenarios in `packages/core/integration`.
  */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { errAsync } from "neverthrow";
+import { Result } from "better-result";
+const { err, ok } = Result;
+
+const successfulSafeCreate = <T>(value: T) => Promise.resolve(ok(value));
 import { z } from "zod";
 import { Token } from "../api/token";
 import { createL3Endpoints, createStarNetwork } from "../utils/test-utils";
@@ -93,13 +96,7 @@ describe("state client runtime and connect APIs", () => {
 
     const actionGetterResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof actionGetterService) => any) =>
-                next(actionGetterService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(actionGetterService),
       } as any,
       definition,
       {},
@@ -134,14 +131,7 @@ describe("state client runtime and connect APIs", () => {
 
     const disconnectedGetterResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (
-                next: (value: typeof disconnectedGetterService) => any,
-              ) => next(disconnectedGetterService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(disconnectedGetterService),
       } as any,
       definition,
       {},
@@ -187,13 +177,7 @@ describe("state client runtime and connect APIs", () => {
 
     const throwingHookResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof throwingHookService) => any) =>
-                next(throwingHookService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(throwingHookService),
       } as any,
       definition,
       {},
@@ -223,13 +207,7 @@ describe("state client runtime and connect APIs", () => {
 
     const noopHookResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof noopHookService) => any) =>
-                next(noopHookService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(noopHookService),
       } as any,
       definition,
       {},
@@ -264,12 +242,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:timeout-non-string-subscription-id"),
@@ -428,7 +401,7 @@ describe("state client runtime and connect APIs", () => {
     const createFailure = new Error("safeCreate failed");
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () => errAsync(createFailure),
+        safeCreate: () => Promise.resolve(err(createFailure)),
       } as any,
       definition,
       {},
@@ -455,27 +428,20 @@ describe("state client runtime and connect APIs", () => {
     const result = await safeConnectNexusStore(
       {
         safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (
-                next: (value: NexusStoreServiceContract<any, any>) => any,
-              ) =>
-                next({
-                  subscribe: vi.fn(async () => ({
-                    storeInstanceId: "store-state-throw",
-                    subscriptionId: "sub-state-throw",
-                    version: 0,
-                    state: { count: 0 },
-                  })),
-                  unsubscribe: vi.fn(async () => {}),
-                  dispatch: vi.fn(async () => ({
-                    type: "dispatch-result",
-                    committedVersion: 1,
-                    result: 0,
-                  })),
-                } as NexusStoreServiceContract<any, any>),
-            }),
-          }) as any,
+          successfulSafeCreate({
+            subscribe: vi.fn(async () => ({
+              storeInstanceId: "store-state-throw",
+              subscriptionId: "sub-state-throw",
+              version: 0,
+              state: { count: 0 },
+            })),
+            unsubscribe: vi.fn(async () => {}),
+            dispatch: vi.fn(async () => ({
+              type: "dispatch-result",
+              committedVersion: 1,
+              result: 0,
+            })),
+          } as NexusStoreServiceContract<any, any>),
       } as any,
       definition,
       {},
@@ -675,7 +641,7 @@ describe("state client runtime and connect APIs", () => {
     );
   });
 
-  it("safeConnectNexusStore returns ResultAsync", async () => {
+  it("safeConnectNexusStore returns Promise<Result>", async () => {
     const definition = createCounterDefinition();
     const { provider: registration } = createNexusStore(definition);
     const network = await createStarNetwork<
@@ -711,27 +677,20 @@ describe("state client runtime and connect APIs", () => {
     const remoteResult = await safeConnectNexusStore(
       {
         safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (
-                next: (value: NexusStoreServiceContract<any, any>) => any,
-              ) =>
-                next({
-                  subscribe: vi.fn(async () => ({
-                    storeInstanceId: "store-invalid-state-shape",
-                    subscriptionId: "sub-invalid-state-shape",
-                    version: 0,
-                    state: 42,
-                  })),
-                  unsubscribe: vi.fn(async () => {}),
-                  dispatch: vi.fn(async () => ({
-                    type: "dispatch-result",
-                    committedVersion: 1,
-                    result: 0,
-                  })),
-                } as NexusStoreServiceContract<any, any>),
-            }),
-          }) as any,
+          successfulSafeCreate({
+            subscribe: vi.fn(async () => ({
+              storeInstanceId: "store-invalid-state-shape",
+              subscriptionId: "sub-invalid-state-shape",
+              version: 0,
+              state: 42,
+            })),
+            unsubscribe: vi.fn(async () => {}),
+            dispatch: vi.fn(async () => ({
+              type: "dispatch-result",
+              committedVersion: 1,
+              result: 0,
+            })),
+          } as NexusStoreServiceContract<any, any>),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:invalid-state-shape"),
@@ -1394,12 +1353,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:target-stale-hook"),
@@ -1488,7 +1442,7 @@ describe("state client runtime and connect APIs", () => {
 
     expectTypeOf(safeInvokeStoreAction(remote, "increment", [1])).toMatchTypeOf<
       PromiseLike<
-        import("neverthrow").Result<
+        import("better-result").Result<
           { count: number },
           | NexusStoreActionError
           | NexusStoreDisconnectedError
@@ -1779,13 +1733,7 @@ describe("state client runtime and connect APIs", () => {
 
     const disconnectedResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof brokenService) => any) =>
-                next(brokenService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(brokenService),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:handshake-disconnected"),
@@ -1823,13 +1771,7 @@ describe("state client runtime and connect APIs", () => {
 
     const malformedResult = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof malformedService) => any) =>
-                next(malformedService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(malformedService),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:handshake-malformed"),
@@ -1876,14 +1818,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (
-                next: (value: typeof staleDuringHandshakeService) => any,
-              ) => next(staleDuringHandshakeService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(staleDuringHandshakeService),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:stale-during-handshake"),
@@ -1930,14 +1865,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (
-                next: (value: typeof terminalBeforeBaselineService) => any,
-              ) => next(terminalBeforeBaselineService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(terminalBeforeBaselineService),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:terminal-before-baseline"),
@@ -1984,12 +1912,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:terminal-buffered-mismatch"),
@@ -2045,12 +1968,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:terminal-buffered-multi"),
@@ -2290,13 +2208,7 @@ describe("state client runtime and connect APIs", () => {
 
     const timedOut = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof neverService) => any) =>
-                next(neverService),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(neverService),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:handshake-timeout"),
@@ -2311,6 +2223,46 @@ describe("state client runtime and connect APIs", () => {
       expect(timedOut.error).toBeInstanceOf(NexusStoreConnectError);
       expect(timedOut.error.message).toMatch(/timed out/i);
     }
+  });
+
+  it("invokes subscribe without an extra promise hop after proxy creation", async () => {
+    const events: string[] = [];
+    const service = {
+      subscribe: vi.fn(async () => {
+        events.push("subscribe");
+        return {
+          storeInstanceId: "store-subscribe-order",
+          subscriptionId: "sub-subscribe-order",
+          version: 0,
+          state: { count: 0 },
+        };
+      }),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 0,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { noop(): number }
+    >;
+
+    const resultPromise = safeConnectNexusStore(
+      { safeCreate: () => successfulSafeCreate(service) } as any,
+      defineNexusStore({
+        token: new Token("state:counter:subscribe-order"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ noop: () => 0 }),
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    events.push("after-subscribe-ready");
+    expect(events).toEqual(["subscribe", "after-subscribe-ready"]);
+    const result = await resultPromise;
+    expect(result.isOk()).toBe(true);
   });
 
   it("safeConnectNexusStore timeout cleans up late baseline and disconnect hook", async () => {
@@ -2343,12 +2295,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:handshake-timeout-cleanup"),
@@ -2405,12 +2352,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:bad-baseline-cleanup"),
@@ -2461,12 +2403,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:throwy-baseline-cleanup"),
@@ -2513,12 +2450,7 @@ describe("state client runtime and connect APIs", () => {
 
     const result = await safeConnectNexusStore(
       {
-        safeCreate: () =>
-          ({
-            mapErr: () => ({
-              andThen: (next: (value: typeof service) => any) => next(service),
-            }),
-          }) as any,
+        safeCreate: () => successfulSafeCreate(service),
       } as any,
       defineNexusStore({
         token: new Token("state:counter:early-reject-cleanup"),

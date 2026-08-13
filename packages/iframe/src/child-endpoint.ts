@@ -1,19 +1,23 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
 import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
-import { DEFAULT_CHANNEL, DEFAULT_INSTANCE } from "./constants";
-import { createEnvelope, readEnvelope, type MessageEnvelope } from "./envelope";
-import { IframeAdapterError } from "./errors";
-import { createPlatformMeta } from "./platform-meta";
-import { createCapabilities } from "./shared";
+import { DEFAULT_CHANNEL, DEFAULT_INSTANCE } from "./constants.js";
+import {
+  createEnvelope,
+  readEnvelope,
+  type MessageEnvelope,
+} from "./envelope.js";
+import { IframeAdapterError } from "./errors.js";
+import { createPlatformMeta } from "./platform-meta.js";
+import { createCapabilities } from "./shared.js";
 import type {
   EndpointCapabilities,
   IframeChildEndpointOptions,
   IframePlatformMeta,
   IframeEndpointMeta,
   WindowLike,
-} from "./types";
-import { originMatches, validateAppId, validateOrigin } from "./validation";
-import { getWindow, postMessageFrom } from "./window";
+} from "./types.js";
+import { originMatches, validateAppId, validateOrigin } from "./validation.js";
+import { getWindow, postMessageFrom } from "./window.js";
 
 /**
  * Child-side endpoint. Its only trusted peer is `window.parent`, further scoped
@@ -54,16 +58,15 @@ export class IframeChildEndpoint implements IEndpoint<
         "Iframe router is unavailable",
         "E_IFRAME_CONNECT_FAILED",
       );
-    const port = await VirtualPortRouter.safeConnect(this.router).match(
-      (value) => value,
-      (error) => {
-        throw new IframeAdapterError(
-          "Could not connect to iframe parent",
-          "E_IFRAME_CONNECT_FAILED",
-          error,
-        );
-      },
-    );
+    const connectResult = await VirtualPortRouter.safeConnect(this.router);
+    if (connectResult.isErr()) {
+      throw new IframeAdapterError(
+        "Could not connect to iframe parent",
+        "E_IFRAME_CONNECT_FAILED",
+        connectResult.error,
+      );
+    }
+    const port = connectResult.value;
     return [port, this.createMeta()];
   }
 

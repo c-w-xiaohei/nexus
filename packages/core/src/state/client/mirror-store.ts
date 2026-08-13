@@ -1,4 +1,4 @@
-import { Logger } from "@/logger";
+import { Logger } from "../../logger.js";
 
 type Reconcile<TState extends object> = (
   previous: TState,

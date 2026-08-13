@@ -1,8 +1,9 @@
 import os from "node:os";
 import path from "node:path";
-import { err, ok, Result } from "neverthrow";
-import { NodeIpcError } from "../errors";
-import type { NodeIpcEndpointMeta } from "./meta";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import { NodeIpcError } from "../errors.js";
+import type { NodeIpcEndpointMeta } from "./meta.js";
 
 export type NodeIpcSocketAddress =
   | { kind: "path"; path: string }

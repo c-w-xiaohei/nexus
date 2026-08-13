@@ -1,6 +1,7 @@
-import { err, ok, type Result } from "neverthrow";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import { z } from "zod";
-import { VirtualPortProtocolError } from "./errors";
+import { VirtualPortProtocolError } from "./errors.js";
 
 export namespace VirtualPortProtocol {
   export const MARKER = "__nexusVirtualPort";

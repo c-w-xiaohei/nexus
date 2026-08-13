@@ -1,6 +1,9 @@
 import type { NexusConfig, Target } from "@nexus-js/core";
-import type { NodeIpcAddressResolver, NodeIpcSocketAddress } from "./address";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./meta";
+import type {
+  NodeIpcAddressResolver,
+  NodeIpcSocketAddress,
+} from "./address.js";
+import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./meta.js";
 
 export type NodeIpcDaemonOptions = {
   appId: string;

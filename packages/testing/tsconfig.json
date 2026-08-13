@@ -1,8 +1,5 @@
 {
   "extends": "../../tsconfig.json",
   "include": ["src", "vite.config.ts"],
-  "exclude": ["node_modules", "dist"],
-  "compilerOptions": {
-    "baseUrl": "."
-  }
+  "exclude": ["node_modules", "dist"]
 }

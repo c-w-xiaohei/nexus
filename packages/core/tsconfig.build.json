@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.declaration.json",
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.typecheck.ts",
+    "src/utils/test-utils.ts",
+    "src/transport/serializers/serializer-benchmark.ts"
+  ],
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"]
+  }
+}

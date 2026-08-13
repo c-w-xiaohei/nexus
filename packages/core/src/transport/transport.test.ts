@@ -3,6 +3,7 @@ import { Transport } from "./transport";
 import { createMockPortPair } from "../utils/test-utils";
 import type { IEndpoint } from "./types/endpoint";
 import { NexusMessageType } from "@/types/message";
+import { NexusEndpointConnectError } from "../errors/transport-errors";
 
 describe("Transport", () => {
   let mockEndpoint: IEndpoint<any, any>;
@@ -80,6 +81,26 @@ describe("Transport", () => {
   });
 
   describe("connect", () => {
+    it("returns a structured connect error when the endpoint returns an invalid port", async () => {
+      vi.mocked(mockEndpoint.connect!).mockResolvedValue([
+        {} as any,
+        { source: "remote-endpoint" },
+      ]);
+
+      const result = await Transport.safeConnect(
+        Transport.create(mockEndpoint),
+        { context: "test-target" },
+        { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() },
+      );
+
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error).toBeInstanceOf(NexusEndpointConnectError);
+        expect(result.error.code).toBe("E_ENDPOINT_CONNECT_FAILED");
+        expect(result.error.context?.originalError).toBeInstanceOf(TypeError);
+      }
+    });
+
     it("uses endpoint.connect and returns processor with metadata", async () => {
       const [port1] = createMockPortPair();
       const mockRemoteMetadata = { source: "remote-endpoint" };

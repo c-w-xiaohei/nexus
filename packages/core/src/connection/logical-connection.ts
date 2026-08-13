@@ -1,21 +1,22 @@
-import { PortProcessor } from "../transport/port-processor";
+import { PortProcessor } from "../transport/port-processor.js";
 import type {
   EndpointMeta,
   PlatformMeta,
   ConnectionContext,
-} from "../types/identity";
+} from "../types/identity.js";
 import type {
   NexusMessage,
   HandshakeReqMessage,
   HandshakeAckMessage,
   HandshakeReadyMessage,
   IdentityUpdateMessage,
-} from "../types/message";
-import { NexusMessageType } from "../types/message";
-import { ConnectionStatus, type LogicalConnectionHandlers } from "./types";
-import { Logger } from "@/logger";
-import { toSerializedError } from "@/utils/error";
-import { ResultAsync, err, ok, type Result } from "neverthrow";
+} from "../types/message.js";
+import { NexusMessageType } from "../types/message.js";
+import { ConnectionStatus, type LogicalConnectionHandlers } from "./types.js";
+import { Logger } from "../logger.js";
+import { toSerializedError } from "../utils/error.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 type LogicalConnectionErrorCode = "E_AUTH_CONNECT_DENIED" | "E_USAGE_INVALID";
 
@@ -73,10 +74,7 @@ export const LogicalConnectionError = {
  * It manages the connection lifecycle, orchestrates the handshake protocol,
  * and acts as the bridge between the ConnectionManager and a low-level PortProcessor.
  */
-export class LogicalConnection<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
+export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
   public readonly connectionId: string;
   private status: ConnectionStatus = ConnectionStatus.INITIALIZING;
   public readonly context: ConnectionContext<P>;
@@ -234,7 +232,7 @@ export class LogicalConnection<
    */
   public safeHandleMessage(
     message: NexusMessage,
-  ): ResultAsync<void, globalThis.Error> {
+  ): Promise<Result<void, globalThis.Error>> {
     const orderingGate = this.shouldWaitForInboundOrdering(message)
       ? this.inboundOrderingGate
       : Promise.resolve();
@@ -246,11 +244,13 @@ export class LogicalConnection<
       this.inboundOrderingGate = messageHandling.catch(() => undefined);
     }
 
-    return ResultAsync.fromPromise(messageHandling, (error) =>
-      error instanceof globalThis.Error
-        ? error
-        : new globalThis.Error(String(error)),
-    );
+    return Result.tryPromise({
+      try: () => messageHandling,
+      catch: (error) =>
+        error instanceof globalThis.Error
+          ? error
+          : new globalThis.Error(String(error)),
+    });
   }
 
   private shouldGateInboundOrdering(message: NexusMessage): boolean {

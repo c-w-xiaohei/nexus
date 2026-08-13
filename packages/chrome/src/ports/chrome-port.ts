@@ -1,4 +1,4 @@
-import type { IPort } from '@nexus-js/core';
+import type { IPort } from "@nexus-js/core";
 
 /**
  * Wraps chrome.runtime.Port to implement Nexus IPort interface
@@ -18,7 +18,7 @@ export class ChromePort implements IPort {
       this.port.postMessage(data);
     } catch (error) {
       // Port might be disconnected
-      console.warn('ChromePort: Failed to send message', error);
+      console.warn("ChromePort: Failed to send message", error);
     }
   }
 

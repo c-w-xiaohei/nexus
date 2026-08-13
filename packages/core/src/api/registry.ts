@@ -1,9 +1,9 @@
-import type { IEndpoint } from "@/transport";
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import type { Token } from "./token";
-import type { EndpointOptions } from "./decorators/endpoint";
-import type { ExposeOptions } from "./decorators/expose";
-import { NexusConfigurationError } from "@/errors";
+import type { IEndpoint } from "../transport/index.js";
+import type { EndpointMeta, PlatformMeta } from "../types/identity.js";
+import type { Token } from "./token.js";
+import type { EndpointOptions } from "./decorators/endpoint.js";
+import type { ExposeOptions } from "./decorators/expose.js";
+import { NexusConfigurationError } from "../errors/index.js";
 
 /**
  * A type-safe representation of the service registration data.

@@ -1,8 +1,9 @@
-import type { NexusMessage } from "../../types/message";
-import type { ISerializer } from "./interface";
-import { NexusProtocolError } from "../../errors/transport-errors";
-import { JsonSerializer } from "./json-serializer";
-import { err, ok, type Result } from "neverthrow";
+import type { NexusMessage } from "../../types/message.js";
+import type { ISerializer } from "./interface.js";
+import { NexusProtocolError } from "../../errors/transport-errors.js";
+import { JsonSerializer } from "./json-serializer.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

@@ -1,4 +1,4 @@
-import { NexusError } from "./nexus-error";
+import { NexusError } from "./nexus-error.js";
 
 export type NexusResourceErrorCode =
   | "E_RESOURCE_NOT_FOUND"

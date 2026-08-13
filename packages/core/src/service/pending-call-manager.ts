@@ -1,5 +1,5 @@
-import type { MessageId, SerializedError } from "@/types/message";
-import { Logger } from "@/logger";
+import type { MessageId, SerializedError } from "../types/message.js";
+import { Logger } from "../logger.js";
 
 /**
  * A helper to create an AsyncIterable and control it externally.

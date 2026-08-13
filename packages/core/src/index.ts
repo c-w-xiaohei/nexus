@@ -1,28 +1,28 @@
-export { Nexus, nexus } from "./api/nexus";
+export { Nexus, nexus } from "./api/nexus.js";
 
-export { Expose } from "./api/decorators/expose";
-export { Endpoint } from "./api/decorators/endpoint";
+export { Expose } from "./api/decorators/expose.js";
+export { Endpoint } from "./api/decorators/endpoint.js";
 
-export { Token } from "./api/token";
-export type { TokenOptions } from "./api/token";
-export { TokenSpace } from "./api/token-space";
+export { Token } from "./api/token.js";
+export type { TokenOptions } from "./api/token.js";
+export { TokenSpace } from "./api/token-space.js";
 export {
   serviceProvider,
   defineNexusConfig,
   composeNexusConfig,
-} from "./api/types/config";
+} from "./api/types/config.js";
 export type {
   TokenSpaceConfig,
   TokenSpaceDefaultTarget,
   ChildTokenSpaceConfig,
-} from "./api/token-space";
+} from "./api/token-space.js";
 
 export type {
   EndpointMeta,
   PlatformMeta,
   ConnectionContext,
-} from "./types/identity";
-export type { IPort, IEndpoint } from "@/transport";
+} from "./types/identity.js";
+export type { IPort, IEndpoint } from "./transport/index.js";
 export type {
   NexusConfig,
   NexusAuthorizationPolicy,
@@ -39,7 +39,7 @@ export type {
   DescriptorTarget,
   MatcherTarget,
   MessageTarget,
-} from "./api/types/config"; // 配置和寻址相关类型
+} from "./api/types/config.js"; // 配置和寻址相关类型
 export type {
   NexusInstance,
   MatcherUtils,
@@ -49,7 +49,7 @@ export type {
   RuntimeCreateToken,
   RuntimeCreateTokenParam,
   TokenService,
-} from "./api/types"; // Nexus 实例和代理相关类型
+} from "./api/types/index.js"; // Nexus 实例和代理相关类型
 // 错误类
 export {
   NexusError,
@@ -64,6 +64,6 @@ export {
   NexusEndpointListenError,
   NexusEndpointCapabilityError,
   NexusProtocolError,
-} from "./errors";
+} from "./errors/index.js";
 
-export { configureNexusLogger, LogLevel } from "./logger";
+export { configureNexusLogger, LogLevel } from "./logger.js";

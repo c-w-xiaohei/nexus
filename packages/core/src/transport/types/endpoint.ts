@@ -1,4 +1,4 @@
-import type { IPort } from "./port";
+import type { IPort } from "./port.js";
 
 /**
  * Represents the communication capabilities of the current context and serves

@@ -2,22 +2,16 @@ import {
   NexusStoreActionError,
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-} from "../errors";
-import {
-  Result,
-  ResultAsync,
-  err,
-  errAsync,
-  ok,
-  type Result as R,
-} from "neverthrow";
+} from "../errors.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import {
   DispatchResultEnvelopeSchema,
   SnapshotEnvelopeSchema,
   SubscribeResultSchema,
   TerminalEnvelopeSchema,
   type TerminalReason,
-} from "../protocol";
+} from "../protocol.js";
 import type {
   ActionArgs,
   ActionResult,
@@ -26,9 +20,9 @@ import type {
   RemoteStore,
   RemoteActions,
   RemoteStoreStatus,
-} from "../types";
-import { createMirrorStore, type MirrorStore } from "./mirror-store";
-import { MARK_REMOTE_STORE_STALE_SYMBOL } from "../stale-marker";
+} from "../types.js";
+import { createMirrorStore, type MirrorStore } from "./mirror-store.js";
+import { MARK_REMOTE_STORE_STALE_SYMBOL } from "../stale-marker.js";
 
 type ActionFunction = (...args: any[]) => any;
 
@@ -350,7 +344,7 @@ export class RemoteStoreEntity<
   public safeInvokeAction<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
-  ): ResultAsync<ActionResult<TActions, K>, Error> {
+  ): Promise<Result<ActionResult<TActions, K>, Error>> {
     return this.safeInvokeActionResult(action, args);
   }
 
@@ -360,65 +354,37 @@ export class RemoteStoreEntity<
     action: K,
     args: ActionArgs<TActions, K>,
   ): Promise<ActionResult<TActions, K>> {
-    return this.safeInvokeActionResult(action, args).match(
-      (value) => value,
-      (error) => {
-        throw error;
-      },
-    );
+    return this.safeInvokeActionResult(action, args).then((result) => {
+      if (result.isErr()) {
+        throw result.error;
+      }
+      return result.value;
+    });
   }
 
   private safeInvokeActionResult<K extends keyof TActions & string>(
     action: K,
     args: ActionArgs<TActions, K>,
-  ): ResultAsync<ActionResult<TActions, K>, Error> {
+  ): Promise<Result<ActionResult<TActions, K>, Error>> {
     const readiness = this.safeEnsureActionReady();
-
-    return (
-      readiness.isErr()
-        ? errAsync(readiness.error)
-        : ResultAsync.fromPromise(
-            Result.fromThrowable(
-              () => {
-                const dispatch = this.service.dispatch;
-                return dispatch(action, args);
-              },
-              (error) => error,
-            )().match(
-              (promise) => promise,
-              (error) => Promise.reject(error),
-            ),
-            (error) => error,
-          )
-    )
-      .andThen((dispatchResult) => {
-        const parsed = Result.fromThrowable(
-          () => this.safeParseDispatchResult<K>(action, dispatchResult),
-          (error) => error,
-        )();
-
-        if (parsed.isErr()) {
-          return errAsync(parsed.error);
-        }
-
-        if (parsed.value.isErr()) {
-          return errAsync(parsed.value.error);
-        }
-
-        return ResultAsync.fromPromise(
-          Promise.resolve(parsed.value.value),
-          (error) => error,
-        );
+    if (readiness.isErr()) return Promise.resolve(err(readiness.error));
+    let dispatchPromise: Promise<unknown>;
+    try {
+      dispatchPromise = this.service.dispatch(action, args);
+    } catch (error) {
+      return Promise.resolve(err(this.normalizeActionInvocationError(error)));
+    }
+    return dispatchPromise
+      .then((dispatchResult) => {
+        const parsed = this.safeParseDispatchResult<K>(action, dispatchResult);
+        if (parsed.isErr()) return err(parsed.error);
+        return this.waitForVersion(
+          (version) => version >= parsed.value.committedVersion,
+        )
+          .then(() => ok(parsed.value.result))
+          .catch((error) => err(this.normalizeActionInvocationError(error)));
       })
-      .andThen((payload) =>
-        ResultAsync.fromPromise(
-          this.waitForVersion(
-            (version) => version >= payload.committedVersion,
-          ).then(() => payload.result),
-          (error) => error,
-        ),
-      )
-      .mapErr((error) => this.normalizeActionInvocationError(error));
+      .catch((error) => err(this.normalizeActionInvocationError(error)));
   }
 
   private safeEnsureActionReady(): Result<void, Error> {
@@ -645,10 +611,10 @@ export class RemoteStoreEntity<
       },
     NexusStoreProtocolError
   > {
-    const snapshotResult = Result.fromThrowable(
-      () => SnapshotEnvelopeSchema.safeParse(event),
-      (error) => error,
-    )();
+    const snapshotResult = Result.try({
+      try: () => SnapshotEnvelopeSchema.safeParse(event),
+      catch: (error) => error,
+    });
     if (snapshotResult.isErr()) {
       return err(
         new NexusStoreProtocolError("Invalid sync envelope.", {
@@ -675,10 +641,10 @@ export class RemoteStoreEntity<
       });
     }
 
-    const terminalResult = Result.fromThrowable(
-      () => TerminalEnvelopeSchema.safeParse(event),
-      (error) => error,
-    )();
+    const terminalResult = Result.try({
+      try: () => TerminalEnvelopeSchema.safeParse(event),
+      catch: (error) => error,
+    });
     if (terminalResult.isErr()) {
       return err(
         new NexusStoreProtocolError("Invalid sync envelope.", {
@@ -716,10 +682,10 @@ export class RemoteStoreEntity<
     },
     NexusStoreProtocolError
   > {
-    const parsedResult = Result.fromThrowable(
-      () => SubscribeResultSchema.safeParse(baseline),
-      (error) => error,
-    )();
+    const parsedResult = Result.try({
+      try: () => SubscribeResultSchema.safeParse(baseline),
+      catch: (error) => error,
+    });
     if (parsedResult.isErr()) {
       return err(
         new NexusStoreProtocolError("Invalid subscribe baseline envelope.", {
@@ -756,7 +722,7 @@ export class RemoteStoreEntity<
   private safeParseDispatchResult<K extends keyof TActions & string>(
     action: K,
     dispatchResult: unknown,
-  ): R<
+  ): Result<
     {
       type: "dispatch-result";
       committedVersion: number;
@@ -764,10 +730,10 @@ export class RemoteStoreEntity<
     },
     NexusStoreProtocolError
   > {
-    const parsedDispatchResultResult = Result.fromThrowable(
-      () => DispatchResultEnvelopeSchema.safeParse(dispatchResult),
-      (error) => error,
-    )();
+    const parsedDispatchResultResult = Result.try({
+      try: () => DispatchResultEnvelopeSchema.safeParse(dispatchResult),
+      catch: (error) => error,
+    });
     if (parsedDispatchResultResult.isErr()) {
       return err(
         new NexusStoreProtocolError("Invalid dispatch result envelope.", {

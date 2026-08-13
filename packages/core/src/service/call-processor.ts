@@ -1,18 +1,19 @@
-import type { PlatformMeta, EndpointMeta } from "@/types/identity";
-import { NexusMessageType } from "@/types/message";
-import type { ApplyMessage, GetMessage, SetMessage } from "@/types/message";
-import type { DispatchCallOptions } from "./engine";
-import { PendingCallManager } from "./pending-call-manager";
-import { PayloadProcessor } from "./payload/payload-processor";
+import type { PlatformMeta, EndpointMeta } from "../types/identity.js";
+import { NexusMessageType } from "../types/message.js";
+import type { ApplyMessage, GetMessage, SetMessage } from "../types/message.js";
+import type { DispatchCallOptions } from "./engine.js";
+import { PendingCallManager } from "./pending-call-manager.js";
+import { PayloadProcessor } from "./payload/payload-processor.js";
 import type {
   CallTarget,
   MessageTarget,
   ResolveOptions,
-} from "@/connection/types";
-import type { NexusMessage } from "@/types/message";
-import type { LogicalConnection } from "@/connection/logical-connection";
-import { Logger } from "@/logger";
-import { Result, ResultAsync, err, errAsync, ok, okAsync } from "neverthrow";
+} from "../connection/types.js";
+import type { NexusMessage } from "../types/message.js";
+import type { LogicalConnection } from "../connection/logical-connection.js";
+import { Logger } from "../logger.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 export namespace CallProcessor {
   type ErrorCode =
@@ -71,7 +72,7 @@ export namespace CallProcessor {
     nextMessageId: () => number;
     resolveConnection: (
       target: ResolveOptions<U, P>,
-    ) => ResultAsync<LogicalConnection<U, P> | null, globalThis.Error>;
+    ) => Promise<Result<LogicalConnection<U, P> | null, globalThis.Error>>;
     sendMessage: (
       target: MessageTarget<U>,
       message: NexusMessage,
@@ -83,7 +84,7 @@ export namespace CallProcessor {
   export interface Runtime {
     safeProcess(
       options: DispatchCallOptions,
-    ): ResultAsync<any, globalThis.Error>;
+    ): Promise<Result<any, globalThis.Error>>;
   }
 
   export const create = <U extends EndpointMeta, P extends PlatformMeta>(
@@ -103,28 +104,27 @@ export namespace CallProcessor {
       return [];
     };
 
-    const resolveTarget = (
+    const resolveTarget = async (
       target: CallTarget<U, P>,
-    ): ResultAsync<MessageTarget<U> | null, globalThis.Error> => {
+    ): Promise<Result<MessageTarget<U> | null, globalThis.Error>> => {
       if ("descriptor" in target && target.descriptor) {
-        return deps
-          .resolveConnection({
-            descriptor: target.descriptor,
-            matcher: "matcher" in target ? target.matcher : undefined,
-          })
-          .map((resolvedConnection) => {
-            if (!resolvedConnection) {
-              return null;
-            }
+        const resolved = await deps.resolveConnection({
+          descriptor: target.descriptor,
+          matcher: "matcher" in target ? target.matcher : undefined,
+        });
+        return resolved.map((resolvedConnection) => {
+          if (!resolvedConnection) {
+            return null;
+          }
 
-            return {
-              ...target,
-              connectionId: resolvedConnection.connectionId,
-            };
-          });
+          return {
+            ...target,
+            connectionId: resolvedConnection.connectionId,
+          };
+        });
       }
 
-      return okAsync(target as MessageTarget<U>);
+      return ok(target as MessageTarget<U>);
     };
 
     const buildMessage = (
@@ -234,22 +234,27 @@ export namespace CallProcessor {
       return ok(firstResult.value);
     };
 
-    const adaptResult = (
+    const adaptResult = async (
       result: Promise<any[]>,
       strategy: "one" | "first",
-    ): ResultAsync<any, globalThis.Error> =>
-      ResultAsync.fromPromise(result, (error) =>
-        error instanceof globalThis.Error
-          ? error
-          : new globalThis.Error(String(error)),
-      ).andThen((results) => safeAdaptResult(results, strategy));
+    ): Promise<Result<any, globalThis.Error>> =>
+      Result.tryPromise({
+        try: () => result,
+        catch: (error) =>
+          error instanceof globalThis.Error
+            ? error
+            : new globalThis.Error(String(error)),
+      }).then((result) =>
+        result.andThen((results) => safeAdaptResult(results, strategy)),
+      );
 
-    const safeExecuteDispatch = (
+    const safeExecuteDispatch = async (
       options: DispatchCallOptions,
       strategy: "one" | "first" | "all" | "stream",
-    ): ResultAsync<any, globalThis.Error> => {
+    ): Promise<Result<any, globalThis.Error>> => {
       logger.debug("Resolving target...", options.target);
-      return resolveTarget(options.target).andThen((finalTarget) => {
+      const resolvedTarget = await resolveTarget(options.target);
+      return resolvedTarget.andThenAsync(async (finalTarget) => {
         if (!finalTarget) {
           logger.warn(
             `Could not resolve target, call to [${options.path.join(
@@ -257,7 +262,7 @@ export namespace CallProcessor {
             )}] will not be sent.`,
             options.target,
           );
-          return okAsync(getEmptyResultForStrategy(strategy));
+          return ok(getEmptyResultForStrategy(strategy));
         }
 
         logger.debug("Target resolved.", {
@@ -267,7 +272,7 @@ export namespace CallProcessor {
 
         const messageResult = buildMessage(options, finalTarget);
         if (messageResult.isErr()) {
-          return errAsync(messageResult.error);
+          return err(messageResult.error);
         }
 
         const message = messageResult.value;
@@ -275,7 +280,7 @@ export namespace CallProcessor {
 
         const sendResult = deps.sendMessage(finalTarget, message);
         if (sendResult.isErr()) {
-          return errAsync(sendResult.error);
+          return err(sendResult.error);
         }
 
         const sentConnectionIds = sendResult.value;
@@ -287,7 +292,7 @@ export namespace CallProcessor {
 
         if (sentCount === 0) {
           if ("connectionId" in finalTarget && finalTarget.connectionId) {
-            return errAsync(
+            return err(
               new Error.Disconnected(
                 `Call failed. The connection "${finalTarget.connectionId}" was closed or is no longer available.`,
                 {
@@ -304,11 +309,11 @@ export namespace CallProcessor {
             `Message #${message.id} found no matching connections for its target. Returning empty result for strategy '${strategy}'.`,
             finalTarget,
           );
-          return okAsync(getEmptyResultForStrategy(strategy));
+          return ok(getEmptyResultForStrategy(strategy));
         }
 
         if (strategy === "one" && sentCount !== 1) {
-          return errAsync(
+          return err(
             new Error.Targeting(
               `Expected to send to exactly one target for a call with strategy 'one', but sent to ${sentCount}.`,
               {
@@ -325,26 +330,25 @@ export namespace CallProcessor {
         logger.debug(`Registering pending call for message #${message.id}`);
         const timeout =
           options.timeout ?? options.proxyOptions?.timeout ?? 5000;
-        const isBroadcast =
-          "matcher" in finalTarget || "group" in finalTarget;
+        const isBroadcast = "matcher" in finalTarget || "group" in finalTarget;
         const pendingStrategy = strategy === "stream" ? "stream" : "all";
 
-        const registerResult = Result.fromThrowable(
-          () =>
+        const registerResult = Result.try({
+          try: () =>
             deps.pendingCallManager.register(message.id, {
               strategy: pendingStrategy,
               isBroadcast,
               sentConnectionIds,
               timeout,
             }),
-          (error) =>
+          catch: (error) =>
             error instanceof globalThis.Error
               ? error
               : new globalThis.Error(String(error)),
-        )();
+        });
 
         if (registerResult.isErr()) {
-          return errAsync(registerResult.error);
+          return err(registerResult.error);
         }
 
         if (strategy === "first" || strategy === "one") {
@@ -355,22 +359,22 @@ export namespace CallProcessor {
         }
 
         if (strategy === "all") {
-          return ResultAsync.fromPromise(
-            registerResult.value as Promise<any>,
-            (error) =>
+          return Result.tryPromise({
+            try: () => registerResult.value as Promise<any>,
+            catch: (error) =>
               error instanceof globalThis.Error
                 ? error
                 : new globalThis.Error(String(error)),
-          );
+          });
         }
 
-        return okAsync(registerResult.value);
+        return ok(registerResult.value);
       });
     };
 
     const safeProcess = (
       options: DispatchCallOptions,
-    ): ResultAsync<any, globalThis.Error> => {
+    ): Promise<Result<any, globalThis.Error>> => {
       const strategy = options.strategy ?? "first";
       return safeExecuteDispatch(options, strategy);
     };

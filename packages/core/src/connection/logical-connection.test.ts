@@ -76,10 +76,9 @@ describe("LogicalConnection", () => {
       serializer,
       {
         onLogicalMessage: (msg: NexusMessage) =>
-          clientConnection.safeHandleMessage(msg).match(
-            () => undefined,
-            (error) => Promise.reject(error),
-          ),
+          clientConnection.safeHandleMessage(msg).then((result) => {
+            if (result.isErr()) return Promise.reject(result.error);
+          }),
         onDisconnect: () => clientConnection.handleDisconnect(),
       },
       { chunkSize: Infinity },
@@ -90,10 +89,9 @@ describe("LogicalConnection", () => {
       serializer,
       {
         onLogicalMessage: (msg: NexusMessage) =>
-          hostConnection.safeHandleMessage(msg).match(
-            () => undefined,
-            (error) => Promise.reject(error),
-          ),
+          hostConnection.safeHandleMessage(msg).then((result) => {
+            if (result.isErr()) return Promise.reject(result.error);
+          }),
         onDisconnect: () => hostConnection.handleDisconnect(),
       },
       { chunkSize: Infinity },
@@ -790,10 +788,7 @@ describe("LogicalConnection", () => {
       });
 
       expect(result.isErr()).toBe(true);
-      result.match(
-        () => undefined,
-        (actual) => expect(actual).toBe(error),
-      );
+      expect(result.error).toBe(error);
     });
   });
 });

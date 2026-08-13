@@ -38,7 +38,9 @@ describe("Nexus L4 Integration: Target Resolution and Discovery", () => {
       const Cs1TokenWithDefault = new Token<IContentScriptService>(
         ContentScriptServiceToken.id,
         {
-          defaultTarget: { descriptor: { context: "content-script", issueId: "CS1" } },
+          defaultTarget: {
+            descriptor: { context: "content-script", issueId: "CS1" },
+          },
         },
       );
 

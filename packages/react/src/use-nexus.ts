@@ -1,6 +1,6 @@
 import { useContext } from "react";
 import type { NexusInstance } from "@nexus-js/core";
-import { NexusContext } from "./provider";
+import { NexusContext } from "./provider.js";
 
 export const useNexus = (): NexusInstance => {
   const nexus = useContext(NexusContext);

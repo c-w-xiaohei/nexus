@@ -1,9 +1,9 @@
-import type { NexusMessage } from "@/types/message";
-import type { PlatformMeta, EndpointMeta } from "@/types/identity";
-import type { MessageHandlerCallbacks } from "../../engine";
-import type { PayloadProcessor } from "../../payload/payload-processor";
-import type { ResourceManager } from "../../resource-manager";
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import type { NexusMessage } from "../../../types/message.js";
+import type { PlatformMeta, EndpointMeta } from "../../../types/identity.js";
+import type { MessageHandlerCallbacks } from "../../engine.js";
+import type { PayloadProcessor } from "../../payload/payload-processor.js";
+import type { ResourceManager } from "../../resource-manager.js";
+import type { NexusAuthorizationPolicy } from "../../../api/types/config.js";
 
 /**
  * The shared context object available to all message handlers.

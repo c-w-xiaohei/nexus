@@ -1,6 +1,6 @@
-import { NexusUsageError } from "@/errors";
-import type { EndpointMeta } from "@/types/identity";
-import type { InlineTarget } from "./types/config";
+import { NexusUsageError } from "../errors/index.js";
+import type { EndpointMeta } from "../types/identity.js";
+import type { InlineTarget } from "./types/config.js";
 
 export interface TokenOptions<U extends EndpointMeta = EndpointMeta> {
   defaultTarget?: InlineTarget<U> | null;

@@ -1,4 +1,4 @@
-export { NexusMockError, type NexusMockErrorCode } from "./errors";
+export { NexusMockError, type NexusMockErrorCode } from "./errors.js";
 
 export {
   createMockNexus,
@@ -7,4 +7,4 @@ export {
   type MockNexusConfigureCall,
   type MockNexusReleaseCall,
   type MockNexusUpdateIdentityCall,
-} from "./mock-nexus";
+} from "./mock-nexus.js";

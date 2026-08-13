@@ -14,8 +14,8 @@ export {
 } from "@nexus-js/core";
 
 // Chrome-specific exports
-export * from "./types/meta";
-export * from "./endpoints";
-export * from "./factory";
-export * from "./matchers";
-export * from "./ports/chrome-port";
+export * from "./types/meta.js";
+export * from "./endpoints/index.js";
+export * from "./factory.js";
+export * from "./matchers.js";
+export * from "./ports/chrome-port.js";

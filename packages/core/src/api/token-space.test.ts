@@ -79,25 +79,48 @@ describe("TokenSpace defaultTarget", () => {
 
   it("rejects direct Token defaultTarget descriptor values that are not inline objects", () => {
     expect(
-      () => new Token("array-descriptor", { defaultTarget: { descriptor: [] } as any }),
-    ).toThrow("Token defaultTarget only supports inline descriptor objects and matcher functions.");
+      () =>
+        new Token("array-descriptor", {
+          defaultTarget: { descriptor: [] } as any,
+        }),
+    ).toThrow(
+      "Token defaultTarget only supports inline descriptor objects and matcher functions.",
+    );
 
     expect(
-      () => new Token("null-descriptor", { defaultTarget: { descriptor: null } as any }),
-    ).toThrow("Token defaultTarget only supports inline descriptor objects and matcher functions.");
+      () =>
+        new Token("null-descriptor", {
+          defaultTarget: { descriptor: null } as any,
+        }),
+    ).toThrow(
+      "Token defaultTarget only supports inline descriptor objects and matcher functions.",
+    );
 
     expect(
-      () => new Token("number-descriptor", { defaultTarget: { descriptor: 1 } as any }),
-    ).toThrow("Token defaultTarget only supports inline descriptor objects and matcher functions.");
+      () =>
+        new Token("number-descriptor", {
+          defaultTarget: { descriptor: 1 } as any,
+        }),
+    ).toThrow(
+      "Token defaultTarget only supports inline descriptor objects and matcher functions.",
+    );
   });
 
   it("rejects direct Token defaultTarget matcher values that are not functions", () => {
     expect(
-      () => new Token("object-matcher", { defaultTarget: { matcher: {} } as any }),
-    ).toThrow("Token defaultTarget only supports inline descriptor objects and matcher functions.");
+      () =>
+        new Token("object-matcher", { defaultTarget: { matcher: {} } as any }),
+    ).toThrow(
+      "Token defaultTarget only supports inline descriptor objects and matcher functions.",
+    );
 
     expect(
-      () => new Token("boolean-matcher", { defaultTarget: { matcher: true } as any }),
-    ).toThrow("Token defaultTarget only supports inline descriptor objects and matcher functions.");
+      () =>
+        new Token("boolean-matcher", {
+          defaultTarget: { matcher: true } as any,
+        }),
+    ).toThrow(
+      "Token defaultTarget only supports inline descriptor objects and matcher functions.",
+    );
   });
 });

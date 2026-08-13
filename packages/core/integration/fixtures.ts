@@ -322,12 +322,8 @@ export async function injectIncomingMessage(
     throw new Error("Engine not initialized for integration fixture.");
   }
 
-  await engine.safeOnMessage(message, sourceConnectionId).match(
-    () => undefined,
-    (error: Error) => {
-      throw error;
-    },
-  );
+  const result = await engine.safeOnMessage(message, sourceConnectionId);
+  if (result.isErr()) throw result.error;
 }
 
 export function teardownIssueCompanionWorld(world?: IssueCompanionWorld) {

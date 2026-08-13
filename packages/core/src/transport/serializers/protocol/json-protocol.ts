@@ -1,5 +1,5 @@
-import * as Message from "@/types/message";
-import type { IsEquivalent, MessageByType } from "@/types/message";
+import * as Message from "../../../types/message.js";
+import type { IsEquivalent, MessageByType } from "../../../types/message.js";
 
 /**
  * A type-safe constructor function for the packet structure.

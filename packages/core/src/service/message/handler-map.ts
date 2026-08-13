@@ -7,19 +7,20 @@ import {
   type ResMessage,
   type GetMessage,
   type SetMessage,
-} from "@/types/message";
-import { toSerializedError } from "@/utils/error";
+} from "../../types/message.js";
+import { toSerializedError } from "../../utils/error.js";
 import { get, set } from "es-toolkit/compat";
-import type { MessageHandlerFn, HandlerContext } from "./types";
-import { ResourceManager } from "../resource-manager";
-import { Result, ResultAsync, err, errAsync, ok, okAsync } from "neverthrow";
+import type { MessageHandlerFn, HandlerContext } from "./types/index.js";
+import { ResourceManager } from "../resource-manager.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import {
   type ServiceInvocationContext,
   getServiceInvocationHook,
   isServiceWithHooks,
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
-} from "../service-invocation-hooks";
+} from "../service-invocation-hooks.js";
 
 type MessageResourceErrorCode =
   | "E_RESOURCE_NOT_FOUND"
@@ -78,10 +79,10 @@ const safeSend = (
     | { type: NexusMessageType.ERR; id: MessageId; error: any },
   sourceConnectionId: string,
 ): Result<void, globalThis.Error> => {
-  const sendResult = Result.fromThrowable(
-    () => context.engine.safeSendMessage(message, sourceConnectionId),
-    toError,
-  )();
+  const sendResult = Result.try({
+    try: () => context.engine.safeSendMessage(message, sourceConnectionId),
+    catch: toError,
+  });
 
   if (sendResult.isErr()) {
     return err(sendResult.error);
@@ -111,16 +112,20 @@ function createRequestHandler<T extends GetMessage | SetMessage | ApplyMessage>(
     context: HandlerContext<any, any>,
     message: T,
     sourceConnectionId: string,
-  ) => ResultAsync<
-    { readonly result: any; readonly authorizedCall: AuthorizedCall },
-    globalThis.Error
+  ) => Promise<
+    Result<
+      { readonly result: any; readonly authorizedCall: AuthorizedCall },
+      globalThis.Error
+    >
   >,
 ): MessageHandlerFn<T, any, any> {
   return async (context, message, sourceConnectionId) => {
     const { id } = message;
 
-    const handled = await executor(context, message, sourceConnectionId).match(
-      ({ result, authorizedCall }) => {
+    const handled = (
+      await executor(context, message, sourceConnectionId)
+    ).match({
+      ok: ({ result, authorizedCall }) => {
         const sanitizeResult = context.payloadProcessor.safeSanitizeFromService(
           [result],
           sourceConnectionId,
@@ -150,7 +155,7 @@ function createRequestHandler<T extends GetMessage | SetMessage | ApplyMessage>(
           sourceConnectionId,
         );
       },
-      (error) => {
+      err: (error) => {
         return safeSend(
           context,
           {
@@ -161,7 +166,7 @@ function createRequestHandler<T extends GetMessage | SetMessage | ApplyMessage>(
           sourceConnectionId,
         );
       },
-    );
+    });
 
     if (handled.isErr()) {
       throw handled.error;
@@ -333,14 +338,14 @@ const authorizeServiceCall = (
   context: HandlerContext<any, any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
-): ResultAsync<AuthorizedCall, globalThis.Error> => {
+): Promise<Result<AuthorizedCall, globalThis.Error>> => {
   const serviceNameResult = resolveAuthoritativeServiceName(
     context,
     message,
     sourceConnectionId,
   );
   if (serviceNameResult.isErr()) {
-    return errAsync(serviceNameResult.error);
+    return Promise.resolve(err(serviceNameResult.error));
   }
 
   const serviceName = serviceNameResult.value;
@@ -348,38 +353,48 @@ const authorizeServiceCall = (
   const canCall = policy?.canCall;
 
   if (!canCall) {
-    return okAsync({ serviceName, servicePolicy: policy });
+    return Promise.resolve(ok({ serviceName, servicePolicy: policy }));
   }
 
   const authBase = context.getConnectionAuthContext?.(sourceConnectionId);
   if (!authBase) {
-    return errAsync(
-      new MessageHandlerMapError.Resource(
-        `Connection "${sourceConnectionId}" is not authorized to call service "${serviceName}".`,
-        "E_AUTH_CALL_DENIED",
-        { context: { sourceConnectionId, path: message.path } },
+    return Promise.resolve(
+      err(
+        new MessageHandlerMapError.Resource(
+          `Connection "${sourceConnectionId}" is not authorized to call service "${serviceName}".`,
+          "E_AUTH_CALL_DENIED",
+          { context: { sourceConnectionId, path: message.path } },
+        ),
       ),
     );
   }
 
-  return ResultAsync.fromPromise(
-    Promise.resolve().then(() =>
-      canCall({
-        ...authBase,
-        connectionId: sourceConnectionId,
-        serviceName,
-        path:
-          message.resourceId === null ? message.path.slice(1) : message.path,
-        operation: operationName(message.type),
-      }),
+  return Result.tryPromise({
+    try: () =>
+      Promise.resolve().then(() =>
+        canCall({
+          ...authBase,
+          connectionId: sourceConnectionId,
+          serviceName,
+          path:
+            message.resourceId === null ? message.path.slice(1) : message.path,
+          operation: operationName(message.type),
+        }),
+      ),
+    catch: () =>
+      createCallDeniedError(sourceConnectionId, serviceName, message.path),
+  }).then((result) =>
+    result.andThen((allowed) =>
+      allowed === true
+        ? ok({ serviceName, servicePolicy: policy })
+        : err(
+            createCallDeniedError(
+              sourceConnectionId,
+              serviceName,
+              message.path,
+            ),
+          ),
     ),
-    () => createCallDeniedError(sourceConnectionId, serviceName, message.path),
-  ).andThen((allowed) =>
-    allowed === true
-      ? okAsync({ serviceName, servicePolicy: policy })
-      : errAsync(
-          createCallDeniedError(sourceConnectionId, serviceName, message.path),
-        ),
   );
 };
 
@@ -387,10 +402,10 @@ const validateAuthorizableCall = (
   context: HandlerContext<any, any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
-): ResultAsync<AuthorizedCall, globalThis.Error> => {
+): Promise<Result<AuthorizedCall, globalThis.Error>> => {
   const pathCheck = validateSafeRpcPath(message.path);
   if (pathCheck.isErr()) {
-    return errAsync(pathCheck.error);
+    return Promise.resolve(err(pathCheck.error));
   }
 
   if (message.resourceId !== null) {
@@ -398,23 +413,27 @@ const validateAuthorizableCall = (
       message.resourceId,
     );
     if (!resource) {
-      return errAsync(
-        new MessageHandlerMapError.Resource(
-          `Local resource with ID "${message.resourceId}" not found.`,
-          "E_RESOURCE_NOT_FOUND",
-          { context: { resourceId: message.resourceId } },
+      return Promise.resolve(
+        err(
+          new MessageHandlerMapError.Resource(
+            `Local resource with ID "${message.resourceId}" not found.`,
+            "E_RESOURCE_NOT_FOUND",
+            { context: { resourceId: message.resourceId } },
+          ),
         ),
       );
     }
 
     if (resource.ownerConnectionId !== sourceConnectionId) {
-      return errAsync(
-        new MessageHandlerMapError.Resource(
-          `Connection "${sourceConnectionId}" is not authorized to access resource "${message.resourceId}".`,
-          "E_RESOURCE_ACCESS_DENIED",
-          {
-            context: { sourceConnectionId, resourceId: message.resourceId },
-          },
+      return Promise.resolve(
+        err(
+          new MessageHandlerMapError.Resource(
+            `Connection "${sourceConnectionId}" is not authorized to access resource "${message.resourceId}".`,
+            "E_RESOURCE_ACCESS_DENIED",
+            {
+              context: { sourceConnectionId, resourceId: message.resourceId },
+            },
+          ),
         ),
       );
     }
@@ -469,98 +488,106 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           sourceConnectionId,
         );
 
-        return authResult.andThen((authorizedCall) => {
-          const pathResult = resolveExecutionPath(
-            context.resourceManager,
-            resourceId,
-            path,
-            sourceConnectionId,
-          );
-
-          if (pathResult.isErr()) {
-            return errAsync(pathResult.error);
-          }
-
-          const { root, target, parent } = pathResult.value;
-
-          if (typeof target !== "function") {
-            return errAsync(
-              new MessageHandlerMapError.Resource(
-                `Target at path [${[resourceId, ...path].join(".")}] is not a function.`,
-                "E_TARGET_NOT_CALLABLE",
-                { context: { resourceId, path } },
-              ),
+        return authResult.then((auth) =>
+          auth.andThenAsync(async (authorizedCall) => {
+            const pathResult = resolveExecutionPath(
+              context.resourceManager,
+              resourceId,
+              path,
+              sourceConnectionId,
             );
-          }
 
-          const hookTarget = !authorizedCall.serviceName.startsWith("resource:")
-            ? context.resourceManager.getExposedService(
-                authorizedCall.serviceName,
-              )
-            : undefined;
-          const invocationHookTarget = isServiceWithHooks(hookTarget)
-            ? hookTarget
-            : isServiceWithHooks(root)
-              ? root
-              : isServiceWithHooks(parent ?? target)
-                ? (parent ?? target)
-                : undefined;
-          const onInvokeStart = getServiceInvocationHook(
-            invocationHookTarget,
-            SERVICE_INVOKE_START,
-          ) as
-            | ((
-                invocationContext: ServiceInvocationContext,
-              ) => ServiceInvocationContext)
-            | undefined;
-          const onInvokeEnd = getServiceInvocationHook(
-            invocationHookTarget,
-            SERVICE_INVOKE_END,
-          ) as
-            | ((invocationContext?: ServiceInvocationContext) => void)
-            | undefined;
-          return ResultAsync.fromPromise(
-            Promise.resolve().then(async () => {
-              const invocationContext: ServiceInvocationContext | undefined =
-                onInvokeStart
-                  ? onInvokeStart({
-                      sourceConnectionId,
-                      sourceIdentity:
-                        context.getConnectionAuthContext?.(sourceConnectionId)
-                          ?.remoteIdentity,
-                      localIdentity:
-                        context.getConnectionAuthContext?.(sourceConnectionId)
-                          ?.localIdentity,
-                      platform:
-                        context.getConnectionAuthContext?.(sourceConnectionId)
-                          ?.platform,
-                    })
+            if (pathResult.isErr()) {
+              return err(pathResult.error);
+            }
+
+            const { root, target, parent } = pathResult.value;
+
+            if (typeof target !== "function") {
+              return err(
+                new MessageHandlerMapError.Resource(
+                  `Target at path [${[resourceId, ...path].join(".")}] is not a function.`,
+                  "E_TARGET_NOT_CALLABLE",
+                  { context: { resourceId, path } },
+                ),
+              );
+            }
+
+            const hookTarget = !authorizedCall.serviceName.startsWith(
+              "resource:",
+            )
+              ? context.resourceManager.getExposedService(
+                  authorizedCall.serviceName,
+                )
+              : undefined;
+            const invocationHookTarget = isServiceWithHooks(hookTarget)
+              ? hookTarget
+              : isServiceWithHooks(root)
+                ? root
+                : isServiceWithHooks(parent ?? target)
+                  ? (parent ?? target)
                   : undefined;
-              try {
-                const revivedArgsResult = payloadProcessor.safeRevive(
-                  args,
-                  sourceConnectionId,
-                );
+            const onInvokeStart = getServiceInvocationHook(
+              invocationHookTarget,
+              SERVICE_INVOKE_START,
+            ) as
+              | ((
+                  invocationContext: ServiceInvocationContext,
+                ) => ServiceInvocationContext)
+              | undefined;
+            const onInvokeEnd = getServiceInvocationHook(
+              invocationHookTarget,
+              SERVICE_INVOKE_END,
+            ) as
+              | ((invocationContext?: ServiceInvocationContext) => void)
+              | undefined;
+            return Result.tryPromise({
+              try: () =>
+                Promise.resolve().then(async () => {
+                  const invocationContext:
+                    | ServiceInvocationContext
+                    | undefined = onInvokeStart
+                    ? onInvokeStart({
+                        sourceConnectionId,
+                        sourceIdentity:
+                          context.getConnectionAuthContext?.(sourceConnectionId)
+                            ?.remoteIdentity,
+                        localIdentity:
+                          context.getConnectionAuthContext?.(sourceConnectionId)
+                            ?.localIdentity,
+                        platform:
+                          context.getConnectionAuthContext?.(sourceConnectionId)
+                            ?.platform,
+                      })
+                    : undefined;
+                  try {
+                    const revivedArgsResult = payloadProcessor.safeRevive(
+                      args,
+                      sourceConnectionId,
+                    );
 
-                if (revivedArgsResult.isErr()) {
-                  throw revivedArgsResult.error;
-                }
+                    if (revivedArgsResult.isErr()) {
+                      throw revivedArgsResult.error;
+                    }
 
-                const invokeArgs =
-                  typeof invocationContext === "undefined"
-                    ? revivedArgsResult.value
-                    : [...revivedArgsResult.value, invocationContext];
+                    const invokeArgs =
+                      typeof invocationContext === "undefined"
+                        ? revivedArgsResult.value
+                        : [...revivedArgsResult.value, invocationContext];
 
-                return await Reflect.apply(target, parent, invokeArgs);
-              } finally {
-                if (onInvokeEnd) {
-                  onInvokeEnd(invocationContext);
-                }
-              }
-            }),
-            toError,
-          ).map((result) => ({ result, authorizedCall }));
-        });
+                    return await Reflect.apply(target, parent, invokeArgs);
+                  } finally {
+                    if (onInvokeEnd) {
+                      onInvokeEnd(invocationContext);
+                    }
+                  }
+                }),
+              catch: toError,
+            }).then((result) =>
+              result.map((value) => ({ result: value, authorizedCall })),
+            );
+          }),
+        );
       },
     ),
   ],
@@ -639,20 +666,22 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
         sourceConnectionId,
       );
 
-      return authResult.andThen((authorizedCall) => {
-        const pathResult = resolveExecutionPath(
-          context.resourceManager,
-          resourceId,
-          path,
-          sourceConnectionId,
-        );
+      return authResult.then((auth) =>
+        auth.andThen((authorizedCall) => {
+          const pathResult = resolveExecutionPath(
+            context.resourceManager,
+            resourceId,
+            path,
+            sourceConnectionId,
+          );
 
-        if (pathResult.isErr()) {
-          return errAsync(pathResult.error);
-        }
+          if (pathResult.isErr()) {
+            return err(pathResult.error);
+          }
 
-        return okAsync({ result: pathResult.value.target, authorizedCall });
-      });
+          return ok({ result: pathResult.value.target, authorizedCall });
+        }),
+      );
     }),
   ],
   [
@@ -667,50 +696,55 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
         sourceConnectionId,
       );
 
-      return authResult.andThen((authorizedCall) => {
-        const pathResult = resolveExecutionPath(
-          context.resourceManager,
-          resourceId,
-          path,
-          sourceConnectionId,
-        );
-
-        if (pathResult.isErr()) {
-          return errAsync(pathResult.error);
-        }
-
-        const { root, propertyPath } = pathResult.value;
-
-        const revivedValue = payloadProcessor.safeRevive(
-          [value],
-          sourceConnectionId,
-        );
-
-        if (revivedValue.isErr()) {
-          return errAsync(revivedValue.error);
-        }
-
-        if (propertyPath.length === 0) {
-          return errAsync(
-            new MessageHandlerMapError.Resource(
-              "SET requires a path. Cannot set a root resource or service directly.",
-              "E_SET_ON_ROOT",
-              { context: { resourceId, path } },
-            ),
+      return authResult.then((auth) =>
+        auth.andThen((authorizedCall) => {
+          const pathResult = resolveExecutionPath(
+            context.resourceManager,
+            resourceId,
+            path,
+            sourceConnectionId,
           );
-        }
 
-        const setResult = Result.fromThrowable(() => {
-          set(root, propertyPath, revivedValue.value[0]);
-          return true;
-        }, toError)();
+          if (pathResult.isErr()) {
+            return err(pathResult.error);
+          }
 
-        if (setResult.isErr()) {
-          return errAsync(setResult.error);
-        }
+          const { root, propertyPath } = pathResult.value;
 
-        return okAsync({ result: setResult.value, authorizedCall });
-      });
+          const revivedValue = payloadProcessor.safeRevive(
+            [value],
+            sourceConnectionId,
+          );
+
+          if (revivedValue.isErr()) {
+            return err(revivedValue.error);
+          }
+
+          if (propertyPath.length === 0) {
+            return err(
+              new MessageHandlerMapError.Resource(
+                "SET requires a path. Cannot set a root resource or service directly.",
+                "E_SET_ON_ROOT",
+                { context: { resourceId, path } },
+              ),
+            );
+          }
+
+          const setResult = Result.try({
+            try: () => {
+              set(root, propertyPath, revivedValue.value[0]);
+              return true;
+            },
+            catch: toError,
+          });
+
+          if (setResult.isErr()) {
+            return err(setResult.error);
+          }
+
+          return ok({ result: setResult.value, authorizedCall });
+        }),
+      );
     }),
   ],
 ]);

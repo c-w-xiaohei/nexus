@@ -1,5 +1,5 @@
-import type { NexusMessage } from "../../types/message";
-import type { NexusAuthorizationPolicy } from "../../api/types/config";
+import type { NexusMessage } from "../../types/message.js";
+import type { NexusAuthorizationPolicy } from "../../api/types/config.js";
 
 /**
  * Configuration for the ConnectionManager.

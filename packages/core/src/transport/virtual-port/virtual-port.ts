@@ -1,5 +1,5 @@
-import type { IPort } from "../types/port";
-import type { VirtualPortProtocol } from "./protocol";
+import type { IPort } from "../types/port.js";
+import type { VirtualPortProtocol } from "./protocol.js";
 
 type SendData = (payload: unknown, transfer?: Transferable[]) => void;
 type SendClose = () => void;

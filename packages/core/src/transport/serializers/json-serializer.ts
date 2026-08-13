@@ -1,8 +1,9 @@
-import * as Message from "../../types/message";
-import type { ISerializer } from "./interface";
-import { MESSAGE_PACKET_STRUCTURE } from "./protocol/json-protocol";
-import { NexusProtocolError } from "../../errors/transport-errors";
-import { err, ok, type Result } from "neverthrow";
+import * as Message from "../../types/message.js";
+import type { ISerializer } from "./interface.js";
+import { MESSAGE_PACKET_STRUCTURE } from "./protocol/json-protocol.js";
+import { NexusProtocolError } from "../../errors/transport-errors.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 
 export namespace JsonSerializer {
   const messageToPacketArray = (

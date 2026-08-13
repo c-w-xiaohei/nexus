@@ -1,39 +1,33 @@
-import type { ConnectionManager } from "@/connection/connection-manager";
+import type { ConnectionManager } from "../connection/connection-manager.js";
 import type {
   MessageId,
   NexusMessage,
   ReleaseMessage,
   SerializedError,
-} from "@/types/message";
-import { NexusMessageType } from "@/types/message";
-import type { PlatformMeta, EndpointMeta } from "@/types/identity";
-import type { CallTarget, MessageTarget } from "@/connection/types";
-import { Logger } from "@/logger";
-import { toSerializedError } from "@/utils/error";
-import { CallProcessor } from "./call-processor";
-import { MessageHandler } from "./message/message-handler";
-import { PayloadProcessor } from "./payload/payload-processor";
-import { PendingCallManager } from "./pending-call-manager";
-import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
-import { ResourceManager } from "./resource-manager";
+} from "../types/message.js";
+import { NexusMessageType } from "../types/message.js";
+import type { PlatformMeta, EndpointMeta } from "../types/identity.js";
+import type { CallTarget, MessageTarget } from "../connection/types.js";
+import { Logger } from "../logger.js";
+import { toSerializedError } from "../utils/error.js";
+import { CallProcessor } from "./call-processor.js";
+import { MessageHandler } from "./message/message-handler.js";
+import { PayloadProcessor } from "./payload/payload-processor.js";
+import { PendingCallManager } from "./pending-call-manager.js";
+import { CreateProxyOptions, ProxyFactory } from "./proxy-factory.js";
+import { ResourceManager } from "./resource-manager.js";
 import {
   getServiceInvocationHook,
   isServiceWithHooks,
   SERVICE_ON_DISCONNECT,
-} from "./service-invocation-hooks";
+} from "./service-invocation-hooks.js";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
-import {
-  err,
-  errAsync,
-  ok,
-  okAsync,
-  type Result,
-  type ResultAsync,
-} from "neverthrow";
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
+} from "../types/symbols.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import type { NexusAuthorizationPolicy } from "../api/types/config.js";
 
 type DispatchCallBase = {
   target: CallTarget<any, any>;
@@ -262,7 +256,7 @@ export class Engine<
 
   public safeDispatchCall(
     options: DispatchCallOptions,
-  ): ResultAsync<any, globalThis.Error> {
+  ): Promise<Result<any, globalThis.Error>> {
     return this.callProcessor.safeProcess(options);
   }
 
@@ -272,21 +266,21 @@ export class Engine<
       id: null,
       resourceId,
     };
-    this.safeSendMessage(message, { connectionId }).match(
-      () => undefined,
-      (error) => {
+    this.safeSendMessage(message, { connectionId }).match({
+      ok: () => undefined,
+      err: (error) => {
         this.logger.warn(
           `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
           error,
         );
       },
-    );
+    });
   }
 
   public safeOnMessage(
     message: NexusMessage,
     sourceConnectionId: string,
-  ): ResultAsync<void, globalThis.Error> {
+  ): Promise<Result<void, globalThis.Error>> {
     this.logger.debug(
       `<- Received message #${message.id ?? "N/A"} from connection ${sourceConnectionId}`,
       message,
@@ -294,35 +288,37 @@ export class Engine<
 
     return this.messageHandler
       .safeHandleMessage(message, sourceConnectionId)
-      .orElse((error) => {
-        this.logger.error(
-          `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
-          error,
-        );
-
-        if (!message.id) {
-          return okAsync(undefined);
-        }
-
-        const sendResult = this.safeSendMessage(
-          {
-            type: NexusMessageType.ERR,
-            id: message.id,
-            error: toSerializedError(error),
-          },
-          sourceConnectionId,
-        );
-
-        if (sendResult.isErr()) {
+      .then((messageResult) =>
+        messageResult.tryRecover((error) => {
           this.logger.error(
-            `Failed to send ERR response for message #${message.id}.`,
-            sendResult.error,
+            `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
+            error,
           );
-          return errAsync(sendResult.error);
-        }
 
-        return okAsync(undefined);
-      });
+          if (!message.id) {
+            return ok(undefined);
+          }
+
+          const sendResult = this.safeSendMessage(
+            {
+              type: NexusMessageType.ERR,
+              id: message.id,
+              error: toSerializedError(error),
+            },
+            sourceConnectionId,
+          );
+
+          if (sendResult.isErr()) {
+            this.logger.error(
+              `Failed to send ERR response for message #${message.id}.`,
+              sendResult.error,
+            );
+            return err(sendResult.error);
+          }
+
+          return ok(undefined);
+        }),
+      );
   }
 
   public handleResponse(

@@ -225,6 +225,24 @@ const value = await remote.ping("hello");
 console.log(value);
 ```
 
+For safe-first composition, core safe APIs return `Promise<Result<T, E>>`:
+
+```ts
+const result = await nexus.safeCreate(PingToken, {
+  target: { descriptor: { context: "host" } },
+});
+
+if (result.isErr()) {
+  console.error(result.error.code, result.error.message);
+} else {
+  const remote = result.value;
+  console.log(await remote.ping("hello"));
+}
+```
+
+The same `Promise<Result<T, E>>` convention applies to `safeReady(...)` and
+`safeUpdateIdentity(...)`.
+
 Keep explicit targets while debugging or when the topology is complex:
 
 ```ts

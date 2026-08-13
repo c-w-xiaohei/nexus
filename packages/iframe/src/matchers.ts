@@ -1,5 +1,5 @@
-import { DEFAULT_INSTANCE } from "./constants";
-import type { IframeEndpointMeta } from "./types";
+import { DEFAULT_INSTANCE } from "./constants.js";
+import type { IframeEndpointMeta } from "./types.js";
 
 export const IframeMatchers = {
   parent: (appId: string) => (identity: IframeEndpointMeta) =>

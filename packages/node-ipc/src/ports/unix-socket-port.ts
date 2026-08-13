@@ -1,6 +1,6 @@
 import type net from "node:net";
 import type { IPort } from "@nexus-js/core";
-import { BinaryFrame } from "../framing/binary-frame";
+import { BinaryFrame } from "../framing/binary-frame.js";
 
 export class UnixSocketPort implements IPort {
   private readonly messageHandlers = new Set<(message: ArrayBuffer) => void>();
@@ -13,14 +13,14 @@ export class UnixSocketPort implements IPort {
       const packet = new Uint8Array(chunk.byteLength);
       packet.set(chunk);
       const result = this.decoder.push(packet.buffer);
-      result.match(
-        (frames) => {
+      result.match({
+        ok: (frames) => {
           for (const frame of frames) {
             for (const handler of this.messageHandlers) handler(frame);
           }
         },
-        () => this.close(),
-      );
+        err: () => this.close(),
+      });
     });
     socket.once("close", () => this.notifyDisconnect());
     socket.once("error", () => this.notifyDisconnect());
@@ -33,14 +33,14 @@ export class UnixSocketPort implements IPort {
     }
 
     const result = BinaryFrame.encode(message);
-    result.match(
-      (frame) => {
+    result.match({
+      ok: (frame) => {
         this.socket.write(Buffer.from(frame), (error) => {
           if (error) this.close();
         });
       },
-      () => this.close(),
-    );
+      err: () => this.close(),
+    });
   }
 
   onMessage(handler: (message: ArrayBuffer) => void): void {

@@ -31,6 +31,7 @@ For full project documentation, direct readers to the GitHub docs in `c-w-xiaohe
 - For Nexus State providers, use `const { provider, store } = createNexusStore(definition)`: pass `provider` through `nexus.configure({ providers: [provider] })` or `providers: [provider]`, and use `store` only for same-context authoritative consumption.
 - Use `createMockNexus()` from `@nexus-js/testing` for user-level unit tests of code that consumes a `NexusInstance`; use adapter or integration tests for transport, connection, auth, reload, restart, or lifecycle semantics.
 - Treat raw `nexus.create(...)` proxies and refs as session-bound handles. Recreate them after disconnect, restart, or session replacement.
+- Safe async APIs return native `Promise<Result<T, E>>` values. Await the promise, narrow with `isErr()`/`isOk()`, and use `result.error` or `result.value`; do not expect `ResultAsync` methods or wrap the API in a compatibility layer.
 
 ## Architecture And Boundaries
 

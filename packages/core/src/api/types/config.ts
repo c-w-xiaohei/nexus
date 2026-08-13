@@ -1,6 +1,6 @@
-import type { EndpointMeta, PlatformMeta } from "@/types/identity";
-import type { IEndpoint } from "@/transport";
-import type { Token } from "../token";
+import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
+import type { IEndpoint } from "../../transport/index.js";
+import type { Token } from "../token.js";
 
 type AtLeastOne<T> = {
   [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>;

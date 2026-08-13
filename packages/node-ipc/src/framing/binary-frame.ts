@@ -1,5 +1,6 @@
-import { err, ok, Result } from "neverthrow";
-import { NodeIpcError } from "../errors";
+import { Result } from "better-result";
+const { err, ok } = Result;
+import { NodeIpcError } from "../errors.js";
 
 type DecoderOptions = {
   maxFrameSize?: number;

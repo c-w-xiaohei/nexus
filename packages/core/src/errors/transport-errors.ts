@@ -1,4 +1,4 @@
-import { NexusError } from "./nexus-error";
+import { NexusError } from "./nexus-error.js";
 
 /**
  * Base class for all Layer 1 (Transport & Protocol) errors.

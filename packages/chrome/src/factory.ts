@@ -9,11 +9,11 @@ import type {
   ChromeOptionsPageMeta,
   ChromePlatformMeta,
   ChromePopupMeta,
-} from "./types/meta";
-import { BackgroundEndpoint } from "./endpoints/background";
-import { ContentScriptEndpoint } from "./endpoints/content-script";
-import { UIClientEndpoint } from "./endpoints/ui-client";
-import { ChromeMatchers, type ChromeMatcherMeta } from "./matchers";
+} from "./types/meta.js";
+import { BackgroundEndpoint } from "./endpoints/background.js";
+import { ContentScriptEndpoint } from "./endpoints/content-script.js";
+import { UIClientEndpoint } from "./endpoints/ui-client.js";
+import { ChromeMatchers, type ChromeMatcherMeta } from "./matchers.js";
 
 type ChromeConfig<
   TAppMeta = never,

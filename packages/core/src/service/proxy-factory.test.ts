@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi, type Mocked } from "vitest";
 import type { ProxyFactoryCallbacks } from "./proxy-factory";
 import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
-import { okAsync } from "neverthrow";
+import { Result } from "better-result";
+const { ok } = Result;
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { NexusResourceError } from "@/errors/resource-errors";
 
@@ -30,12 +31,12 @@ describe("ProxyFactory", () => {
     mockEngine = {
       safeDispatchCall: vi
         .fn()
-        .mockReturnValue(okAsync("mocked promise result")),
+        .mockReturnValue(Promise.resolve(ok("mocked promise result"))),
       dispatchRelease: vi.fn(),
     } as unknown as Mocked<ProxyFactoryCallbacks>;
     mockEngine.safeDispatchCall = vi
       .fn()
-      .mockReturnValue(okAsync("mocked promise result"));
+      .mockReturnValue(Promise.resolve(ok("mocked promise result")));
     mockEngine.dispatchRelease = vi.fn();
 
     resourceManager = ResourceManager.create();
@@ -72,7 +73,7 @@ describe("ProxyFactory", () => {
 
     it("should dispatch a GET call when a property is awaited", async () => {
       mockEngine.safeDispatchCall.mockReturnValue(
-        okAsync("mocked promise result"),
+        Promise.resolve(ok("mocked promise result")),
       );
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },

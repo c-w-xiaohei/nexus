@@ -63,10 +63,11 @@ pnpm typecheck
 pnpm test
 ```
 
-Format TypeScript and Markdown:
+Format TypeScript, TSX, and Markdown:
 
 ```bash
 pnpm format
+pnpm format:check
 ```
 
 Run package tests:
@@ -110,8 +111,8 @@ pnpm dev
 - Run the narrowest relevant test first when changing behavior.
 - Run `pnpm typecheck` before claiming type-level or public API work is complete.
 - Run `pnpm build` when exports, package boundaries, Vite config, or declarations may be affected.
-- Run `pnpm lint` when changing TypeScript source or ESLint environment assumptions.
-- For docs-only changes, run `pnpm exec prettier --check <files>` on edited Markdown.
+- Run `pnpm lint` when changing TypeScript source or Oxlint environment assumptions.
+- For docs-only changes, run `pnpm exec oxfmt --check <files>` on edited Markdown.
 
 ## TypeScript And Formatting
 
@@ -120,7 +121,7 @@ pnpm dev
 - Prefer explicit exported types for public APIs.
 - Use `import type` for type-only imports.
 - Keep imports direct and stable; avoid unnecessary internal barrels when a local module import is clearer.
-- Formatting is controlled by Prettier. Do not hand-format against Prettier output.
+- Formatting is controlled by Oxfmt (`.oxfmtrc.json`, print width 80). Do not hand-format against another formatter.
 - Keep source and docs ASCII unless nearby content already uses non-ASCII or the content requires it.
 
 ## Comments And Design Notes
@@ -135,14 +136,14 @@ pnpm dev
 - Use `PascalCase` for classes, types, interfaces, namespaces, and tokens such as `PingToken`.
 - Use `camelCase` for functions, methods, variables, and object properties.
 - Use `SCREAMING_SNAKE_CASE` only for true global-style constants.
-- Name safe APIs with a `safe` prefix when they return `Result` or `ResultAsync`.
+- Name safe APIs with a `safe` prefix when they return `Result` or `Promise<Result>`.
 - Name throw-style public wrappers without `safe`, for example `create` or `configure`.
 - Keep token IDs stable and namespaced. Prefer `TokenSpace` for structured token IDs.
 
 ## Mandatory Internal Style
 
 - Read `.doc/style.md` before non-trivial implementation work.
-- Internal recoverable errors in `core` and adapters must use `Result` / `ResultAsync` with railway-oriented composition.
+- Internal recoverable errors in `core` and adapters must use `Result` / `Promise<Result>` with better-result composition.
 - Do not use implicit throws for expected business/control-flow failures inside core/adapters.
 - Public APIs may expose both throw-style and safe-style interfaces.
 - Use the shared `fn` helper from `packages/core/src/utils/fn.ts` for schema-backed business logic functions when appropriate.
@@ -159,7 +160,7 @@ pnpm dev
 
 ## Error Handling
 
-- Use `neverthrow` `Result` and `ResultAsync` for recoverable internal paths.
+- Use better-result `Result` and `Promise<Result>` for recoverable internal paths. Prefer `Result.gen` with `Result.await` for multi-step async workflows, and `andThenAsync`/`tryPromise` for short pipelines and fallible async boundaries.
 - Preserve structured error codes and context when wrapping errors.
 - Treat authorization denial, targeting misses, disconnects, and validation failures as expected control flow where applicable.
 - Throw only at public throw-style boundaries, constructor/configuration misuse boundaries, or truly unrecoverable cases.

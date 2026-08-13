@@ -3,19 +3,17 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type {
-  ChromeEndpointMeta,
-  ChromePlatformMeta,
-} from "../types/meta";
-import { ChromePort } from "../ports/chrome-port";
+import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta.js";
+import { ChromePort } from "../ports/chrome-port.js";
 
 /**
  * Background script endpoint implementation
  * Handles connections from content scripts, popups, and other extension contexts
  */
-export class BackgroundEndpoint
-  implements IEndpoint<ChromeEndpointMeta, ChromePlatformMeta>
-{
+export class BackgroundEndpoint implements IEndpoint<
+  ChromeEndpointMeta,
+  ChromePlatformMeta
+> {
   private connectHandler?: (port: IPort, meta?: ChromePlatformMeta) => void;
 
   capabilities = {
@@ -29,13 +27,13 @@ export class BackgroundEndpoint
     } catch (error) {
       throw new NexusEndpointListenError(
         `Failed to start listening for connections: ${error instanceof Error ? error.message : String(error)}`,
-        { originalError: error }
+        { originalError: error },
       );
     }
   }
 
   async connect(
-    target: Partial<ChromeEndpointMeta>
+    target: Partial<ChromeEndpointMeta>,
   ): Promise<[IPort, ChromePlatformMeta]> {
     try {
       // Background can connect to specific content scripts
@@ -59,7 +57,7 @@ export class BackgroundEndpoint
 
       throw new NexusEndpointConnectError(
         `Cannot connect to target: expected 'content-script' context with 'tabId', but received ${JSON.stringify(target)}`,
-        { target }
+        { target },
       );
     } catch (error) {
       if (error instanceof NexusEndpointConnectError) {
@@ -67,7 +65,7 @@ export class BackgroundEndpoint
       }
       throw new NexusEndpointConnectError(
         `Failed to connect to target: ${error instanceof Error ? error.message : String(error)}`,
-        { target, originalError: error }
+        { target, originalError: error },
       );
     }
   }

@@ -1,15 +1,10 @@
 import { defineConfig } from "vite";
 import path from "path";
-import dts from "vite-plugin-dts";
 import reactSwc from "@vitejs/plugin-react-swc";
 
 export default defineConfig({
   plugins: [
     reactSwc(), // 使用 SWC 进行编译
-    dts({
-      insertTypesEntry: true, // 为类型入口生成单独的 .d.ts 文件
-      exclude: ["**/*.test.ts"],
-    }),
   ],
   resolve: {
     alias: {
@@ -17,6 +12,10 @@ export default defineConfig({
     },
   },
   build: {
+    rollupOptions: {
+      // better-result is ESM-only; bundle it so the CJS entry remains require-able.
+      external: [],
+    },
     lib: {
       entry: {
         index: path.resolve(__dirname, "src/index.ts"),
@@ -35,7 +34,7 @@ export default defineConfig({
       name: "NexusCore",
       formats: ["es", "cjs"], // Explicitly output ES Module and CommonJS
       fileName: (format, entryName) =>
-        `${entryName}.${format === "es" ? "mjs" : "js"}`,
+        `${entryName}.${format === "es" ? "mjs" : "cjs"}`,
     },
   },
 });

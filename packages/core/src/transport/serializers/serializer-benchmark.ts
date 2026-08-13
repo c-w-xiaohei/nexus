@@ -1,19 +1,19 @@
-import type { ISerializer } from "./interface";
-import { BinarySerializer } from "./binary-serializer";
-import { JsonSerializer } from "./json-serializer";
-import type { Result } from "neverthrow";
-import { err, ok } from "neverthrow";
+import type { ISerializer } from "./interface.js";
+import { BinarySerializer } from "./binary-serializer.js";
+import { JsonSerializer } from "./json-serializer.js";
+import { Result } from "better-result";
+const { err, ok } = Result;
 import {
   decode as msgpackDecode,
   encode as msgpackEncode,
 } from "@msgpack/msgpack";
 import { Packr } from "msgpackr";
-import { NexusProtocolError } from "@/errors/transport-errors";
+import { NexusProtocolError } from "../../errors/transport-errors.js";
 import {
   NexusMessageType,
   type ApplyMessage,
   type NexusMessage,
-} from "@/types/message";
+} from "../../types/message.js";
 
 export type SerializerBenchmarkCase = {
   name: string;
@@ -359,16 +359,15 @@ const unwrapBenchmarkResult = <T>(
   serializerName: string,
   caseName: string,
   operation: "serialize" | "deserialize",
-): T =>
-  result.match(
-    (value) => value,
-    (error) => {
-      throw new Error(
-        `${serializerName} failed to ${operation} ${caseName}: ${error.message}`,
-        { cause: error },
-      );
-    },
-  );
+): T => {
+  if (result.isErr()) {
+    throw new Error(
+      `${serializerName} failed to ${operation} ${caseName}: ${result.error.message}`,
+      { cause: result.error },
+    );
+  }
+  return result.value;
+};
 
 const measurePacketBytes = (packet: string | ArrayBuffer): number => {
   if (typeof packet === "string") {

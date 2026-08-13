@@ -113,9 +113,8 @@ describe("serializer benchmark scaffold", () => {
 
   it("keeps BinarySerializer byte length equal to UTF-8 compact JSON packet length", () => {
     const message = buildSerializerBenchmarkMessages()[0]!.message;
-    const jsonPacket = JsonSerializer.safeSerialize(message)._unsafeUnwrap();
-    const binaryPacket =
-      BinarySerializer.safeSerialize(message)._unsafeUnwrap();
+    const jsonPacket = JsonSerializer.safeSerialize(message).unwrap();
+    const binaryPacket = BinarySerializer.safeSerialize(message).unwrap();
 
     expect(binaryPacket).toBeInstanceOf(ArrayBuffer);
     if (!(binaryPacket instanceof ArrayBuffer)) {

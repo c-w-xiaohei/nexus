@@ -1,4 +1,4 @@
-import type { EndpointCapabilities } from "./types";
+import type { EndpointCapabilities } from "./types.js";
 
 export function createCapabilities(
   binaryPackets?: boolean,

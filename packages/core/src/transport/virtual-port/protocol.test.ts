@@ -17,16 +17,16 @@ describe("VirtualPortProtocol", () => {
     const result = VirtualPortProtocol.safeClassify(message);
 
     expect(result.isOk()).toBe(true);
-    expect(result._unsafeUnwrap()).toEqual(message);
+    expect(result.unwrap()).toEqual(message);
   });
 
   it("rejects malformed messages without throwing", () => {
     const result = VirtualPortProtocol.safeClassify({ type: "data" });
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr().code).toBe(
-      "VIRTUAL_PORT_PROTOCOL_INVALID",
-    );
+    if (result.isErr()) {
+      expect(result.error.code).toBe("VIRTUAL_PORT_PROTOCOL_INVALID");
+    }
   });
 
   it("requires data messages to carry a sequence number", () => {

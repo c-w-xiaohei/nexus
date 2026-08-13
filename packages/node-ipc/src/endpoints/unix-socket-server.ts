@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { IEndpoint, IPort } from "@nexus-js/core";
-import { ResultAsync } from "neverthrow";
-import { NodeIpcError } from "../errors";
-import { UnixSocketPort } from "../ports/unix-socket-port";
-import type { NodeIpcSocketAddress } from "../types/address";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "../types/meta";
+import { Result } from "better-result";
+import { NodeIpcError } from "../errors.js";
+import { UnixSocketPort } from "../ports/unix-socket-port.js";
+import type { NodeIpcSocketAddress } from "../types/address.js";
+import type {
+  NodeIpcPlatformMeta,
+  NodeIpcEndpointMeta,
+} from "../types/meta.js";
 
 export type UnixSocketServerHandle = {
   close(): void;
@@ -56,23 +59,18 @@ export class UnixSocketServerEndpoint implements IEndpoint<
   private async listenUnsafe(
     onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
   ): Promise<UnixSocketServerHandle> {
-    return await this.safeListen(onConnect).then((result) =>
-      result.match(
-        (handle) => handle,
-        (error) => {
-          throw error;
-        },
-      ),
-    );
+    const result = await this.safeListen(onConnect);
+    if (result.isErr()) throw result.error;
+    return result.value;
   }
 
   safeListen(
     onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
-  ): ResultAsync<UnixSocketServerHandle, NodeIpcError> {
-    return ResultAsync.fromPromise<UnixSocketServerHandle, NodeIpcError>(
-      this.listenInternal(onConnect),
-      (cause) => toNodeIpcError(cause, "E_IPC_CONNECT_FAILED"),
-    );
+  ): Promise<Result<UnixSocketServerHandle, NodeIpcError>> {
+    return Result.tryPromise({
+      try: () => this.listenInternal(onConnect),
+      catch: (cause) => toNodeIpcError(cause, "E_IPC_CONNECT_FAILED"),
+    });
   }
 
   private async listenInternal(

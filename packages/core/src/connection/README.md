@@ -32,5 +32,3 @@ The `ConnectionManager` communicates events back to L3 via a `handlers` object p
 
 - **`onMessage(message, connectionId)`**: Forwards a fully validated, inbound `NexusMessage` from a specific connection to L3 for processing.
 - **`onDisconnect(connectionId, identity)`**: Notifies L3 that a connection has been terminated. This is crucial for L3 to perform resource cleanup (e.g., releasing remote proxies and pending calls).
-
-

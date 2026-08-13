@@ -4,7 +4,8 @@ import type { EndpointMeta, PlatformMeta } from "@/types/identity";
 import type { DispatchCallOptions } from "./engine";
 import { PendingCallManager } from "./pending-call-manager";
 import { PayloadProcessor } from "./payload/payload-processor";
-import { ok, okAsync } from "neverthrow";
+import { Result } from "better-result";
+const { ok } = Result;
 
 describe("CallProcessor", () => {
   let processorState: CallProcessor.Runtime;
@@ -15,7 +16,7 @@ describe("CallProcessor", () => {
 
     deps = {
       nextMessageId: vi.fn(() => 1),
-      resolveConnection: vi.fn(() => okAsync(null)),
+      resolveConnection: vi.fn(() => Promise.resolve(ok(null))),
       sendMessage: vi.fn(() => ok([])),
       payloadProcessor: PayloadProcessor.create({} as any, {} as any),
       pendingCallManager: PendingCallManager.create(),

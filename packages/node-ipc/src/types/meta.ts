@@ -1,4 +1,4 @@
-import type { NodeIpcSocketAddress } from "./address";
+import type { NodeIpcSocketAddress } from "./address.js";
 
 export type NodeIpcDaemonMeta = {
   context: "node-ipc-daemon";

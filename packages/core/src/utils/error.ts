@@ -1,9 +1,9 @@
-import type { SerializedError } from "@/types/message";
+import type { SerializedError } from "../types/message.js";
 import {
   NexusError,
   type NexusErrorCode,
   type NexusErrorOptions,
-} from "@/errors/nexus-error";
+} from "../errors/nexus-error.js";
 
 /**
  * Creates a serializable representation of an error object.
