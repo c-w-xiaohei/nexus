@@ -6,6 +6,7 @@ This Nexus State guide covers `@nexus-js/react`.
 
 ```ts
 import {
+  createNexusScope,
   createRemoteStoreScope,
   NexusProvider,
   useNexus,
@@ -37,21 +38,45 @@ function RuntimeName() {
 
 It fails fast outside `NexusProvider` on purpose.
 
+## `createNexusScope()`
+
+Use a model-bound React scope when the same application contains multiple adapter models and the provider, hooks, store definitions, and targeting options must stay associated at compile time:
+
+```tsx
+import { createNexusScope } from "@nexus-js/react";
+import {
+  usingBackgroundScript,
+  type ChromeAdapterModel,
+} from "@nexus-js/chrome";
+
+const ChromeNexus = createNexusScope<ChromeAdapterModel>();
+const chromeNexus = usingBackgroundScript();
+
+function ChromeApp() {
+  return (
+    <ChromeNexus.NexusProvider nexus={chromeNexus}>
+      <App />
+    </ChromeNexus.NexusProvider>
+  );
+}
+```
+
+Use `ChromeNexus.useNexus()`, `ChromeNexus.useRemoteStore()`, and `ChromeNexus.createRemoteStoreScope()` inside that tree. The default `NexusProvider` and hooks remain the simpler path when the application does not need model-specific React context typing.
+
 ## `createRemoteStoreScope()`
 
 Recommended React pattern for shared remote stores. Declare the store connection once near the subtree that needs it, then consume selector, actions, status, or the raw remote result from children.
 
 ```tsx
 import { createRemoteStoreScope } from "@nexus-js/react";
+import { chromeTarget } from "@nexus-js/chrome";
 import { counterStore } from "./counter-store";
 
 const CounterScope = createRemoteStoreScope(counterStore);
 
 function CounterPanel() {
   return (
-    <CounterScope.Provider
-      options={{ target: { descriptor: { context: "background" } } }}
-    >
+    <CounterScope.Provider options={{ target: chromeTarget.background() }}>
       <CounterButton />
       <CounterStatus />
     </CounterScope.Provider>
@@ -97,9 +122,11 @@ Use `reconnectKey` for an external committed session or lifecycle revision, such
 Both controls trigger a replacement acquisition attempt. They do not revive an old handle, replay store actions, retry failed business actions, or guarantee that the remote target is available or that the attempt succeeds. The `reconnect` function reference is stable; the `UseRemoteStoreResult` object is not promised to be stable.
 
 ```tsx
+import { chromeTarget } from "@nexus-js/chrome";
+
 function CounterRemote({ sessionEpoch }: { sessionEpoch: number }) {
   const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
     reconnectKey: sessionEpoch,
   });
 
@@ -131,6 +158,8 @@ type UseRemoteStoreResult<TState, TActions> = {
 With a scope, branch on `useStatus()`, `useActions()`, and `useError()` in the leaf components that render lifecycle UI.
 
 ```tsx
+import { chromeTarget } from "@nexus-js/chrome";
+
 function CounterView() {
   const count = CounterScope.useSelector((state) => state.count, {
     fallback: 0,
@@ -160,7 +189,7 @@ For direct low-level usage, branch on `status`, `store`, and `error` from `useRe
 ```tsx
 function CounterView() {
   const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
   });
 
   const count = useStoreSelector(remote, (state) => state.count, {
@@ -190,9 +219,11 @@ function CounterView() {
 Nexus State selector hook on top of `useSyncExternalStore`.
 
 ```tsx
+import { chromeTarget } from "@nexus-js/chrome";
+
 function CounterValue() {
   const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
   });
   const count = useStoreSelector(remote, (state) => state.count, {
     fallback: 0,
@@ -226,10 +257,11 @@ For same-target session loss, do not assume automatic retry or rebuild from the 
 
 ### Same-target session loss pattern (explicit reacquire)
 
-If your app must stay on the same target (for example `{ context: "background" }`) after a restart/session-loss event, reacquire by changing the external `reconnectKey` revision or calling `reconnect()` from an interaction.
+If your app must stay on the same target (for example `chromeTarget.background()`) after a restart/session-loss event, reacquire by changing the external `reconnectKey` revision or calling `reconnect()` from an interaction.
 
 ```tsx
 import { useEffect, useState } from "react";
+import { chromeTarget } from "@nexus-js/chrome";
 
 // Application- or adapter-owned subscription, not a Nexus export.
 declare function observeBackgroundSession(
@@ -250,7 +282,7 @@ function CounterBoundary() {
 
 function CounterRemote({ reconnectKey }: { reconnectKey: number }) {
   const remote = useRemoteStore(counterStore, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
     reconnectKey,
   });
 
@@ -282,13 +314,13 @@ This preserves the raw core rule: an old handle is terminal, while React provide
 ## Example
 
 ```tsx
+import { chromeTarget } from "@nexus-js/chrome";
+
 const CounterScope = createRemoteStoreScope(counterStore);
 
 function Counter() {
   return (
-    <CounterScope.Provider
-      options={{ target: { descriptor: { context: "background" } } }}
-    >
+    <CounterScope.Provider options={{ target: chromeTarget.background() }}>
       <CounterButton />
     </CounterScope.Provider>
   );

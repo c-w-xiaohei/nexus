@@ -1,39 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { Endpoint } from "./endpoint";
 import { Nexus, nexus } from "../nexus";
-import { DecoratorRegistry } from "../registry";
 
 const decoratorSnapshotOf = (instance: Nexus) =>
   (instance as any).decoratorRegistry.snapshot();
 
 describe("@Endpoint", () => {
-  it("accepts named descriptor in connectTo", () => {
-    DecoratorRegistry.clear();
-    const instance = new Nexus();
-
-    const decorator = instance.Endpoint({
-      meta: { context: "background" },
-      connectTo: [{ descriptor: "background-main" }],
-    });
-
-    class EndpointImpl {}
-    decorator(
-      EndpointImpl as never,
-      { kind: "class" } as ClassDecoratorContext,
-    );
-
-    expect(decoratorSnapshotOf(instance).endpoint).not.toBeNull();
-    expect(
-      decoratorSnapshotOf(instance).endpoint?.options.connectTo?.[0]
-        ?.descriptor,
-    ).toBe("background-main");
-  });
-
-  it("attaches validation error as cause", () => {
+  it("attaches schema validation error as cause for invalid endpoint config", () => {
     expect(() => {
       Endpoint({
-        meta: { context: "background" },
-        connectTo: [{} as never],
+        meta: null as never,
       });
     }).toThrowError(
       expect.objectContaining({
@@ -42,20 +18,17 @@ describe("@Endpoint", () => {
     );
   });
 
-  it("rejects connectTo targets without descriptor", () => {
-    try {
-      Endpoint({
-        meta: { context: "background" },
-        connectTo: [{ matcher: "is-background" } as never],
-      });
-      throw new Error("should have thrown");
-    } catch (error) {
-      expect((error as Error).message).toContain("Invalid options");
-      expect(
-        (error as Error & { cause?: { message?: string } }).cause?.message,
-      ).toContain("Schema validation failed");
-    }
-  });
+  it.each([null, [], new Date()])(
+    "rejects non-plain defaultTarget %p before cloning",
+    (defaultTarget) => {
+      expect(() =>
+        Endpoint({
+          meta: { context: "invalid" },
+          defaultTarget: defaultTarget as never,
+        }),
+      ).toThrow(expect.objectContaining({ code: "E_USAGE_INVALID" }));
+    },
+  );
 
   it("registers endpoint with the decorator expression Nexus instance", () => {
     const first = new Nexus();
@@ -81,6 +54,5 @@ describe("@Endpoint", () => {
     );
 
     expect(decoratorSnapshotOf(nexus).endpoint?.targetClass).toBe(EndpointImpl);
-    expect(DecoratorRegistry.snapshot().endpoint).toBeNull();
   });
 });

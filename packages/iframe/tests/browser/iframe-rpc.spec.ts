@@ -7,7 +7,7 @@ interface BrowserHarness {
     parentCalls: Array<{ frameId: string; value: string }>;
     childCalls: Array<{ frameId: string; value: string }>;
     binaryDataEnvelopes: number;
-    readyFrames: string[];
+    loadedFrames: string[];
   };
   reloadFrame(frameId: string): Promise<void>;
 }
@@ -18,11 +18,13 @@ interface ChildHarness {
   makeUnresponsive(): void;
 }
 
-async function waitForReadyFrames(page: Page) {
+async function waitForLoadedFrames(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(() =>
-        (window as unknown as BrowserHarness).getTelemetry().readyFrames.sort(),
+        (window as unknown as BrowserHarness)
+          .getTelemetry()
+          .loadedFrames.sort(),
       ),
     )
     .toEqual(["alpha", "beta"]);
@@ -112,7 +114,7 @@ test("calls a child Nexus service through a real iframe boundary", async ({
   await page.goto("/parent.html");
 
   await expect.poll(() => page.evaluate(() => window.frames.length)).toBe(2);
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await expect(callChildEcho(page, "alpha", "hello")).resolves.toBe(
     "child:alpha:hello",
@@ -139,7 +141,7 @@ test("uses binary ArrayBuffer transport packets across cross-origin iframe RPC",
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   const childBefore = await getChildTelemetry(page, "alpha");
   await expect(
@@ -164,7 +166,7 @@ test("child iframe calls a parent Nexus service with frame routing metadata", as
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await expect(callParentEcho(page, "alpha", "from-child")).resolves.toBe(
     "parent:alpha:from-child",
@@ -186,7 +188,7 @@ test("rejects wrong channel and nonce connect messages without accepting spoofed
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await postSpoofedConnectFromChild(page, "alpha", {
     channel: "wrong-channel",
@@ -194,7 +196,7 @@ test("rejects wrong channel and nonce connect messages without accepting spoofed
   await postSpoofedConnectFromChild(page, "alpha", { nonce: "wrong-nonce" });
 
   await expect(
-    getTelemetry(page).then((telemetry) => telemetry.readyFrames.sort()),
+    getTelemetry(page).then((telemetry) => telemetry.loadedFrames.sort()),
   ).resolves.toEqual(["alpha", "beta"]);
   await expect(
     getTelemetry(page).then((telemetry) => telemetry.parentCalls),
@@ -209,7 +211,7 @@ test("reconnects to a reloaded iframe and keeps routing isolated", async ({
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await expect(callChildEcho(page, "alpha", "before-reload")).resolves.toBe(
     "child:alpha:before-reload",
@@ -220,7 +222,7 @@ test("reconnects to a reloaded iframe and keeps routing isolated", async ({
   );
 
   await expect
-    .poll(() => getTelemetry(page).then((telemetry) => telemetry.readyFrames))
+    .poll(() => getTelemetry(page).then((telemetry) => telemetry.loadedFrames))
     .toContain("alpha");
 
   await expect
@@ -241,7 +243,7 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await expect(callCachedChildEcho(page, "alpha", "before-hang")).resolves.toBe(
     "child:alpha:before-hang",
@@ -264,7 +266,7 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
     (window as unknown as BrowserHarness).reloadFrame("alpha"),
   );
   await expect
-    .poll(() => getTelemetry(page).then((telemetry) => telemetry.readyFrames))
+    .poll(() => getTelemetry(page).then((telemetry) => telemetry.loadedFrames))
     .toContain("alpha");
 
   await expect
@@ -280,7 +282,7 @@ test("detects an unresponsive iframe through virtual port heartbeat and reconnec
 
 test("isolates cross-origin iframe routes by frame id", async ({ page }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await expect(callChildEcho(page, "alpha", "route")).resolves.toBe(
     "child:alpha:route",
@@ -300,7 +302,7 @@ test("documents native browser drop for wrong targetOrigin messages", async ({
   page,
 }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   await page.evaluate(() => {
     window.postMessage(
@@ -332,7 +334,7 @@ test("documents native browser drop for wrong targetOrigin messages", async ({
 
 test("ignores messages from a non-iframe source", async ({ page }) => {
   await page.goto("/parent.html");
-  await waitForReadyFrames(page);
+  await waitForLoadedFrames(page);
 
   const before = await callChildEcho(page, "alpha", "before");
   expect(before).toBe("child:alpha:before");

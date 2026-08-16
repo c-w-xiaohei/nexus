@@ -23,12 +23,12 @@ mock.nexus.configure({
   providers: [provider],
   endpoint: {
     meta: { context: "background" },
-    connectTo: [{ descriptor: { context: "background" } }],
+    defaultTarget: { context: "background" },
   },
 });
 
 const remote = await connectNexusStore(mock.nexus, counterStore, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 
 expect(store.getState()).toEqual(remote.getState());

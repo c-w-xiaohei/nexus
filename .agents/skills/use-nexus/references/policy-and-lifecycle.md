@@ -8,10 +8,8 @@ Keep `configure(...)` in main/bootstrap/runtime modules. Service modules should 
 nexus.configure({
   endpoint: endpointConfig,
   policy: {
-    canConnect({ remoteIdentity, platform }) {
-      return (
-        platform.authenticated === true || remoteIdentity.context === "trusted"
-      );
+    canConnect({ remoteIdentity }) {
+      return remoteIdentity.context === "trusted";
     },
     canCall({ serviceName, operation }) {
       return (

@@ -1,5 +1,4 @@
 export { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory.js";
-export { NodeIpcMatchers } from "./matchers.js";
 export { NodeIpcError } from "./errors.js";
 export { BinaryFrame } from "./framing/binary-frame.js";
 export { UnixSocketPort } from "./ports/unix-socket-port.js";
@@ -14,8 +13,11 @@ export type {
 export type {
   NodeIpcClientMeta,
   NodeIpcDaemonMeta,
-  NodeIpcPlatformMeta,
-  NodeIpcEndpointMeta,
+  NodeIpcConnectionMeta,
+  NodeIpcObservedConnectionFacts,
+  NodeIpcContextMeta,
+  NodeIpcConnectionTarget,
+  NodeIpcAdapterModel,
 } from "./types/meta.js";
 export type {
   NodeIpcClientConfigOptions,

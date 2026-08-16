@@ -1,65 +1,70 @@
-import type { Target, ServiceProvider } from "../api/types/config.js";
-import type { NexusInstance } from "../api/types/index.js";
-import { Token } from "../api/token.js";
+import type { ServiceProvider } from "@/api/types/config";
+import type { NexusInstance } from "@/api/types";
+import { Token } from "@/api/token";
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
   SERVICE_ON_DISCONNECT,
   type ServiceInvocationContext,
-} from "../service/service-invocation-hooks.js";
+} from "@/service/service-invocation-hooks";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
   RELEASE_PROXY_SYMBOL,
-} from "../types/symbols.js";
-import { isRefWrapper } from "../types/ref-wrapper.js";
-import type { PlatformMeta, EndpointMeta } from "../types/identity.js";
+} from "@/types/symbols";
+import { isRefWrapper } from "@/types/ref-wrapper";
+import type {
+  AdapterModel,
+  ConnectionTargetOf,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "@/types/adapter-model";
 import {
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
-} from "../state/errors.js";
+} from "@/state/errors";
 import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
-} from "../state/types.js";
+} from "@/state/types";
 import type {
   SnapshotEnvelope,
   TerminalEnvelope,
   TerminalReason,
-} from "../state/protocol.js";
+} from "@/state/protocol";
 
-export interface RelayBaseContext<U, P> {
-  origin: U;
-  relay: U;
-  platform: P;
+export interface RelayBaseContext<M extends AdapterModel> {
+  origin: ContextMetaOf<M>;
+  relay: ContextMetaOf<M>;
+  connection: ConnectionMetaOf<M>;
   tokenId: string;
 }
 
-export interface RelayServiceCallContext<U, P> extends RelayBaseContext<U, P> {
+export interface RelayServiceCallContext<
+  M extends AdapterModel,
+> extends RelayBaseContext<M> {
   path: (string | number)[];
   operation: "GET" | "SET" | "APPLY";
 }
 
-export type RelayStoreSubscribeContext<U, P> = RelayBaseContext<U, P>;
+export type RelayStoreSubscribeContext<M extends AdapterModel> =
+  RelayBaseContext<M>;
 
-export interface RelayStoreDispatchContext<U, P> extends RelayBaseContext<
-  U,
-  P
-> {
+export interface RelayStoreDispatchContext<
+  M extends AdapterModel,
+> extends RelayBaseContext<M> {
   action: string;
 }
 
 export interface RelayServiceOptions<
-  DownstreamU extends EndpointMeta,
-  DownstreamP extends PlatformMeta,
-  UpstreamU extends EndpointMeta,
-  UpstreamP extends PlatformMeta,
+  DownstreamM extends AdapterModel,
+  UpstreamM extends AdapterModel,
 > {
-  forwardThrough: NexusInstance<UpstreamU, UpstreamP>;
-  forwardTarget: Target<UpstreamU, string, string>;
+  forwardThrough: NexusInstance<UpstreamM>;
+  forwardTarget: ConnectionTargetOf<UpstreamM>;
   policy?: {
     canCall?(
-      context: RelayServiceCallContext<DownstreamU, DownstreamP>,
+      context: RelayServiceCallContext<DownstreamM>,
     ): boolean | Promise<boolean>;
   };
   payload?: {
@@ -68,19 +73,17 @@ export interface RelayServiceOptions<
 }
 
 export interface RelayNexusStoreOptions<
-  DownstreamU extends EndpointMeta,
-  DownstreamP extends PlatformMeta,
-  UpstreamU extends EndpointMeta,
-  UpstreamP extends PlatformMeta,
+  DownstreamM extends AdapterModel,
+  UpstreamM extends AdapterModel,
 > {
-  forwardThrough: NexusInstance<UpstreamU, UpstreamP>;
-  forwardTarget: Target<UpstreamU, string, string>;
+  forwardThrough: NexusInstance<UpstreamM>;
+  forwardTarget: ConnectionTargetOf<UpstreamM>;
   policy?: {
     canSubscribe?(
-      context: RelayStoreSubscribeContext<DownstreamU, DownstreamP>,
+      context: RelayStoreSubscribeContext<DownstreamM>,
     ): boolean | Promise<boolean>;
     canDispatch?(
-      context: RelayStoreDispatchContext<DownstreamU, DownstreamP>,
+      context: RelayStoreDispatchContext<DownstreamM>,
     ): boolean | Promise<boolean>;
   };
 }
@@ -265,15 +268,13 @@ const cloneState = <TState extends object>(state: TState): TState => {
 
 export const relayService = <
   TService extends object,
-  DownstreamU extends EndpointMeta,
-  DownstreamP extends PlatformMeta,
-  UpstreamU extends EndpointMeta,
-  UpstreamP extends PlatformMeta,
+  DownstreamM extends AdapterModel,
+  UpstreamM extends AdapterModel,
 >(
-  token: Token<TService, DownstreamU> | Token<TService>,
-  options: RelayServiceOptions<DownstreamU, DownstreamP, UpstreamU, UpstreamP>,
-): ServiceProvider<TService, DownstreamU, DownstreamP> => {
-  const upstreamToken = new Token<TService, UpstreamU>(token.id);
+  token: Token<TService, DownstreamM> | Token<TService>,
+  options: RelayServiceOptions<DownstreamM, UpstreamM>,
+): ServiceProvider<TService, DownstreamM> => {
+  const upstreamToken = new Token<TService, UpstreamM>(token.id);
   let activeInvocation: ServiceInvocationContext | undefined;
 
   const createPathProxy = (path: (string | number)[]): unknown =>
@@ -310,15 +311,14 @@ export const relayService = <
           );
         }
 
-        const policyContext: RelayServiceCallContext<DownstreamU, DownstreamP> =
-          {
-            origin: invocation.sourceIdentity as DownstreamU,
-            relay: invocation.localIdentity as DownstreamU,
-            platform: invocation.platform as DownstreamP,
-            tokenId: token.id,
-            path,
-            operation: "APPLY",
-          };
+        const policyContext: RelayServiceCallContext<DownstreamM> = {
+          origin: invocation.sourceIdentity as ContextMetaOf<DownstreamM>,
+          relay: invocation.localIdentity as ContextMetaOf<DownstreamM>,
+          connection: invocation.platform as ConnectionMetaOf<DownstreamM>,
+          tokenId: token.id,
+          path,
+          operation: "APPLY",
+        };
 
         const allowed = await options.policy?.canCall?.(policyContext);
         if (allowed === false) {
@@ -337,8 +337,8 @@ export const relayService = <
 
         try {
           const upstream = await options.forwardThrough.create(upstreamToken, {
-            target: options.forwardTarget as any,
-          } as any);
+            target: options.forwardTarget,
+          });
           let cursor: any = upstream;
           for (const segment of path) {
             cursor = cursor[segment];
@@ -397,28 +397,20 @@ export const relayService = <
 export const relayNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  DownstreamU extends EndpointMeta,
-  DownstreamP extends PlatformMeta,
-  UpstreamU extends EndpointMeta,
-  UpstreamP extends PlatformMeta,
+  DownstreamM extends AdapterModel,
+  UpstreamM extends AdapterModel,
 >(
   definition:
-    | NexusStoreDefinition<TState, TActions, DownstreamU>
+    | NexusStoreDefinition<TState, TActions, DownstreamM>
     | NexusStoreDefinition<TState, TActions>,
-  options: RelayNexusStoreOptions<
-    DownstreamU,
-    DownstreamP,
-    UpstreamU,
-    UpstreamP
-  >,
+  options: RelayNexusStoreOptions<DownstreamM, UpstreamM>,
 ): ServiceProvider<
   NexusStoreServiceContract<TState, TActions>,
-  DownstreamU,
-  DownstreamP
+  DownstreamM
 > => {
   const upstreamToken = new Token<
     NexusStoreServiceContract<TState, TActions>,
-    UpstreamU
+    UpstreamM
   >(definition.token.id);
   const relayStoreInstanceId = createRelaySessionId();
   let downstreamVersion = 0;
@@ -593,8 +585,8 @@ export const relayNexusStore = <
     upstreamHandlePromise = (async () => {
       try {
         const service = (await options.forwardThrough.create(upstreamToken, {
-          target: options.forwardTarget as any,
-        } as any)) as UpstreamStoreHandle<TState, TActions>["service"];
+          target: options.forwardTarget,
+        })) as UpstreamStoreHandle<TState, TActions>["service"];
 
         service[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?.(() => {
           emitTerminal("source-disconnected");
@@ -624,10 +616,10 @@ export const relayNexusStore = <
 
   const buildBaseContext = (
     invocationContext: ServiceInvocationContext,
-  ): RelayBaseContext<DownstreamU, DownstreamP> => ({
-    origin: invocationContext.sourceIdentity as DownstreamU,
-    relay: invocationContext.localIdentity as DownstreamU,
-    platform: invocationContext.platform as DownstreamP,
+  ): RelayBaseContext<DownstreamM> => ({
+    origin: invocationContext.sourceIdentity as ContextMetaOf<DownstreamM>,
+    relay: invocationContext.localIdentity as ContextMetaOf<DownstreamM>,
+    connection: invocationContext.platform as ConnectionMetaOf<DownstreamM>,
     tokenId: definition.token.id,
   });
 
@@ -777,7 +769,10 @@ export const relayNexusStore = <
   };
 
   return {
-    token: definition.token,
+    token: definition.token as Token<
+      NexusStoreServiceContract<TState, TActions>,
+      DownstreamM
+    >,
     service,
   };
 };

@@ -13,6 +13,7 @@ import { createMockPortPair } from "@/utils/test-utils";
 import type { LogicalConnectionHandlers } from "./types";
 import { JsonSerializer } from "@/transport/serializers/json-serializer";
 import type { ConnectionContext } from "@/types/identity";
+import type { AdapterModel } from "@/types/adapter-model";
 import {
   NexusMessageType,
   type ApplyMessage,
@@ -25,28 +26,28 @@ interface TestUserMeta {
   context: string;
   id: number;
 }
-interface TestPlatformMeta {
+interface TestConnectionMeta {
   from: string;
+}
+
+interface TestAdapterModel extends AdapterModel {
+  contextMeta: TestUserMeta;
+  connectionMeta: TestConnectionMeta;
+  connectionTarget: TestUserMeta;
 }
 
 describe("LogicalConnection", () => {
   // Test Data
   const clientMeta: TestUserMeta = { context: "client", id: 2 };
   const hostMeta: TestUserMeta = { context: "host", id: 1 };
-  const clientPlatformMeta: TestPlatformMeta = { from: "client" };
-  const hostPlatformMeta: TestPlatformMeta = { from: "host" };
+  const clientConnectionMeta: TestConnectionMeta = { from: "client" };
+  const hostConnectionMeta: TestConnectionMeta = { from: "host" };
 
   // Mocks and Instances
-  let clientConnection: LogicalConnection<TestUserMeta, TestPlatformMeta>;
-  let hostConnection: LogicalConnection<TestUserMeta, TestPlatformMeta>;
-  let mockClientHandlers: LogicalConnectionHandlers<
-    TestUserMeta,
-    TestPlatformMeta
-  >;
-  let mockHostHandlers: LogicalConnectionHandlers<
-    TestUserMeta,
-    TestPlatformMeta
-  >;
+  let clientConnection: LogicalConnection<TestAdapterModel>;
+  let hostConnection: LogicalConnection<TestAdapterModel>;
+  let mockClientHandlers: LogicalConnectionHandlers<TestAdapterModel>;
+  let mockHostHandlers: LogicalConnectionHandlers<TestAdapterModel>;
 
   beforeEach(() => {
     const [clientPort, hostPort] = createMockPortPair();
@@ -104,7 +105,8 @@ describe("LogicalConnection", () => {
       {
         connectionId: "conn-client",
         localEndpointMeta: clientMeta,
-        platformMetadata: hostPlatformMeta, // Client gets host's platform meta
+        connectionMeta: hostConnectionMeta, // Client gets host's connection meta
+        direction: "outgoing",
         nextMessageId,
       },
     );
@@ -115,7 +117,8 @@ describe("LogicalConnection", () => {
       {
         connectionId: "conn-host",
         localEndpointMeta: hostMeta,
-        platformMetadata: clientPlatformMeta, // Host gets client's platform meta
+        connectionMeta: clientConnectionMeta, // Host gets client's connection meta
+        direction: "incoming",
         nextMessageId,
       },
     );
@@ -123,6 +126,23 @@ describe("LogicalConnection", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("preserves the configured connection direction", () => {
+    expect(clientConnection.direction).toBe("outgoing");
+    expect(hostConnection.direction).toBe("incoming");
+  });
+
+  it("freezes a shallow connection metadata snapshot", () => {
+    hostConnectionMeta.from = "mutated";
+
+    expect(clientConnection.context.connection).toEqual({ from: "host" });
+    expect(Object.isFrozen(clientConnection.context.connection)).toBe(true);
+    expect(() => {
+      (clientConnection.context.connection as { from: string }).from =
+        "replaced";
+    }).toThrow(TypeError);
+    expect(clientConnection.context.connection.from).toBe("host");
   });
 
   describe("Successful Handshake (A1)", () => {
@@ -136,15 +156,15 @@ describe("LogicalConnection", () => {
       // Assert: The full handshake completes successfully
       await vi.waitFor(() => {
         // 1. Host verifies the client
-        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
+        expect(mockHostHandlers.verify).toHaveBeenCalled();
         expect(mockHostHandlers.verify).toHaveBeenCalledWith(
           clientMeta,
-          expect.objectContaining<Partial<ConnectionContext<TestPlatformMeta>>>(
-            {
-              platform: clientPlatformMeta,
-              connectionId: "conn-host",
-            },
-          ),
+          expect.objectContaining<
+            Partial<ConnectionContext<TestConnectionMeta>>
+          >({
+            connection: clientConnectionMeta,
+            connectionId: "conn-host",
+          }),
         );
       });
 
@@ -169,11 +189,373 @@ describe("LogicalConnection", () => {
         // 4. Remote identities are correctly stored
         expect(clientConnection.remoteIdentity).toEqual(hostMeta);
         expect(hostConnection.remoteIdentity).toEqual(clientMeta);
+        expect(clientConnection.remoteProviders.size).toBe(0);
+        expect(hostConnection.remoteProviders.size).toBe(0);
+      });
+    });
+
+    it("makes the active side ready synchronously after sending READY", async () => {
+      const sent: NexusMessage[] = [];
+      const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+        onVerified: vi.fn(),
+        onClosed: vi.fn(),
+        onMessage: vi.fn(),
+        onIdentityUpdated: vi.fn(),
+        verify: vi.fn().mockResolvedValue(true),
+      };
+      const connection = new LogicalConnection(
+        {
+          sendMessage: vi.fn((message: NexusMessage) => {
+            sent.push(message);
+            return { isErr: () => false };
+          }),
+          close: vi.fn(() => ({ isErr: () => false })),
+        } as unknown as PortProcessor.Context,
+        handlers,
+        {
+          connectionId: "conn-active-ready",
+          connectionMeta: hostConnectionMeta,
+          direction: "outgoing",
+          localEndpointMeta: clientMeta,
+          nextMessageId: () => 1,
+        },
+      );
+
+      expect(connection.initiateHandshake(clientMeta).isOk()).toBe(true);
+      await connection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: 1,
+        metadata: hostMeta,
+        capabilities: ["provider-catalog-v1"],
+      });
+
+      expect(sent).toContainEqual(
+        expect.objectContaining({ type: NexusMessageType.HANDSHAKE_READY }),
+      );
+      expect(connection.isReady()).toBe(true);
+    });
+
+    it("merges authorized handshake catalogs monotonically", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(true);
+      expect(clientConnection.initiateHandshake(clientMeta).isOk()).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(clientConnection.isReady()).toBe(true);
+        expect(hostConnection.isReady()).toBe(true);
+      });
+
+      await clientConnection.safeHandleMessage({
+        type: NexusMessageType.PROVIDER_AVAILABLE,
+        id: null,
+        providers: ["service.a", "service.a", "service.b"],
+      });
+      await clientConnection.safeHandleMessage({
+        type: NexusMessageType.PROVIDER_AVAILABLE,
+        id: null,
+        providers: ["service.b"],
+      });
+
+      expect(clientConnection.remoteProviders).toEqual(
+        new Set(["service.a", "service.b"]),
+      );
+    });
+
+    it("flushes providers registered at each handshake phase and after readiness", async () => {
+      vi.useFakeTimers();
+      const sent: NexusMessage[] = [];
+      const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+        onVerified: vi.fn(),
+        onClosed: vi.fn(),
+        onMessage: vi.fn(),
+        onIdentityUpdated: vi.fn(),
+        verify: vi.fn().mockResolvedValue(true),
+      };
+      const createConnection = () =>
+        new LogicalConnection(
+          {
+            sendMessage: vi.fn((message: NexusMessage) => {
+              sent.push(message);
+              return { isErr: () => false };
+            }),
+            close: vi.fn(() => ({ isErr: () => false })),
+          } as unknown as PortProcessor.Context,
+          handlers,
+          {
+            connectionId: "conn-phase",
+            connectionMeta: hostConnectionMeta,
+            direction: "outgoing",
+            localEndpointMeta: clientMeta,
+            nextMessageId: () => 1,
+          },
+        );
+
+      try {
+        const reqBeforeAck = createConnection();
+        reqBeforeAck.initiateHandshake(clientMeta);
+        reqBeforeAck.publishProviders(["req.provider"]);
+        await reqBeforeAck.safeHandleMessage({
+          type: NexusMessageType.HANDSHAKE_ACK,
+          id: 1,
+          metadata: hostMeta,
+          capabilities: ["provider-catalog-v1"],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sent).toContainEqual(
+          expect.objectContaining({
+            type: NexusMessageType.PROVIDER_AVAILABLE,
+            providers: ["req.provider"],
+          }),
+        );
+
+        sent.length = 0;
+        const ackBeforeReady = new LogicalConnection(
+          {
+            sendMessage: vi.fn((message: NexusMessage) => {
+              sent.push(message);
+              return { isErr: () => false };
+            }),
+            close: vi.fn(() => ({ isErr: () => false })),
+          } as unknown as PortProcessor.Context,
+          handlers,
+          {
+            connectionId: "conn-ack-phase",
+            connectionMeta: hostConnectionMeta,
+            direction: "incoming",
+            localEndpointMeta: hostMeta,
+            nextMessageId: () => 1,
+          },
+        );
+        await ackBeforeReady.safeHandleMessage({
+          type: NexusMessageType.HANDSHAKE_REQ,
+          id: 1,
+          metadata: clientMeta,
+          capabilities: ["provider-catalog-v1"],
+        });
+        ackBeforeReady.publishProviders(["ack.provider"]);
+        await ackBeforeReady.safeHandleMessage({
+          type: NexusMessageType.HANDSHAKE_READY,
+          id: 1,
+          capabilities: ["provider-catalog-v1"],
+        });
+        expect(sent).toContainEqual(
+          expect.objectContaining({
+            type: NexusMessageType.PROVIDER_AVAILABLE,
+            providers: ["ack.provider"],
+          }),
+        );
+
+        sent.length = 0;
+        expect(reqBeforeAck.publishProviders(["ready.provider"]).isOk()).toBe(
+          true,
+        );
+        expect(sent).toEqual([
+          expect.objectContaining({
+            type: NexusMessageType.PROVIDER_AVAILABLE,
+            providers: ["ready.provider"],
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("closes before verification when a queued provider publication fails", async () => {
+      const sendMessage = vi
+        .fn()
+        .mockReturnValueOnce({ isErr: () => false })
+        .mockReturnValueOnce({
+          isErr: () => true,
+          error: new Error("provider publication failed"),
+        });
+      const portProcessor = {
+        sendMessage,
+        close: vi.fn().mockReturnValue({ isErr: () => false }),
+      } as unknown as PortProcessor.Context;
+      const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+        onVerified: vi.fn(),
+        onClosed: vi.fn(),
+        onMessage: vi.fn(),
+        onIdentityUpdated: vi.fn(),
+        verify: vi.fn().mockResolvedValue(true),
+      };
+      const connection = new LogicalConnection(portProcessor, handlers, {
+        connectionId: "conn-publication-failure",
+        connectionMeta: hostConnectionMeta,
+        direction: "incoming",
+        localEndpointMeta: clientMeta,
+        nextMessageId: () => 1,
+      });
+
+      await connection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 1,
+        metadata: hostMeta,
+        capabilities: ["provider-catalog-v1"],
+      });
+      expect(connection.publishProviders(["service.queued"]).isOk()).toBe(true);
+
+      await connection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_READY,
+        id: 1,
+        capabilities: ["provider-catalog-v1"],
+      });
+
+      expect(connection.isReady()).toBe(false);
+      expect(handlers.onVerified).not.toHaveBeenCalled();
+      expect(handlers.onClosed).toHaveBeenCalledWith({
+        connectionId: "conn-publication-failure",
+        identity: undefined,
       });
     });
   });
 
   describe("Rejected Handshake (A2)", () => {
+    it("rejects an incompatible request before authorization or catalog publication", async () => {
+      (mockHostHandlers.verify as Mock).mockResolvedValue(false);
+
+      await hostConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 76,
+        metadata: clientMeta,
+      });
+
+      expect(mockHostHandlers.verify).not.toHaveBeenCalled();
+      expect(hostConnection.handshakeRejectionError).toMatchObject({
+        code: "E_PROTOCOL_INCOMPATIBLE",
+      });
+      expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
+    });
+
+    it("rejects an ACK from a peer without provider-catalog-v1", async () => {
+      (mockClientHandlers.verify as Mock).mockResolvedValue(false);
+
+      expect(clientConnection.initiateHandshake(clientMeta).isOk()).toBe(true);
+      await clientConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: 1,
+        metadata: hostMeta,
+      });
+
+      expect(clientConnection.handshakeRejectionError).toMatchObject({
+        code: "E_PROTOCOL_INCOMPATIBLE",
+      });
+      expect(clientConnection.isReady()).toBe(false);
+      expect(mockClientHandlers.verify).not.toHaveBeenCalled();
+      expect(mockClientHandlers.onVerified).not.toHaveBeenCalled();
+    });
+
+    it("does not disclose catalogs in incompatible REQ or ACK replies when policy denies", async () => {
+      const sentByHost: NexusMessage[] = [];
+      const sentByClient: NexusMessage[] = [];
+      const createConnection = (
+        direction: "incoming" | "outgoing",
+        sent: NexusMessage[],
+        handlers: LogicalConnectionHandlers<TestAdapterModel>,
+      ) =>
+        new LogicalConnection(
+          {
+            sendMessage: vi.fn((message: NexusMessage) => {
+              sent.push(message);
+              return { isErr: () => false };
+            }),
+            close: vi.fn(() => ({ isErr: () => false })),
+          } as unknown as PortProcessor.Context,
+          handlers,
+          {
+            connectionId: `conn-${direction}`,
+            connectionMeta: hostConnectionMeta,
+            direction,
+            localEndpointMeta: direction === "incoming" ? hostMeta : clientMeta,
+            nextMessageId: () => 1,
+            localProviders: () => ["private.service"],
+          },
+        );
+      const denyingHandlers =
+        (): LogicalConnectionHandlers<TestAdapterModel> => ({
+          onVerified: vi.fn(),
+          onClosed: vi.fn(),
+          onMessage: vi.fn(),
+          onIdentityUpdated: vi.fn(),
+          verify: vi.fn().mockResolvedValue(false),
+        });
+      const incoming = createConnection(
+        "incoming",
+        sentByHost,
+        denyingHandlers(),
+      );
+
+      await incoming.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REQ,
+        id: 1,
+        metadata: clientMeta,
+      });
+
+      expect(sentByHost).toEqual([
+        expect.objectContaining({
+          type: NexusMessageType.HANDSHAKE_REJECT,
+          error: expect.objectContaining({ code: "E_PROTOCOL_INCOMPATIBLE" }),
+        }),
+      ]);
+      expect(sentByHost).not.toContainEqual(
+        expect.objectContaining({
+          type: NexusMessageType.HANDSHAKE_ACK,
+          providers: expect.anything(),
+        }),
+      );
+
+      const outgoing = createConnection(
+        "outgoing",
+        sentByClient,
+        denyingHandlers(),
+      );
+      expect(outgoing.initiateHandshake(clientMeta).isOk()).toBe(true);
+      await outgoing.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: 1,
+        metadata: hostMeta,
+      });
+
+      expect(sentByClient).toEqual([
+        expect.objectContaining({ type: NexusMessageType.HANDSHAKE_REQ }),
+        expect.objectContaining({
+          type: NexusMessageType.HANDSHAKE_REJECT,
+          error: expect.objectContaining({ code: "E_PROTOCOL_INCOMPATIBLE" }),
+        }),
+      ]);
+      expect(sentByClient).not.toContainEqual(
+        expect.objectContaining({
+          type: NexusMessageType.HANDSHAKE_READY,
+          providers: expect.anything(),
+        }),
+      );
+    });
+
+    it("preserves a remote incompatible rejection's structured cause", async () => {
+      expect(clientConnection.initiateHandshake(clientMeta).isOk()).toBe(true);
+      await clientConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_REJECT,
+        id: 1,
+        error: {
+          name: "NexusProtocolIncompatibleError",
+          code: "E_PROTOCOL_INCOMPATIBLE",
+          message: "provider catalog missing",
+          cause: {
+            name: "VersionError",
+            code: "E_UNKNOWN",
+            message: "old peer",
+          },
+        },
+      });
+
+      expect(clientConnection.handshakeRejectionError).toMatchObject({
+        code: "E_PROTOCOL_INCOMPATIBLE",
+        cause: {
+          code: "E_UNKNOWN",
+          message: "old peer",
+        },
+      });
+    });
+
     it("should ignore passive HANDSHAKE_READY while verification is still pending", async () => {
       let resolveVerify!: (allowed: boolean) => void;
       (mockHostHandlers.verify as Mock).mockReturnValue(
@@ -186,6 +568,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 77,
         metadata: clientMeta,
+        capabilities: ["provider-catalog-v1"],
       });
 
       await vi.waitFor(() => {
@@ -195,6 +578,7 @@ describe("LogicalConnection", () => {
       const readyBeforeVerify = hostConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_READY,
         id: 77,
+        capabilities: ["provider-catalog-v1"],
       });
 
       expect(hostConnection.isReady()).toBe(false);
@@ -203,7 +587,6 @@ describe("LogicalConnection", () => {
       resolveVerify(false);
       expect((await readyBeforeVerify).isOk()).toBe(true);
       await vi.waitFor(() => {
-        expect(mockHostHandlers.verify).toHaveBeenCalledOnce();
         expect(hostConnection.isReady()).toBe(false);
         expect(mockHostHandlers.onVerified).not.toHaveBeenCalled();
       });
@@ -217,6 +600,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 88,
         metadata: clientMeta,
+        capabilities: ["provider-catalog-v1"],
       });
 
       await vi.waitFor(() => {
@@ -241,6 +625,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 99,
         metadata: clientMeta,
+        capabilities: ["provider-catalog-v1"],
       });
 
       await vi.waitFor(() => {
@@ -260,12 +645,12 @@ describe("LogicalConnection", () => {
       await vi.waitFor(() => {
         expect(mockClientHandlers.verify).toHaveBeenCalledWith(
           hostMeta,
-          expect.objectContaining<Partial<ConnectionContext<TestPlatformMeta>>>(
-            {
-              platform: hostPlatformMeta,
-              connectionId: "conn-client",
-            },
-          ),
+          expect.objectContaining<
+            Partial<ConnectionContext<TestConnectionMeta>>
+          >({
+            connection: hostConnectionMeta,
+            connectionId: "conn-client",
+          }),
         );
         expect(mockClientHandlers.onVerified).not.toHaveBeenCalled();
         expect(clientConnection.isReady()).toBe(false);
@@ -419,6 +804,7 @@ describe("LogicalConnection", () => {
         id: 444,
         metadata: clientMeta,
         assigns: assignmentMeta,
+        capabilities: ["provider-catalog-v1"],
       });
 
       expect(hostConnection.localIdentity).toEqual(hostMeta);
@@ -576,6 +962,7 @@ describe("LogicalConnection", () => {
           "conn-client",
           expectedNewIdentity,
           hostMeta, // The original identity
+          hostConnectionMeta,
         );
 
         // 2. The regular message handler is NOT called for this message type
@@ -599,12 +986,12 @@ describe("LogicalConnection", () => {
       await vi.waitFor(() => {
         expect(mockClientHandlers.verify).toHaveBeenCalledWith(
           { ...hostMeta, context: "admin" },
-          expect.objectContaining<Partial<ConnectionContext<TestPlatformMeta>>>(
-            {
-              platform: hostPlatformMeta,
-              connectionId: "conn-client",
-            },
-          ),
+          expect.objectContaining<
+            Partial<ConnectionContext<TestConnectionMeta>>
+          >({
+            connection: hostConnectionMeta,
+            connectionId: "conn-client",
+          }),
         );
         expect(clientConnection.remoteIdentity).toEqual(hostMeta);
         expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
@@ -625,7 +1012,7 @@ describe("LogicalConnection", () => {
         {
           connectionId: "conn-fresh",
           localEndpointMeta: clientMeta,
-          platformMetadata: hostPlatformMeta,
+          connectionMeta: hostConnectionMeta,
           nextMessageId: () => 1,
         },
       );
@@ -685,12 +1072,14 @@ describe("LogicalConnection", () => {
         "conn-client",
         { ...hostMeta, id: 10 },
         hostMeta,
+        hostConnectionMeta,
       );
       expect(mockClientHandlers.onIdentityUpdated).toHaveBeenNthCalledWith(
         2,
         "conn-client",
         { ...hostMeta, id: 10, context: "latest" },
         { ...hostMeta, id: 10 },
+        hostConnectionMeta,
       );
     });
 

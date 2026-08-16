@@ -25,16 +25,6 @@ export class NexusTargetingError extends NexusError {
 }
 
 /**
- * Represents a call that failed because no active connection matched the
- * provided `matcher`.
- */
-export class NexusNoMatchingConnectionError extends NexusError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, "E_TARGET_NO_MATCH", { context });
-  }
-}
-
-/**
  * Represents a remote procedure call that has timed out.
  */
 export class NexusCallTimeoutError extends NexusError {

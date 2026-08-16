@@ -38,11 +38,11 @@ usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
 });
 ```
 
-The default daemon identity is a `node-ipc-daemon` descriptor with your `appId` and optional `instance`.
+The daemon's peer identity is `NodeIpcContextMeta`; the client connects with an exact `NodeIpcConnectionTarget` containing `appId` and optional `instance`.
 
 ## 4. Configure The Client
 
-The client owns an outgoing endpoint. `connectTo` gives the client a default daemon target.
+The client owns an outgoing endpoint. `defaultTarget` gives `create` an optional default daemon address.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -51,11 +51,7 @@ import { EchoToken } from "./shared";
 
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
 });
 
 const echo = await nexus.create(EchoToken);
@@ -63,14 +59,16 @@ const echo = await nexus.create(EchoToken);
 console.log(await echo.echo("hello"));
 ```
 
-`create(EchoToken)` works when `EchoToken` has a `defaultTarget` for the daemon or when the client has exactly one `connectTo` fallback. If neither is true, Nexus fails instead of guessing. Keep an explicit target while debugging or when several daemons are reachable:
+`create(EchoToken)` uses the Token default and then client endpoint `defaultTarget`. If neither exists, it returns `E_TARGET_REQUIRED`. Keep an exact target while debugging or when several daemons are reachable:
 
 ```ts
 const echo = await nexus.create(EchoToken, {
   target: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    context: "node-ipc-daemon",
+    appId: "example-app",
   },
-  expects: "one",
+  timeout: 30_000,
+  callTimeout: 5_000,
 });
 ```
 
@@ -92,11 +90,7 @@ Client:
 ```ts
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
   authToken: process.env.NEXUS_IPC_TOKEN,
 });
 ```
@@ -105,7 +99,7 @@ Empty tokens are rejected. Wrong tokens fail before Nexus core receives the sock
 
 ## 6. Add Core Policy
 
-Use adapter pre-auth to establish `platform.authenticated`, then use core policy to make authorization decisions.
+Use adapter pre-auth to establish `connection.observed.authenticated`, then use core policy to make authorization decisions.
 
 Policy composition is a low-level bootstrap path. Ask the helper for pure config with `configure: false`, combine layers with `composeNexusConfig([...])`, then register the provider with `nexus.provide(...)`.
 
@@ -121,8 +115,8 @@ nexus.configure(
     }),
     {
       policy: {
-        canConnect({ platform }) {
-          return platform.authenticated === true;
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
         },
         canCall({ serviceName, operation }) {
           return serviceName === "example:echo" && operation === "APPLY";

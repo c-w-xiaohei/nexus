@@ -34,28 +34,26 @@ When repeated iframe calls target the same child, a TokenSpace `defaultTarget` c
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
-import type { IframePlatformMeta, IframeEndpointMeta } from "@nexus-js/iframe";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
 import type { GreetingService } from "./service-contract";
 
-const appSpace = new TokenSpace<IframeEndpointMeta, IframePlatformMeta>({
+const appSpace = new TokenSpace<IframeAdapterModel>({
   name: "iframe-demo",
 });
 
 const childServices = appSpace.space("child-services", {
   defaultTarget: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
-    },
+    context: "iframe-child",
+    appId: "iframe-demo",
+    frameId: "preview",
+    origin: "https://child.example.com",
   },
 });
 
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
 
-Child-to-parent calls can use a parent `defaultTarget`. Parent-to-one-fixed-child calls can use a child `defaultTarget`. Parent-to-many-children calls should use explicit targets or `createMulticast()`.
+Child-to-parent calls can use a parent `defaultTarget`. Parent-to-one-fixed-child calls can use a child `defaultTarget`. Parent-to-many-children can use `createMulticast` with non-empty exact targets or `selectMulticast` for a current provider snapshot. `createMulticast` supports `expects: "all"` (default) or `"stream"`, fails all acquisition if one target fails, and applies `timeout`/`signal` before calls; `selectMulticast` has no `wait`, does not connect, and may return an empty snapshot. Both settle calls without connection IDs or `from` metadata; connection IDs are not acquisition inputs, selection keys, or routing targets. `callTimeout` applies to later calls.
 
 Introductory examples should still pass explicit `target` options to `nexus.create(...)` because the resolved route is easiest to inspect and debug.
 
@@ -85,19 +83,17 @@ usingIframeParent({
 
 const greeting = await nexus.create(GreetingToken, {
   target: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
-    },
+    context: "iframe-child",
+    appId: "iframe-demo",
+    frameId: "preview",
+    origin: "https://child.example.com",
   },
 });
 
 await greeting.greet("parent");
 ```
 
-The parent helper also registers descriptors named `child` for the first frame and `child:<frameId>` for additional frames. Named descriptors are useful after setup is working, but explicit descriptors are clearer in first examples.
+The parent helper does not register named targets. Keep exact `IframeConnectionTarget` values in application code, or use a Token `defaultTarget` when one route is stable.
 
 ## Child Setup
 
@@ -170,9 +166,9 @@ Layers apply left-to-right, and later layers win for the same domain.
 - iframe `postMessage` endpoint wiring
 - virtual-port routing over `postMessage`
 - binary Nexus transport packets transferred with `ArrayBuffer` by default
-- iframe descriptors and common matchers
+- iframe exact targets and `where` predicates
 - source window, exact origin, app id, channel, and optional nonce gates
-- iframe platform metadata for policy decisions
+- iframe connection metadata for policy decisions
 
 ## What Core Still Owns
 
@@ -196,11 +192,9 @@ Compose structural configuration before the runtime bootstrap snapshot. After a 
 Config composition is domain-aware:
 
 - omitted fields keep previous layers
-- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided
-- `endpoint.connectTo: []` clears inherited connection defaults
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.defaultTarget` are whole-field replacements when explicitly provided
 - `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
 - `policy: undefined` clears inherited policy when callers intentionally need to remove it
-- `descriptors` and `matchers` merge by key; later duplicate keys win
 - `providers` replace by `token.id`; the later provider replaces both service and policy
 
 ## Security Notes

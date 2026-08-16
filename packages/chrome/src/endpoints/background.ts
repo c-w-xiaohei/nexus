@@ -1,26 +1,40 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
 import {
+  NexusEndpointCapabilityError,
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta.js";
+import type {
+  ChromeAdapterModel,
+  ChromeConnectionTarget,
+  ChromeConnectionMeta,
+} from "../types/meta.js";
 import { ChromePort } from "../ports/chrome-port.js";
+import {
+  createChromeConnectionMeta,
+  matchesChromeTarget,
+} from "./connection-meta.js";
 
 /**
  * Background script endpoint implementation
  * Handles connections from content scripts, popups, and other extension contexts
  */
-export class BackgroundEndpoint implements IEndpoint<
-  ChromeEndpointMeta,
-  ChromePlatformMeta
-> {
-  private connectHandler?: (port: IPort, meta?: ChromePlatformMeta) => void;
+export class BackgroundEndpoint implements IEndpoint<ChromeAdapterModel> {
+  private connectHandler?: (port: IPort, meta: ChromeConnectionMeta) => void;
 
   capabilities = {
     supportsTransferables: false, // Chrome extension IPC doesn't support transferables
   };
 
-  listen(onConnect: (port: IPort, meta?: ChromePlatformMeta) => void): void {
+  matchesTarget(
+    target: ChromeConnectionTarget,
+    contextMeta: ChromeAdapterModel["contextMeta"],
+    connectionMeta: ChromeConnectionMeta,
+  ): boolean {
+    return matchesChromeTarget(target, contextMeta, connectionMeta);
+  }
+
+  listen(onConnect: (port: IPort, meta: ChromeConnectionMeta) => void): void {
     try {
       this.connectHandler = onConnect;
       chrome.runtime.onConnect.addListener(this.handleConnect);
@@ -33,26 +47,41 @@ export class BackgroundEndpoint implements IEndpoint<
   }
 
   async connect(
-    target: Partial<ChromeEndpointMeta>,
-  ): Promise<[IPort, ChromePlatformMeta]> {
+    target: ChromeConnectionTarget,
+  ): Promise<{ port: IPort; connectionMeta: ChromeConnectionMeta }> {
     try {
       // Background can connect to specific content scripts
       if (
-        target.context === "content-script" &&
-        typeof target.tabId === "number"
+        target.kind === "content-frame" ||
+        target.kind === "content-document"
       ) {
         // Type assertion for accessing frameId safely
         const connectInfo: chrome.tabs.ConnectInfo = {};
-        if (typeof target.frameId === "number") {
+        if (target.kind === "content-frame") {
           connectInfo.frameId = target.frameId;
         }
+        if (target.kind === "content-document") {
+          connectInfo.documentId = target.documentId;
+        }
 
-        const port = chrome.tabs.connect(target.tabId, connectInfo);
+        let port: chrome.runtime.Port;
+        try {
+          port = chrome.tabs.connect(target.tabId, connectInfo);
+        } catch (error) {
+          if (
+            target.kind === "content-document" &&
+            isUnsupportedDocumentIdError(error)
+          ) {
+            throw new NexusEndpointCapabilityError(
+              "Chrome tabs.connect() does not support documentId targeting in this runtime.",
+              { target, originalError: error },
+            );
+          }
+          throw error;
+        }
         const chromePort = new ChromePort(port);
-        const platformMeta: ChromePlatformMeta = {
-          sender: port.sender,
-        };
-        return [chromePort, platformMeta];
+        const connectionMeta = createChromeConnectionMeta(port.sender, target);
+        return { port: chromePort, connectionMeta };
       }
 
       throw new NexusEndpointConnectError(
@@ -60,7 +89,10 @@ export class BackgroundEndpoint implements IEndpoint<
         { target },
       );
     } catch (error) {
-      if (error instanceof NexusEndpointConnectError) {
+      if (
+        error instanceof NexusEndpointConnectError ||
+        error instanceof NexusEndpointCapabilityError
+      ) {
         throw error;
       }
       throw new NexusEndpointConnectError(
@@ -74,10 +106,15 @@ export class BackgroundEndpoint implements IEndpoint<
     if (!this.connectHandler) return;
 
     const chromePort = new ChromePort(port);
-    const platformMeta: ChromePlatformMeta = {
-      sender: port.sender,
-    };
+    const connectionMeta = createChromeConnectionMeta(port.sender);
 
-    this.connectHandler(chromePort, platformMeta);
+    this.connectHandler(chromePort, connectionMeta);
   };
+}
+
+function isUnsupportedDocumentIdError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unexpected (?:property|key).*documentId|documentId.*(?:not supported|unsupported|unexpected))/i.test(
+    message,
+  );
 }

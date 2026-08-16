@@ -1,16 +1,12 @@
 import { Nexus } from "@nexus-js/core";
-import {
-  NexusProvider,
-  useRemoteStore,
-  useStoreSelector,
-} from "@nexus-js/react";
-import { usingIframeChild } from "@nexus-js/iframe";
+import { createNexusScope, useStoreSelector } from "@nexus-js/react";
+import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   APP_ID,
   HOST_ORIGIN,
-  counterStore,
+  iframeCounterStore,
   frameNonce,
   type CounterState,
 } from "./shared";
@@ -52,21 +48,23 @@ window.addEventListener = trackedAddEventListener;
 window.removeEventListener = trackedRemoveEventListener;
 
 const hostTarget = {
-  descriptor: { context: "iframe-parent", appId: APP_ID },
-  matcher: (identity: { context?: string; appId?: string }) =>
-    identity.context === "iframe-parent" && identity.appId === APP_ID,
+  context: "iframe-parent",
+  appId: APP_ID,
+  origin: HOST_ORIGIN,
 } as const;
+const hostWhere = (identity: { context?: string; appId?: string }) =>
+  identity.context === "iframe-parent" && identity.appId === APP_ID;
 
-const child = new Nexus().configure({
-  ...usingIframeChild({
-    configure: false,
-    appId: APP_ID,
-    frameId,
-    parentOrigin: HOST_ORIGIN,
-    nonce: frameNonce(frameId),
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
-    connectTo: [{ descriptor: hostTarget.descriptor }],
-  }),
+const childConfig = usingIframeChild({
+  configure: false,
+  appId: APP_ID,
+  frameId,
+  parentOrigin: HOST_ORIGIN,
+  nonce: frameNonce(frameId),
+  heartbeat: { intervalMs: 100, maxMisses: 2 },
+});
+const child = new Nexus<IframeAdapterModel>().configure({
+  ...childConfig,
 });
 
 const telemetry = {
@@ -75,18 +73,25 @@ const telemetry = {
   errors: [] as string[],
   oldHandle: null as
     | null
-    | ReturnType<typeof useRemoteStore<CounterState, any>>["store"],
+    | ReturnType<
+        typeof IframeNexusScope.useRemoteStore<CounterState, any>
+      >["store"],
 };
 
-let latestRemote: ReturnType<typeof useRemoteStore<CounterState, any>> | null =
-  null;
+const IframeNexusScope = createNexusScope<IframeAdapterModel>();
+let latestRemote: ReturnType<
+  typeof IframeNexusScope.useRemoteStore<CounterState, any>
+> | null = null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
 }
 
 function CounterApp() {
-  const remote = useRemoteStore(counterStore, { target: hostTarget });
+  const remote = IframeNexusScope.useRemoteStore(iframeCounterStore, {
+    target: hostTarget,
+    where: hostWhere,
+  });
   latestRemote = remote;
   const count = useStoreSelector(remote, (state) => state.count, {
     fallback: -1,
@@ -127,9 +132,9 @@ function mount() {
   if (root) return;
   root = createRoot(appRootElement);
   root.render(
-    <NexusProvider nexus={child}>
+    <IframeNexusScope.NexusProvider nexus={child}>
       <CounterApp />
-    </NexusProvider>,
+    </IframeNexusScope.NexusProvider>,
   );
 }
 

@@ -41,6 +41,29 @@ describe("PayloadProcessor", () => {
   });
 
   describe("safeSanitize", () => {
+    it("rolls back resources registered before a later value fails to sanitize", () => {
+      vi.mocked(resourceManager.registerLocalResource).mockRestore();
+      const existingResourceId = resourceManager.registerLocalResource(
+        {},
+        "existing-conn",
+        LocalResourceType.OBJECT,
+      );
+      const failingValue = {
+        get failure() {
+          throw new Error("cannot serialize");
+        },
+      };
+
+      const result = payloadProcessor.safeSanitize(
+        [() => {}, failingValue],
+        mockConnectionId,
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(resourceManager.countLocalResources()).toBe(1);
+      expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
+    });
+
     it("should keep primitives (string, number, boolean, null) as they are", () => {
       const result = unwrap(
         payloadProcessor.safeSanitize(

@@ -17,5 +17,13 @@ export {
 export * from "./types/meta.js";
 export * from "./endpoints/index.js";
 export * from "./factory.js";
-export * from "./matchers.js";
+export {
+  whereBackground,
+  whereContentScript,
+  whereContentScriptByOrigin,
+  whereContentScriptByUrl,
+  whereContentScriptInFrame,
+  wherePopup,
+  whereVisibleContentScript,
+} from "./where.js";
 export * from "./ports/chrome-port.js";

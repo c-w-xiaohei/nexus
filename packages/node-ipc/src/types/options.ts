@@ -1,9 +1,9 @@
-import type { NexusConfig, Target } from "@nexus-js/core";
+import type { NexusConfig } from "@nexus-js/core";
 import type {
   NodeIpcAddressResolver,
   NodeIpcSocketAddress,
 } from "./address.js";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./meta.js";
+import type { NodeIpcAdapterModel, NodeIpcConnectionTarget } from "./meta.js";
 
 export type NodeIpcDaemonOptions = {
   appId: string;
@@ -14,10 +14,7 @@ export type NodeIpcDaemonOptions = {
   authTimeoutMs?: number;
   maxAuthLineBytes?: number;
   configure?: true;
-} & Omit<
-  NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>,
-  "endpoint" | "matchers" | "descriptors"
->;
+} & Omit<NexusConfig<NodeIpcAdapterModel>, "endpoint">;
 
 export type NodeIpcDaemonConfigOptions = Omit<
   NodeIpcDaemonOptions,
@@ -32,13 +29,10 @@ export type NodeIpcClientOptions = {
   authToken?: string;
   authTimeoutMs?: number;
   maxAuthLineBytes?: number;
-  connectTo?: readonly Target<NodeIpcEndpointMeta, string, string>[];
+  defaultTarget?: NodeIpcConnectionTarget;
   resolveAddress?: NodeIpcAddressResolver;
   configure?: true;
-} & Omit<
-  NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>,
-  "endpoint" | "matchers" | "descriptors"
->;
+} & Omit<NexusConfig<NodeIpcAdapterModel>, "endpoint">;
 
 export type NodeIpcClientConfigOptions = Omit<
   NodeIpcClientOptions,

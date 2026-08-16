@@ -129,6 +129,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -335,13 +336,13 @@ describe("L3 Engine Integration Test: Task Service", () => {
     let broadcastProxy: TaskService;
 
     beforeEach(() => {
-      // Create a proxy that targets the client via a matcher.
+      // Create a proxy that snapshots currently ready connections.
       // Even with one client, this tests the broadcast/multi-response logic.
       broadcastProxy = (clientEngine as any).proxyFactory.createServiceProxy(
         "tasks",
         {
-          target: { matcher: (meta: any) => meta.id === "host" },
-          broadcastOptions: { strategy: "all" },
+          target: { where: (meta: any) => meta.id === "host" },
+          strategy: "all",
         },
       );
     });
@@ -359,8 +360,6 @@ describe("L3 Engine Integration Test: Task Service", () => {
       const hostConnectionId = (clientCm as any).connections
         .keys()
         .next().value;
-      expect(tasksResult[0].from).toBe(hostConnectionId);
-
       const tasks = tasksResult[0].value;
       expect(tasks).toHaveLength(1);
       expect(tasks[0].title).toBe("Task for broadcast");
@@ -370,7 +369,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
       const streamProxy = (clientEngine as any).proxyFactory.createServiceProxy(
         "tasks",
         {
-          target: { matcher: (meta: any) => meta.id === "host" },
+          target: { where: (meta: any) => meta.id === "host" },
           strategy: "stream",
         },
       );

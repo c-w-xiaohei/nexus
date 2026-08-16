@@ -32,11 +32,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const csApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {
-        target: {
-          matcher: (id: AppUserMeta) =>
-            id.context === "content-script" && id.issueId === "CS1",
-        },
-        expects: "one",
+        target: { context: "content-script", issueId: "CS1" },
+        where: (id: AppUserMeta, _connectionMeta) =>
+          id.context === "content-script" && id.issueId === "CS1",
       },
     );
     expect(csApi).toBeDefined();
@@ -59,11 +57,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const csApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {
-        target: {
-          matcher: (id: AppUserMeta) =>
-            id.context === "content-script" && id.issueId === "CS1",
-        },
-        expects: "one",
+        target: { context: "content-script", issueId: "CS1" },
+        where: (id: AppUserMeta, _connectionMeta) =>
+          id.context === "content-script" && id.issueId === "CS1",
       },
     );
     expect(csApi).toBeDefined();
@@ -86,11 +82,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const csApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {
-        target: {
-          matcher: (id: AppUserMeta) =>
-            id.context === "content-script" && id.issueId === "CS1",
-        },
-        expects: "one",
+        target: { context: "content-script", issueId: "CS1" },
+        where: (id: AppUserMeta, _connectionMeta) =>
+          id.context === "content-script" && id.issueId === "CS1",
       },
     );
 
@@ -104,11 +98,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const csApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {
-        target: {
-          matcher: (id: AppUserMeta) =>
-            id.context === "content-script" && id.issueId === "CS1",
-        },
-        expects: "one",
+        target: { context: "content-script", issueId: "CS1" },
+        where: (id: AppUserMeta, _connectionMeta) =>
+          id.context === "content-script" && id.issueId === "CS1",
       },
     );
 
@@ -128,9 +120,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
       ContentScriptServiceToken,
       {
         target: {
-          descriptor: { context: "content-script", issueId: "CS1" },
+          context: "content-script",
+          issueId: "CS1",
         },
-        expects: "one",
       },
     );
 
@@ -149,9 +141,9 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
       ContentScriptServiceToken,
       {
         target: {
-          descriptor: { context: "content-script", issueId: "CS1" },
+          context: "content-script",
+          issueId: "CS1",
         },
-        expects: "one",
       },
     );
     const freshProcessorProxy = await freshApi.getTimelineProcessor();
@@ -171,8 +163,8 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const oldApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {
-        target: { matcher: logicalTarget },
-        expects: "first",
+        target: { context: "content-script", issueId: "CS1" },
+        where: logicalTarget,
       },
     );
     const oldProcessorProxy = await oldApi.getTimelineProcessor();
@@ -184,8 +176,8 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
       const candidate = await world.background.nexus.create(
         ContentScriptServiceToken,
         {
-          target: { matcher: logicalTarget },
-          expects: "first",
+          target: { context: "content-script", issueId: "CS2" },
+          where: logicalTarget,
         },
       );
       await expect(candidate.getTitle()).resolves.toContain("CS2");

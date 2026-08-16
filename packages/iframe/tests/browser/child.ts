@@ -1,5 +1,5 @@
 import { Nexus, Token } from "@nexus-js/core";
-import { usingIframeChild } from "@nexus-js/iframe";
+import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 
 interface EchoService {
   echo(value: string): Promise<string>;
@@ -77,7 +77,7 @@ function trackedRemoveEventListener(
 window.addEventListener = trackedAddEventListener;
 window.removeEventListener = trackedRemoveEventListener;
 
-const child = new Nexus().configure({
+const child = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeChild({
     configure: false,
     appId: "browser-app",
@@ -85,9 +85,6 @@ const child = new Nexus().configure({
     parentOrigin: "http://127.0.0.1:3210",
     nonce: `browser-nonce-${frameId}`,
     heartbeat: { intervalMs: 100, maxMisses: 2 },
-    connectTo: [
-      { descriptor: { context: "iframe-parent", appId: "browser-app" } },
-    ],
   }),
   providers: [
     {
@@ -102,11 +99,7 @@ const child = new Nexus().configure({
 });
 
 async function callParentEcho(value: string) {
-  const service = await child.create(ParentEchoToken, {
-    target: {
-      descriptor: { context: "iframe-parent", appId: "browser-app" },
-    },
-  });
+  const service = await child.create(ParentEchoToken);
   return service.echoFromParent(`${frameId}:${value}`);
 }
 

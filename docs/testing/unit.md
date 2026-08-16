@@ -18,7 +18,7 @@ import { UserToken } from "./shared";
 
 export async function loadUserName(nexus: NexusInstance, id: string) {
   const users = await nexus.create(UserToken, {
-    target: { descriptor: { context: "background" } },
+    target: { context: "background" },
   });
 
   return (await users.getUser(id)).name;
@@ -77,12 +77,12 @@ mock.failCreate(UserToken, error);
 
 await expect(
   mock.nexus.create(UserToken, {
-    target: { descriptor: { context: "background" } },
+    target: { context: "background" },
   }),
 ).rejects.toBe(error);
 
 const result = await mock.nexus.safeCreate(UserToken, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 
 expect(result.isErr()).toBe(true);
@@ -93,7 +93,7 @@ An unregistered service rejects with `NexusMockError`:
 ```ts
 await expect(
   mock.nexus.create(UserToken, {
-    target: { descriptor: { context: "background" } },
+    target: { context: "background" },
   }),
 ).rejects.toMatchObject({
   name: "NexusMockError",
@@ -113,7 +113,7 @@ mock.nexus.configure({
 expect(mock.calls.configure()).toHaveLength(1);
 ```
 
-Use the value returned by `configure(...)` when a test needs TypeScript's evolved matcher or descriptor types. The `mock.nexus` property itself does not change its static type in place.
+`mock.service(Token, implementation)` is an unscoped registration. Pass provider metadata as the optional third argument when a test needs `select` or `selectMulticast` to filter it.
 
 The mock stores `config.policy` for assertions but does not execute `canConnect` or `canCall`.
 
@@ -121,7 +121,7 @@ The mock stores `config.policy` for assertions but does not execute `canConnect`
 
 ```ts
 const users = await mock.nexus.create(UserToken, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 
 mock.nexus.release(users);
@@ -129,11 +129,13 @@ mock.nexus.release(users);
 expect(mock.calls.release()).toEqual([{ proxy: users }]);
 ```
 
-## Unsupported Operations
+## Selection And Multicast
 
-`createMockNexus()` intentionally does not simulate multicast connection semantics. `createMulticast(...)` rejects with `NexusMockError` code `E_MOCK_UNSUPPORTED_OPERATION`, and `safeCreateMulticast(...)` returns an err result with the same code.
+`select(...)` chooses a metadata-backed provider immediately, or waits for `mock.service(...)` registration when `wait: { timeout?, signal? }` is provided. It records `select` calls separately.
 
-Use core or adapter integration tests when multicast behavior matters.
+`createMulticast(...)` accepts non-empty exact targets and returns a bound mock fanout. `selectMulticast(...)` binds one metadata-filtered provider snapshot; zero providers is valid. Both `all` and `stream` use deterministic registration order, and later registrations do not alter an existing fanout.
+
+Use core or adapter integration tests for real acquisition, provider-catalog protocol behavior, `where(contextMeta, connectionMeta)`, and adapter topology.
 
 ## Clearing State Between Tests
 
@@ -157,3 +159,4 @@ afterEach(() => {
 - real disconnect or reconnect ordering
 - daemon restart or iframe reload behavior
 - core authorization policy execution
+- transport graphs, dynamic discovery, or adapter connection-metadata evaluation

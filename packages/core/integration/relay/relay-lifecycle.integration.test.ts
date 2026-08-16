@@ -13,6 +13,7 @@ import {
 import type { IEndpoint } from "../../src/transport/types/endpoint";
 import type { IPort } from "../../src/transport/types/port";
 import { createMockPortPair } from "../../src/utils/test-utils";
+import type { TestAdapterModel } from "../../src/utils/test-utils";
 
 type RelayContext = "host" | "relay-upstream" | "relay-downstream" | "leaf";
 
@@ -24,6 +25,8 @@ interface RelayMeta {
 interface RelayPlatform {
   from: string;
 }
+
+type RelayAdapterModel = TestAdapterModel<RelayMeta, RelayPlatform>;
 
 interface RelayProfileService {
   profile: {
@@ -46,12 +49,12 @@ type CounterActions = Record<string, (...args: any[]) => any> & {
 
 interface PendingConnection {
   source: RelayMeta;
-  resolve(value: [IPort, RelayPlatform]): void;
+  resolve(value: { port: IPort; connectionMeta: RelayPlatform }): void;
 }
 
 interface NetworkNode {
   meta: RelayMeta;
-  listener?: (port: IPort, platform?: RelayPlatform) => void;
+  listener?: (port: IPort, platform: RelayPlatform) => void;
   pending: PendingConnection[];
 }
 
@@ -60,7 +63,8 @@ const RelayProfileToken = new Token<RelayProfileService>(
 );
 
 const CounterStoreToken = new Token<
-  NexusStoreServiceContract<CounterState, CounterActions>
+  NexusStoreServiceContract<CounterState, CounterActions>,
+  RelayAdapterModel
 >("core.integration.relay.counter-store");
 
 const counterStore = defineNexusStore<CounterState, CounterActions>({
@@ -74,27 +78,27 @@ const counterStore = defineNexusStore<CounterState, CounterActions>({
   }),
 });
 
-const hostTarget = { descriptor: { context: "host" } } as const;
-const relayTarget = { descriptor: { context: "relay-downstream" } } as const;
+const hostTarget = { context: "host" } as const;
+const relayTarget = { context: "relay-downstream" } as const;
 
 class InMemoryRelayNetwork {
   private readonly nodes = new Map<string, NetworkNode>();
   private readonly ports = new Set<IPort>();
 
-  createEndpoint(meta: RelayMeta): IEndpoint<RelayMeta, RelayPlatform> {
+  createEndpoint(meta: RelayMeta): IEndpoint<RelayAdapterModel> {
     const node: NetworkNode = { meta, pending: [] };
     this.nodes.set(this.key(meta), node);
 
     return {
       listen: (onConnect) => {
-        node.listener = onConnect;
+        node.listener = (port, platform) => onConnect(port, platform);
         this.flushPending(node);
       },
-      connect: async (descriptor) => {
-        const target = this.findNode(descriptor);
+      connect: async (targetMeta) => {
+        const target = this.findNode(targetMeta);
         if (!target) {
           throw new Error(
-            `No in-memory endpoint matches ${JSON.stringify(descriptor)}`,
+            `No in-memory endpoint matches ${JSON.stringify(targetMeta)}`,
           );
         }
 
@@ -102,10 +106,16 @@ class InMemoryRelayNetwork {
           return this.openConnection(meta, target);
         }
 
-        return new Promise<[IPort, RelayPlatform]>((resolve) => {
-          target.pending.push({ source: meta, resolve });
-        });
+        return new Promise<{ port: IPort; connectionMeta: RelayPlatform }>(
+          (resolve) => {
+            target.pending.push({ source: meta, resolve });
+          },
+        );
       },
+      matchesTarget: (target, contextMeta) =>
+        Object.entries(target).every(
+          ([key, value]) => contextMeta[key as keyof RelayMeta] === value,
+        ),
     };
   }
 
@@ -126,7 +136,7 @@ class InMemoryRelayNetwork {
   private openConnection(
     source: RelayMeta,
     target: NetworkNode,
-  ): [IPort, RelayPlatform] {
+  ): { port: IPort; connectionMeta: RelayPlatform } {
     if (!target.listener) {
       throw new Error(`Endpoint ${this.key(target.meta)} is not listening`);
     }
@@ -135,12 +145,17 @@ class InMemoryRelayNetwork {
     this.ports.add(sourcePort);
     this.ports.add(targetPort);
     target.listener(targetPort, { from: this.key(source) });
-    return [sourcePort, { from: this.key(target.meta) }];
+    return {
+      port: sourcePort,
+      connectionMeta: { from: this.key(target.meta) },
+    };
   }
 
-  private findNode(descriptor: Partial<RelayMeta>): NetworkNode | undefined {
+  private findNode(
+    target: RelayAdapterModel["connectionTarget"],
+  ): NetworkNode | undefined {
     return Array.from(this.nodes.values()).find((node) =>
-      Object.entries(descriptor).every(
+      Object.entries(target).every(
         ([key, value]) => node.meta[key as keyof RelayMeta] === value,
       ),
     );
@@ -218,11 +233,11 @@ async function createRelayHarness() {
   const hostDispatchCalls: Array<{ action: string; args: unknown[] }> = [];
   const relayPolicyCalls: RelayPolicyCall[] = [];
 
-  const hostNexus = new Nexus<RelayMeta, RelayPlatform>();
-  const relayUpstreamNexus = new Nexus<RelayMeta, RelayPlatform>();
-  const relayDownstreamNexus = new Nexus<RelayMeta, RelayPlatform>();
-  const leafANexus = new Nexus<RelayMeta, RelayPlatform>();
-  const leafBNexus = new Nexus<RelayMeta, RelayPlatform>();
+  const hostNexus = new Nexus<RelayAdapterModel>();
+  const relayUpstreamNexus = new Nexus<RelayAdapterModel>();
+  const relayDownstreamNexus = new Nexus<RelayAdapterModel>();
+  const leafANexus = new Nexus<RelayAdapterModel>();
+  const leafBNexus = new Nexus<RelayAdapterModel>();
 
   const profileService: RelayProfileService = {
     profile: {
@@ -271,7 +286,7 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "relay-upstream" },
       implementation: network.createEndpoint({ context: "relay-upstream" }),
-      connectTo: [hostTarget],
+      defaultTarget: hostTarget,
     },
   });
 
@@ -281,32 +296,27 @@ async function createRelayHarness() {
       implementation: network.createEndpoint({ context: "relay-downstream" }),
     },
     providers: [
-      relayService<
-        RelayProfileService,
-        RelayMeta,
-        RelayPlatform,
-        RelayMeta,
-        RelayPlatform
-      >(RelayProfileToken, {
-        forwardThrough: relayUpstreamNexus,
-        forwardTarget: hostTarget,
-        policy: {
-          canCall(context) {
-            relayPolicyCalls.push({
-              origin: context.origin,
-              path: [...context.path],
-            });
-            return true;
+      relayService<RelayProfileService, RelayAdapterModel, RelayAdapterModel>(
+        RelayProfileToken,
+        {
+          forwardThrough: relayUpstreamNexus,
+          forwardTarget: hostTarget,
+          policy: {
+            canCall(context) {
+              relayPolicyCalls.push({
+                origin: context.origin,
+                path: [...context.path],
+              });
+              return true;
+            },
           },
         },
-      }),
+      ),
       relayNexusStore<
         CounterState,
         CounterActions,
-        RelayMeta,
-        RelayPlatform,
-        RelayMeta,
-        RelayPlatform
+        RelayAdapterModel,
+        RelayAdapterModel
       >(counterStore, {
         forwardThrough: relayUpstreamNexus,
         forwardTarget: hostTarget,
@@ -318,7 +328,7 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "leaf", id: "leaf-a" },
       implementation: network.createEndpoint({ context: "leaf", id: "leaf-a" }),
-      connectTo: [relayTarget],
+      defaultTarget: relayTarget,
     },
   });
 
@@ -326,10 +336,15 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "leaf", id: "leaf-b" },
       implementation: network.createEndpoint({ context: "leaf", id: "leaf-b" }),
-      connectTo: [relayTarget],
+      defaultTarget: relayTarget,
     },
   });
 
+  await Promise.all([
+    relayUpstreamNexus.create(counterStore.token, { target: hostTarget }),
+    leafANexus.create(RelayProfileToken, { target: relayTarget }),
+    leafBNexus.create(RelayProfileToken, { target: relayTarget }),
+  ]);
   await waitForConnectionsReady([
     [hostNexus, 1],
     [relayUpstreamNexus, 1],

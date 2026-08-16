@@ -26,7 +26,23 @@ export function originMatches(
   expected: string,
   allowAnyOrigin?: boolean,
 ): boolean {
-  return expected === "*" && allowAnyOrigin === true
-    ? true
-    : actual === expected;
+  if (expected === "*") {
+    return allowAnyOrigin === true && actual !== "*";
+  }
+  return actual === expected;
+}
+
+/** Matches a connection target against configured origin policy, not an event. */
+export function targetOriginMatches(
+  target: string,
+  configured: string,
+  allowAnyOrigin?: boolean,
+): boolean {
+  if (target === "*") {
+    return configured === "*" && allowAnyOrigin === true;
+  }
+  if (configured === "*") {
+    return allowAnyOrigin === true;
+  }
+  return target === configured;
 }

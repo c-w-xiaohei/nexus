@@ -1,15 +1,10 @@
-import { createContext, type ReactNode } from "react";
-import type { NexusInstance } from "@nexus-js/core";
+import type { AdapterModel } from "@nexus-js/core";
+import { createNexusScope } from "./create-nexus-scope.js";
+import type { NexusProviderProps as ScopeNexusProviderProps } from "./create-nexus-scope.js";
 
-export const NexusContext = createContext<NexusInstance | null>(null);
+const defaultNexusScope = createNexusScope<AdapterModel>();
 
-export interface NexusProviderProps {
-  readonly nexus: NexusInstance;
-  readonly children: ReactNode;
-}
+export type NexusProviderProps = ScopeNexusProviderProps<AdapterModel>;
 
-export const NexusProvider = ({ nexus, children }: NexusProviderProps) => {
-  return (
-    <NexusContext.Provider value={nexus}>{children}</NexusContext.Provider>
-  );
-};
+export const NexusProvider = defaultNexusScope.NexusProvider;
+export const useDefaultNexus = defaultNexusScope.useNexus;

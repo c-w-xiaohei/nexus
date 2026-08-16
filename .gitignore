@@ -45,5 +45,7 @@ test-results/
 
 # experimental
 /exp
+/tmp
+/worktree
 .claude
 docs/superpowers/

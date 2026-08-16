@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/react",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "React adapter for Nexus state hooks",
   "private": false,
   "license": "MIT",
@@ -46,6 +46,11 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.browser.json",
     "typecheck:browser": "tsc --noEmit -p tsconfig.browser.json"
   },
+  "peerDependencies": {
+    "@nexus-js/core": ">=1.0.0",
+    "react": "^18.3.1 || ^19.0.0",
+    "react-dom": "^18.3.1 || ^19.0.0"
+  },
   "devDependencies": {
     "@nexus-js/core": "workspace:*",
     "@nexus-js/iframe": "workspace:*",
@@ -60,10 +65,5 @@
     "typescript": "7.0.2",
     "vite": "7.3.1",
     "vitest": "4.0.18"
-  },
-  "peerDependencies": {
-    "@nexus-js/core": ">=0.4.0",
-    "react": "^18.3.1 || ^19.0.0",
-    "react-dom": "^18.3.1 || ^19.0.0"
   }
 }

@@ -1,8 +1,6 @@
 # Getting Started With Nexus
 
-This guide shows the real minimum path to a first working Nexus setup.
-
-It is product-level, not subsystem-specific. The goal is to get one context to expose a service and another context to call it successfully.
+This guide shows the minimum path to a first working Nexus setup.
 
 Important: both sides of the communication need Nexus setup. The host context and the consumer context each need their own endpoint configuration.
 
@@ -11,7 +9,7 @@ Important: both sides of the communication need Nexus setup. The host context an
 Nexus always needs these pieces:
 
 1. shared contracts and `Token`s
-2. an endpoint implementation for the current context
+2. an endpoint implementation and `ContextMeta` for the current context
 3. runtime configuration through `using*()` helpers or `nexus.configure(...)`
 4. a provider published with `@nexus.Expose(...)` or `provide(...)`
 5. a consumer that creates a session-bound remote proxy
@@ -71,10 +69,7 @@ import { nexus } from "@nexus-js/core";
 nexus.configure({
   endpoint: {
     implementation: endpointImplementation,
-    meta: {
-      context: "background",
-      platform: "chrome-extension",
-    },
+    meta: { context: "worker" },
   },
 });
 ```
@@ -84,7 +79,7 @@ Two fields matter immediately:
 - `implementation`
   - the endpoint object that can send/listen using your transport
 - `meta`
-  - the identity Nexus uses for routing, targeting, and lifecycle
+  - the peer-declared `ContextMeta` exchanged during the handshake
 
 If you are using a first-party adapter such as `@nexus-js/chrome`, that adapter can provide a friendlier setup path. If you are using only `@nexus-js/core`, this is the level of endpoint configuration you need to supply yourself.
 
@@ -96,7 +91,7 @@ Both sides need this step.
 At minimum, an endpoint implementation needs to be able to do one or both of these jobs:
 
 - `listen(onConnect)` to accept incoming connections
-- `connect(targetDescriptor)` to initiate an outgoing connection
+  - `connect(target)` to initiate an outgoing connection to one adapter-defined `ConnectionTarget`
 
 That is the core bridge between Nexus and your runtime transport.
 
@@ -104,10 +99,10 @@ A minimal conceptual endpoint shape looks like this:
 
 ```ts
 type Endpoint = {
-  listen?: (onConnect: (port: unknown, platformMeta?: unknown) => void) => void;
+  listen?: (onConnect: (port: unknown, connectionMeta: object) => void) => void;
   connect?: (
-    targetDescriptor: Record<string, unknown>,
-  ) => Promise<[unknown, unknown]>;
+    target: object,
+  ) => Promise<{ port: unknown; connectionMeta: object }>;
   capabilities?: {
     supportsTransferables: boolean;
   };
@@ -126,12 +121,11 @@ Two concrete next-step routes are:
 Expose the implementation in the host context.
 
 ```ts
-import { nexus } from "@nexus-js/core";
-import { usingHostRuntime } from "@nexus-js/some-adapter";
+import { usingBackgroundScript } from "@nexus-js/chrome";
 import { PingToken } from "./shared";
 import type { PingService } from "./service-contract";
 
-const hostNexus = usingHostRuntime();
+const hostNexus = usingBackgroundScript();
 
 @hostNexus.Expose(PingToken)
 class PingServiceImpl implements PingService {
@@ -144,7 +138,13 @@ class PingServiceImpl implements PingService {
 The equivalent object-provider style is:
 
 ```ts
-usingHostRuntime().provide(PingToken, pingService);
+const pingService: PingService = {
+  async ping(input) {
+    return `pong:${input}`;
+  },
+};
+
+hostNexus.provide(PingToken, pingService);
 ```
 
 Use `@xxNexus.Expose(...)` for class declarations, where `xxNexus` is the configured Nexus instance that owns the local endpoint face. Use `provide(...)` for already-constructed object/function instances, Nexus State stores, Relay providers, runtime dependencies created during startup, and live registration after the runtime is ready.
@@ -157,20 +157,12 @@ At this point, one side of the system is configured and can host the service.
 
 The other side still needs its own Nexus setup.
 
-For example, the consumer context also needs an endpoint implementation and identity metadata:
+For example, this Chrome consumer uses the first-party content-script adapter:
 
 ```ts
-import { nexus } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome";
 
-nexus.configure({
-  endpoint: {
-    implementation: consumerEndpointImplementation,
-    meta: {
-      context: "popup",
-      platform: "chrome-extension",
-    },
-  },
-});
+const consumerNexus = usingContentScript();
 ```
 
 Without this step, the consumer cannot create a usable proxy.
@@ -189,37 +181,42 @@ The decorator expression captures its Nexus instance. `@nexus.Expose(...)` binds
 
 If one JavaScript context needs two independent Nexus runtimes, create isolated `Nexus` instances and configure each one explicitly:
 
+The following is a structural sketch with placeholder endpoint and provider
+values. In a real application, configure each instance with its adapter setup
+before registering providers or creating demand operations; see
+`docs/platforms.md` for the first-party setup paths.
+
 ```ts
 import { Nexus } from "@nexus-js/core";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
 
-const extensionNexus = new Nexus<
-  ExtensionEndpointMeta,
-  ExtensionPlatformMeta
->();
-const localBrokerNexus = new Nexus<BrokerEndpointMeta, BrokerPlatformMeta>();
+const extensionNexus = new Nexus<ChromeAdapterModel>();
+const iframeNexus = new Nexus<IframeAdapterModel>();
 
 extensionNexus.configure({
   endpoint: extensionEndpointConfig,
 });
 extensionNexus.provide(ExtensionServiceToken, extensionService);
 
-localBrokerNexus.configure({
-  endpoint: brokerEndpointConfig,
+iframeNexus.configure({
+  endpoint: iframeEndpointConfig,
 });
-localBrokerNexus.provide(BrokerGatewayToken, brokerGatewayService);
+iframeNexus.provide(IframeGatewayToken, iframeGatewayService);
 ```
 
 Avoid top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)` in this pattern. If a class service belongs to a specific instance, use that instance's decorator, for example `@extensionNexus.Expose(ExtensionServiceToken)`. Use `configure({ providers })` only for bootstrap bulk composition; prefer `.provide(...)` for ordinary provider registration. Bridge between the two runtimes with explicit providers that call the other instance when needed.
 
-## 6. Create A Proxy From Another Context
+## 6. Acquire A Proxy From Another Context
 
-From a different configured context, create the proxy. If the token has a `defaultTarget` or the endpoint has a unique `connectTo` fallback, the standard call site is:
+From a different configured context, `create` acquires one provider. A Token or endpoint `defaultTarget` can supply its exact target:
 
 ```ts
-import { nexus } from "@nexus-js/core";
+import { usingContentScript } from "@nexus-js/chrome";
 import { PingToken } from "./shared";
 
-const remote = await nexus.create(PingToken);
+const consumerNexus = usingContentScript();
+const remote = await consumerNexus.create(PingToken);
 
 const value = await remote.ping("hello");
 console.log(value);
@@ -228,8 +225,12 @@ console.log(value);
 For safe-first composition, core safe APIs return `Promise<Result<T, E>>`:
 
 ```ts
-const result = await nexus.safeCreate(PingToken, {
-  target: { descriptor: { context: "host" } },
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
+import { PingToken } from "./shared";
+
+const consumerNexus = usingContentScript();
+const result = await consumerNexus.safeCreate(PingToken, {
+  target: chromeTarget.background(),
 });
 
 if (result.isErr()) {
@@ -246,11 +247,14 @@ The same `Promise<Result<T, E>>` convention applies to `safeReady(...)` and
 Keep explicit targets while debugging or when the topology is complex:
 
 ```ts
-const remote = await nexus.create(PingToken, {
-  target: {
-    descriptor: { context: "host" },
-  },
-  expects: "one",
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
+import { PingToken } from "./shared";
+
+const consumerNexus = usingContentScript();
+const remote = await consumerNexus.create(PingToken, {
+  target: chromeTarget.background(),
+  timeout: 30_000,
+  callTimeout: 5_000,
 });
 
 const value = await remote.ping("hello");
@@ -268,13 +272,48 @@ Why is `target` usually needed?
 
 Because Nexus has to decide where the proxy should connect. It resolves target intent in this order:
 
-1. explicit non-empty `target` in `create(...)`
+1. explicit `ConnectionTarget` in `create(...)`
 2. token `defaultTarget`
-3. a unique `connectTo` fallback from endpoint configuration
+3. endpoint `defaultTarget`
 
-If that resolution is ambiguous or empty, `create(Token)` fails instead of discovering providers globally or guessing.
+If that resolution is empty, `create(Token)` fails with `E_TARGET_REQUIRED` instead of discovering providers globally or guessing. `timeout` and `signal` bound acquisition; `callTimeout` controls later RPC calls through the proxy.
 
-You can also target by named descriptor or matcher if your app registers those through configuration. See `docs/concepts.md` for the targeting model.
+An omitted `target` and `target: undefined` have the same fallback behavior: Nexus continues with the Token default, then the endpoint default, and otherwise returns `E_TARGET_REQUIRED`.
+
+Use `select` when the caller wants an already available provider and must not connect:
+
+```ts
+import { usingContentScript, whereBackground } from "@nexus-js/chrome";
+import { PingToken } from "./shared";
+
+const abortController = new AbortController();
+const consumerNexus = usingContentScript();
+const remote = await consumerNexus.select(PingToken, {
+  where: whereBackground,
+  wait: { timeout: 30_000, signal: abortController.signal },
+});
+```
+
+Without `wait`, zero matches and ambiguity are structured errors. `where(contextMeta, connectionMeta)` only filters established peers.
+
+### Acquisition Outcomes
+
+These are the public error codes for the main `create` and `select` paths:
+
+| Path                                  | Code                            | Meaning                                                             |
+| ------------------------------------- | ------------------------------- | ------------------------------------------------------------------- |
+| `create`                              | `E_TARGET_REQUIRED`             | No explicit, Token, or endpoint target resolved.                    |
+| `create`, `createMulticast`           | `E_TARGET_CONSTRAINT_FAILED`    | The exact target could not satisfy its connection constraint.       |
+| `create`, `createMulticast`           | `E_SERVICE_UNAVAILABLE`         | The target was reached, but the requested provider was unavailable. |
+| `create`, `createMulticast`           | `E_SERVICE_ACQUISITION_TIMEOUT` | Exact-target acquisition exceeded `timeout`.                        |
+| `create`, `createMulticast`           | `E_PROTOCOL_INCOMPATIBLE`       | Provider protocol negotiation was incompatible.                     |
+| `select`                              | `E_SERVICE_NO_MATCH`            | No established provider matched without `wait`.                     |
+| `select`                              | `E_SERVICE_AMBIGUOUS`           | More than one established provider matched.                         |
+| `select`                              | `E_SERVICE_WAIT_TIMEOUT`        | `wait.timeout` expired while waiting for a provider.                |
+| `create`, `createMulticast`, `select` | `E_ABORTED`                     | The supplied acquisition or selection signal was aborted.           |
+
+`selectMulticast` is a snapshot operation: an empty snapshot is valid, so it
+does not return `E_SERVICE_NO_MATCH` or wait for a provider.
 
 ## 7. Know What "Working" Means
 

@@ -52,7 +52,7 @@ describe("MessageHandler", () => {
       getConnectionAuthContext: vi.fn(() => ({
         localIdentity: { id: "host" },
         remoteIdentity: { id: "client" },
-        platform: { from: "client" },
+        connection: { from: "client" },
       })),
     };
     messageHandler = MessageHandler.create(context);

@@ -6,7 +6,7 @@ import type { NexusInstance } from "@nexus-js/core";
 import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory.js";
 import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server.js";
 import type { NodeIpcSocketAddress } from "./types/address.js";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta.js";
+import type { NodeIpcAdapterModel } from "./types/meta.js";
 
 export type EchoService = {
   echo(input: string): string;
@@ -23,13 +23,15 @@ export type TestHarness = {
     policy?: Parameters<typeof usingNodeIpcDaemon>[0]["policy"];
     service?: EchoService;
   }): Promise<{
-    daemon: NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+    daemon: NexusInstance<NodeIpcAdapterModel>;
     close(): void;
   }>;
   createClient(options?: {
     authToken?: string;
     policy?: Parameters<typeof usingNodeIpcClient>[0]["policy"];
-  }): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+    resolveAddress?: Parameters<typeof usingNodeIpcClient>[0]["resolveAddress"];
+    onEndpointCreated?(endpoint: object): void;
+  }): NexusInstance<NodeIpcAdapterModel>;
   cleanup(): Promise<void>;
 };
 
@@ -45,7 +47,7 @@ export async function createHarness(): Promise<TestHarness> {
     address,
     async startDaemon(options = {}) {
       const endpoint = new UnixSocketServerEndpoint(address, options.authToken);
-      const daemon = new Nexus<NodeIpcEndpointMeta, NodeIpcPlatformMeta>();
+      const daemon = new Nexus<NodeIpcAdapterModel>();
       const config = {
         ...usingNodeIpcDaemon({
           appId: "test-daemon",
@@ -86,22 +88,22 @@ export async function createHarness(): Promise<TestHarness> {
       };
     },
     createClient(options = {}) {
-      const client = new Nexus<NodeIpcEndpointMeta, NodeIpcPlatformMeta>();
+      const client = new Nexus<NodeIpcAdapterModel>();
       const config = usingNodeIpcClient({
         appId: `test-client-${Math.random().toString(16).slice(2)}`,
         authToken: options.authToken,
         configure: false,
-        connectTo: [
-          {
-            descriptor: {
-              context: "node-ipc-daemon",
-              appId: "test-daemon",
-            },
-          },
-        ],
+        defaultTarget: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+        },
         policy: options.policy,
-        resolveAddress: () => address,
+        resolveAddress: options.resolveAddress ?? (() => address),
       } as unknown as Parameters<typeof usingNodeIpcClient>[0]);
+      options.onEndpointCreated?.(
+        ((config as unknown as { endpoint?: { implementation?: object } })
+          .endpoint?.implementation ?? {}) as object,
+      );
       client.configure(
         config as unknown as Parameters<typeof client.configure>[0],
       );

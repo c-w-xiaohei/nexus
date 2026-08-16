@@ -6,7 +6,7 @@ This page covers daemon startup, stale sockets, disconnect behavior, and error c
 
 Daemon startup does this work:
 
-1. resolve the daemon descriptor to a socket path
+1. resolve the exact daemon target to a socket path
 2. validate path safety and length
 3. check runtime directory safety
 4. check whether the socket path already exists
@@ -67,15 +67,15 @@ This is intentional. Nexus does not silently mutate old raw proxies to point at 
 
 Node-ipc adapter errors:
 
-| Code                                | Meaning                                                              |
-| ----------------------------------- | -------------------------------------------------------------------- |
-| `E_IPC_ADDRESS_INVALID`             | Descriptor or resolver result cannot produce a valid socket address. |
-| `E_IPC_ADDRESS_IN_USE`              | Another live daemon owns the socket.                                 |
-| `E_IPC_PATH_TOO_LONG`               | Filesystem socket path exceeds the platform limit.                   |
-| `E_IPC_CONNECT_FAILED`              | Underlying socket connection failed.                                 |
-| `E_IPC_AUTH_FAILED`                 | Shared-secret pre-auth failed or timed out.                          |
-| `E_IPC_PROTOCOL_ERROR`              | Framing or pre-auth protocol was malformed.                          |
-| `E_IPC_STALE_SOCKET_CLEANUP_FAILED` | Stale socket recovery could not safely remove the socket file.       |
+| Code                                | Meaning                                                          |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| `E_IPC_ADDRESS_INVALID`             | Target or resolver result cannot produce a valid socket address. |
+| `E_IPC_ADDRESS_IN_USE`              | Another live daemon owns the socket.                             |
+| `E_IPC_PATH_TOO_LONG`               | Filesystem socket path exceeds the platform limit.               |
+| `E_IPC_CONNECT_FAILED`              | Underlying socket connection failed.                             |
+| `E_IPC_AUTH_FAILED`                 | Shared-secret pre-auth failed or timed out.                      |
+| `E_IPC_PROTOCOL_ERROR`              | Framing or pre-auth protocol was malformed.                      |
+| `E_IPC_STALE_SOCKET_CLEANUP_FAILED` | Stale socket recovery could not safely remove the socket file.   |
 
 Core authorization errors commonly seen with node-ipc:
 

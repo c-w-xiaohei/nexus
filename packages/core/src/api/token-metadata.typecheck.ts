@@ -1,63 +1,134 @@
 import { expectTypeOf } from "vitest";
-import { Nexus, Token, type NexusInstance, serviceProvider } from "@/index";
+import {
+  type AdapterModel,
+  type Allified,
+  Nexus,
+  type Streamified,
+  Token,
+  type NexusInstance,
+  serviceProvider,
+} from "@/index";
 
 interface PingService {
   ping(): string;
 }
 
-type ChromeEndpointMeta =
+declare const allSettlement: Awaited<
+  ReturnType<Allified<PingService>["ping"]>
+>[number];
+// @ts-expect-error multicast settlements intentionally do not expose recipient IDs.
+void allSettlement.from;
+
+declare const streamSettlement: Awaited<
+  ReturnType<Streamified<PingService>["ping"]>
+> extends AsyncIterable<infer T>
+  ? T
+  : never;
+// @ts-expect-error multicast settlements intentionally do not expose recipient IDs.
+void streamSettlement.from;
+
+type ChromeContextMeta =
   | { runtime: "background" }
   | { runtime: "content-script"; tabId: number };
 
-interface ChromePlatformMeta {
+interface ChromeConnectionMeta {
   platform: "chrome";
 }
 
-type UpstreamEndpointMeta = { runtime: "upstream"; workerId: string };
+type ChromeModel = {
+  contextMeta: ChromeContextMeta;
+  connectionMeta: ChromeConnectionMeta;
+  connectionTarget:
+    | { context: "background" }
+    | { context: "content"; tabId: number };
+};
+
+const chromeModelContract: AdapterModel = {} as ChromeModel;
+void chromeModelContract;
+
+type UpstreamContextMeta = { runtime: "upstream"; workerId: string };
 
 const PlainPingToken = new Token<PingService>("test:plain-ping");
 
-const ChromePingToken = new Token<PingService, ChromeEndpointMeta>(
+const chromeNexusForUndefinedConnected = new Nexus<ChromeModel>();
+chromeNexusForUndefinedConnected.create(PlainPingToken, {
+  // @ts-expect-error removed connected mode is rejected at the Nexus API.
+  connected: { context: "background" },
+});
+
+chromeNexusForUndefinedConnected.create(PlainPingToken, {
+  // @ts-expect-error create does not use multicast response strategies.
+  expects: "all",
+});
+
+chromeNexusForUndefinedConnected.safeCreate(PlainPingToken, {
+  // @ts-expect-error create does not use multicast response strategies.
+  expects: "stream",
+});
+
+const anyConnected: any = { context: "background" };
+chromeNexusForUndefinedConnected.create(PlainPingToken, {
+  // @ts-expect-error any-valued connected keys are rejected too.
+  connected: anyConnected,
+});
+
+// @ts-expect-error multicast options, including targets, are required.
+void chromeNexusForUndefinedConnected.createMulticast(PlainPingToken);
+// @ts-expect-error safe multicast options, including targets, are required.
+void chromeNexusForUndefinedConnected.safeCreateMulticast(PlainPingToken);
+
+const ModelBoundPingToken = new Token<PingService, ChromeModel>(
+  "test:model-bound-ping",
+  { defaultTarget: { context: "background" } },
+);
+
+type UpstreamModel = {
+  contextMeta: UpstreamContextMeta;
+  connectionMeta: ChromeConnectionMeta;
+  connectionTarget: { context: "upstream" };
+};
+
+// @ts-expect-error a model-bound default target cannot cross adapter models.
+const rejectModelBoundToken: Token<PingService, UpstreamModel> =
+  ModelBoundPingToken;
+void rejectModelBoundToken;
+
+const ChromePingToken = new Token<PingService, ChromeModel>(
   "test:chrome-ping",
   {
     defaultTarget: {
-      descriptor: { runtime: "background" },
+      context: "background",
     },
   },
 );
 
-const BackgroundOnlyPingToken = new Token<
-  PingService,
-  Extract<ChromeEndpointMeta, { runtime: "background" }>
->("test:background-only-ping", {
-  defaultTarget: {
-    matcher: (identity) => identity.runtime === "background",
+const BackgroundOnlyPingToken = new Token<PingService, ChromeModel>(
+  "test:background-only-ping",
+  {
+    defaultTarget: {
+      context: "background",
+    },
   },
-});
+);
 
-// @ts-expect-error narrower token metadata is not assignable to the full runtime metadata token type.
-const rejectBackgroundOnlyAsChromeToken: Token<
-  PingService,
-  ChromeEndpointMeta
-> = BackgroundOnlyPingToken;
+const rejectBackgroundOnlyAsChromeToken: Token<PingService, ChromeModel> =
+  BackgroundOnlyPingToken;
 void rejectBackgroundOnlyAsChromeToken;
 
-const UpstreamPingToken = new Token<PingService, UpstreamEndpointMeta>(
+const UpstreamPingToken = new Token<PingService, UpstreamModel>(
   "test:upstream-ping",
   {
     defaultTarget: {
-      descriptor: { runtime: "upstream", workerId: "worker-1" },
+      context: "upstream",
     },
   },
 );
 
 const AnyPingToken = new Token<PingService, any>("test:any-ping");
 
-const chromeNexus = new Nexus<ChromeEndpointMeta, ChromePlatformMeta>();
+const chromeNexus = new Nexus<ChromeModel>();
 
-expectTypeOf(chromeNexus).toMatchTypeOf<
-  NexusInstance<ChromeEndpointMeta, ChromePlatformMeta>
->();
+expectTypeOf(chromeNexus).toMatchTypeOf<NexusInstance<ChromeModel>>();
 
 void chromeNexus.create(PlainPingToken);
 void chromeNexus.create(ChromePingToken);
@@ -66,7 +137,6 @@ void chromeNexus.safeCreate(ChromePingToken);
 // @ts-expect-error create reads token.defaultTarget and must reject tokens from unrelated runtimes.
 void chromeNexus.create(UpstreamPingToken);
 
-// @ts-expect-error create must reject narrower token metadata because matchers receive any runtime identity.
 void chromeNexus.create(BackgroundOnlyPingToken);
 
 void AnyPingToken;
@@ -74,31 +144,7 @@ void AnyPingToken;
 // @ts-expect-error safeCreate reads token.defaultTarget and must reject tokens from unrelated runtimes.
 void chromeNexus.safeCreate(UpstreamPingToken);
 
-// @ts-expect-error safeCreate must reject narrower token metadata because matchers receive any runtime identity.
 void chromeNexus.safeCreate(BackgroundOnlyPingToken);
-
-void chromeNexus.createMulticast(ChromePingToken);
-void chromeNexus.createMulticast(ChromePingToken, {
-  target: { descriptor: { runtime: "background" } },
-  expects: "all",
-});
-void chromeNexus.safeCreateMulticast(ChromePingToken);
-void chromeNexus.safeCreateMulticast(ChromePingToken, {
-  target: { descriptor: { runtime: "background" } },
-  expects: "stream",
-});
-
-// @ts-expect-error createMulticast is runtime-targeted and must reject unrelated token metadata.
-void chromeNexus.createMulticast(UpstreamPingToken);
-
-// @ts-expect-error createMulticast must reject narrower token metadata because matchers receive any runtime identity.
-void chromeNexus.createMulticast(BackgroundOnlyPingToken);
-
-// @ts-expect-error safeCreateMulticast is runtime-targeted and must reject unrelated token metadata.
-void chromeNexus.safeCreateMulticast(UpstreamPingToken);
-
-// @ts-expect-error safeCreateMulticast must reject narrower token metadata because matchers receive any runtime identity.
-void chromeNexus.safeCreateMulticast(BackgroundOnlyPingToken);
 
 chromeNexus.provide(ChromePingToken, { ping: () => "pong" });
 chromeNexus.safeProvide(ChromePingToken, { ping: () => "pong" });
@@ -116,7 +162,7 @@ chromeNexus.Expose(ChromePingToken)(PingProvider, {
   metadata: {},
 });
 
-serviceProvider<PingService, ChromeEndpointMeta, ChromePlatformMeta>(
+serviceProvider<PingService, ChromeModel>(
   ChromePingToken,
   { ping: () => "pong" },
   {

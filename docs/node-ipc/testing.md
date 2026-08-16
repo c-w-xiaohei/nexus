@@ -18,7 +18,8 @@ mock.service(EchoToken, echoService);
 
 const echo = await mock.nexus.create(EchoToken, {
   target: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
+    context: "node-ipc-daemon",
+    appId: "example-app",
   },
 });
 ```

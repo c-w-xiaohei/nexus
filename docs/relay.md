@@ -1,262 +1,188 @@
 # Nexus Relay
 
-Nexus Relay lets one Nexus graph expose provider-level forwarding into another Nexus graph.
+Nexus Relay exposes a provider in one Nexus graph that forwards selected service or State operations into an adjacent graph.
 
-Use it when one JavaScript runtime sits between two adjacent communication graphs and should deliberately forward selected services or stores, for example:
-
-```text
-background <-> content relay <-> iframe children
-```
-
-Relay is explicit. It is not transparent multi-hop routing, raw envelope forwarding, or a `target.via` tunnel.
+Relay is explicit. It is not transparent multi-hop routing, raw envelope forwarding, or a target tunnel.
 
 ## When To Use Relay
 
-Use Relay when all of these are true:
-
-- one runtime hosts more than one configured `Nexus` instance
-- each instance represents a different local endpoint face or transport graph
-- downstream callers should access a selected upstream service or store through the middle runtime
-- the middle runtime must keep policy, identity, lifecycle, and forwarding choices explicit
-
-Do not use Relay just to avoid targeting. If two contexts can already connect directly in one Nexus graph, use normal `nexus.create(...)` or `connectNexusStore(...)` instead.
-
-## Layering
-
-Relay is a product-facing capability exposed through `@nexus-js/core/relay`.
-
-Internally, it is built on ordinary Nexus service and state-provider semantics:
-
-- `relayService(...)` exposes a normal service registration in the downstream graph and implements it by calling an upstream Nexus instance.
-- `relayNexusStore(...)` exposes a normal Nexus State service registration in the downstream graph and implements it by projecting an upstream store.
-
-Relay does not merge connection graphs. The middle runtime remains responsible for configuring each local `Nexus` instance and deciding what to forward.
-
-## Import
-
-```ts
-import { relayService, relayNexusStore } from "@nexus-js/core/relay";
-```
-
-`relayNexusStore` is also re-exported from `@nexus-js/core/state` for Nexus State-focused code.
-
-## Naming Multi-Instance Runtimes
-
-Name a `Nexus` instance after the local graph or endpoint face it represents, not after a remote direction.
-
-Good:
-
-```ts
-const chromeNexus = new Nexus<ChromeEndpointMeta, ChromePlatformMeta>();
-const iframeParentNexus = new Nexus<FrameEndpointMeta, FramePlatformMeta>();
-```
-
-Avoid:
-
-```ts
-const toBackgroundNexus = new Nexus();
-const backgroundNexus = new Nexus(); // misleading if this code runs in content
-```
-
-A `Nexus` instance has its own endpoint, identity, policy, services, connections, proxies, and refs. It is not a one-way client for one destination.
+Use Relay when one runtime owns more than one configured `Nexus<M>` instance and downstream callers should access a selected upstream provider through the middle runtime. If two contexts can connect directly in one graph, use normal `create()` or `connectNexusStore()` instead.
 
 ## Service Relay
 
-Use `relayService(...)` to expose a downstream service provider that forwards method calls upstream.
+The following is a wiring fragment, not a complete bootstrap. Assume
+`chromeNexus`, `iframeParentNexus`, and `iframeChildNexus` have already been
+configured by their respective Chrome and iframe adapter setup.
 
 ```ts
-import { Nexus } from "@nexus-js/core";
+import { Nexus, Token } from "@nexus-js/core";
+import { chromeTarget, type ChromeAdapterModel } from "@nexus-js/chrome";
 import { relayService } from "@nexus-js/core/relay";
-import { UserProfileToken } from "./shared-contracts";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
 
-const chromeNexus = new Nexus<ChromeMeta, ChromePlatform>();
-const iframeParentNexus = new Nexus<FrameMeta, FramePlatform>();
+interface UserProfileService {
+  update(input: { name: string }): Promise<void>;
+}
 
-chromeNexus.configure({
-  endpoint: chromeEndpoint,
-});
+const UpstreamUserProfileToken = new Token<
+  UserProfileService,
+  ChromeAdapterModel
+>("example:user-profile");
+const DownstreamUserProfileToken = new Token<
+  UserProfileService,
+  IframeAdapterModel
+>("example:user-profile");
 
-iframeParentNexus.configure({
-  endpoint: iframeParentEndpoint,
-});
+declare const chromeNexus: Nexus<ChromeAdapterModel>;
+declare const iframeParentNexus: Nexus<IframeAdapterModel>;
+declare const iframeChildNexus: Nexus<IframeAdapterModel>;
 
 iframeParentNexus.provide(
-  relayService(UserProfileToken, {
+  relayService(DownstreamUserProfileToken, {
     forwardThrough: chromeNexus,
-    forwardTarget: {
-      descriptor: { context: "background" },
-    },
-    policy: {
-      canCall({ origin, path, operation }) {
-        return origin.context === "iframe-child" && operation === "APPLY";
-      },
-    },
+    forwardTarget: chromeTarget.background(),
   }),
 );
+
+// The upstream graph exposes the same service id under its own model-bound Token.
+chromeNexus.provide(UpstreamUserProfileToken, {
+  async update(input) {
+    console.log(input.name);
+  },
+});
 ```
 
-Downstream callers use ordinary targeting in their own graph:
+The downstream caller uses an exact target in its own graph:
 
 ```ts
-const profile = await iframeChildNexus.create(UserProfileToken, {
+const profile = await iframeChildNexus.create(DownstreamUserProfileToken, {
   target: {
-    descriptor: { context: "iframe-parent" },
+    context: "iframe-parent",
+    appId: "portal",
+    instance: "default",
+    origin: "https://parent.example.com",
   },
 });
 
 await profile.update({ name: "Ada" });
 ```
 
-The iframe child does not know about the upstream Chrome graph. It calls an adjacent provider in the iframe graph.
+The shared Token's `defaultTarget` is graph-local. Relay never derives `forwardTarget` from downstream defaults; configure the upstream `forwardThrough` and `forwardTarget` explicitly.
 
-Important: the same Token can have different provider locations in the upstream and downstream graphs. A Token `defaultTarget` is only a graph-local `create(...)` default for the caller's graph. Relay never derives the upstream `forwardTarget` from the shared Token defaultTarget; configure `forwardThrough` and `forwardTarget` explicitly. Internally, relay forwards through a no-default upstream token with the same id, so downstream token metadata and defaults do not leak into upstream targeting.
-
-### Service Relay Semantics
-
-`relayService(...)` currently supports serializable request/response method calls.
-
-Default behavior:
-
-- method calls are forwarded with `APPLY`
-- nested method paths are forwarded, for example `profile.update(...)`
-- `SET` is rejected with a structured relay error
-- callback functions, refs, remote resource proxies, and other capability-bearing payloads are rejected by default
-- capability-bearing upstream results are rejected before returning to the downstream caller
-
-This default avoids implicit cross-relay capability bridging. If an application needs capability forwarding, model it as an explicit service contract instead of relying on transparent resource tunneling.
-
-### Service Relay Policy Context
-
-`relayService` policy receives trusted direct-caller context from Nexus invocation metadata:
-
-```ts
-type RelayServiceCallContext = {
-  origin: DownstreamEndpointMeta;
-  relay: DownstreamEndpointMeta;
-  platform: DownstreamPlatformMeta;
-  tokenId: string;
-  path: (string | number)[];
-  operation: "GET" | "SET" | "APPLY";
-};
-```
-
-- `origin` is the direct downstream caller identity.
-- `relay` is the local identity of the relay provider face.
-- `platform` is the direct downstream platform metadata.
-
-These values come from Nexus connection metadata, not from user payload.
+By default, `relayService()` forwards serializable method calls and rejects `SET`, callbacks, refs, remote resources, and other capability-bearing payloads. Model capability forwarding as an explicit service contract instead of relying on transparent tunneling.
 
 ## State Relay
 
-Use `relayNexusStore(...)` when downstream callers should connect to a store hosted upstream.
+Use `relayNexusStore()` when downstream callers should connect to an upstream authoritative State store:
+
+The following is a wiring fragment using the same already-configured Nexus
+instances from the service example above. It does not create new runtimes.
 
 ```ts
+import { Nexus, Token } from "@nexus-js/core";
+import {
+  connectNexusStore,
+  createNexusStore,
+  defineNexusStore,
+  type NexusStoreServiceContract,
+} from "@nexus-js/core/state";
 import { relayNexusStore } from "@nexus-js/core/relay";
-import { sessionStore } from "./shared-store";
+import { chromeTarget } from "@nexus-js/chrome";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
 
-iframeParentNexus.configure({
-  endpoint: iframeParentEndpoint,
+declare const chromeNexus: Nexus<ChromeAdapterModel>;
+declare const iframeParentNexus: Nexus<IframeAdapterModel>;
+declare const iframeChildNexus: Nexus<IframeAdapterModel>;
+
+type SessionState = { name: string };
+type SessionActions = { rename(name: string): Promise<void> };
+type SessionService = NexusStoreServiceContract<SessionState, SessionActions>;
+
+const UpstreamSessionStoreToken = new Token<SessionService, ChromeAdapterModel>(
+  "example:session-store",
+);
+const DownstreamSessionStoreToken = new Token<
+  SessionService,
+  IframeAdapterModel
+>("example:session-store");
+const upstreamSessionStore = defineNexusStore<
+  SessionState,
+  SessionActions,
+  ChromeAdapterModel
+>({
+  token: UpstreamSessionStoreToken,
+  state: () => ({ name: "Ada" }),
+  actions: ({ setState }) => ({
+    async rename(name) {
+      setState({ name });
+    },
+  }),
 });
+const downstreamSessionStore = defineNexusStore<
+  SessionState,
+  SessionActions,
+  IframeAdapterModel
+>({
+  token: DownstreamSessionStoreToken,
+  state: () => ({ name: "Ada" }),
+  actions: ({ setState }) => ({
+    async rename(name) {
+      setState({ name });
+    },
+  }),
+});
+const { provider: sessionProvider } = createNexusStore(upstreamSessionStore);
+chromeNexus.provide(sessionProvider);
 
 iframeParentNexus.provide(
-  relayNexusStore(sessionStore, {
+  relayNexusStore<
+    SessionState,
+    SessionActions,
+    IframeAdapterModel,
+    ChromeAdapterModel
+  >(downstreamSessionStore, {
     forwardThrough: chromeNexus,
-    forwardTarget: {
-      descriptor: { context: "background" },
-    },
-    policy: {
-      canSubscribe({ origin }) {
-        return origin.context === "iframe-child";
-      },
-      canDispatch({ origin, action }) {
-        return origin.context === "iframe-child" && action !== "adminReset";
-      },
-    },
+    forwardTarget: chromeTarget.background(),
   }),
 );
 ```
 
-Downstream callers connect through the relay provider like any other Nexus State store:
+Downstream State code connects to the relay provider using an exact iframe target or a Token/endpoint `defaultTarget`:
 
 ```ts
-const store = await connectNexusStore(iframeChildNexus, sessionStore, {
-  target: {
-    descriptor: { context: "iframe-parent" },
+const store = await connectNexusStore(
+  iframeChildNexus,
+  downstreamSessionStore,
+  {
+    target: {
+      context: "iframe-parent",
+      appId: "portal",
+      instance: "default",
+      origin: "https://parent.example.com",
+    },
   },
-});
-
-await store.actions.setTheme("dark");
+);
 ```
 
-### State Relay Semantics
+The relay projects the upstream authoritative store. It has its own downstream session and versions, waits for the upstream baseline, and terminalizes downstream subscribers when the upstream session is disconnected or replaced. Create fresh handles after replacement.
 
-`relayNexusStore(...)` is a projection of an upstream authoritative store.
+## Policy Context
 
-It does not create a second authoritative store and does not run the local store actions as the source of truth.
-
-Important behavior:
-
-- downstream subscribe waits for the upstream baseline before resolving
-- the relay owns its own downstream store session id
-- downstream versions are allocated by the relay, not copied from upstream versions
-- dispatch is forwarded upstream and resolves only after the upstream commit has been projected into a downstream snapshot
-- a successful upstream no-op commit still emits a downstream checkpoint snapshot
-- upstream disconnect, replacement, or stale target terminalizes downstream subscribers
-- a downstream disconnect cleans only that downstream owner's subscriptions
-
-This preserves Nexus State's guarantee that after an awaited action, the downstream mirror has observed the committed update.
-
-### State Relay Policy Context
-
-State relay policies use the same direct-caller identity model:
-
-```ts
-type RelayStoreSubscribeContext = {
-  origin: DownstreamEndpointMeta;
-  relay: DownstreamEndpointMeta;
-  platform: DownstreamPlatformMeta;
-  tokenId: string;
-};
-
-type RelayStoreDispatchContext = RelayStoreSubscribeContext & {
-  action: string;
-};
-```
-
-Use `canSubscribe` for read access and `canDispatch` for action access.
-
-## Error Model
-
-Relay failures use `RelayError` with structured `code` values.
-
-Common codes include:
-
-- `E_RELAY_POLICY_DENIED`
-- `E_RELAY_PAYLOAD_UNSUPPORTED`
-- `E_RELAY_OPERATION_UNSUPPORTED`
-- `E_RELAY_UPSTREAM_TARGET_NOT_FOUND`
-- `E_RELAY_UPSTREAM_DISCONNECTED`
-- `E_RELAY_UPSTREAM_FAILURE`
-
-Treat these as expected control-flow failures at relay boundaries.
+Relay policy receives direct-caller `ContextMeta` and `ConnectionMeta` from the downstream graph. Use connection facts for adapter-observed security decisions and peer identity for product-level authorization at its documented trust level.
 
 ## What Relay Does Not Do
 
-Relay intentionally does not provide:
-
-- transparent multi-hop routing
-- raw Nexus message forwarding
-- `target.via` routing syntax
-- automatic merging of two Nexus connection graphs
-- automatic cross-relay refs/callback/resource proxy tunneling
-- in-place healing of old downstream store sessions after upstream replacement
-
-If the upstream runtime is replaced, downstream relay-backed state handles become terminal. Create fresh handles for a fresh session.
+- merge connection graphs
+- discover providers globally
+- forward raw Nexus messages
+- provide transparent multi-hop routing
+- tunnel refs, callbacks, or resources implicitly
+- heal old downstream service or State handles after upstream replacement
 
 ## Related Pages
 
-- Core concepts: `docs/concepts.md`
-- Platform and bridge contexts: `docs/platforms.md`
-- Package and subpath map: `docs/packages.md`
-- Authorization and policy: `docs/auth-and-policy.md`
-- Nexus State: `docs/state/README.md`
+- [Core concepts](concepts.md)
+- [Platforms and bridge contexts](platforms.md)
+- [Authorization and policy](auth-and-policy.md)
+- [Nexus State](state/README.md)

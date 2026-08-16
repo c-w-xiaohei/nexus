@@ -1,17 +1,13 @@
 import { Nexus } from "@nexus-js/core";
-import {
-  NexusProvider,
-  useRemoteStore,
-  useStoreSelector,
-} from "@nexus-js/react";
-import { usingIframeChild } from "@nexus-js/iframe";
+import { createNexusScope, useStoreSelector } from "@nexus-js/react";
+import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   RelayProfileToken,
   RELAY_APP_ID,
   RELAY_ORIGIN,
-  counterStore,
+  iframeCounterStore,
   relayChildNonce,
   relayFrameTarget,
   type CounterState,
@@ -26,35 +22,41 @@ function getRequiredChildId() {
   return value;
 }
 
-const childNexus = new Nexus().configure({
-  ...usingIframeChild({
-    configure: false,
-    appId: RELAY_APP_ID,
-    frameId: childId,
-    parentOrigin: RELAY_ORIGIN,
-    nonce: relayChildNonce(childId),
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
-    connectTo: [{ descriptor: relayFrameTarget.descriptor }],
-  }),
+const childConfig = usingIframeChild({
+  configure: false,
+  appId: RELAY_APP_ID,
+  frameId: childId,
+  parentOrigin: RELAY_ORIGIN,
+  nonce: relayChildNonce(childId),
+  heartbeat: { intervalMs: 100, maxMisses: 2 },
+});
+const childNexus = new Nexus<IframeAdapterModel>().configure({
+  ...childConfig,
 });
 
 const telemetry = {
   statuses: [] as string[],
   errors: [] as string[],
   oldHandle: null as
-    | ReturnType<typeof useRemoteStore<CounterState, any>>["store"]
+    | ReturnType<
+        typeof IframeNexusScope.useRemoteStore<CounterState, any>
+      >["store"]
     | null,
 };
 
-let latestRemote: ReturnType<typeof useRemoteStore<CounterState, any>> | null =
-  null;
+const IframeNexusScope = createNexusScope<IframeAdapterModel>();
+let latestRemote: ReturnType<
+  typeof IframeNexusScope.useRemoteStore<CounterState, any>
+> | null = null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
 }
 
 function RelayChildApp() {
-  const remote = useRemoteStore(counterStore, { target: relayFrameTarget });
+  const remote = IframeNexusScope.useRemoteStore(iframeCounterStore, {
+    target: relayFrameTarget,
+  });
   latestRemote = remote;
   const count = useStoreSelector(remote, (state) => state.count, {
     fallback: -1,
@@ -98,9 +100,9 @@ function mount() {
   if (root) return;
   root = createRoot(appRootElement);
   root.render(
-    <NexusProvider nexus={childNexus}>
+    <IframeNexusScope.NexusProvider nexus={childNexus}>
       <RelayChildApp />
-    </NexusProvider>,
+    </IframeNexusScope.NexusProvider>,
   );
 }
 

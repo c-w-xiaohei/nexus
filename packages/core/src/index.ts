@@ -1,28 +1,37 @@
-export { Nexus, nexus } from "./api/nexus.js";
+export { Nexus, nexus } from "./api/nexus";
 
-export { Expose } from "./api/decorators/expose.js";
-export { Endpoint } from "./api/decorators/endpoint.js";
+export { Expose } from "./api/decorators/expose";
+export { Endpoint } from "./api/decorators/endpoint";
 
-export { Token } from "./api/token.js";
-export type { TokenOptions } from "./api/token.js";
-export { TokenSpace } from "./api/token-space.js";
+export { Token } from "./api/token";
+export type { TokenOptions } from "./api/token";
+export { TokenSpace } from "./api/token-space";
 export {
   serviceProvider,
   defineNexusConfig,
   composeNexusConfig,
-} from "./api/types/config.js";
+} from "./api/types/config";
 export type {
   TokenSpaceConfig,
   TokenSpaceDefaultTarget,
   ChildTokenSpaceConfig,
-} from "./api/token-space.js";
+} from "./api/token-space";
 
 export type {
-  EndpointMeta,
-  PlatformMeta,
+  ContextMeta,
+  ConnectionMeta,
+  ConnectionTarget,
   ConnectionContext,
-} from "./types/identity.js";
-export type { IPort, IEndpoint } from "./transport/index.js";
+} from "./types/identity";
+export type {
+  AdapterModel,
+  DefaultAdapterModel,
+  ContextMetaOf,
+  ConnectionMetaOf,
+  ConnectionTargetOf,
+  ConnectionWhere,
+} from "./types/adapter-model";
+export type { IPort, IEndpoint } from "@/transport";
 export type {
   NexusConfig,
   NexusAuthorizationPolicy,
@@ -33,27 +42,23 @@ export type {
   ServiceCallAuthContext,
   CreateOptions,
   CreateMulticastOptions,
-  Target,
-  InlineTarget,
-  MulticastTarget,
-  DescriptorTarget,
-  MatcherTarget,
-  MessageTarget,
-} from "./api/types/config.js"; // 配置和寻址相关类型
+  SelectOptions,
+  SelectMulticastOptions,
+} from "./api/types/config"; // 配置和寻址相关类型
 export type {
   NexusInstance,
-  MatcherUtils,
   Asyncified,
   Allified,
   Streamified,
-  RuntimeCreateToken,
   RuntimeCreateTokenParam,
   TokenService,
-} from "./api/types/index.js"; // Nexus 实例和代理相关类型
+} from "./api/types"; // Nexus 实例和代理相关类型
 // 错误类
 export {
   NexusError,
   NexusConnectionError,
+  NexusConnectionConstraintFailedError,
+  NexusProtocolIncompatibleError,
   NexusTargetingError,
   NexusRemoteError,
   NexusResourceError,
@@ -64,6 +69,7 @@ export {
   NexusEndpointListenError,
   NexusEndpointCapabilityError,
   NexusProtocolError,
-} from "./errors/index.js";
+  NexusServiceError,
+} from "./errors";
 
-export { configureNexusLogger, LogLevel } from "./logger.js";
+export { configureNexusLogger, LogLevel } from "./logger";

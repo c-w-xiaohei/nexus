@@ -4,6 +4,7 @@ import { Nexus } from "../../src/api/nexus";
 import { Token } from "../../src/api/token";
 import type { IPort } from "../../src/transport";
 import { createMockPortPair } from "../../src/utils/test-utils";
+import type { TestAdapterModel } from "../../src/utils/test-utils";
 import {
   connectNexusStore,
   defineNexusStore,
@@ -13,7 +14,8 @@ import {
 type CounterState = { count: number };
 type CounterActions = { increment(by: number): Promise<number> };
 type UserMeta = { context: "background" | "popup" };
-type PlatformMeta = { from: string };
+type ClientConnectionMeta = { from: string };
+type RestartModel = TestAdapterModel<UserMeta, ClientConnectionMeta>;
 
 interface SnapshotEvent {
   type: "snapshot";
@@ -168,13 +170,13 @@ const createBackgroundHost = async (
   tokenId: string,
   service: object,
 ): Promise<{
-  nexus: Nexus<UserMeta, PlatformMeta>;
+  nexus: Nexus<RestartModel>;
   acceptConnection(port: { onMessage: unknown }): void;
   closeAllConnections(): void;
 }> => {
-  const nexus = new Nexus<UserMeta, PlatformMeta>();
+  const nexus = new Nexus<RestartModel>();
   let listenCallback:
-    | ((port: any, platformMeta?: PlatformMeta) => void)
+    | ((port: any, connectionMeta?: ClientConnectionMeta) => void)
     | undefined;
 
   nexus.configure({
@@ -229,21 +231,23 @@ const createPopupNexus = async (
     createPorts?: () => [IPort, IPort];
   },
 ) => {
-  const popup = new Nexus<UserMeta, PlatformMeta>();
+  const popup = new Nexus<RestartModel>();
 
   popup.configure({
     endpoint: {
       meta: { context: "popup" },
       implementation: {
         listen: vi.fn(),
-        connect: vi.fn(async (_targetDescriptor: Partial<UserMeta>) => {
+        connect: vi.fn(async (_target: { context: string }) => {
           const [popupPort, backgroundPort] =
             options?.createPorts?.() ?? createMockPortPair();
           resolveBackground().acceptConnection(backgroundPort as any);
-          return [popupPort, { from: "background" }] as [IPort, PlatformMeta];
+          return { port: popupPort, connectionMeta: { from: "background" } };
         }),
+        matchesTarget: (target, contextMeta) =>
+          target.context === contextMeta.context,
       },
-      connectTo: [{ descriptor: { context: "background" } }],
+      connectTo: [{ context: "background" }],
     },
   });
 
@@ -256,7 +260,11 @@ const createPopupNexus = async (
 
 describe("Nexus State Integration: Background Restart Lifecycle", () => {
   it("stops old-session listeners after restart and allows clean resubscribe on fresh handle", async () => {
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      RestartModel
+    >({
       token: new Token(
         "state:counter:background-restart-listener-session-isolation:integration",
       ),
@@ -273,7 +281,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     const popup = await createPopupNexus(() => activeBackground);
 
     const oldHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const oldSnapshots: number[] = [];
     const stopOld = oldHandle.subscribe((snapshot) => {
@@ -300,7 +308,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     });
 
     const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const replacementSnapshots: number[] = [];
     const stopReplacement = replacementHandle.subscribe((snapshot) => {
@@ -323,7 +331,11 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
   });
 
   it("marks old handle disconnected and binds new handle to replacement background", async () => {
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      RestartModel
+    >({
       token: new Token(
         "state:counter:background-restart-real-host-replacement:integration",
       ),
@@ -341,7 +353,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     const popup = await createPopupNexus(() => activeBackground);
 
     const oldHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     await expect(oldHandle.actions.increment(1)).resolves.toBe(1);
     expect(oldHandle.getState().count).toBe(1);
@@ -366,7 +378,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     );
 
     const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     await expect(replacementHandle.actions.increment(2)).resolves.toBe(2);
     expect(replacementHandle.getState().count).toBe(2);
@@ -378,7 +390,11 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     const oldConnectionPorts = createControlledConnectionPorts();
     let connectionAttempt = 0;
 
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      RestartModel
+    >({
       token: new Token(
         "state:counter:background-restart-real-host-late-inflight:integration",
       ),
@@ -415,7 +431,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     });
 
     const oldHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const oldSnapshots: number[] = [];
     const stopOld = oldHandle.subscribe((snapshot) => {
@@ -447,7 +463,7 @@ describe("Nexus State Integration: Background Restart Lifecycle", () => {
     });
 
     const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const replacementSnapshots: number[] = [];
     const stopReplacement = replacementHandle.subscribe((snapshot) => {

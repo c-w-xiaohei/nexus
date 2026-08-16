@@ -3,12 +3,12 @@ import {
   createNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
-import { usingIframeParent } from "@nexus-js/iframe";
+import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 import {
   APP_ID,
   CHILD_ORIGIN,
   FRAME_IDS,
-  counterStore,
+  iframeCounterStore,
   frameNonce,
   type CounterActions,
   type CounterState,
@@ -176,8 +176,12 @@ function eventFrameId(
   return FRAME_IDS[(subscribeCallIndex - 1) % FRAME_IDS.length];
 }
 
-const { provider } = createNexusStore(counterStore);
-const host = new Nexus().configure({
+const { provider } = createNexusStore<
+  CounterState,
+  CounterActions,
+  IframeAdapterModel
+>(iframeCounterStore);
+const host = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
     appId: APP_ID,

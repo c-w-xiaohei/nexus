@@ -1,17 +1,24 @@
 import { Nexus } from "@nexus-js/core";
 import { relayNexusStore, relayService } from "@nexus-js/core/relay";
-import { usingIframeChild, usingIframeParent } from "@nexus-js/iframe";
+import {
+  usingIframeChild,
+  usingIframeParent,
+  type IframeAdapterModel,
+} from "@nexus-js/iframe";
 import {
   RelayProfileToken,
   RELAY_APP_ID,
   RELAY_CHILD_IDS,
   RELAY_HOST_ORIGIN,
   RELAY_ORIGIN,
-  counterStore,
+  iframeCounterStore,
   relayChildNonce,
   relayFrameNonce,
   relayHostTarget,
+  type CounterActions,
+  type CounterState,
   type RelayChildId,
+  type RelayProfileService,
 } from "./shared";
 
 type RelayChildReadyMessage = {
@@ -81,7 +88,7 @@ function isRelayChildReadyMessage(
   );
 }
 
-const chromeNexus = new Nexus().configure({
+const chromeNexus = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeChild({
     configure: false,
     appId: RELAY_APP_ID,
@@ -89,11 +96,10 @@ const chromeNexus = new Nexus().configure({
     parentOrigin: RELAY_HOST_ORIGIN,
     nonce: relayFrameNonce(),
     heartbeat: { intervalMs: 100, maxMisses: 2 },
-    connectTo: [{ descriptor: relayHostTarget.descriptor }],
   }),
 });
 
-const iframeParentNexus = new Nexus().configure({
+const iframeParentNexus = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
     appId: RELAY_APP_ID,
@@ -106,20 +112,28 @@ const iframeParentNexus = new Nexus().configure({
     heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
   providers: [
-    relayService(RelayProfileToken, {
-      forwardThrough: chromeNexus,
-      forwardTarget: relayHostTarget,
-      policy: {
-        canCall(context) {
-          telemetry.servicePolicyCalls.push({
-            origin: context.origin,
-            path: [...context.path],
-          });
-          return true;
+    relayService<RelayProfileService, IframeAdapterModel, IframeAdapterModel>(
+      RelayProfileToken,
+      {
+        forwardThrough: chromeNexus,
+        forwardTarget: relayHostTarget,
+        policy: {
+          canCall(context) {
+            telemetry.servicePolicyCalls.push({
+              origin: context.origin,
+              path: [...context.path],
+            });
+            return true;
+          },
         },
       },
-    }),
-    relayNexusStore(counterStore, {
+    ),
+    relayNexusStore<
+      CounterState,
+      CounterActions,
+      IframeAdapterModel,
+      IframeAdapterModel
+    >(iframeCounterStore, {
       forwardThrough: chromeNexus,
       forwardTarget: relayHostTarget,
       policy: {

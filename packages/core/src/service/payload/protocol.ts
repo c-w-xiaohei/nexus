@@ -36,31 +36,31 @@ export enum PlaceholderType {
   // REGEXP = 'X',
 }
 
-import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
+import type { AdapterModel } from "@/types/adapter-model";
 import {
   LocalResourceType,
   type ReviveContext,
   type SanitizeContext,
   ValueType,
-} from "../types/index.js";
-import { Placeholder } from "./placeholder.js";
-import { PayloadProcessor } from "./payload-processor.js";
+} from "../types";
+import { Placeholder } from "./placeholder";
+import { PayloadProcessor } from "./payload-processor";
 
-type SanitizeHandler<U extends EndpointMeta, P extends PlatformMeta> = (
-  processor: PayloadProcessor.Runtime<U, P>,
+type SanitizeHandler<M extends AdapterModel> = (
+  processor: PayloadProcessor.Runtime<M>,
   value: any,
   context: SanitizeContext,
 ) => Placeholder;
 
-type ReviveHandler<U extends EndpointMeta, P extends PlatformMeta> = (
-  processor: PayloadProcessor.Runtime<U, P>,
+type ReviveHandler<M extends AdapterModel> = (
+  processor: PayloadProcessor.Runtime<M>,
   placeholder: Placeholder,
   context: ReviveContext,
 ) => any;
 
 export const SANITIZER_TABLE_CONFIG = new Map<
   ValueType,
-  SanitizeHandler<any, any>
+  SanitizeHandler<AdapterModel>
 >([
   [
     ValueType.FUNCTION,
@@ -78,6 +78,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
             context.targetConnectionId,
             LocalResourceType.FUNCTION,
           );
+      context.createdResourceIds?.push(resourceId);
       return new Placeholder(PlaceholderType.RESOURCE, resourceId);
     },
   ],
@@ -105,7 +106,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
 
 export const REVIVER_TABLE_CONFIG = new Map<
   PlaceholderType,
-  ReviveHandler<any, any>
+  ReviveHandler<AdapterModel>
 >([
   [
     PlaceholderType.RESOURCE,

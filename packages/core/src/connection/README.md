@@ -7,7 +7,7 @@ This directory contains the core implementation of Layer 2 of the Nexus architec
 - **Managing Logical Connections**: Abstracting the raw, physical communication channels from L1 into stable, stateful, and identifiable `LogicalConnection` objects. It manages their entire lifecycle from creation to termination.
 - **Orchestrating Handshakes**: Implementing a secure handshake protocol to verify the identity of remote endpoints and establish trusted communication channels.
 - **Connection Admission Control**: Acting as the second line of defense by enforcing security policies to decide whether to accept or reject incoming connections.
-- **Service Discovery & Routing**: Automatically discovering and registering services based on their metadata (`groups`). It routes messages from L3 to a single endpoint (unicast), a service group (multicast), or all matching endpoints (broadcast).
+- **Provider Availability & Routing**: Tracking the services advertised by each authorized peer and routing messages to the session-bound providers selected by L3.
 - **Providing a Uniform Interface**: Offering a clean, high-level API to Layer 3 (`RpcEngine`), hiding the complexities of connection management, reuse, and concurrent establishment.
 
 ## Architecture
@@ -22,9 +22,9 @@ The `ConnectionManager` class serves as the facade for this layer. It provides t
 
 ### Methods (L3 -> L2)
 
-- **`initialize()`**: Starts the entire connection layer, begins listening for incoming connections, and establishes any pre-configured "warm" connections (`connectTo`).
-- **`resolveConnection(options)`**: The primary method for L3 to acquire a connection. It implements a "find-or-create" logic, allowing L3 to get a connection to a specific target by using a `descriptor` or a `matcher`. This is the foundation for `nexus.create()`.
-- **`sendMessage(target, message)`**: Routes a `NexusMessage` to its destination. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details. The `target` can be a specific connection, a service group, or a dynamic matcher.
+- **`initialize()`**: Starts the connection layer and begins listening for incoming connections. Outgoing connections are established only when an exact-target acquisition requests one.
+- **`resolveConnection(options)`**: The primary method for L3 to acquire a connection. For an exact `target`, it reuses a ready matching connection or creates one through the adapter. An optional `where` predicate filters peer-declared context and immutable connection metadata after target selection; it does not discover or create a connection by itself. This is the foundation for `nexus.create()`.
+- **`sendMessage(target, message)`**: Routes a `NexusMessage` to its destination. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details. A `MessageTarget` names an exact connection, a group, or a dynamic `where` filter over the ready connection graph.
 
 ### Handlers (L2 -> L3)
 

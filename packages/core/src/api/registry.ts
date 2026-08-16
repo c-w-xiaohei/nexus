@@ -1,9 +1,9 @@
-import type { IEndpoint } from "../transport/index.js";
-import type { EndpointMeta, PlatformMeta } from "../types/identity.js";
-import type { Token } from "./token.js";
-import type { EndpointOptions } from "./decorators/endpoint.js";
-import type { ExposeOptions } from "./decorators/expose.js";
-import { NexusConfigurationError } from "../errors/index.js";
+import type { IEndpoint } from "@/transport";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { Token } from "./token";
+import type { EndpointOptions } from "./decorators/endpoint";
+import type { ExposeOptions } from "./decorators/expose";
+import { NexusConfigurationError } from "@/errors";
 
 /**
  * A type-safe representation of the service registration data.
@@ -18,82 +18,15 @@ export type ServiceProviderData = {
  * A type-safe representation of the endpoint registration data.
  * @internal
  */
-export type EndpointRegistrationData = {
-  targetClass: new (
-    ...args: unknown[]
-  ) => IEndpoint<EndpointMeta, PlatformMeta>;
-  options: EndpointOptions<EndpointMeta>;
+export type EndpointRegistrationData<M extends AdapterModel = AdapterModel> = {
+  targetClass: new (...args: unknown[]) => IEndpoint<M>;
+  options: EndpointOptions<M>;
 };
 
-export type DecoratorSnapshot = {
+export type DecoratorSnapshot<M extends AdapterModel = AdapterModel> = {
   providers: ReadonlyMap<Token<object, any>, ServiceProviderData>;
-  endpoint: EndpointRegistrationData | null;
+  endpoint: EndpointRegistrationData<M> | null;
 };
-
-export namespace DecoratorRegistry {
-  /**
-   * Stores all providers registered via the @Expose decorator.
-   * Key: Service Token
-   * Value: Registration data
-   */
-  const servicesMap = new Map<Token<object, any>, ServiceProviderData>();
-
-  /**
-   * Stores the single endpoint registered via the @Endpoint decorator.
-   * There can be only one endpoint per JavaScript context.
-   */
-  let endpoint: EndpointRegistrationData | null = null;
-
-  export type Snapshot = DecoratorSnapshot;
-
-  export const hasRegistrations = (): boolean =>
-    servicesMap.size > 0 || endpoint !== null;
-
-  export const snapshot = (): Snapshot => ({
-    providers: new Map(servicesMap),
-    endpoint,
-  });
-
-  /**
-   * Registers a service. Called by the @Expose decorator.
-   * @param token The service's unique Token.
-   * @param data The service's registration metadata.
-   */
-  export const registerService = (
-    token: Token<object, any>,
-    data: ServiceProviderData,
-  ): void => {
-    if (servicesMap.has(token)) {
-      console.warn(
-        `Nexus Warning: Service with token ID "${token.id}" has been registered more than once. The last registration will be used.`,
-      );
-    }
-    servicesMap.set(token, data);
-  };
-
-  /**
-   * Registers the context's endpoint. Called by the @Endpoint decorator.
-   * @param data The endpoint's registration metadata.
-   */
-  export const registerEndpoint = (data: EndpointRegistrationData): void => {
-    if (endpoint) {
-      console.warn(
-        "Nexus Warning: @Endpoint decorator has been used more than once. Only one Endpoint can be defined per JavaScript context. The last registration will be used.",
-      );
-    }
-    endpoint = data;
-  };
-
-  /**
-   * Resets the registry to its initial state.
-   * This is crucial for ensuring test isolation.
-   * @internal
-   */
-  export const clear = (): void => {
-    servicesMap.clear();
-    endpoint = null;
-  };
-}
 
 export class InstanceDecoratorRegistry {
   private readonly servicesMap = new Map<

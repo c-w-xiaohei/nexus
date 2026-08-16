@@ -1,6 +1,6 @@
-import type { Token } from "../api/token.js";
-import type { CreateOptions } from "../api/types/config.js";
-import type { EndpointMeta } from "../types/identity.js";
+import type { Token } from "@/api/token";
+import type { CreateOptions } from "@/api/types/config";
+import type { AdapterModel } from "@/types/adapter-model";
 import type { ZodType } from "zod";
 import type {
   ConnectNexusStoreOptionsInput,
@@ -9,13 +9,13 @@ import type {
   SubscribeResult,
   TerminalEnvelope,
   TerminalReason,
-} from "./protocol.js";
-import type { ServiceInvocationContext } from "../service/service-invocation-hooks.js";
+} from "./protocol";
+import type { ServiceInvocationContext } from "@/service/service-invocation-hooks";
 
 export type ActionFunction = (...args: any[]) => any;
 
 export type StoreTokenMetadata<TToken> =
-  TToken extends Token<infer _T, infer U> ? U : never;
+  TToken extends Token<infer _T, infer M> ? M : never;
 
 export type ActionArgs<
   TActions extends Record<string, ActionFunction>,
@@ -77,9 +77,11 @@ export interface NexusStoreServiceContract<
 export interface NexusStoreDefinition<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-  U extends EndpointMeta = EndpointMeta,
+  M extends AdapterModel = AdapterModel,
 > {
-  token: Token<NexusStoreServiceContract<TState, TActions>, U>;
+  token:
+    | Token<NexusStoreServiceContract<TState, TActions>, M>
+    | Token<NexusStoreServiceContract<TState, TActions>>;
   state: () => TState;
   actions: (helpers: StoreActionHelpers<TState>) => TActions;
   sync?: {
@@ -115,9 +117,8 @@ export interface RemoteStore<
 }
 
 export interface ConnectNexusStoreOptions<
-  U extends EndpointMeta = EndpointMeta,
-  M extends string = string,
-  D extends string = string,
+  M extends AdapterModel = AdapterModel,
 > extends Omit<ConnectNexusStoreOptionsInput, "target"> {
-  target?: CreateOptions<U, M, D>["target"];
+  target?: CreateOptions<M>["target"];
+  where?: CreateOptions<M>["where"];
 }

@@ -4,29 +4,22 @@ For iframe integrations, keep contracts shared and keep parent/child setup focus
 
 ## Shared Contract Shape
 
-Use a Token `defaultTarget` when the parent repeatedly calls the same child frame.
+Use a model-bound `TokenSpace<IframeAdapterModel>` or `Token<GreetingService, IframeAdapterModel>` with a `defaultTarget` when the parent repeatedly calls the same child frame. Keep shared Tokens target-free.
 
 ```ts
-import { TokenSpace } from "@nexus-js/core";
-import type { IframePlatformMeta, IframeEndpointMeta } from "@nexus-js/iframe";
+import { Token } from "@nexus-js/core";
+import type { IframeChildConnectionTarget } from "@nexus-js/iframe";
 import type { GreetingService } from "./service-contract";
 
-const appSpace = new TokenSpace<IframeEndpointMeta, IframePlatformMeta>({
-  name: "iframe-demo",
-});
+export const childTarget = {
+  context: "iframe-child",
+  appId: "iframe-demo",
+  frameId: "preview",
+  origin: "https://child.example.com",
+} satisfies IframeChildConnectionTarget;
 
-const childServices = appSpace.space("child-services", {
-  defaultTarget: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
-    },
-  },
-});
-
-export const GreetingToken = childServices.token<GreetingService>("greeting");
+// This shared contract has no default target and is usable by another model.
+export const GreetingToken = new Token<GreetingService>("iframe-demo:greeting");
 ```
 
 ## Parent
@@ -34,7 +27,15 @@ export const GreetingToken = childServices.token<GreetingService>("greeting");
 Use exact child origins and keep the initial proxy example explicit.
 
 ```ts
-usingIframeParent({
+import { usingIframeParent } from "@nexus-js/iframe";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+import type { NexusInstance } from "@nexus-js/core";
+import { GreetingToken } from "./service-contract";
+
+const iframe = document.querySelector<HTMLIFrameElement>("#preview");
+if (!iframe) throw new Error("Preview iframe is required");
+
+const iframeParentNexus: NexusInstance<IframeAdapterModel> = usingIframeParent({
   appId: "iframe-demo",
   frames: [
     {
@@ -46,15 +47,8 @@ usingIframeParent({
   ],
 });
 
-const greeting = await nexus.create(GreetingToken, {
-  target: {
-    descriptor: {
-      context: "iframe-child",
-      appId: "iframe-demo",
-      frameId: "preview",
-      origin: "https://child.example.com",
-    },
-  },
+const greeting = await iframeParentNexus.create(GreetingToken, {
+  target: childTarget,
 });
 ```
 
@@ -63,7 +57,12 @@ const greeting = await nexus.create(GreetingToken, {
 For class-style child services, bind the class to the child Nexus instance.
 
 ```ts
-const childNexus = usingIframeChild({
+import { usingIframeChild } from "@nexus-js/iframe";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+import type { NexusInstance } from "@nexus-js/core";
+import { GreetingToken, type GreetingService } from "./service-contract";
+
+const childNexus: NexusInstance<IframeAdapterModel> = usingIframeChild({
   appId: "iframe-demo",
   frameId: "preview",
   parentOrigin: "https://parent.example.com",
@@ -71,7 +70,11 @@ const childNexus = usingIframeChild({
 });
 
 @childNexus.Expose(GreetingToken)
-class GreetingServiceImpl implements GreetingService {}
+class GreetingServiceImpl implements GreetingService {
+  async greet(name: string) {
+    return `Hello, ${name}`;
+  }
+}
 ```
 
 For function/object style, use `childNexus.provide(GreetingToken, greetingService)`.

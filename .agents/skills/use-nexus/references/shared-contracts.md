@@ -2,31 +2,38 @@
 
 Define service interfaces and Tokens in shared modules imported by both host and consumer contexts.
 
-Read `references/identity-and-metadata.md` when defining `EndpointMeta` for TokenSpace targeting, Token `defaultTarget`, descriptors, matchers, and identity replacement, or `PlatformMeta` for adapter facts and policy inputs.
+Read `references/identity-and-metadata.md` when defining `ContextMeta` for identity replacement, `ConnectionTarget` for TokenSpace targets or Token `defaultTarget`, or `ConnectionMeta` for adapter facts and policy inputs.
 
 ## Tokens
 
-Prefer `TokenSpace` when token IDs should be hierarchical or a family of tokens should share `defaultTarget` routing. Use direct `new Token<T>(...)` only for small examples or when namespacing and create defaults are unnecessary.
+Use a shared `new Token<Service>(...)` without a default target when the contract must work across adapter models. Use `TokenSpace<Model>` when token IDs should be hierarchical or a model-bound family of tokens should share `defaultTarget` routing. A model-bound `Token<Service, Model>` may also carry a `defaultTarget`; an unbound Token remains portable.
 
 Token modules should import existing service interfaces with `import type`. Do not repeat service method shapes inline at token definition sites.
 
 ```ts
-import { TokenSpace } from "@nexus-js/core";
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "@nexus-js/chrome";
+import { Token, TokenSpace } from "@nexus-js/core";
+import { chromeTarget } from "@nexus-js/chrome";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
 import type { SettingsService } from "./contracts";
 
-const appSpace = new TokenSpace<ChromeEndpointMeta, ChromePlatformMeta>({
+export const SettingsToken = new Token<SettingsService>(
+  "my-extension:settings",
+);
+
+export const BoundSettingsToken = new Token<
+  SettingsService,
+  ChromeAdapterModel
+>("my-extension:bound-settings", {
+  defaultTarget: chromeTarget.background(),
+});
+
+const appSpace = new TokenSpace<ChromeAdapterModel>({
   name: "my-extension",
 });
 
-const backgroundServices = appSpace.space("background-services", {
-  defaultTarget: {
-    descriptor: { context: "background" },
-  },
-});
-
-export const SettingsToken =
-  backgroundServices.token<SettingsService>("settings");
+export const BackgroundSettingsToken = appSpace
+  .space("background-services", { defaultTarget: chromeTarget.background() })
+  .token<SettingsService>("settings");
 ```
 
 Import existing service types instead of defining anonymous shapes inline.
@@ -49,7 +56,7 @@ export const SettingsToken = services.token<{
 
 ## Service Exposure
 
-Use `@xxNexus.Expose(Token)` for class-style services. Import the concrete Nexus instance from the runtime/bootstrap module so the class is bound to that instance's registry.
+Use `@xxNexus.Expose(Token)` for class-style services. Import the concrete Nexus instance from the runtime/bootstrap module so the class is bound to that instance's decorator store.
 
 ```ts
 import { backgroundNexus } from "./runtime";

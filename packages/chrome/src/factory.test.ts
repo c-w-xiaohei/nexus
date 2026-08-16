@@ -12,9 +12,9 @@ import {
   usingOffscreenDocument,
 } from "./factory";
 import { nexus } from "@nexus-js/core";
-import type { ChromeEndpointMeta } from "./types/meta";
+import type { ChromeContextMeta } from "./types/meta";
 
-const contextlessCustomMeta: ChromeEndpointMeta<
+const contextlessCustomMeta: ChromeContextMeta<
   never,
   // @ts-expect-error custom Chrome endpoint metadata must include a context discriminator.
   { customFlag: boolean }
@@ -96,8 +96,6 @@ describe("Chrome Factory Functions", () => {
         extensionId: "test-extension-id",
         version: "1.0.0",
       });
-      expect(config.matchers).toHaveProperty("visible-content-script");
-      expect(config.matchers).not.toHaveProperty("active-content-script");
       expect(configureSpy).not.toHaveBeenCalled();
     });
   });
@@ -191,9 +189,7 @@ describe("Chrome Factory Functions", () => {
         context: "extension-page",
         page: "settings.html",
       });
-      expect(config.endpoint?.connectTo).toEqual([
-        { descriptor: { context: "background" } },
-      ]);
+      expect(config.endpoint?.defaultTarget).toEqual({ kind: "background" });
       expect(sidePanel.getOptions).not.toHaveBeenCalled();
     });
 

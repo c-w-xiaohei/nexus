@@ -19,18 +19,24 @@ Examples:
 - a platform-specific context check
 - a transport-specific protocol check
 
-The core policy gate runs after Nexus has enough identity and platform metadata to evaluate connection and service access. It is configured through `nexus.configure({ policy })` and is the same concept across adapters.
+The core policy gate runs after Nexus has enough `ContextMeta` and `ConnectionMeta` to evaluate connection and service access. It is configured through `nexus.configure({ policy })` and is the same concept across adapters.
 
 ## Configure A Global Policy
 
 Add `policy` to `nexus.configure(...)`:
 
 ```ts
-nexus.configure({
-  endpoint: endpointConfig,
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+
+const daemonNexus = usingNodeIpcDaemon({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
   policy: {
-    canConnect(context) {
-      return context.remoteIdentity.context === "trusted-client";
+    canConnect({ remoteIdentity, connection }) {
+      return (
+        remoteIdentity.context === "node-ipc-client" &&
+        connection.observed.authenticated === true
+      );
     },
 
     canCall(context) {
@@ -50,12 +56,12 @@ The context includes:
 
 - `localIdentity`
 - `remoteIdentity`
-- `platform`
+- `connection`
 - `direction`: `"incoming"` or `"outgoing"`
 
 Return `true` to allow the connection and `false` to deny it. Throwing or rejecting also denies the connection.
 
-Denied connections do not become ready connections and are not exposed through connection snapshots or service groups.
+Denied connections do not become ready connections, acquire services, or participate in provider selection.
 
 Denial code:
 
@@ -71,13 +77,17 @@ The context includes:
 
 - `localIdentity`
 - `remoteIdentity`
-- `platform`
+- `connection`
 - `connectionId`
 - `serviceName`
 - `path`
 - `operation`: `"GET"`, `"SET"`, or `"APPLY"`
 
 Return `true` to allow the call and `false` to deny it. Throwing or rejecting also denies the call.
+
+`connectionId` is an opaque identifier for policy and audit context only. It is
+not a public `ConnectionTarget`, acquisition input, selection key, or routing
+handle, and applications must not use it to route or reacquire services.
 
 Denied calls do not invoke the local service implementation.
 
@@ -117,34 +127,41 @@ Resource references returned by a service keep the policy snapshot from the serv
 
 Policy decisions are only as strong as the metadata they rely on.
 
-EndpointMeta is logical identity. It is usually declared by the peer and should not be treated as OS-verified unless the adapter documentation says it is verified.
+ContextMeta is logical identity. It is usually declared by the peer and should not be treated as OS-verified unless the adapter documentation says it is verified.
 
-PlatformMeta is adapter-observed data. It can include facts such as the transport address, an authenticated flag, or adapter-specific context information.
+ConnectionMeta is adapter-observed data scoped to one connection. It can include facts such as the transport address, an authenticated flag, or adapter-specific context information.
 
 See `docs/identity-and-metadata.md` for the full field placement model and trust boundary guidance.
 
 When writing policy:
 
-- prefer adapter-observed `platform` facts for security decisions
+- prefer adapter-observed `connection` facts for security decisions
 - treat peer-declared `remoteIdentity` fields as routing and product identity unless independently authenticated
 - do not assume `pid`, `uid`, or `gid` are OS-verified unless the adapter explicitly documents peer credential support
 
 ## Node IPC Example
 
-For node-ipc, shared-secret pre-auth sets `platform.authenticated` before core policy runs:
+For node-ipc, shared-secret pre-auth sets `connection.observed.authenticated` before core policy runs:
 
 When composing node-ipc with additional bootstrap configuration, ask the helper for a pure config object with `configure: false`, then combine layers with `composeNexusConfig([...])` before passing the result to `nexus.configure(...)`. This is a low-level bootstrap composition path; the standard path is to call `usingNodeIpcDaemon(...)` directly and register providers through the returned instance, for example `@daemonNexus.Expose(...)` for class services or `daemonNexus.provide(...)` for object services.
 
 ```ts
 import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+
+const daemonConfig = usingNodeIpcDaemon({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
+  configure: false,
+});
 
 nexus.configure(
   composeNexusConfig([
-    usingNodeIpcDaemon({ appId: "example-app", authToken, configure: false }),
+    daemonConfig,
     {
       policy: {
-        canConnect({ platform }) {
-          return platform.authenticated === true;
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
         },
       },
     },

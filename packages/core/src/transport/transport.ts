@@ -1,20 +1,25 @@
-import type { IEndpoint } from "./types/endpoint.js";
-import type { IPort } from "./types/port.js";
-import { PortProcessor, type PortProcessorHandlers } from "./port-processor.js";
-import { JsonSerializer } from "./serializers/json-serializer.js";
-import { BinarySerializer } from "./serializers/binary-serializer.js";
-import type { ISerializer } from "./serializers/interface.js";
+import type { IEndpoint } from "./types/endpoint";
+import type { IPort } from "./types/port";
+import { PortProcessor, type PortProcessorHandlers } from "./port-processor";
+import { JsonSerializer } from "./serializers/json-serializer";
+import { BinarySerializer } from "./serializers/binary-serializer";
+import type { ISerializer } from "./serializers/interface";
+import type {
+  AdapterModel,
+  ConnectionTargetOf,
+  ConnectionMetaOf,
+} from "@/types/adapter-model";
 import {
   NexusEndpointCapabilityError,
   NexusEndpointConnectError,
   NexusEndpointListenError,
-} from "../errors/transport-errors.js";
+} from "../errors/transport-errors";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
 export namespace Transport {
-  const shouldUseBinarySerializer = <U extends object, P extends object>(
-    endpoint: IEndpoint<U, P>,
+  const shouldUseBinarySerializer = <M extends AdapterModel>(
+    endpoint: IEndpoint<M>,
   ): boolean => {
     const capabilities = endpoint.capabilities;
     if (!capabilities) {
@@ -28,27 +33,27 @@ export namespace Transport {
     return capabilities.supportsTransferables === true;
   };
 
-  export interface Context<U extends object, P extends object> {
-    readonly endpoint: IEndpoint<U, P>;
+  export interface Context<M extends AdapterModel> {
+    readonly endpoint: IEndpoint<M>;
     readonly serializer: ISerializer;
   }
 
-  export const create = <U extends object, P extends object>(
-    endpoint: IEndpoint<U, P>,
-  ): Context<U, P> => ({
+  export const create = <M extends AdapterModel>(
+    endpoint: IEndpoint<M>,
+  ): Context<M> => ({
     endpoint,
     serializer: shouldUseBinarySerializer(endpoint)
       ? BinarySerializer.serializer
       : JsonSerializer.serializer,
   });
 
-  export const safeListen = async <U extends object, P extends object>(
-    context: Context<U, P>,
+  export const safeListen = async <M extends AdapterModel>(
+    context: Context<M>,
     onConnect: (
       createProcessor: (
         handlers: PortProcessorHandlers,
       ) => PortProcessor.Context,
-      platformMetadata?: P,
+      connectionMeta: ConnectionMetaOf<M>,
     ) => void,
   ): Promise<Result<void, NexusEndpointListenError>> => {
     if (!context.endpoint.listen) {
@@ -60,13 +65,13 @@ export namespace Transport {
 
     try {
       const listenResult = context.endpoint.listen(
-        (port: IPort, platformMetadata?: P) => {
+        (port: IPort, connectionMeta: ConnectionMetaOf<M>) => {
           const createProcessor = (
             handlers: PortProcessorHandlers,
           ): PortProcessor.Context =>
             PortProcessor.create(port, context.serializer, handlers);
           try {
-            onConnect(createProcessor, platformMetadata);
+            onConnect(createProcessor, connectionMeta);
           } catch (error) {
             console.error(
               "Nexus DEV: unhandled error in Transport.safeListen onConnect callback",
@@ -82,13 +87,16 @@ export namespace Transport {
     }
   };
 
-  export const safeConnect = async <U extends object, P extends object>(
-    context: Context<U, P>,
-    targetDescriptor: Partial<U>,
+  export const safeConnect = async <M extends AdapterModel>(
+    context: Context<M>,
+    target: ConnectionTargetOf<M>,
     handlers: PortProcessorHandlers,
   ): Promise<
     Result<
-      [PortProcessor.Context, P],
+      {
+        portProcessor: PortProcessor.Context;
+        connectionMeta: ConnectionMetaOf<M>;
+      },
       NexusEndpointCapabilityError | NexusEndpointConnectError
     >
   > => {
@@ -97,62 +105,36 @@ export namespace Transport {
         "Cannot connect: endpoint does not implement connect() method",
         {
           endpointType: "endpoint",
-          targetDescriptor,
+          target,
         },
       );
 
       return err(capabilityError);
     }
 
-    let connectPromise: Promise<[IPort, P]>;
+    let connectPromise: Promise<{
+      port: IPort;
+      connectionMeta: ConnectionMetaOf<M>;
+    }>;
     try {
-      connectPromise = context.endpoint.connect(targetDescriptor);
+      connectPromise = context.endpoint.connect(target);
     } catch (error) {
-      return err(
-        new NexusEndpointConnectError(
-          `Failed to connect endpoint: ${error instanceof Error ? error.message : String(error)}`,
-          {
-            endpointType: "endpoint",
-            targetDescriptor,
-            originalError: error,
-          },
-        ),
-      );
+      return err(createConnectError(error, target));
     }
 
     const connected = await Result.tryPromise({
       try: () => connectPromise,
-      catch: (error) =>
-        new NexusEndpointConnectError(
-          `Failed to connect endpoint: ${error instanceof Error ? error.message : String(error)}`,
-          {
-            endpointType: "endpoint",
-            targetDescriptor,
-            originalError: error,
-          },
-        ),
+      catch: (error) => createConnectError(error, target),
     });
-    if (connected.isErr()) {
-      return err(connected.error);
-    }
-
+    if (connected.isErr()) return err(connected.error);
     try {
-      const [port, platformMetadata] = connected.value;
-      return ok([
-        PortProcessor.create(port, context.serializer, handlers),
-        platformMetadata,
-      ]);
+      const { port, connectionMeta } = connected.value;
+      return ok({
+        portProcessor: PortProcessor.create(port, context.serializer, handlers),
+        connectionMeta,
+      });
     } catch (error) {
-      return err(
-        new NexusEndpointConnectError(
-          `Failed to construct endpoint port: ${error instanceof Error ? error.message : String(error)}`,
-          {
-            endpointType: "endpoint",
-            targetDescriptor,
-            originalError: error,
-          },
-        ),
-      );
+      return err(createConnectError(error, target));
     }
   };
 }
@@ -165,3 +147,19 @@ const createListenError = (error: unknown): NexusEndpointListenError =>
       originalError: error,
     },
   );
+
+const createConnectError = <M extends AdapterModel>(
+  error: unknown,
+  target: ConnectionTargetOf<M>,
+): NexusEndpointCapabilityError | NexusEndpointConnectError =>
+  error instanceof NexusEndpointCapabilityError ||
+  error instanceof NexusEndpointConnectError
+    ? error
+    : new NexusEndpointConnectError(
+        `Failed to connect endpoint: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          endpointType: "endpoint",
+          target,
+          originalError: error,
+        },
+      );

@@ -5,24 +5,17 @@ For node-ipc, keep contract code shared and adapter code focused on daemon/clien
 ## Shared Contract
 
 ```ts
-import { TokenSpace } from "@nexus-js/core";
-import type {
-  NodeIpcPlatformMeta,
-  NodeIpcEndpointMeta,
-} from "@nexus-js/node-ipc";
+import { Token } from "@nexus-js/core";
+import type { NodeIpcConnectionTarget } from "@nexus-js/node-ipc";
 import type { EchoService } from "./contracts";
 
-const appSpace = new TokenSpace<NodeIpcEndpointMeta, NodeIpcPlatformMeta>({
-  name: "example-app",
-});
+export const daemonTarget = {
+  context: "node-ipc-daemon",
+  appId: "example-app",
+} satisfies NodeIpcConnectionTarget;
 
-const daemonServices = appSpace.space("daemon-services", {
-  defaultTarget: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-  },
-});
-
-export const EchoToken = daemonServices.token<EchoService>("echo");
+// This shared contract has no default target and is usable by another model.
+export const EchoToken = new Token<EchoService>("example-app:echo");
 ```
 
 ## Daemon
@@ -47,7 +40,7 @@ For function/object style, use `daemonNexus.provide(EchoToken, echoService)`.
 
 ## Client
 
-Use `nexus.create(EchoToken)` when the Token `defaultTarget` or unique node-ipc `connectTo` fallback supplies the daemon target.
+Use `nexus.create(EchoToken)` when the Token or node-ipc endpoint `defaultTarget` supplies the daemon target.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -56,11 +49,7 @@ import { EchoToken } from "./shared";
 
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: daemonTarget,
 });
 
 const echo = await nexus.create(EchoToken);
@@ -70,14 +59,11 @@ Use explicit targets for debugging or multiple daemon topologies.
 
 ```ts
 const echo = await nexus.create(EchoToken, {
-  target: {
-    descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-  },
-  expects: "one",
+  target: daemonTarget,
 });
 ```
 
-This works because core resolves `create(Token)` through the Token `defaultTarget` or the unique node-ipc `connectTo` fallback.
+This works because core resolves `create(Token)` through the Token or endpoint `defaultTarget`. `select(EchoToken, { where, wait })` only chooses an already available provider and never opens a socket.
 
 ## Authorization
 
@@ -86,7 +72,15 @@ Treat shared-secret pre-auth as an adapter gate. Keep core policy as the authori
 The standard provider path is helper plus `@daemonNexus.Expose(...)` for class services or `.provide(...)` for object services. If you also need to compose daemon policy at bootstrap, ask the helper for pure config with `configure: false`, combine layers with `composeNexusConfig([...])`, and configure once.
 
 ```ts
+import type { EchoService } from "./contracts";
 import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { EchoToken } from "./shared";
+
+const echoService: EchoService = {
+  async echo(input) {
+    return `echo:${input}`;
+  },
+};
 
 nexus.configure(
   composeNexusConfig([
@@ -97,8 +91,8 @@ nexus.configure(
     }),
     {
       policy: {
-        canConnect({ platform }) {
-          return platform.authenticated === true;
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
         },
       },
     },

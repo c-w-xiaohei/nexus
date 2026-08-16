@@ -20,11 +20,11 @@ The client:
 
 Both sides are normal Nexus runtimes. The adapter only supplies endpoint wiring and metadata.
 
-## Descriptor vs Socket Address
+## ConnectionTarget Vs Socket Address
 
-Nexus targets use descriptors. The adapter maps descriptors to socket addresses.
+Nexus targets use `NodeIpcConnectionTarget`. The adapter maps exact targets to socket addresses.
 
-Descriptor example:
+ConnectionTarget example:
 
 ```ts
 { context: "node-ipc-daemon", appId: "example-app", instance: "default" }
@@ -38,10 +38,10 @@ Socket address example:
 
 Keep this distinction clear:
 
-- descriptors are part of Nexus routing intent
+- exact targets are part of Nexus connection intent
 - socket addresses are adapter transport details
 
-Application code should normally target descriptors. Custom resolvers are the escape hatch when you need a specific socket layout.
+Application code should normally target the exported Node IPC target shape. Custom address resolvers are the escape hatch when the application owns a specific socket layout.
 
 ## Adapter Pre-Auth vs Core Policy
 
@@ -52,11 +52,11 @@ Core policy is the shared Nexus authorization layer. It decides whether authenti
 The common pattern is:
 
 1. node-ipc validates the shared secret
-2. node-ipc sets `platform.authenticated`
-3. `policy.canConnect` checks `platform.authenticated`
+2. node-ipc records `connection.observed.authenticated`
+3. `policy.canConnect` checks the connection fact
 4. `policy.canCall` checks service access
 
-## Endpoint Metadata vs Platform Metadata
+## ContextMeta Vs ConnectionMeta
 
 Endpoint metadata is logical identity declared by the process.
 
@@ -83,13 +83,15 @@ Client metadata shape:
 }
 ```
 
-Platform metadata is adapter-observed data:
+Connection metadata is adapter-observed data:
 
 ```ts
 {
-  socket: NodeIpcSocketAddress;
-  authenticated: boolean;
-  authMethod?: "none" | "shared-secret";
+  observed: {
+    socket: NodeIpcSocketAddress;
+    authenticated: boolean;
+    authMethod?: "none" | "shared-secret";
+  };
 }
 ```
 
@@ -129,7 +131,7 @@ It does not provide:
 
 - cross-machine transport
 - TLS
-- service discovery outside local descriptor-to-socket mapping
+- global service or target discovery outside the application's target-to-socket workflow
 - durable reconnecting proxy handles
 - OS peer credential authorization
 

@@ -1,7 +1,6 @@
 import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
 import { UnixSocketClientEndpoint } from "./endpoints/unix-socket-client.js";
 import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server.js";
-import { NodeIpcMatchers } from "./matchers.js";
 import { NodeIpcAddress } from "./types/address.js";
 import type { NodeIpcSocketAddress } from "./types/address.js";
 import type {
@@ -10,15 +9,15 @@ import type {
   NodeIpcDaemonConfigOptions,
   NodeIpcDaemonOptions,
 } from "./types/options.js";
-import type { NodeIpcPlatformMeta, NodeIpcEndpointMeta } from "./types/meta.js";
+import type { NodeIpcAdapterModel } from "./types/meta.js";
 import { NodeIpcError } from "./errors.js";
 
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonConfigOptions,
-): NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+): NexusConfig<NodeIpcAdapterModel>;
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonOptions,
-): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+): NexusInstance<NodeIpcAdapterModel>;
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonOptions | NodeIpcDaemonConfigOptions,
 ) {
@@ -27,7 +26,7 @@ export function usingNodeIpcDaemon(
     ? validateDaemonAddress(options.address)
     : resolveDaemonAddress(options.appId, instance);
   validateAuthToken(options.authToken);
-  const config: NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta> = {
+  const config: NexusConfig<NodeIpcAdapterModel> = {
     ...options,
     endpoint: {
       meta: {
@@ -42,13 +41,13 @@ export function usingNodeIpcDaemon(
         maxAuthLineBytes: options.maxAuthLineBytes,
       }),
     },
-    matchers: baseMatchers(options.appId, options.groups, instance),
-    descriptors: {
-      daemon: { context: "node-ipc-daemon", appId: options.appId, instance },
-    },
   };
 
-  return options.configure === false ? config : nexus.configure(config);
+  return options.configure === false
+    ? config
+    : (nexus.configure(
+        config as never,
+      ) as unknown as NexusInstance<NodeIpcAdapterModel>);
 }
 
 function validateDaemonAddress(
@@ -56,7 +55,7 @@ function validateDaemonAddress(
 ): NodeIpcSocketAddress {
   const result = NodeIpcAddress.validate(address);
   if (result.isErr()) throw result.error;
-  return result.value;
+  return NodeIpcAddress.normalize(result.value);
 }
 
 function resolveDaemonAddress(
@@ -74,15 +73,15 @@ function resolveDaemonAddress(
 
 export function usingNodeIpcClient(
   options: NodeIpcClientConfigOptions,
-): NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+): NexusConfig<NodeIpcAdapterModel>;
 export function usingNodeIpcClient(
   options: NodeIpcClientOptions,
-): NexusInstance<NodeIpcEndpointMeta, NodeIpcPlatformMeta>;
+): NexusInstance<NodeIpcAdapterModel>;
 export function usingNodeIpcClient(
   options: NodeIpcClientOptions | NodeIpcClientConfigOptions,
 ) {
   validateAuthToken(options.authToken);
-  const config: NexusConfig<NodeIpcEndpointMeta, NodeIpcPlatformMeta> = {
+  const config: NexusConfig<NodeIpcAdapterModel> = {
     ...options,
     endpoint: {
       meta: {
@@ -99,13 +98,15 @@ export function usingNodeIpcClient(
           maxAuthLineBytes: options.maxAuthLineBytes,
         },
       ),
-      connectTo: options.connectTo,
+      defaultTarget: options.defaultTarget,
     },
-    matchers: baseMatchers(options.appId, options.groups),
-    descriptors: {},
   };
 
-  return options.configure === false ? config : nexus.configure(config);
+  return options.configure === false
+    ? config
+    : (nexus.configure(
+        config as never,
+      ) as unknown as NexusInstance<NodeIpcAdapterModel>);
 }
 
 function validateAuthToken(authToken: string | undefined): void {
@@ -115,15 +116,4 @@ function validateAuthToken(authToken: string | undefined): void {
       "E_IPC_AUTH_FAILED",
     );
   }
-}
-
-function baseMatchers(appId: string, groups?: string[], instance?: string) {
-  return {
-    daemon: NodeIpcMatchers.daemon(appId),
-    client: NodeIpcMatchers.client(appId),
-    instance: NodeIpcMatchers.instance(instance ?? "default"),
-    ...Object.fromEntries(
-      (groups ?? []).map((name) => [name, NodeIpcMatchers.group(name)]),
-    ),
-  };
 }

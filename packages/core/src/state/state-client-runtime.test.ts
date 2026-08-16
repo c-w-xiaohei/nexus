@@ -64,6 +64,48 @@ const deferred = <T>() => {
 };
 
 describe("state client runtime and connect APIs", () => {
+  it("omits target so a store token defaultTarget is resolved", async () => {
+    const definition = createCounterDefinition();
+    const safeCreate = vi.fn(() =>
+      Promise.resolve(Result.err(new Error("stop after options"))),
+    );
+
+    await safeConnectNexusStore({ safeCreate } as any, definition, {});
+
+    expect(safeCreate).toHaveBeenCalledWith(definition.token, {});
+  });
+
+  it("omits target so a unique connectTo fallback is resolved", async () => {
+    const definition = createCounterDefinition();
+    const safeCreate = vi.fn(() =>
+      Promise.resolve(Result.err(new Error("stop after options"))),
+    );
+
+    await safeConnectNexusStore({ safeCreate } as any, definition, {
+      where: () => true,
+    });
+
+    expect(safeCreate).toHaveBeenCalledWith(definition.token, {
+      where: expect.any(Function),
+    });
+  });
+
+  it("forwards one State timeout to acquisition and remote call timeout", async () => {
+    const definition = createCounterDefinition();
+    const safeCreate = vi.fn(() =>
+      Promise.resolve(Result.err(new Error("stop after options"))),
+    );
+
+    await safeConnectNexusStore({ safeCreate } as any, definition, {
+      timeout: 321,
+    });
+
+    expect(safeCreate).toHaveBeenCalledWith(definition.token, {
+      timeout: 321,
+      callTimeout: 321,
+    });
+  });
+
   it("safeConnectNexusStore maps disconnect-hook getter errors with normalization branches", async () => {
     const definition = defineNexusStore({
       token: new Token("state:counter:disconnect-hook-getter-errors"),
@@ -379,7 +421,7 @@ describe("state client runtime and connect APIs", () => {
       } as any,
       definition,
       {
-        target: {} as any,
+        target: [] as never,
       },
     );
 
@@ -481,14 +523,14 @@ describe("state client runtime and connect APIs", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
 
     const popup = network.get("popup")!.nexus;
     const remote = await connectNexusStore(popup, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     expect(remote.getStatus().type).toBe("ready");
@@ -535,7 +577,7 @@ describe("state client runtime and connect APIs", () => {
           providers: {
             [definition.token.id]: registration.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -545,10 +587,11 @@ describe("state client runtime and connect APIs", () => {
 
     const remote = await connectNexusStore(backgroundNexus, definition, {
       target: {
-        descriptor: { context: "content-script" },
-        matcher: (id: Meta) =>
-          id.context === "content-script" && id.isActive === true,
+        context: "content-script",
+        issueId: "CS-ACTIVE",
       },
+      where: (id: Meta) =>
+        id.context === "content-script" && id.isActive === true,
     });
 
     await remote.actions.increment(1);
@@ -601,7 +644,7 @@ describe("state client runtime and connect APIs", () => {
           providers: {
             [definition.token.id]: registration1.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: {
@@ -612,7 +655,7 @@ describe("state client runtime and connect APIs", () => {
           providers: {
             [definition.token.id]: registration2.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -622,10 +665,11 @@ describe("state client runtime and connect APIs", () => {
 
     const remote = await connectNexusStore(backgroundNexus, definition, {
       target: {
-        descriptor: { context: "content-script" },
-        matcher: (id: Meta) =>
-          id.context === "content-script" && id.isActive === true,
+        context: "content-script",
+        issueId: "CS-1",
       },
+      where: (id: Meta) =>
+        id.context === "content-script" && id.isActive === true,
     });
 
     await remote.actions.increment(1);
@@ -657,14 +701,14 @@ describe("state client runtime and connect APIs", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
 
     const popup = network.get("popup")!.nexus;
     const result = await safeConnectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     expect(result.isOk()).toBe(true);
@@ -808,7 +852,7 @@ describe("state client runtime and connect APIs", () => {
           },
         }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(remote.getState()).toEqual({ count: 1 });
@@ -853,7 +897,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     onSync({
@@ -896,7 +940,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     onSync({
@@ -959,7 +1003,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(remote.getStatus().type).toBe("ready");
@@ -1027,7 +1071,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     const observed: number[] = [];
@@ -1111,7 +1155,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     remote.subscribe(() => {
@@ -1182,7 +1226,7 @@ describe("state client runtime and connect APIs", () => {
           second: () => "second",
         }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     const first = remote.actions
@@ -1255,7 +1299,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     const pending = remote.actions.increment();
@@ -1434,7 +1478,7 @@ describe("state client runtime and connect APIs", () => {
           increment: async () => ({ count: 0 }),
         }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     const result = await safeInvokeStoreAction(remote, "increment", [1]);
@@ -1579,7 +1623,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     await expect(remote.actions.increment()).rejects.toMatchObject({
@@ -1621,7 +1665,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     await expect(remote.actions.increment()).rejects.toMatchObject({
@@ -1661,7 +1705,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     await expect(remote.actions.increment()).rejects.toMatchObject({
@@ -1702,7 +1746,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     await expect(remote.actions.increment()).rejects.toBeInstanceOf(
@@ -1740,7 +1784,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(disconnectedResult.isErr()).toBe(true);
@@ -1778,7 +1822,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(malformedResult.isErr()).toBe(true);
@@ -1825,7 +1869,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(result.isErr()).toBe(true);
@@ -1872,7 +1916,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(result.isErr()).toBe(true);
@@ -1919,7 +1963,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(result.isOk()).toBe(true);
@@ -1975,7 +2019,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(result.isErr()).toBe(true);
@@ -2013,7 +2057,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     (remote as any).onSync({
@@ -2060,7 +2104,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     onSync({
@@ -2108,7 +2152,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     onSync({
@@ -2169,7 +2213,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: () => 1 }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     const actionPromise = remote.actions.increment();
@@ -2215,7 +2259,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ noop: () => 0 }),
       }),
-      { target: { descriptor: { context: "background" } as any }, timeout: 10 },
+      { target: { context: "background" }, timeout: 10 },
     );
 
     expect(timedOut.isErr()).toBe(true);
@@ -2484,6 +2528,7 @@ describe("state client runtime and connect APIs", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -2501,7 +2546,7 @@ describe("state client runtime and connect APIs", () => {
     };
 
     const remote = await connectNexusStore(fakeNexus as any, definition, {
-      target: { descriptor: { id: "host" } as any },
+      target: { id: "host" },
     });
     await remote.actions.increment(1);
     expect(remote.getState().count).toBe(1);
@@ -2573,7 +2618,7 @@ describe("state client runtime and connect APIs", () => {
           increment: (by: number) => by,
         }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     expect(remote.getStatus().type).toBe("ready");
@@ -2630,7 +2675,7 @@ describe("state client runtime and connect APIs", () => {
         state: () => ({ count: 0 }),
         actions: () => ({ increment: (by: number) => by }),
       }),
-      { target: { descriptor: { context: "background" } as any } },
+      { target: { context: "background" } },
     );
 
     await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(

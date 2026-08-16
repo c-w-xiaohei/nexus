@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from "react";
+import type { AdapterModel, NexusInstance } from "@nexus-js/core";
 import {
   connectNexusStore,
   type ConnectNexusStoreOptions,
@@ -18,9 +19,13 @@ const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
 
 type ActionFunction = (...args: any[]) => any;
 
+export type NexusStoreNexus<M extends AdapterModel> = Pick<
+  NexusInstance<M>,
+  "create" | "safeCreate"
+>;
+
 interface TargetIdentity {
-  readonly descriptorKey: string;
-  readonly matcher: unknown;
+  readonly targetKey: string;
 }
 
 export interface UseRemoteStoreResult<
@@ -33,8 +38,8 @@ export interface UseRemoteStoreResult<
   readonly reconnect: () => void;
 }
 
-export type UseRemoteStoreOptions<U extends object = object> =
-  ConnectNexusStoreOptions<U> & {
+export type UseRemoteStoreOptions<M extends AdapterModel = AdapterModel> =
+  ConnectNexusStoreOptions<M> & {
     readonly reconnectKey?: string | number | boolean | null;
   };
 
@@ -43,14 +48,13 @@ const INITIALIZING_STATUS: RemoteStoreStatus = { type: "initializing" };
 const toTargetIdentity = (
   options: ConnectNexusStoreOptions<any>,
 ): TargetIdentity => ({
-  descriptorKey: JSON.stringify({
-    descriptor: options.target?.descriptor ?? null,
+  targetKey: JSON.stringify({
+    target: options.target ?? null,
   }),
-  matcher: options.target?.matcher ?? null,
 });
 
 const sameTarget = (left: TargetIdentity, right: TargetIdentity): boolean =>
-  left.descriptorKey === right.descriptorKey && left.matcher === right.matcher;
+  left.targetKey === right.targetKey;
 
 const getLastKnownVersion = (status: RemoteStoreStatus): number | null => {
   if (status.type === "ready") {
@@ -87,13 +91,23 @@ const clearStoreStale = (target: RemoteStore<any, any>): void => {
 export const useRemoteStore = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-  U extends object = object,
 >(
-  definition: NexusStoreDefinition<TState, TActions, U>,
-  options: UseRemoteStoreOptions<U> = {},
+  definition: NexusStoreDefinition<TState, TActions, AdapterModel>,
+  options: UseRemoteStoreOptions<AdapterModel> = {},
+): UseRemoteStoreResult<TState, TActions> => {
+  return useRemoteStoreWithNexus(useNexus(), definition, options);
+};
+
+export const useRemoteStoreWithNexus = <
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+  M extends AdapterModel,
+>(
+  nexus: NexusStoreNexus<M>,
+  definition: NexusStoreDefinition<TState, TActions, M>,
+  options: UseRemoteStoreOptions<M> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
   const { reconnectKey = null, ...connectOptions } = options;
-  const nexus = useNexus();
   const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(
     null,
   );
@@ -113,6 +127,7 @@ export const useRemoteStore = <
   const effectTargetRef = useRef<TargetIdentity | null>(null);
   const lastStatusRef = useRef<RemoteStoreStatus>(INITIALIZING_STATUS);
   const connectVersionRef = useRef(0);
+  const latestConnectOptionsRef = useRef(connectOptions);
 
   const target = toTargetIdentity(connectOptions);
   const timeout = connectOptions.timeout ?? null;
@@ -126,6 +141,10 @@ export const useRemoteStore = <
         reason: "target-changed",
       }
     : status;
+
+  useEffect(() => {
+    latestConnectOptionsRef.current = connectOptions;
+  });
 
   useEffect(() => {
     effectTargetRef.current = target;
@@ -172,7 +191,7 @@ export const useRemoteStore = <
 
     let cancelled = false;
 
-    void connectNexusStore(nexus, definition, connectOptions)
+    void connectNexusStore(nexus, definition, latestConnectOptionsRef.current)
       .then((remote) => {
         if (cancelled || version !== connectVersionRef.current) {
           remote.destroy();
@@ -226,8 +245,7 @@ export const useRemoteStore = <
     manualReconnectRevision,
     nexus,
     reconnectKey,
-    target.descriptorKey,
-    target.matcher,
+    target.targetKey,
     timeout,
   ]);
 

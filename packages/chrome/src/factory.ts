@@ -1,24 +1,23 @@
-import { nexus, type IEndpoint, type NexusConfig } from "@nexus-js/core";
+import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
 import type {
   ChromeBackgroundMeta,
   ChromeBuiltinContext,
   ChromeContentScriptMeta,
   ChromeDevToolsPageMeta,
-  ChromeEndpointMeta,
+  ChromeContextMeta,
+  ChromeAdapterModel,
   ChromeOffscreenDocumentMeta,
   ChromeOptionsPageMeta,
-  ChromePlatformMeta,
   ChromePopupMeta,
 } from "./types/meta.js";
 import { BackgroundEndpoint } from "./endpoints/background.js";
 import { ContentScriptEndpoint } from "./endpoints/content-script.js";
 import { UIClientEndpoint } from "./endpoints/ui-client.js";
-import { ChromeMatchers, type ChromeMatcherMeta } from "./matchers.js";
 
 type ChromeConfig<
   TAppMeta = never,
   TCustomMeta extends { context: string } = never,
-> = NexusConfig<ChromeEndpointMeta<TAppMeta, TCustomMeta>, ChromePlatformMeta>;
+> = NexusConfig<ChromeAdapterModel<TAppMeta, TCustomMeta>>;
 
 type AppOption<TAppMeta> = [TAppMeta] extends [never]
   ? { app?: never }
@@ -65,7 +64,6 @@ type ExtensionPageConfigInput<
   (TCustomMeta["context"] extends ChromeBuiltinContext ? never : unknown) &
   AppOption<TAppMeta>;
 
-const backgroundDescriptor = { context: "background" } as const;
 const chromeBuiltinContexts = new Set<ChromeBuiltinContext>([
   "background",
   "content-script",
@@ -75,32 +73,25 @@ const chromeBuiltinContexts = new Set<ChromeBuiltinContext>([
   "offscreen-document",
 ]);
 
-function backgroundDescriptorFor<
-  TAppMeta,
-  TCustomMeta extends { context: string } = never,
->(): Partial<ChromeEndpointMeta<TAppMeta, TCustomMeta>> {
-  return backgroundDescriptor as Partial<
-    ChromeEndpointMeta<TAppMeta, TCustomMeta>
-  >;
+function backgroundDefaultTarget() {
+  return { kind: "background" as const };
 }
 
-function backgroundConnectToFor<
-  TAppMeta,
+function configureChrome<
+  TAppMeta = never,
   TCustomMeta extends { context: string } = never,
->() {
-  return [{ descriptor: backgroundDescriptorFor<TAppMeta, TCustomMeta>() }];
+>(
+  config: ChromeConfig<TAppMeta, TCustomMeta>,
+): NexusInstance<ChromeAdapterModel<TAppMeta, TCustomMeta>> {
+  return (
+    nexus as unknown as NexusInstance<ChromeAdapterModel<TAppMeta, TCustomMeta>>
+  ).configure(config);
 }
 
 function isChromeBuiltinContext(
   context: string,
 ): context is ChromeBuiltinContext {
   return chromeBuiltinContexts.has(context as ChromeBuiltinContext);
-}
-
-function matcherFor<TMeta extends object>(
-  matcher: (identity: ChromeMatcherMeta) => boolean,
-): (identity: TMeta) => boolean {
-  return matcher as (identity: TMeta) => boolean;
 }
 
 /**
@@ -122,24 +113,7 @@ export function createBackgroundScriptConfig<TAppMeta = never>(
   const config = {
     endpoint: {
       meta: backgroundMeta,
-      implementation: new BackgroundEndpoint() as IEndpoint<
-        ChromeEndpointMeta<TAppMeta>,
-        ChromePlatformMeta
-      >,
-    },
-    matchers: {
-      "any-content-script": matcherFor<ChromeEndpointMeta<TAppMeta>>(
-        ChromeMatchers.anyContentScript,
-      ),
-      "any-popup": matcherFor<ChromeEndpointMeta<TAppMeta>>(
-        ChromeMatchers.anyPopup,
-      ),
-      "visible-content-script": matcherFor<ChromeEndpointMeta<TAppMeta>>(
-        ChromeMatchers.visibleContentScript,
-      ),
-    },
-    descriptors: {
-      background: backgroundDescriptorFor<TAppMeta>(),
+      implementation: new BackgroundEndpoint(),
     },
   } satisfies ChromeConfig<TAppMeta>;
 
@@ -155,7 +129,7 @@ export function usingBackgroundScript<TAppMeta = never>(
     CreateBackgroundScriptConfigOptions<TAppMeta>
   >
 ) {
-  return nexus.configure(
+  return configureChrome<TAppMeta>(
     createBackgroundScriptConfig<TAppMeta>(
       ...([options] as OptionalOptions<
         TAppMeta,
@@ -185,19 +159,9 @@ export function createContentScriptConfig<TAppMeta = never>(
   const config = {
     endpoint: {
       meta: contentScriptMeta,
-      implementation: new ContentScriptEndpoint() as IEndpoint<
-        ChromeEndpointMeta<TAppMeta>,
-        ChromePlatformMeta
-      >,
-      connectTo: backgroundConnectToFor<TAppMeta>(),
-    },
-    matchers: {
-      background: matcherFor<ChromeEndpointMeta<TAppMeta>>(
-        ChromeMatchers.background,
-      ),
-    },
-    descriptors: {
-      background: backgroundDescriptorFor<TAppMeta>(),
+      implementation: new ContentScriptEndpoint(),
+      defaultTarget:
+        backgroundDefaultTarget() as ChromeAdapterModel<TAppMeta>["connectionTarget"],
     },
   } satisfies ChromeConfig<TAppMeta>;
 
@@ -213,7 +177,7 @@ export function usingContentScript<TAppMeta = never>(
     CreateContentScriptConfigOptions<TAppMeta>
   >
 ) {
-  const nexusInstance = nexus.configure(
+  const nexusInstance = configureChrome<TAppMeta>(
     createContentScriptConfig<TAppMeta>(
       ...([options] as OptionalOptions<
         TAppMeta,
@@ -242,7 +206,7 @@ export function createPopupConfig<TAppMeta = never>(
     ...options,
   } as ChromePopupMeta<TAppMeta>;
 
-  return createUiClientConfig(popupMeta);
+  return createUiClientConfig<TAppMeta>(popupMeta);
 }
 
 /**
@@ -251,7 +215,7 @@ export function createPopupConfig<TAppMeta = never>(
 export function usingPopup<TAppMeta = never>(
   ...[options]: OptionalOptions<TAppMeta, CreatePopupConfigOptions<TAppMeta>>
 ) {
-  return nexus.configure(
+  return configureChrome<TAppMeta>(
     createPopupConfig<TAppMeta>(
       ...([options] as OptionalOptions<
         TAppMeta,
@@ -273,7 +237,7 @@ export function createOptionsPageConfig<TAppMeta = never>(
     ...options,
   } as ChromeOptionsPageMeta<TAppMeta>;
 
-  return createUiClientConfig(optionsPageMeta);
+  return createUiClientConfig<TAppMeta>(optionsPageMeta);
 }
 
 export function usingOptionsPage<TAppMeta = never>(
@@ -282,7 +246,7 @@ export function usingOptionsPage<TAppMeta = never>(
     CreateOptionsPageConfigOptions<TAppMeta>
   >
 ) {
-  return nexus.configure(
+  return configureChrome<TAppMeta>(
     createOptionsPageConfig<TAppMeta>(
       ...([options] as OptionalOptions<
         TAppMeta,
@@ -304,7 +268,7 @@ export function createDevToolsPageConfig<TAppMeta = never>(
     ...options,
   } as ChromeDevToolsPageMeta<TAppMeta>;
 
-  return createUiClientConfig(devToolsPageMeta);
+  return createUiClientConfig<TAppMeta>(devToolsPageMeta);
 }
 
 export function usingDevToolsPage<TAppMeta = never>(
@@ -313,7 +277,7 @@ export function usingDevToolsPage<TAppMeta = never>(
     CreateDevToolsPageConfigOptions<TAppMeta>
   >
 ) {
-  return nexus.configure(
+  return configureChrome<TAppMeta>(
     createDevToolsPageConfig<TAppMeta>(
       ...([options] as OptionalOptions<
         TAppMeta,
@@ -331,7 +295,7 @@ export function createOffscreenDocumentConfig<TAppMeta = never>(
     ...options,
   } as ChromeOffscreenDocumentMeta<TAppMeta>;
 
-  return createUiClientConfig(offscreenDocumentMeta);
+  return createUiClientConfig<TAppMeta>(offscreenDocumentMeta);
 }
 
 export function usingOffscreenDocument<TAppMeta = never>(
@@ -346,7 +310,7 @@ export function usingOffscreenDocument<TAppMeta = never>(
         } as CreateOffscreenDocumentConfigOptions<TAppMeta>)
       : reasonOrOptions;
 
-  return nexus.configure(createOffscreenDocumentConfig(options));
+  return configureChrome<TAppMeta>(createOffscreenDocumentConfig(options));
 }
 
 export function createExtensionPageConfig<
@@ -381,35 +345,29 @@ export function usingExtensionPage<
   },
 >(
   meta: ExtensionPageConfigInput<TAppMeta, TCustomMeta>,
-): ReturnType<typeof nexus.configure>;
+): NexusInstance<
+  ChromeAdapterModel<TAppMeta, ExtensionPageConfigMeta<TAppMeta, TCustomMeta>>
+>;
 export function usingExtensionPage(
   meta: { context: string } & Record<string, unknown>,
-) {
-  return nexus.configure(createExtensionPageConfig(meta));
+): NexusInstance<any> {
+  return configureChrome(createExtensionPageConfig(meta));
 }
 
 function createUiClientConfig<
   TAppMeta = never,
   TCustomMeta extends { context: string } = never,
 >(
-  meta: ChromeEndpointMeta<TAppMeta, TCustomMeta>,
+  meta: ChromeContextMeta<TAppMeta, TCustomMeta>,
 ): ChromeConfig<TAppMeta, TCustomMeta> {
   const config = {
     endpoint: {
       meta,
-      implementation: new UIClientEndpoint() as IEndpoint<
-        ChromeEndpointMeta<TAppMeta, TCustomMeta>,
-        ChromePlatformMeta
-      >,
-      connectTo: backgroundConnectToFor<TAppMeta, TCustomMeta>(),
-    },
-    matchers: {
-      background: matcherFor<ChromeEndpointMeta<TAppMeta, TCustomMeta>>(
-        ChromeMatchers.background,
-      ),
-    },
-    descriptors: {
-      background: backgroundDescriptorFor<TAppMeta, TCustomMeta>(),
+      implementation: new UIClientEndpoint(),
+      defaultTarget: backgroundDefaultTarget() as ChromeAdapterModel<
+        TAppMeta,
+        TCustomMeta
+      >["connectionTarget"],
     },
   } satisfies ChromeConfig<TAppMeta, TCustomMeta>;
 

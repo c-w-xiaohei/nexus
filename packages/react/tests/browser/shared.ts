@@ -3,6 +3,7 @@ import {
   defineNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
 
 export const APP_ID = "react-state-star-browser";
 export const HOST_ORIGIN = "http://127.0.0.1:3310";
@@ -96,27 +97,34 @@ export const counterStore = defineNexusStore<CounterState, CounterActions>({
   }),
 });
 
+export const iframeCounterStore = defineNexusStore<
+  CounterState,
+  CounterActions,
+  IframeAdapterModel
+>({
+  token: CounterStoreToken,
+  state: counterStore.state,
+  actions: counterStore.actions,
+});
+
 export const hostTarget = {
-  descriptor: { context: "iframe-parent", appId: APP_ID },
+  context: "iframe-parent",
+  appId: APP_ID,
 } as const;
 
 export const relayHostTarget = {
-  descriptor: {
-    context: "iframe-parent",
-    appId: RELAY_APP_ID,
-    origin: RELAY_HOST_ORIGIN,
-  },
+  context: "iframe-parent",
+  appId: RELAY_APP_ID,
+  origin: RELAY_HOST_ORIGIN,
 } as const;
 
 export const relayFrameTarget = {
-  descriptor: {
-    context: "iframe-parent",
-    appId: RELAY_APP_ID,
-    origin: RELAY_ORIGIN,
-  },
+  context: "iframe-parent",
+  appId: RELAY_APP_ID,
+  origin: RELAY_ORIGIN,
 } as const;
 
-export const childDescriptor = (frameId: string) => ({
+export const childTarget = (frameId: string) => ({
   context: "iframe-child",
   appId: APP_ID,
   frameId,

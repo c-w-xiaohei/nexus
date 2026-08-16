@@ -5,10 +5,11 @@ import type { IEndpoint, IPort } from "@nexus-js/core";
 import { Result } from "better-result";
 import { NodeIpcError } from "../errors.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
-import type { NodeIpcSocketAddress } from "../types/address.js";
+import { NodeIpcAddress, type NodeIpcSocketAddress } from "../types/address.js";
 import type {
-  NodeIpcPlatformMeta,
-  NodeIpcEndpointMeta,
+  NodeIpcAdapterModel,
+  NodeIpcConnectionMeta,
+  NodeIpcObservedConnectionFacts,
 } from "../types/meta.js";
 
 export type UnixSocketServerHandle = {
@@ -16,7 +17,7 @@ export type UnixSocketServerHandle = {
 };
 
 type EndpointCapabilities = NonNullable<
-  IEndpoint<NodeIpcEndpointMeta, NodeIpcPlatformMeta>["capabilities"]
+  IEndpoint<NodeIpcAdapterModel>["capabilities"]
 >;
 
 const createCapabilities = (): EndpointCapabilities => {
@@ -31,10 +32,7 @@ const createCapabilities = (): EndpointCapabilities => {
   return capabilities;
 };
 
-export class UnixSocketServerEndpoint implements IEndpoint<
-  NodeIpcEndpointMeta,
-  NodeIpcPlatformMeta
-> {
+export class UnixSocketServerEndpoint implements IEndpoint<NodeIpcAdapterModel> {
   readonly capabilities = createCapabilities();
   private server: net.Server | undefined;
   private readonly sockets = new Set<net.Socket>();
@@ -50,14 +48,14 @@ export class UnixSocketServerEndpoint implements IEndpoint<
     validateAuthToken(authToken);
   }
 
-  listen(
-    onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
+  async listen(
+    onConnect: (port: IPort, connectionMeta: NodeIpcConnectionMeta) => void,
   ): Promise<UnixSocketServerHandle> {
     return this.listenUnsafe(onConnect);
   }
 
   private async listenUnsafe(
-    onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: NodeIpcConnectionMeta) => void,
   ): Promise<UnixSocketServerHandle> {
     const result = await this.safeListen(onConnect);
     if (result.isErr()) throw result.error;
@@ -65,7 +63,7 @@ export class UnixSocketServerEndpoint implements IEndpoint<
   }
 
   safeListen(
-    onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: NodeIpcConnectionMeta) => void,
   ): Promise<Result<UnixSocketServerHandle, NodeIpcError>> {
     return Result.tryPromise({
       try: () => this.listenInternal(onConnect),
@@ -74,7 +72,7 @@ export class UnixSocketServerEndpoint implements IEndpoint<
   }
 
   private async listenInternal(
-    onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: NodeIpcConnectionMeta) => void,
   ): Promise<UnixSocketServerHandle> {
     validateAuthToken(this.authToken);
     if (this.address.kind !== "path")
@@ -127,12 +125,12 @@ export class UnixSocketServerEndpoint implements IEndpoint<
 
   private async acceptSocket(
     socket: net.Socket,
-    onConnect: (port: IPort, platformMetadata?: NodeIpcPlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: NodeIpcConnectionMeta) => void,
   ): Promise<void> {
     if (this.authToken === undefined) {
       onConnect(
         new UnixSocketPort(socket),
-        this.createPlatformMeta(false, "none"),
+        this.createConnectionMeta(false, "none"),
       );
       return;
     }
@@ -142,22 +140,24 @@ export class UnixSocketServerEndpoint implements IEndpoint<
       socket.write(JSON.stringify({ type: "nexus-ipc-auth-ok" }) + "\n");
       onConnect(
         new UnixSocketPort(socket),
-        this.createPlatformMeta(true, "shared-secret"),
+        this.createConnectionMeta(true, "shared-secret"),
       );
     } catch (cause) {
       socket.destroy();
     }
   }
 
-  private createPlatformMeta(
+  private createConnectionMeta(
     authenticated: boolean,
-    authMethod: NodeIpcPlatformMeta["authMethod"],
-  ): NodeIpcPlatformMeta {
-    return {
-      socket: this.address,
-      authenticated,
-      authMethod,
-    };
+    authMethod: NodeIpcObservedConnectionFacts["authMethod"],
+  ): NodeIpcConnectionMeta {
+    return Object.freeze({
+      observed: Object.freeze({
+        socket: NodeIpcAddress.freeze(this.address),
+        authenticated,
+        authMethod,
+      }),
+    });
   }
 }
 

@@ -13,10 +13,21 @@ import {
   createNexusStore,
   type NexusStoreServiceContract,
 } from "../../src/state";
+import type { AppConnectionMeta } from "../fixtures";
+import type { TestAdapterModel } from "../../src/utils/test-utils";
+
+type LifecycleUserMeta = {
+  context: "background" | "popup" | "popup-a" | "popup-b" | "popup-c";
+};
+type LifecycleModel = TestAdapterModel<LifecycleUserMeta, AppConnectionMeta>;
 
 describe("Nexus State Integration: Lifecycle and Cleanup", () => {
   it("connects remote store over ordinary service path and handles disconnect", async () => {
-    const counterStore = defineNexusStore({
+    const counterStore = defineNexusStore<
+      { count: number },
+      { increment(by: number): number },
+      LifecycleModel
+    >({
       token: new Token<
         NexusStoreServiceContract<
           { count: number },
@@ -33,8 +44,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const network = await createStarNetwork<
-      { context: "background" | "popup" },
-      { from: string }
+      LifecycleUserMeta,
+      AppConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -46,14 +57,14 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
 
     const popup = network.get("popup")!.nexus;
     const remote = await connectNexusStore(popup, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     expect(remote.getState().count).toBe(0);
@@ -76,7 +87,11 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
   });
 
   it("synchronizes state across isolated contexts, fans out updates, and cleans disconnected subscribers", async () => {
-    const counterStore = defineNexusStore({
+    const counterStore = defineNexusStore<
+      { count: number },
+      { increment(by: number): number },
+      LifecycleModel
+    >({
       token: new Token<
         NexusStoreServiceContract<
           { count: number },
@@ -93,8 +108,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const network = await createStarNetwork<
-      { context: "background" | "popup-a" | "popup-b" | "popup-c" },
-      { from: string }
+      LifecycleUserMeta,
+      AppConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -106,15 +121,15 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
       leaves: [
         {
           meta: { context: "popup-a" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: { context: "popup-b" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: { context: "popup-c" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -127,13 +142,13 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     const backgroundCm = (background as any).connectionManager;
 
     const remoteA = await connectNexusStore(popupA, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const remoteB = await connectNexusStore(popupB, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const remoteC = await connectNexusStore(popupC, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     const updatesA: number[] = [];
@@ -296,7 +311,11 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     type CounterState = { count: number };
     type CounterActions = { increment(by: number): number };
 
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      LifecycleModel
+    >({
       token: new Token("state:counter:stale-instance:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
@@ -404,8 +423,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     };
 
     const network = await createStarNetwork<
-      { context: "background" | "popup" },
-      { from: string }
+      LifecycleUserMeta,
+      AppConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -416,14 +435,14 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
 
     const popup = network.get("popup")!.nexus;
     const remote = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     const seenCounts: number[] = [];
@@ -460,7 +479,11 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     type CounterState = { count: number };
     type CounterActions = { increment(by: number): number };
 
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      LifecycleModel
+    >({
       token: new Token("state:counter:sibling-stale-isolation:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
@@ -568,8 +591,8 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     };
 
     const network = await createStarNetwork<
-      { context: "background" | "popup-a" | "popup-b" },
-      { from: string }
+      LifecycleUserMeta,
+      AppConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -580,11 +603,11 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
       leaves: [
         {
           meta: { context: "popup-a" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: { context: "popup-b" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -593,10 +616,10 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     const popupB = network.get("popup-b")!.nexus;
 
     const staleRemote = await connectNexusStore(popupA, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const freshRemote = await connectNexusStore(popupB, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     await staleRemote.actions.increment(1);
@@ -616,7 +639,7 @@ describe("Nexus State Integration: Lifecycle and Cleanup", () => {
     });
 
     const replacementRemote = await connectNexusStore(popupB, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     await expect(replacementRemote.actions.increment(2)).resolves.toBe(7);

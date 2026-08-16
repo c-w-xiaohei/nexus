@@ -65,11 +65,24 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
     "id",
     "metadata",
     "assigns",
+    "capabilities",
   ],
-  [Message.NexusMessageType.HANDSHAKE_ACK]: ["type", "id", "metadata"],
-  [Message.NexusMessageType.HANDSHAKE_READY]: ["type", "id"],
+  [Message.NexusMessageType.HANDSHAKE_ACK]: [
+    "type",
+    "id",
+    "metadata",
+    "capabilities",
+    "providers",
+  ],
+  [Message.NexusMessageType.HANDSHAKE_READY]: [
+    "type",
+    "id",
+    "capabilities",
+    "providers",
+  ],
   [Message.NexusMessageType.HANDSHAKE_REJECT]: ["type", "id", "error"],
   [Message.NexusMessageType.IDENTITY_UPDATE]: ["type", "id", "updates"],
+  [Message.NexusMessageType.PROVIDER_AVAILABLE]: ["type", "id", "providers"],
   // Layer 1
   [Message.NexusMessageType.CHUNK_START]: [
     "type",

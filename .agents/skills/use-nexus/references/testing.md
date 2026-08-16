@@ -19,7 +19,7 @@ const pingService: PingService = {
 mock.service(PingToken, pingService);
 
 const ping = await mock.nexus.create(PingToken, {
-  target: { descriptor: { context: "host" } },
+  target: { context: "host" },
 });
 ```
 
@@ -49,6 +49,6 @@ expect(mock.calls.release()).toHaveLength(1);
 
 ## Boundaries
 
-`createMockNexus()` does not simulate endpoints, transports, adapter auth gates, real connection sessions, iframe reloads, daemon restarts, Chrome runtime ports, or multicast semantics.
+`createMockNexus()` supports API-level `createMulticast` and `selectMulticast` behavior for `"all"` and `"stream"` results, including selection snapshots. It does not simulate endpoints, transports, adapter auth gates, real connection sessions, iframe reloads, daemon restarts, Chrome runtime ports, or transport-level multicast behavior.
 
 Use core, adapter, browser, or socket integration tests for real restart, transport, and session behavior.

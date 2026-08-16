@@ -1,118 +1,38 @@
-import type { EndpointMeta } from "../types/identity.js";
-import {
-  NexusConfigurationError,
-  NexusTargetingError,
-} from "../errors/index.js";
-import type {
-  Target,
-  DescriptorTarget,
-  MatcherTarget,
-} from "./types/config.js";
+import type { AdapterModel, ConnectionTargetOf } from "@/types/adapter-model";
+import { NexusServiceError } from "@/errors";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
-type ResolvedNamedTarget<U extends EndpointMeta> = {
-  descriptor?: Partial<U>;
-  matcher?: (identity: U) => boolean;
-  group?: string;
-};
-
 export namespace TargetResolver {
-  export const resolveNamedTarget = <U extends EndpointMeta>(
-    target: {
-      descriptor?: DescriptorTarget<U, string>;
-      matcher?: MatcherTarget<U, string>;
-      group?: string;
-    },
-    namedDescriptors: ReadonlyMap<string, Partial<U>>,
-    namedMatchers: ReadonlyMap<string, (identity: U) => boolean>,
-    context?: string,
-  ): Result<ResolvedNamedTarget<U>, NexusConfigurationError> => {
-    const { descriptor: descriptorOrName, matcher: matcherOrName } = target;
-
-    const descriptor =
-      typeof descriptorOrName === "string"
-        ? namedDescriptors.get(descriptorOrName)
-        : descriptorOrName;
-
-    const matcher =
-      typeof matcherOrName === "string"
-        ? namedMatchers.get(matcherOrName)
-        : matcherOrName;
-
-    const suffix = context ? ` ${context}` : "";
-
-    if (
-      descriptorOrName &&
-      typeof descriptorOrName === "string" &&
-      !descriptor
-    ) {
-      return err(
-        new NexusConfigurationError(
-          `Nexus: Descriptor with name "${descriptorOrName}" not found${suffix}.`,
-        ),
-      );
-    }
-
-    if (matcherOrName && typeof matcherOrName === "string" && !matcher) {
-      return err(
-        new NexusConfigurationError(
-          `Nexus: Matcher with name "${matcherOrName}" not found${suffix}.`,
-        ),
-      );
-    }
-
-    return ok({
-      descriptor,
-      matcher,
-      group: target.group,
-    });
-  };
-
-  export const resolveUnicastTarget = <U extends EndpointMeta>(
-    optionsTarget: Target<U, string, string> | null | undefined,
-    tokenDefaultTarget: Target<U, string, string> | null | undefined,
-    connectTo: readonly Target<U, string, string>[] | undefined,
+  export const resolveUnicastTarget = <M extends AdapterModel>(
+    optionsTarget: ConnectionTargetOf<M> | undefined,
+    tokenDefaultTarget: ConnectionTargetOf<M> | undefined,
+    endpointDefaultTarget: ConnectionTargetOf<M> | undefined,
     tokenId: string,
-  ): Result<Target<U, string, string>, NexusTargetingError> => {
-    let finalTarget: Target<U, string, string> | null | undefined =
-      optionsTarget;
+  ): Result<ConnectionTargetOf<M>, NexusServiceError> => {
+    let finalTarget = optionsTarget;
 
     if (isTargetEmpty(finalTarget) && tokenDefaultTarget) {
       finalTarget = tokenDefaultTarget;
     }
 
     if (isTargetEmpty(finalTarget)) {
-      if (connectTo?.length === 1) {
-        finalTarget = connectTo[0];
-      } else if (connectTo && connectTo.length > 1) {
-        return err(
-          new NexusTargetingError(
-            `Nexus: Default target is ambiguous. ${connectTo.length} targets are defined in 'connectTo'. Please specify a 'target' explicitly in create().`,
-            "E_TARGET_UNEXPECTED_COUNT",
-            { connectToCount: connectTo.length },
-          ),
-        );
-      }
+      finalTarget = endpointDefaultTarget;
     }
 
     if (isTargetEmpty(finalTarget)) {
       return err(
-        new NexusTargetingError(
-          `Nexus: No target specified for creating proxy for token "${tokenId}". A target must be provided either in create() options, the Token, or a unique 'connectTo' endpoint config.`,
-          "E_TARGET_NO_MATCH",
-          { token: tokenId, target: optionsTarget },
+        new NexusServiceError(
+          `Nexus: No target specified for acquiring "${tokenId}". Provide target, Token.defaultTarget, or endpoint.defaultTarget.`,
+          "E_TARGET_REQUIRED",
         ),
       );
     }
 
-    return ok(finalTarget as Target<U, string, string>);
+    return ok(finalTarget);
   };
 }
 
-function isTargetEmpty(target: object | null | undefined): boolean {
-  return (
-    !target ||
-    Object.values(target).every((value) => typeof value === "undefined")
-  );
+function isTargetEmpty(target: object | undefined): target is undefined {
+  return typeof target === "undefined";
 }

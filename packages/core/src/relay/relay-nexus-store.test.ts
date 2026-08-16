@@ -62,7 +62,7 @@ describe("relayNexusStore", () => {
           dispatch: vi.fn(),
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
 
     const pending = registration.service.subscribe(
@@ -109,7 +109,7 @@ describe("relayNexusStore", () => {
           dispatch: vi.fn(),
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
 
     await expect(
@@ -157,7 +157,7 @@ describe("relayNexusStore", () => {
           dispatch,
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onSync = vi.fn();
     await registration.service.subscribe(onSync, createInvocation("alpha"));
@@ -208,7 +208,7 @@ describe("relayNexusStore", () => {
           })),
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onSync = vi.fn();
     await registration.service.subscribe(onSync, createInvocation("alpha"));
@@ -246,7 +246,7 @@ describe("relayNexusStore", () => {
           dispatch,
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
       policy: { canDispatch },
     });
 
@@ -261,7 +261,7 @@ describe("relayNexusStore", () => {
     expect(canDispatch).toHaveBeenCalledWith({
       origin: { context: "alpha" },
       relay: { context: "content-relay" },
-      platform: { from: "alpha" },
+      connection: { from: "alpha" },
       tokenId: definition.token.id,
       action: "increment",
     });
@@ -297,7 +297,7 @@ describe("relayNexusStore", () => {
           },
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onSync = vi.fn();
     await registration.service.subscribe(onSync, createInvocation("alpha"));
@@ -339,7 +339,7 @@ describe("relayNexusStore", () => {
           dispatch,
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onSync = vi.fn();
     await registration.service.subscribe(onSync, createInvocation("alpha"));
@@ -393,7 +393,7 @@ describe("relayNexusStore", () => {
           },
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onSync = vi.fn();
     await registration.service.subscribe(onSync, createInvocation("alpha"));
@@ -444,7 +444,7 @@ describe("relayNexusStore", () => {
           dispatch: vi.fn(),
         })),
       } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const onAlpha = vi.fn();
     const onBeta = vi.fn();

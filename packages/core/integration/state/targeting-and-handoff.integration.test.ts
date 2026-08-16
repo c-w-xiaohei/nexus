@@ -1,6 +1,6 @@
 /**
  * Simulates state-store discovery decisions when multiple content-script hosts
- * exist, verifying dynamic matcher handoff behavior and fixed-descriptor target
+ * exist, verifying dynamic where handoff behavior and fixed-target routing
  * stability as endpoint identities change over time.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +14,10 @@ import {
   createNexusStore,
 } from "../../src/state";
 
-import type { AppPlatformMeta, AppUserMeta } from "../fixtures";
+import type { AppConnectionMeta, AppUserMeta } from "../fixtures";
+import type { TestAdapterModel } from "../../src/utils/test-utils";
+
+type AppModel = TestAdapterModel<AppUserMeta, AppConnectionMeta>;
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -30,33 +33,28 @@ const deferred = <T>(): Deferred<T> => {
 };
 
 describe("Nexus State Integration: Targeting and Identity Handoff", () => {
-  it("marks existing dynamic-matcher store handle stale after active-target identity handoff", async () => {
+  it("marks an existing where-selected store handle stale after identity handoff", async () => {
     type CounterState = { count: number };
     type CounterActions = { increment(by: number): number };
 
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      AppUserMeta
-    >({
-      token: new Token("state:counter:dynamic-active-handoff:integration"),
-      state: () => ({ count: 0 }),
-      actions: ({ getState, setState }) => ({
-        increment(by: number) {
-          setState({ count: getState().count + by });
-          return getState().count;
-        },
-      }),
-      defaultTarget: {
-        matcher: (id: any) => id.context === "content-script" && id.isActive,
-        descriptor: { context: "content-script" },
+    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
+      {
+        token: new Token("state:counter:dynamic-active-handoff:integration"),
+        state: () => ({ count: 0 }),
+        actions: ({ getState, setState }) => ({
+          increment(by: number) {
+            setState({ count: getState().count + by });
+            return getState().count;
+          },
+        }),
+        defaultTarget: { context: "content-script" },
       },
-    });
+    );
 
     const { provider: cs1Registration } = createNexusStore(definition);
     const { provider: cs2Registration } = createNexusStore(definition);
 
-    const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
+    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
       center: {
         meta: { context: "background", version: "1.0.0" },
       },
@@ -72,7 +70,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs1Registration.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: {
@@ -85,7 +83,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs2Registration.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -95,10 +93,9 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
     const cs2Nexus = network.get("content-script:CS2-INACTIVE")!.nexus;
 
     const remote = await connectNexusStore(backgroundNexus, definition, {
-      target: {
-        matcher: (id: any) => id.context === "content-script" && id.isActive,
-        descriptor: { context: "content-script" },
-      },
+      target: { context: "content-script" },
+      where: (identity, _connectionMeta) =>
+        identity.context === "content-script" && identity.isActive,
     });
     const oldSnapshots: number[] = [];
     const stopOld = remote.subscribe((snapshot) => {
@@ -126,28 +123,24 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
     type CounterState = { count: number };
     type CounterActions = { increment(by: number): number };
 
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      AppUserMeta
-    >({
-      token: new Token("state:counter:fixed-target-stability:integration"),
-      state: () => ({ count: 0 }),
-      actions: ({ getState, setState }) => ({
-        increment(by: number) {
-          setState({ count: getState().count + by });
-          return getState().count;
-        },
-      }),
-      defaultTarget: {
-        descriptor: { context: "content-script" },
+    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
+      {
+        token: new Token("state:counter:fixed-target-stability:integration"),
+        state: () => ({ count: 0 }),
+        actions: ({ getState, setState }) => ({
+          increment(by: number) {
+            setState({ count: getState().count + by });
+            return getState().count;
+          },
+        }),
+        defaultTarget: { context: "content-script" },
       },
-    });
+    );
 
     const { provider: cs1Registration } = createNexusStore(definition);
     const { provider: cs2Registration } = createNexusStore(definition);
 
-    const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
+    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
       center: {
         meta: { context: "background", version: "1.0.0" },
       },
@@ -163,7 +156,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs1Registration.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: {
@@ -176,7 +169,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs2Registration.service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -185,9 +178,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
     const cs2Nexus = network.get("content-script:CS2-OTHER")!.nexus;
 
     const remote = await connectNexusStore(backgroundNexus, definition, {
-      target: {
-        descriptor: { issueId: "CS1-FIXED", context: "content-script" },
-      },
+      target: { context: "content-script", issueId: "CS1-FIXED" },
     });
 
     await remote.actions.increment(1);
@@ -271,24 +262,19 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
       };
     };
 
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      AppUserMeta
-    >({
-      token: new Token("state:counter:dynamic-handoff-inflight:integration"),
-      state: () => ({ count: 0 }),
-      actions: ({ getState, setState }) => ({
-        async increment(by: number) {
-          setState({ count: getState().count + by });
-          return getState().count;
-        },
-      }),
-      defaultTarget: {
-        matcher: (id: any) => id.context === "content-script" && id.isActive,
-        descriptor: { context: "content-script" },
+    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
+      {
+        token: new Token("state:counter:dynamic-handoff-inflight:integration"),
+        state: () => ({ count: 0 }),
+        actions: ({ getState, setState }) => ({
+          async increment(by: number) {
+            setState({ count: getState().count + by });
+            return getState().count;
+          },
+        }),
+        defaultTarget: { context: "content-script" },
       },
-    });
+    );
 
     const cs1Service = createStoreService("cs1:v1", {
       onDispatchStart: () => cs1DispatchStarted.resolve(),
@@ -301,7 +287,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
 
     const cs2Service = createStoreService("cs2:v1");
 
-    const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
+    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
       center: {
         meta: { context: "background", version: "1.0.0" },
       },
@@ -317,7 +303,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs1Service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: {
@@ -330,7 +316,7 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
           providers: {
             [definition.token.id]: cs2Service,
           },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -340,10 +326,9 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
     const cs2Nexus = network.get("content-script:CS2-HANDOFF-INFLIGHT")!.nexus;
 
     const remote = await connectNexusStore(backgroundNexus, definition, {
-      target: {
-        matcher: (id: any) => id.context === "content-script" && id.isActive,
-        descriptor: { context: "content-script" },
-      },
+      target: { context: "content-script" },
+      where: (identity, _connectionMeta) =>
+        identity.context === "content-script" && identity.isActive,
     });
     const oldSnapshots: number[] = [];
     const stopOld = remote.subscribe((snapshot) => {
@@ -364,10 +349,9 @@ describe("Nexus State Integration: Targeting and Identity Handoff", () => {
     });
 
     const replacement = await connectNexusStore(backgroundNexus, definition, {
-      target: {
-        matcher: (id: any) => id.context === "content-script" && id.isActive,
-        descriptor: { context: "content-script" },
-      },
+      target: { context: "content-script" },
+      where: (identity, _connectionMeta) =>
+        identity.context === "content-script" && identity.isActive,
     });
 
     const replacementSnapshots: number[] = [];

@@ -3,24 +3,40 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta.js";
+import type {
+  ChromeAdapterModel,
+  ChromeConnectionTarget,
+  ChromeConnectionMeta,
+} from "../types/meta.js";
 import { ChromePort } from "../ports/chrome-port.js";
+import {
+  createChromeConnectionMeta,
+  matchesChromeTarget,
+} from "./connection-meta.js";
 
 /**
  * Content script endpoint implementation
  * Primarily connects to background script
  */
-export class ContentScriptEndpoint implements IEndpoint<
-  ChromeEndpointMeta,
-  ChromePlatformMeta
-> {
-  private connectHandler?: (port: IPort, meta?: ChromePlatformMeta) => void;
+export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
+  private connectHandler?: (port: IPort, meta: ChromeConnectionMeta) => void;
 
   capabilities = {
     supportsTransferables: false,
   };
 
-  listen(onConnect: (port: IPort, meta?: ChromePlatformMeta) => void): void {
+  matchesTarget(
+    target: ChromeConnectionTarget,
+    contextMeta: ChromeAdapterModel["contextMeta"],
+    connectionMeta: ChromeConnectionMeta,
+  ): boolean {
+    return (
+      target.kind === "background" &&
+      matchesChromeTarget(target, contextMeta, connectionMeta)
+    );
+  }
+
+  listen(onConnect: (port: IPort, meta: ChromeConnectionMeta) => void): void {
     try {
       this.connectHandler = onConnect;
       chrome.runtime.onConnect.addListener(this.handleConnect);
@@ -33,17 +49,17 @@ export class ContentScriptEndpoint implements IEndpoint<
   }
 
   async connect(
-    target: Partial<ChromeEndpointMeta>,
-  ): Promise<[IPort, ChromePlatformMeta]> {
+    target: ChromeConnectionTarget,
+  ): Promise<{ port: IPort; connectionMeta: ChromeConnectionMeta }> {
     try {
       // Content script typically connects to background
-      if (target.context === "background") {
+      if (target.kind === "background") {
         const port = chrome.runtime.connect();
         const chromePort = new ChromePort(port);
-        const platformMeta: ChromePlatformMeta = {
-          sender: port.sender,
-        };
-        return [chromePort, platformMeta];
+        const connectionMeta = createChromeConnectionMeta(port.sender, {
+          kind: "background",
+        });
+        return { port: chromePort, connectionMeta };
       }
 
       throw new NexusEndpointConnectError(
@@ -65,10 +81,8 @@ export class ContentScriptEndpoint implements IEndpoint<
     if (!this.connectHandler) return;
 
     const chromePort = new ChromePort(port);
-    const platformMeta: ChromePlatformMeta = {
-      sender: port.sender,
-    };
+    const connectionMeta = createChromeConnectionMeta(port.sender);
 
-    this.connectHandler(chromePort, platformMeta);
+    this.connectHandler(chromePort, connectionMeta);
   };
 }

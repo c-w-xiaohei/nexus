@@ -1,11 +1,11 @@
-import { Token } from "../token.js";
-import type { AuthorizationPolicy } from "../types/config.js";
-import type { ServiceProviderData } from "../registry.js";
-import { nexus } from "../nexus.js";
-import { NexusUsageError } from "../../errors/index.js";
-import { args, fn } from "../../utils/fn.js";
+import { Token } from "../token";
+import type { AuthorizationPolicy } from "../types/config";
+import type { ServiceProviderData } from "../registry";
+import { nexus } from "../nexus";
+import { NexusUsageError } from "@/errors";
+import { args, fn } from "@/utils/fn";
 import { z } from "zod";
-import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
+import type { DefaultAdapterModel } from "@/types/adapter-model";
 
 /**
  * @Expose 装饰器的高级选项。
@@ -13,7 +13,7 @@ import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
 export type ExposeFactoryContext = {
   targetClass: new (...args: unknown[]) => object;
   token: Token<object, any>;
-  localMeta?: EndpointMeta;
+  localMeta?: object;
 };
 
 export interface ExposeOptions {
@@ -21,7 +21,7 @@ export interface ExposeOptions {
    * （可选）为此服务定义一个独立的授权策略。
    * 这会覆盖任何全局定义的策略。
    */
-  policy?: AuthorizationPolicy<EndpointMeta, PlatformMeta>;
+  policy?: AuthorizationPolicy<DefaultAdapterModel>;
   /**
    * （可选）提供一个工厂函数来创建服务实例。
    * 这对于需要依赖注入的场景至关重要。
@@ -39,18 +39,8 @@ export type NexusClassDecorator<T extends object = object> = (
 const ExposeOptionsSchema = z
   .object({
     policy: z
-      .custom<AuthorizationPolicy<EndpointMeta, PlatformMeta>>(
-        (value) =>
-          typeof value === "object" &&
-          value !== null &&
-          ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
-            .canConnect === undefined ||
-            typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
-              .canConnect === "function") &&
-          ((value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
-            .canCall === undefined ||
-            typeof (value as AuthorizationPolicy<EndpointMeta, PlatformMeta>)
-              .canCall === "function"),
+      .custom<AuthorizationPolicy<DefaultAdapterModel>>(
+        (value) => typeof value === "object" && value !== null,
       )
       .optional(),
     factory: z

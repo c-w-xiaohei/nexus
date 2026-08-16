@@ -1,10 +1,10 @@
 # Node IPC Addressing
 
-Node-ipc addressing maps Nexus daemon descriptors to filesystem Unix socket paths.
+Node-ipc addressing maps exact `NodeIpcConnectionTarget` values to filesystem Unix socket paths.
 
-## Default Descriptor
+## Default ConnectionTarget
 
-The daemon descriptor is:
+The daemon target is:
 
 ```ts
 {
@@ -57,7 +57,7 @@ Rejected examples:
 - values containing `\`
 - values that make the final socket path exceed the Unix socket path limit
 
-This keeps descriptor input from becoming path traversal.
+This keeps target input from becoming path traversal.
 
 ## Custom Resolver
 
@@ -66,15 +66,15 @@ Use a custom resolver when your application owns a specific socket layout.
 ```ts
 usingNodeIpcClient({
   appId: "example-app",
-  resolveAddress(descriptor) {
-    if (descriptor.context !== "node-ipc-daemon") return null;
-    if (descriptor.appId !== "example-app") return null;
+  resolveAddress(target) {
+    if (target.context !== "node-ipc-daemon") return null;
+    if (target.appId !== "example-app") return null;
     return { kind: "path", path: "/run/user/1000/example-app.sock" };
   },
 });
 ```
 
-Returning `null` means the descriptor is not resolvable. Nexus treats that as an address error instead of guessing another path.
+Returning `null` means the target is not resolvable. Nexus treats that as an address error instead of guessing another path.
 
 Custom paths must be absolute filesystem paths and must fit the platform socket path limit.
 

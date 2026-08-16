@@ -3,14 +3,14 @@ import path from "node:path";
 import { Result } from "better-result";
 const { err, ok } = Result;
 import { NodeIpcError } from "../errors.js";
-import type { NodeIpcEndpointMeta } from "./meta.js";
+import type { NodeIpcConnectionTarget } from "./meta.js";
 
 export type NodeIpcSocketAddress =
-  | { kind: "path"; path: string }
-  | { kind: "abstract"; name: string };
+  | { readonly kind: "path"; readonly path: string }
+  | { readonly kind: "abstract"; readonly name: string };
 
 export type NodeIpcAddressResolver = (
-  descriptor: Partial<NodeIpcEndpointMeta>,
+  target: NodeIpcConnectionTarget,
 ) => NodeIpcSocketAddress | null;
 
 type ResolveEnvironment = {
@@ -22,13 +22,13 @@ const MAX_UNIX_SOCKET_PATH_LENGTH = 107;
 
 export namespace NodeIpcAddress {
   export const defaultResolve = (
-    descriptor: Partial<NodeIpcEndpointMeta>,
+    target: NodeIpcConnectionTarget,
     environment: ResolveEnvironment = {},
   ): Result<NodeIpcSocketAddress, NodeIpcError> => {
-    if (descriptor.context !== "node-ipc-daemon" || !descriptor.appId) {
+    if (target.context !== "node-ipc-daemon" || !target.appId) {
       return err(
         new NodeIpcError(
-          "Descriptor does not identify a node-ipc daemon",
+          "Target does not identify a node-ipc daemon",
           "E_IPC_ADDRESS_INVALID",
         ),
       );
@@ -43,8 +43,8 @@ export namespace NodeIpcAddress {
     const root = env.XDG_RUNTIME_DIR
       ? path.join(env.XDG_RUNTIME_DIR, "nexus")
       : path.join("/tmp", `nexus-${uid}`);
-    const segmentResult = validateSegment(descriptor.appId).andThen((appId) =>
-      validateSegment(descriptor.instance ?? "default").map((instance) => ({
+    const segmentResult = validateSegment(target.appId).andThen((appId) =>
+      validateSegment(target.instance ?? "default").map((instance) => ({
         appId,
         instance,
       })),
@@ -55,29 +55,37 @@ export namespace NodeIpcAddress {
     return validate({
       kind: "path",
       path: path.join(root, appId, `${instance}.sock`),
-    });
+    }).map(normalize);
   };
 
   export const resolve = (
-    descriptor: Partial<NodeIpcEndpointMeta>,
+    target: NodeIpcConnectionTarget,
     resolver?: NodeIpcAddressResolver,
   ): Result<NodeIpcSocketAddress, NodeIpcError> => {
-    if (!resolver) return defaultResolve(descriptor);
+    if (target.context !== "node-ipc-daemon" || !target.appId) {
+      return err(
+        new NodeIpcError(
+          "Target does not identify a node-ipc daemon",
+          "E_IPC_ADDRESS_INVALID",
+        ),
+      );
+    }
+    if (!resolver) return defaultResolve(target);
 
     try {
-      const address = resolver(descriptor);
+      const address = resolver(target);
       if (!address)
         return err(
           new NodeIpcError(
-            "Descriptor could not be resolved to a socket address",
+            "Target could not be resolved to a socket address",
             "E_IPC_ADDRESS_INVALID",
           ),
         );
-      return validate(address);
+      return validate(address).map(normalize);
     } catch (cause) {
       return err(
         new NodeIpcError(
-          "Descriptor could not be resolved to a socket address",
+          "Target could not be resolved to a socket address",
           "E_IPC_ADDRESS_INVALID",
           cause,
         ),
@@ -107,6 +115,16 @@ export namespace NodeIpcAddress {
     }
     return ok(address);
   };
+
+  export const normalize = (
+    address: NodeIpcSocketAddress,
+  ): NodeIpcSocketAddress =>
+    address.kind === "path"
+      ? { kind: "path", path: path.normalize(address.path) }
+      : { kind: "abstract", name: address.name };
+
+  export const freeze = (address: NodeIpcSocketAddress): NodeIpcSocketAddress =>
+    Object.freeze(normalize(address));
 }
 
 const validateSegment = (segment: string): Result<string, NodeIpcError> => {

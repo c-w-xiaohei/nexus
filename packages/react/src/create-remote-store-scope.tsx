@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
+import type { AdapterModel } from "@nexus-js/core";
 import type {
   NexusStoreDefinition,
   RemoteActions,
@@ -19,7 +20,7 @@ type ActionFunction = (...args: any[]) => any;
 export interface RemoteStoreScope<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-  U extends object,
+  U extends AdapterModel,
 > {
   readonly Provider: (props: RemoteStoreScopeProviderProps<U>) => ReactNode;
   useRemoteStore(): UseRemoteStoreResult<TState, TActions>;
@@ -32,18 +33,29 @@ export interface RemoteStoreScope<
   useError(): Error | null;
 }
 
-export interface RemoteStoreScopeProviderProps<U extends object = object> {
+export type RemoteStoreHook<M extends AdapterModel> = <
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+>(
+  definition: NexusStoreDefinition<TState, TActions, M>,
+  options?: UseRemoteStoreOptions<M>,
+) => UseRemoteStoreResult<TState, TActions>;
+
+export interface RemoteStoreScopeProviderProps<
+  U extends AdapterModel = AdapterModel,
+> {
   readonly options?: UseRemoteStoreOptions<U>;
   readonly children: ReactNode;
 }
 
-export const createRemoteStoreScope = <
+export const createRemoteStoreScopeWithNexus = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-  U extends object = object,
+  M extends AdapterModel,
 >(
-  definition: NexusStoreDefinition<TState, TActions, U>,
-): RemoteStoreScope<TState, TActions, U> => {
+  definition: NexusStoreDefinition<TState, TActions, M>,
+  useBoundRemoteStore: RemoteStoreHook<M>,
+): RemoteStoreScope<TState, TActions, M> => {
   const RemoteStoreContext = createContext<UseRemoteStoreResult<
     TState,
     TActions
@@ -63,8 +75,8 @@ export const createRemoteStoreScope = <
   const Provider = ({
     options = {},
     children,
-  }: RemoteStoreScopeProviderProps<U>): ReactNode => {
-    const remote = useRemoteStore(definition, options);
+  }: RemoteStoreScopeProviderProps<M>): ReactNode => {
+    const remote = useBoundRemoteStore(definition, options);
 
     return (
       <RemoteStoreContext.Provider value={remote}>
@@ -104,4 +116,13 @@ export const createRemoteStoreScope = <
     useStatus,
     useError,
   };
+};
+
+export const createRemoteStoreScope = <
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+>(
+  definition: NexusStoreDefinition<TState, TActions, AdapterModel>,
+): RemoteStoreScope<TState, TActions, AdapterModel> => {
+  return createRemoteStoreScopeWithNexus(definition, useRemoteStore);
 };

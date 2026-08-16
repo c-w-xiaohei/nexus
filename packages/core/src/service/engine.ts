@@ -1,36 +1,41 @@
-import type { ConnectionManager } from "../connection/connection-manager.js";
+import type { ConnectionManager } from "@/connection/connection-manager";
 import type {
   MessageId,
   NexusMessage,
   ReleaseMessage,
   SerializedError,
-} from "../types/message.js";
-import { NexusMessageType } from "../types/message.js";
-import type { PlatformMeta, EndpointMeta } from "../types/identity.js";
-import type { CallTarget, MessageTarget } from "../connection/types.js";
-import { Logger } from "../logger.js";
-import { toSerializedError } from "../utils/error.js";
-import { CallProcessor } from "./call-processor.js";
-import { MessageHandler } from "./message/message-handler.js";
-import { PayloadProcessor } from "./payload/payload-processor.js";
-import { PendingCallManager } from "./pending-call-manager.js";
-import { CreateProxyOptions, ProxyFactory } from "./proxy-factory.js";
-import { ResourceManager } from "./resource-manager.js";
+} from "@/types/message";
+import { NexusMessageType } from "@/types/message";
+import type {
+  AdapterModel,
+  ConnectionMetaOf,
+  ConnectionWhere,
+  ContextMetaOf,
+} from "@/types/adapter-model";
+import type { CallTarget, MessageTarget } from "@/connection/types";
+import { Logger } from "@/logger";
+import { toSerializedError } from "@/utils/error";
+import { CallProcessor } from "./call-processor";
+import { MessageHandler } from "./message/message-handler";
+import { PayloadProcessor } from "./payload/payload-processor";
+import { PendingCallManager } from "./pending-call-manager";
+import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
+import { ResourceManager } from "./resource-manager";
 import {
   getServiceInvocationHook,
   isServiceWithHooks,
   SERVICE_ON_DISCONNECT,
-} from "./service-invocation-hooks.js";
+} from "./service-invocation-hooks";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "../types/symbols.js";
+} from "@/types/symbols";
 import { Result } from "better-result";
 const { err, ok } = Result;
-import type { NexusAuthorizationPolicy } from "../api/types/config.js";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 type DispatchCallBase = {
-  target: CallTarget<any, any>;
+  target: CallTarget<any>;
   resourceId: string | null;
   path: (string | number)[];
   strategy?: "one" | "first" | "all" | "stream";
@@ -39,11 +44,10 @@ type DispatchCallBase = {
   invocationServiceName?: string;
 };
 
-type TargetStaleSubscription<U extends EndpointMeta> = {
+type TargetStaleSubscription<M extends AdapterModel> = {
   readonly callback: () => void;
   readonly staleTarget?: {
-    readonly descriptor?: Partial<U>;
-    readonly matcher?: (identity: U) => boolean;
+    readonly where?: ConnectionWhere<M>;
   };
 };
 
@@ -66,10 +70,10 @@ export type DispatchCallOptions =
   | DispatchSetCallOptions
   | DispatchApplyCallOptions;
 
-export interface MessageHandlerCallbacks<U extends EndpointMeta> {
+export interface MessageHandlerCallbacks<M extends AdapterModel> {
   safeSendMessage(
     message: NexusMessage,
-    target: MessageTarget<U> | string,
+    target: MessageTarget<M> | string,
   ): Result<string[], Error>;
   handleResponse(
     id: MessageId,
@@ -81,33 +85,32 @@ export interface MessageHandlerCallbacks<U extends EndpointMeta> {
 }
 
 export class Engine<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> implements MessageHandlerCallbacks<U> {
+  M extends AdapterModel,
+> implements MessageHandlerCallbacks<M> {
   private readonly logger = new Logger("L3 --- Engine");
   private readonly resourceManager: ResourceManager.Runtime;
-  private readonly payloadProcessor: PayloadProcessor.Runtime<U, P>;
-  private readonly proxyFactory: ProxyFactory<U>;
+  private readonly payloadProcessor: PayloadProcessor.Runtime<M>;
+  private readonly proxyFactory: ProxyFactory<M>;
   private readonly messageHandler: MessageHandler.Runtime;
   private readonly pendingCallManager: PendingCallManager.Runtime;
   private readonly callProcessor: CallProcessor.Runtime;
-  private readonly policy?: NexusAuthorizationPolicy<U, P>;
+  private readonly policy?: NexusAuthorizationPolicy<M>;
 
   private messageIdSeq = 1;
   private readonly disconnectListeners = new Map<string, Set<() => void>>();
   private readonly targetStaleListeners = new Map<
     string,
-    Set<TargetStaleSubscription<U>>
+    Set<TargetStaleSubscription<M>>
   >();
 
   constructor(
-    private readonly connectionManagerState: ConnectionManager<U, P>,
+    private readonly connectionManagerState: ConnectionManager<M>,
     config: {
       providers?: Record<
         string,
-        { service: object; policy?: NexusAuthorizationPolicy<U, P> }
+        { service: object; policy?: NexusAuthorizationPolicy<M> }
       >;
-      policy?: NexusAuthorizationPolicy<U, P>;
+      policy?: NexusAuthorizationPolicy<M>;
     } = {},
   ) {
     this.policy = config.policy;
@@ -117,7 +120,7 @@ export class Engine<
       this.registerServices(config.providers);
     }
 
-    this.proxyFactory = new ProxyFactory<U>(
+    this.proxyFactory = new ProxyFactory<M>(
       {
         safeDispatchCall: (options) => this.safeDispatchCall(options),
         dispatchRelease: (resourceId, connectionId) =>
@@ -145,8 +148,8 @@ export class Engine<
     });
     this.callProcessor = CallProcessor.create({
       nextMessageId: () => this.nextMessageId(),
-      resolveConnection: (options) =>
-        this.connectionManagerState.safeResolveConnection(options),
+      getReadyConnectionIds: (target) =>
+        this.connectionManagerState.safeGetReadyConnectionIds(target),
       sendMessage: (target, message) =>
         this.connectionManagerState.safeSendMessage(target, message),
       payloadProcessor: this.payloadProcessor,
@@ -160,7 +163,7 @@ export class Engine<
 
   public createServiceProxy<T extends object>(
     serviceName: string,
-    options: CreateProxyOptions<U>,
+    options: CreateProxyOptions<M>,
   ): T {
     const proxy = this.proxyFactory.createServiceProxy(
       serviceName,
@@ -177,51 +180,65 @@ export class Engine<
     if ("connectionId" in options.target) {
       const connectionId = options.target.connectionId;
 
-      proxy[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL] = (callback) => {
-        let listeners = this.disconnectListeners.get(connectionId);
-        if (!listeners) {
-          listeners = new Set();
-          this.disconnectListeners.set(connectionId, listeners);
-        }
+      Object.defineProperty(
+        proxy,
+        NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+        {
+          configurable: true,
+          value: (callback: () => void) => {
+            let listeners = this.disconnectListeners.get(connectionId);
+            if (!listeners) {
+              listeners = new Set();
+              this.disconnectListeners.set(connectionId, listeners);
+            }
 
-        listeners.add(callback);
-        return () => {
-          const current = this.disconnectListeners.get(connectionId);
-          if (!current) {
-            return;
-          }
+            listeners.add(callback);
+            return () => {
+              const current = this.disconnectListeners.get(connectionId);
+              if (!current) {
+                return;
+              }
 
-          current.delete(callback);
-          if (current.size === 0) {
-            this.disconnectListeners.delete(connectionId);
-          }
-        };
-      };
+              current.delete(callback);
+              if (current.size === 0) {
+                this.disconnectListeners.delete(connectionId);
+              }
+            };
+          },
+        },
+      );
 
-      proxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL] = (callback) => {
-        let listeners = this.targetStaleListeners.get(connectionId);
-        if (!listeners) {
-          listeners = new Set();
-          this.targetStaleListeners.set(connectionId, listeners);
-        }
+      Object.defineProperty(
+        proxy,
+        NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+        {
+          configurable: true,
+          value: (callback: () => void) => {
+            let listeners = this.targetStaleListeners.get(connectionId);
+            if (!listeners) {
+              listeners = new Set();
+              this.targetStaleListeners.set(connectionId, listeners);
+            }
 
-        const entry: TargetStaleSubscription<U> = {
-          callback,
-          staleTarget: options.staleTarget,
-        };
-        listeners.add(entry);
-        return () => {
-          const current = this.targetStaleListeners.get(connectionId);
-          if (!current) {
-            return;
-          }
+            const entry: TargetStaleSubscription<M> = {
+              callback,
+              staleTarget: options.staleTarget,
+            };
+            listeners.add(entry);
+            return () => {
+              const current = this.targetStaleListeners.get(connectionId);
+              if (!current) {
+                return;
+              }
 
-          current.delete(entry);
-          if (current.size === 0) {
-            this.targetStaleListeners.delete(connectionId);
-          }
-        };
-      };
+              current.delete(entry);
+              if (current.size === 0) {
+                this.targetStaleListeners.delete(connectionId);
+              }
+            };
+          },
+        },
+      );
     }
 
     return proxy;
@@ -230,7 +247,7 @@ export class Engine<
   public registerServices(
     providers: Record<
       string,
-      { service: object; policy?: NexusAuthorizationPolicy<U, P> }
+      { service: object; policy?: NexusAuthorizationPolicy<M> }
     >,
   ): void {
     const result = this.safeProvideServicesBatch(providers);
@@ -242,16 +259,22 @@ export class Engine<
   public safeProvideServicesBatch(
     providers: Record<
       string,
-      { service: object; policy?: NexusAuthorizationPolicy<U, P> }
+      { service: object; policy?: NexusAuthorizationPolicy<M> }
     >,
   ): Result<void, Error> {
-    return this.resourceManager.safeRegisterExposedServicesBatch(
-      Object.entries(providers).map(([name, registration]) => ({
-        name,
-        service: registration.service,
-        policy: registration.policy,
-      })),
-    );
+    return this.resourceManager
+      .safeRegisterExposedServicesBatch(
+        Object.entries(providers).map(([name, registration]) => ({
+          name,
+          service: registration.service,
+          policy: registration.policy,
+        })),
+      )
+      .andThen(() =>
+        this.connectionManagerState.safePublishProviders(
+          Object.keys(providers),
+        ),
+      );
   }
 
   public safeDispatchCall(
@@ -288,35 +311,38 @@ export class Engine<
 
     return this.messageHandler
       .safeHandleMessage(message, sourceConnectionId)
-      .then((messageResult) =>
-        messageResult.tryRecover((error) => {
-          this.logger.error(
-            `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
-            error,
-          );
-
-          if (!message.id) {
-            return ok(undefined);
-          }
-
-          const sendResult = this.safeSendMessage(
-            {
-              type: NexusMessageType.ERR,
-              id: message.id,
-              error: toSerializedError(error),
-            },
-            sourceConnectionId,
-          );
-
-          if (sendResult.isErr()) {
+      .then((handled) =>
+        handled.match({
+          ok: () => ok(undefined),
+          err: (error) => {
             this.logger.error(
-              `Failed to send ERR response for message #${message.id}.`,
-              sendResult.error,
+              `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
+              error,
             );
-            return err(sendResult.error);
-          }
 
-          return ok(undefined);
+            if (!message.id) {
+              return ok(undefined);
+            }
+
+            const sendResult = this.safeSendMessage(
+              {
+                type: NexusMessageType.ERR,
+                id: message.id,
+                error: toSerializedError(error),
+              },
+              sourceConnectionId,
+            );
+
+            if (sendResult.isErr()) {
+              this.logger.error(
+                `Failed to send ERR response for message #${message.id}.`,
+                sendResult.error,
+              );
+              return err(sendResult.error);
+            }
+
+            return ok(undefined);
+          },
         }),
       );
   }
@@ -339,7 +365,7 @@ export class Engine<
 
   public safeSendMessage(
     message: NexusMessage,
-    target: MessageTarget<U> | string,
+    target: MessageTarget<M> | string,
   ): Result<string[], Error> {
     const messageTarget =
       typeof target === "string" ? { connectionId: target } : target;
@@ -385,15 +411,16 @@ export class Engine<
 
   public onConnectionTargetStale(
     connectionId: string,
-    newIdentity: U,
-    oldIdentity: U,
+    newIdentity: ContextMetaOf<M>,
+    oldIdentity: ContextMetaOf<M>,
+    connectionMeta: ConnectionMetaOf<M>,
   ): void {
     const listeners = this.targetStaleListeners.get(connectionId);
     if (!listeners) {
       return;
     }
 
-    const staleEntries: TargetStaleSubscription<U>[] = [];
+    const staleEntries: TargetStaleSubscription<M>[] = [];
 
     for (const entry of Array.from(listeners)) {
       if (
@@ -401,6 +428,7 @@ export class Engine<
           staleTarget: entry.staleTarget,
           newIdentity,
           oldIdentity,
+          connectionMeta,
         })
       ) {
         staleEntries.push(entry);
@@ -422,66 +450,22 @@ export class Engine<
   }
 }
 
-function shouldMarkTargetStale<U extends EndpointMeta>(input: {
+function shouldMarkTargetStale<M extends AdapterModel>(input: {
   readonly staleTarget?: {
-    readonly descriptor?: Partial<U>;
-    readonly matcher?: (identity: U) => boolean;
+    readonly where?: ConnectionWhere<M>;
   };
-  readonly newIdentity: U;
-  readonly oldIdentity: U;
+  readonly newIdentity: ContextMetaOf<M>;
+  readonly oldIdentity: ContextMetaOf<M>;
+  readonly connectionMeta: ConnectionMetaOf<M>;
 }): boolean {
-  const { staleTarget, newIdentity, oldIdentity } = input;
+  const { staleTarget, newIdentity, oldIdentity, connectionMeta } = input;
 
   if (!staleTarget) {
     return true;
   }
 
-  const wasMatching = isIdentityMatchingTarget(oldIdentity, staleTarget);
-  const isStillMatching = isIdentityMatchingTarget(newIdentity, staleTarget);
-
-  return wasMatching && !isStillMatching;
-}
-
-function isIdentityMatchingTarget<U extends EndpointMeta>(
-  identity: U,
-  target: {
-    readonly descriptor?: Partial<U>;
-    readonly matcher?: (identity: U) => boolean;
-  },
-): boolean {
-  if (target.matcher && !target.matcher(identity)) {
-    return false;
-  }
-
-  if (target.descriptor && !isDeepMatch(identity, target.descriptor)) {
-    return false;
-  }
-
-  return true;
-}
-
-function isDeepMatch(target: any, source: any): boolean {
-  if (target === source) {
-    return true;
-  }
-
-  if (
-    source === null ||
-    typeof source !== "object" ||
-    target === null ||
-    typeof target !== "object"
-  ) {
-    return target === source;
-  }
-
-  for (const key of Object.keys(source)) {
-    if (
-      !Object.prototype.hasOwnProperty.call(target, key) ||
-      !isDeepMatch(target[key], source[key])
-    ) {
-      return false;
-    }
-  }
-
-  return true;
+  return (
+    (staleTarget.where?.(oldIdentity, connectionMeta) ?? true) &&
+    !(staleTarget.where?.(newIdentity, connectionMeta) ?? true)
+  );
 }

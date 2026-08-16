@@ -3,19 +3,30 @@ import { Transport } from "./transport";
 import { createMockPortPair } from "../utils/test-utils";
 import type { IEndpoint } from "./types/endpoint";
 import { NexusMessageType } from "@/types/message";
-import { NexusEndpointConnectError } from "../errors/transport-errors";
+import type { AdapterModel } from "@/types/adapter-model";
+import {
+  NexusEndpointCapabilityError,
+  NexusEndpointConnectError,
+} from "@/errors";
+
+interface TestAdapterModel extends AdapterModel {
+  contextMeta: { context: string };
+  connectionMeta: { source: string };
+  connectionTarget: { context: string };
+}
 
 describe("Transport", () => {
-  let mockEndpoint: IEndpoint<any, any>;
+  let mockEndpoint: IEndpoint<TestAdapterModel>;
 
   beforeEach(() => {
     mockEndpoint = {
-      connect: vi.fn(async (): Promise<[any, any]> => {
+      connect: vi.fn(async () => {
         const [port] = createMockPortPair();
-        return [port, { from: "mock" }];
+        return { port, connectionMeta: { source: "mock" } };
       }),
       listen: vi.fn(),
       capabilities: { supportsTransferables: false },
+      matchesTarget: () => true,
     };
   });
 
@@ -30,6 +41,18 @@ describe("Transport", () => {
     if (packet.isOk()) {
       expect(typeof packet.value).toBe("string");
     }
+  });
+
+  it("accepts listen implementations that return a platform handle", async () => {
+    const close = vi.fn();
+    mockEndpoint.listen = async () => ({ close });
+
+    const result = await Transport.safeListen(
+      Transport.create(mockEndpoint),
+      () => {},
+    );
+    expect(result.isOk()).toBe(true);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("uses binary serializer when binary packets are supported", () => {
@@ -81,33 +104,13 @@ describe("Transport", () => {
   });
 
   describe("connect", () => {
-    it("returns a structured connect error when the endpoint returns an invalid port", async () => {
-      vi.mocked(mockEndpoint.connect!).mockResolvedValue([
-        {} as any,
-        { source: "remote-endpoint" },
-      ]);
-
-      const result = await Transport.safeConnect(
-        Transport.create(mockEndpoint),
-        { context: "test-target" },
-        { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() },
-      );
-
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(NexusEndpointConnectError);
-        expect(result.error.code).toBe("E_ENDPOINT_CONNECT_FAILED");
-        expect(result.error.context?.originalError).toBeInstanceOf(TypeError);
-      }
-    });
-
     it("uses endpoint.connect and returns processor with metadata", async () => {
       const [port1] = createMockPortPair();
       const mockRemoteMetadata = { source: "remote-endpoint" };
-      vi.mocked(mockEndpoint.connect!).mockResolvedValue([
-        port1,
-        mockRemoteMetadata,
-      ]);
+      vi.mocked(mockEndpoint.connect!).mockResolvedValue({
+        port: port1,
+        connectionMeta: mockRemoteMetadata,
+      });
 
       const transport = Transport.create(mockEndpoint);
       const handlers = { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() };
@@ -119,10 +122,10 @@ describe("Transport", () => {
       if (result.isErr()) {
         return;
       }
-      const [processor, platformMetadata] = result.value;
+      const { portProcessor: processor, connectionMeta } = result.value;
 
       expect(mockEndpoint.connect).toHaveBeenCalledWith(target);
-      expect(platformMetadata).toEqual(mockRemoteMetadata);
+      expect(connectionMeta).toEqual(mockRemoteMetadata);
       expect(typeof processor.sendMessage).toBe("function");
       expect(typeof processor.close).toBe("function");
     });
@@ -132,7 +135,7 @@ describe("Transport", () => {
         connect: undefined,
         listen: vi.fn(),
         capabilities: { supportsTransferables: false },
-      } as unknown as IEndpoint<any, any>;
+      } as unknown as IEndpoint<TestAdapterModel>;
 
       const transport = Transport.create(endpointWithoutConnect);
       const result = await Transport.safeConnect(
@@ -145,6 +148,34 @@ describe("Transport", () => {
       if (result.isErr()) {
         expect(result.error.code).toBe("E_ENDPOINT_CAPABILITY_MISMATCH");
       }
+    });
+
+    it("preserves a synchronous structured endpoint error", async () => {
+      const error = new NexusEndpointCapabilityError("unsupported");
+      mockEndpoint.connect = vi.fn(() => {
+        throw error;
+      });
+
+      const result = await Transport.safeConnect(
+        Transport.create(mockEndpoint),
+        { context: "test-target" },
+        { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() },
+      );
+
+      expect(result.error).toBe(error);
+    });
+
+    it("preserves an asynchronously rejected structured endpoint error", async () => {
+      const error = new NexusEndpointConnectError("unreachable");
+      mockEndpoint.connect = vi.fn(() => Promise.reject(error));
+
+      const result = await Transport.safeConnect(
+        Transport.create(mockEndpoint),
+        { context: "test-target" },
+        { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() },
+      );
+
+      expect(result.error).toBe(error);
     });
   });
 

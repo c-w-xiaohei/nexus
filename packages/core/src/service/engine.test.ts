@@ -3,6 +3,7 @@ import { Engine } from "./engine";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
+import { NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL } from "@/types/symbols";
 
 // A mock service to be registered on the host engine for tests.
 const mockTestService = {
@@ -23,7 +24,7 @@ describe("Engine", () => {
         meta: { id: "host" },
         providers: { testService: mockTestService },
       },
-      { meta: { id: "client" } },
+      { meta: { id: "client" }, connectTo: [{ context: "host" }] },
     );
 
     clientEngine = setup.clientEngine;
@@ -118,6 +119,40 @@ describe("Engine", () => {
 
     expect((service as any)[SERVICE_ON_DISCONNECT]).toBeUndefined();
     expect(onDisconnect).toHaveBeenCalledWith(hostConnectionId);
+  });
+
+  it("evaluates identity staleness with immutable connection metadata", () => {
+    const where = vi.fn(
+      (identity: { id: string }, connection: { from: string }) =>
+        identity.id === "host" && connection.from === "transport",
+    );
+    const proxy = clientEngine.createServiceProxy<any>("testService", {
+      target: { connectionId: clientConnectionId },
+      staleTarget: { where },
+    });
+
+    proxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](() => undefined);
+    clientEngine.onConnectionTargetStale(
+      clientConnectionId,
+      { id: "replacement" },
+      { id: "host" },
+      { from: "transport" },
+    );
+
+    expect(where).toHaveBeenNthCalledWith(
+      1,
+      { id: "host" },
+      {
+        from: "transport",
+      },
+    );
+    expect(where).toHaveBeenNthCalledWith(
+      2,
+      { id: "replacement" },
+      {
+        from: "transport",
+      },
+    );
   });
 
   // The other tests about connection resolution and pending call registration

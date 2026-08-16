@@ -10,6 +10,7 @@ import { Token } from "../../src/api/token";
 import type { IPort } from "../../src/transport";
 import { createStarNetwork } from "../../src/utils/test-utils";
 import { createMockPortPair } from "../../src/utils/test-utils";
+import type { TestAdapterModel } from "../../src/utils/test-utils";
 import {
   connectNexusStore,
   defineNexusStore,
@@ -22,7 +23,11 @@ import {
 type HandshakeCounterState = { count: number };
 type HandshakeCounterActions = { noop(): Promise<number> };
 type HandshakeUserMeta = { context: "background" | "popup" };
-type HandshakePlatformMeta = { from: string };
+type HandshakeConnectionMeta = { from: string };
+type HandshakeModel = TestAdapterModel<
+  HandshakeUserMeta,
+  HandshakeConnectionMeta
+>;
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -112,13 +117,13 @@ const createBackgroundHost = async (
   tokenId: string,
   service: object,
 ): Promise<{
-  nexus: Nexus<HandshakeUserMeta, HandshakePlatformMeta>;
+  nexus: Nexus<HandshakeModel>;
   acceptConnection(port: { onMessage: unknown }): void;
   closeAllConnections(): void;
 }> => {
-  const nexus = new Nexus<HandshakeUserMeta, HandshakePlatformMeta>();
+  const nexus = new Nexus<HandshakeModel>();
   let listenCallback:
-    | ((port: any, platformMeta?: HandshakePlatformMeta) => void)
+    | ((port: any, connectionMeta?: HandshakeConnectionMeta) => void)
     | undefined;
 
   nexus.configure({
@@ -173,7 +178,7 @@ const createPopupNexus = async (
     createPorts?: () => [IPort, IPort];
   },
 ) => {
-  const popup = new Nexus<HandshakeUserMeta, HandshakePlatformMeta>();
+  const popup = new Nexus<HandshakeModel>();
 
   popup.configure({
     endpoint: {
@@ -181,18 +186,17 @@ const createPopupNexus = async (
       implementation: {
         listen: vi.fn(),
         connect: vi.fn(
-          async (_targetDescriptor: Partial<HandshakeUserMeta>) => {
+          async (_target: { context: string; issueId?: string }) => {
             const [popupPort, backgroundPort] =
               options?.createPorts?.() ?? createMockPortPair();
             resolveBackground().acceptConnection(backgroundPort as any);
-            return [popupPort, { from: "background" }] as [
-              IPort,
-              HandshakePlatformMeta,
-            ];
+            return { port: popupPort, connectionMeta: { from: "background" } };
           },
         ),
+        matchesTarget: (target, contextMeta) =>
+          target.context === contextMeta.context,
       },
-      connectTo: [{ descriptor: { context: "background" } }],
+      connectTo: [{ context: "background" }],
     },
   });
 
@@ -208,7 +212,11 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     type CounterState = { count: number };
     type CounterActions = { noop(): number };
 
-    const definition = defineNexusStore<CounterState, CounterActions>({
+    const definition = defineNexusStore<
+      CounterState,
+      CounterActions,
+      HandshakeModel
+    >({
       token: new Token("state:counter:handshake-classification:integration"),
       state: () => ({ count: 0 }),
       actions: () => ({ noop: () => 0 }),
@@ -252,8 +260,8 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     };
 
     const malformedNetwork = await createStarNetwork<
-      { context: "background" | "popup" },
-      { from: string }
+      HandshakeUserMeta,
+      HandshakeConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -264,7 +272,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -272,13 +280,13 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     const malformedPopup = malformedNetwork.get("popup")!.nexus;
     await expect(
       connectNexusStore(malformedPopup, definition, {
-        target: { descriptor: { context: "background" } },
+        target: { context: "background" },
       }),
     ).rejects.toBeInstanceOf(NexusStoreProtocolError);
 
     const timeoutNetwork = await createStarNetwork<
-      { context: "background" | "popup" },
-      { from: string }
+      HandshakeUserMeta,
+      HandshakeConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -289,7 +297,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -297,7 +305,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     const timeoutPopup = timeoutNetwork.get("popup")!.nexus;
     await expect(
       connectNexusStore(timeoutPopup, definition, {
-        target: { descriptor: { context: "background" } },
+        target: { context: "background" },
         timeout: 30,
       }),
     ).rejects.toBeInstanceOf(NexusStoreConnectError);
@@ -317,7 +325,11 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
       markStarted = resolve;
     });
 
-    const counterStore = defineNexusStore<CounterState, CounterActions>({
+    const counterStore = defineNexusStore<
+      CounterState,
+      CounterActions,
+      HandshakeModel
+    >({
       token: new Token("state:counter:inflight-disconnect:integration"),
       state: () => ({ count: 0 }),
       actions: ({ getState, setState }) => ({
@@ -331,8 +343,8 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     });
 
     const network = await createStarNetwork<
-      { context: "background" | "popup" },
-      { from: string }
+      HandshakeUserMeta,
+      HandshakeConnectionMeta
     >({
       center: {
         meta: { context: "background" },
@@ -344,14 +356,14 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
       leaves: [
         {
           meta: { context: "popup" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
 
     const popup = network.get("popup")!.nexus;
     const remote = await connectNexusStore(popup, counterStore, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     const pending = remote.actions.increment(1);
@@ -498,7 +510,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     });
 
     const pendingOldConnect = connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
       timeout: 1200,
     });
     void pendingOldConnect.catch(() => undefined);
@@ -524,7 +536,7 @@ describe("Nexus State Integration: Protocol and Error Classification", () => {
     });
 
     const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
       timeout: 250,
     });
 

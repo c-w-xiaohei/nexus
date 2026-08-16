@@ -2,7 +2,7 @@
 
 Configure every context before useful Nexus work can happen. A host context and a consumer context each need endpoint wiring and identity metadata.
 
-Read `references/identity-and-metadata.md` when choosing what belongs in `endpoint.meta`, adapter helper identity options, `PlatformMeta`, or `updateIdentity(...)` calls.
+Read `references/identity-and-metadata.md` when choosing what belongs in `endpoint.meta`, adapter helper identity options, `ConnectionMeta`, or `updateIdentity(...)` calls.
 
 Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation modules should import the configured instance and use `@xxNexus.Expose(...)` or `xxNexus.provide(...)`; they should not configure endpoints themselves.
 
@@ -25,7 +25,7 @@ usingIframeChild({
 });
 ```
 
-Adapter helpers usually configure endpoint implementation, metadata, common matchers, descriptors, and default `connectTo` values.
+Adapter helpers usually configure endpoint implementation, metadata, and an optional endpoint `defaultTarget`.
 
 ## Direct Configuration
 
@@ -40,13 +40,6 @@ nexus.configure({
       role: "host",
     },
   },
-  descriptors: {
-    host: { context: "worker", role: "host" },
-  },
-  matchers: {
-    primaryClient: (identity) =>
-      identity.context === "client" && identity.clientRole === "primary",
-  },
 });
 ```
 
@@ -59,14 +52,11 @@ Use `new Nexus()` when one JavaScript context must host independent Nexus runtim
 ```ts
 import { Nexus } from "@nexus-js/core";
 
-const extensionNexus = new Nexus<
-  ExtensionEndpointMeta,
-  ExtensionPlatformMeta
->();
-const brokerNexus = new Nexus<BrokerEndpointMeta, BrokerPlatformMeta>();
+const extensionNexus = new Nexus<ExtensionAdapterModel>();
+const brokerNexus = new Nexus<BrokerAdapterModel>();
 ```
 
-Each instance has its own endpoint, metadata, policy, services, connections, proxies, refs, and decorator registry. It does not share a connection graph with other instances.
+Each instance has its own endpoint, metadata, policy, services, connections, proxies, refs, and decorator store. It does not share a connection graph with other instances.
 
 Name instances after their local transport graph or endpoint face, then bind class decorators and providers to that instance.
 
@@ -84,7 +74,7 @@ Bridge instances with gateway services. For example, expose a broker-facing serv
 
 Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when the gateway should forward an existing service contract or Nexus State store into another adjacent graph. Configure the relay provider on the downstream-facing instance and pass the upstream-facing instance as `forwardThrough` with an explicit `forwardTarget`.
 
-For a local Nexus State provider, create the authoritative store once with `const { provider, store } = createNexusStore(definition)`. Pass `provider` through `nexus.configure({ providers: [provider] })` or `providers: [provider]`; use `store` only in that same hosting context for local reads, subscriptions, and actions.
+For a local Nexus State provider, create the authoritative store once with `const { provider, store } = createNexusStore(definition)`. Register the provider with `nexus.provide(provider)`; use `store` only in that same hosting context for local reads, subscriptions, and actions.
 
 Do not model Relay as `target.via`, raw message forwarding, or automatic graph merging. The bridge runtime still owns both configured `Nexus` instances and decides exactly which providers are forwarded.
 
@@ -98,20 +88,29 @@ Adapter helpers have two common shapes:
 Use direct helper calls for the standard path.
 
 ```ts
+const daemonTarget = {
+  context: "node-ipc-daemon",
+  appId: "example-app",
+} satisfies import("@nexus-js/node-ipc").NodeIpcConnectionTarget;
+
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: daemonTarget,
 });
 ```
 
 Use `configure: false` when composing helper output with policy, extra configuration, or a custom `Nexus` instance. Compose with `composeNexusConfig([...])`, not raw object spreading.
 
 ```ts
+import { EchoToken, type EchoService } from "./shared";
 import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+
+const echoService: EchoService = {
+  async echo(input) {
+    return `echo:${input}`;
+  },
+};
 
 nexus.configure(
   composeNexusConfig([
@@ -137,11 +136,9 @@ Layers apply left-to-right, and later layers win for the same domain.
 Domain-aware merge rules:
 
 - omitted fields keep previous layers
-- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided
-- `endpoint.connectTo: []` clears inherited connection defaults
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.defaultTarget` are whole-field replacements when explicitly provided
 - `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
 - `policy: undefined` clears inherited policy when callers intentionally need to remove it
-- `descriptors` and `matchers` merge by key; later duplicate keys win
 - `providers` replace by `token.id`; the later provider replaces both service and policy
 
 Compose structural config before the bootstrap snapshot. After `ready`, structural `configure(...)` calls are rejected; register or replace live providers with `provide(...)`, not `configure({ providers })`.

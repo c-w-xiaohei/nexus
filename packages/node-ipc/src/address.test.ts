@@ -7,7 +7,7 @@ const unwrap = <T, E>(result: import("better-result").Result<T, E>): T => {
 };
 
 describe("NodeIpcAddress", () => {
-  it("resolves daemon descriptors under XDG runtime dir with default instance", () => {
+  it("resolves daemon targets under XDG runtime dir with default instance", () => {
     const result = NodeIpcAddress.defaultResolve(
       { context: "node-ipc-daemon", appId: "cli" },
       { env: { XDG_RUNTIME_DIR: "/run/user/1000" }, uid: 1000 },
@@ -43,6 +43,22 @@ describe("NodeIpcAddress", () => {
     if (result.isErr()) {
       expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
     }
+  });
+
+  it("passes the exact daemon connect target to a custom resolver", () => {
+    const target = {
+      context: "node-ipc-daemon",
+      appId: "cli",
+      instance: "preview",
+    } as const;
+    let received: unknown;
+
+    NodeIpcAddress.resolve(target, (value) => {
+      received = value;
+      return { kind: "path", path: "/tmp/cli.sock" };
+    });
+
+    expect(received).toBe(target);
   });
 
   it("validates Unix socket path length", () => {
@@ -111,6 +127,38 @@ describe("NodeIpcAddress", () => {
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error).toMatchObject({ code: "E_IPC_ADDRESS_INVALID" });
+    }
+  });
+
+  it("rejects non-daemon targets before invoking a custom resolver", () => {
+    let called = false;
+    const result = NodeIpcAddress.resolve(
+      { context: "node-ipc-daemon", appId: "" },
+      () => {
+        called = true;
+        return { kind: "path", path: "/tmp/daemon.sock" };
+      },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("E_IPC_ADDRESS_INVALID");
+    }
+    expect(called).toBe(false);
+  });
+
+  it("normalizes custom resolver paths before returning them", () => {
+    const result = NodeIpcAddress.resolve(
+      { context: "node-ipc-daemon", appId: "cli" },
+      () => ({ kind: "path", path: "/tmp/nexus/../daemon.sock" }),
+    );
+
+    expect(result.isOk()).toBe(true);
+    if (result.isOk()) {
+      expect(result.value).toEqual({
+        kind: "path",
+        path: "/tmp/daemon.sock",
+      });
     }
   });
 });

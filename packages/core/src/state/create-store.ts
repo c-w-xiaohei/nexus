@@ -1,19 +1,19 @@
-import type { ServiceProvider } from "../api/types/config.js";
-import type { EndpointMeta } from "../types/identity.js";
+import type { ServiceProvider } from "@/api/types/config";
+import type { AdapterModel } from "@/types/adapter-model";
 import {
   type ServiceInvocationContext,
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
   SERVICE_ON_DISCONNECT,
-} from "../service/service-invocation-hooks.js";
-import { createStoreHost } from "./host/store-host.js";
+} from "@/service/service-invocation-hooks";
+import { createStoreHost } from "./host/store-host";
 import type {
   ActionArgs,
   ActionResult,
   NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteActions,
-} from "./types.js";
+} from "./types";
 
 const ignoredActionProxyKeys = new Set([
   "then",
@@ -43,11 +43,11 @@ export interface NexusStoreHandle<
 export interface CreateNexusStoreResult<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  U extends EndpointMeta,
+  M extends AdapterModel,
 > {
   readonly provider: ServiceProvider<
     NexusStoreServiceContract<TState, TActions>,
-    U
+    M
   >;
   readonly store: NexusStoreHandle<TState, TActions>;
 }
@@ -55,10 +55,10 @@ export interface CreateNexusStoreResult<
 export const createNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-  U extends EndpointMeta,
+  M extends AdapterModel,
 >(
-  definition: NexusStoreDefinition<TState, TActions, U>,
-): CreateNexusStoreResult<TState, TActions, U> => {
+  definition: NexusStoreDefinition<TState, TActions, M>,
+): CreateNexusStoreResult<TState, TActions, M> => {
   const host = createStoreHost(definition);
   let destroyed = false;
 

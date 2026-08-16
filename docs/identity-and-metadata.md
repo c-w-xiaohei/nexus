@@ -1,169 +1,111 @@
-# Identity And Metadata
+# Identity And Connection Metadata
 
-EndpointMeta is the endpoint's logical identity: what runtime context it is, how the application wants to route to it, and which product-level labels policy may inspect.
+Nexus separates three information sources:
 
-PlatformMeta is adapter-observed platform fact: connection source, authentication state, transport facts, and other information the adapter can observe or verify.
+- Application code supplies a `ConnectionTarget` to acquire one exact connection.
+- `ContextMeta` is peer-declared product identity supplied through the handshake.
+- `ConnectionMeta` is local adapter observation or verification for one connection session.
 
-## The Short Model
+They have different owners, trust boundaries, and lifecycles.
 
-EndpointMeta = self-described product identity + routing identity.
+## ContextMeta
 
-PlatformMeta = adapter-observed connection facts + adapter-verified security facts when available.
+An endpoint declares its identity during configuration and the handshake. Typical fields include a discriminating `context`, application metadata, URL, origin, tenant, or product capabilities. The remote peer sees this as `remoteIdentity`.
 
-Use EndpointMeta for targeting and product identity. Use PlatformMeta for adapter facts and security-sensitive policy. If a field is declared by the peer, treat it as identity; if it is observed or verified by the adapter, treat it as platform fact.
+Use `ContextMeta` for:
 
-## Data Chain
+- product role and runtime context
+- application-level labels used by `where`
+- values used by a Token's `defaultTarget` when the adapter's target type intentionally overlaps them
+- policy decisions that explicitly accept peer-declared identity as their trust level
 
-Metadata moves through Nexus in one direction: from local configuration into remote decisions.
+Keep it small, serializable, and stable. Do not put secrets, mutable service state, or local adapter observations in it.
 
-1. A runtime calls `configure(...)` or an adapter helper and provides its local endpoint identity.
-2. Nexus stores that identity as the local `EndpointMeta` for the endpoint.
-3. During handshake, peers exchange endpoint identity and the adapter attaches observed `PlatformMeta` for the connection.
-4. Other contexts see the peer's `EndpointMeta` as `remoteIdentity` and adapter facts as `platform`.
-5. Targeting, policy contexts, service-level policy, diagnostics, connection snapshots, and lifecycle handling can then use those typed values.
+## ConnectionMeta
 
-EndpointMeta is the application-facing identity channel. PlatformMeta is the adapter-facing facts channel.
-
-## Type-Safety Chain
-
-The two metadata types are carried through different parts of the type system. `EndpointMeta` drives targeting and routing types; `PlatformMeta` is available where adapter-observed connection facts are evaluated.
+An adapter creates `ConnectionMeta` when a concrete connection is accepted or opened. It is connection-scoped, read-only, and retained only for that logical connection session. Examples include:
 
 ```ts
-type AppEndpointMeta =
-  | { context: "host"; region: string }
-  | { context: "client"; clientId: string }
-  | { context: "worker"; workerName: string };
-
-type AppPlatformMeta = {
-  authenticated: boolean;
-  transport: "local-bus";
+type LocalConnectionMeta = {
+  observed: {
+    transport: "socket" | "port";
+    authenticated: boolean;
+  };
 };
+```
 
-const appNexus = new Nexus<AppEndpointMeta, AppPlatformMeta>();
+Use it for transport facts, observed sender information, authentication results, source checks, or other adapter-owned facts. `ConnectionMeta` is available to `policy.canConnect`, `policy.canCall`, diagnostics, and adapter matching. It is not exchanged as endpoint identity and is not a generic target shape.
 
-const tokens = new TokenSpace<AppEndpointMeta, AppPlatformMeta>({
-  name: "example",
+Chrome's selected route, when an outgoing adapter implementation keeps one for reuse or diagnostics, is private implementation state. It must not be documented or modeled as a public `ConnectionMeta` contract. Public Chrome connection metadata is the observed connection information exposed by the adapter.
+
+## AdapterModel Association
+
+Adapters bind their metadata and targeting types through one `AdapterModel`:
+
+```ts
+import type { AdapterModel } from "@nexus-js/core";
+
+interface AppModel extends AdapterModel {
+  contextMeta:
+    | { context: "host"; region: string }
+    | { context: "client"; clientId: string };
+  connectionMeta: {
+    readonly transport: "trusted" | "untrusted";
+  };
+  connectionTarget: { context: "host" };
+}
+```
+
+Use `Nexus<AppModel>`, `TokenSpace<AppModel>`, and `IEndpoint<AppModel>` together. `AdapterModel` only associates compile-time types; it does not validate arbitrary wire data or make peer identity trusted.
+
+## Targeting Metadata
+
+`ConnectionTarget` is the adapter's exact connection input. `create` and `createMulticast` acquire targets asynchronously and bind the selected sessions. Neither changes the meaning of `ContextMeta`.
+
+`where` receives each selected connection's peer-declared context identity and local adapter facts:
+
+```ts
+const clients = await appNexus.selectMulticast(ClientToken, {
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "client" &&
+    contextMeta.clientId !== "admin" &&
+    connectionMeta.transport === "trusted",
 });
 ```
 
-Those type parameters keep one shared metadata model visible to the APIs that need it:
+The target match and `where` predicate are strict AND conditions. `selectMulticast` binds a creation-time snapshot of currently available providers and never discovers or connects to a new provider. Call it again to select providers that appear later.
 
-- `Nexus<EndpointMeta, PlatformMeta>` instances
-- `TokenSpace<EndpointMeta, PlatformMeta>` namespaces
-- Tokens created from that space, whose `defaultTarget` descriptors are checked against `EndpointMeta`
-- configured descriptors and matchers, which match `EndpointMeta`
-- `policy.canConnect` and `policy.canCall`, which can inspect both peer `EndpointMeta` and adapter-provided `PlatformMeta`
-- connection snapshots, diagnostics, and lifecycle handling
+## Policy Trust Boundary
 
-This is the type-safety chain: declare the two metadata shapes once, use them in the local Nexus face and shared TokenSpace, and let TypeScript check endpoint targeting against `EndpointMeta` while policy code can also use `PlatformMeta` for adapter facts.
-
-## Choosing Fields
-
-Use these questions to decide where a field belongs.
-
-Put a field in `EndpointMeta` when:
-
-- the runtime declares it about itself
-- the field describes product role, runtime context, tenant, region, group, or feature state
-- target descriptors or matchers need it for routing
-- Token `defaultTarget` values should match it
-- policy may inspect it as peer-declared application identity
-
-Put a field in `PlatformMeta` when:
-
-- the adapter observes it from the connection
-- the adapter verifies it during authentication or admission
-- it describes transport facts, source address, credential result, process information, or platform context
-- policy needs stronger security input than peer-declared identity
-
-If the peer says "I am the worker for tenant A", that is `EndpointMeta`. If the adapter proves "this connection authenticated with the tenant A credential", that is `PlatformMeta`.
-
-Avoid putting secrets, large payloads, mutable objects, or frequently changing business state in either metadata channel. Use service calls or Nexus State for application data.
-
-## Providers And Consumers
-
-`EndpointMeta` is provided by the application runtime. It usually comes from `configure(...)`, adapter helper options, or an identity update when routing-relevant identity changes.
-
-`PlatformMeta` is provided by the adapter. The application can configure adapter inputs such as credentials or admission settings, but the resulting platform facts should be treated as adapter-owned connection metadata.
-
-Metadata is consumed by:
-
-- target descriptors, matchers, and Token `defaultTarget` routing defaults that match `EndpointMeta`
-- `policy.canConnect` and `policy.canCall`, which can inspect both `EndpointMeta` and `PlatformMeta`
-- service-level policy attached through `serviceProvider(...)` or `provide(..., { policy })`
-- diagnostics, connection snapshots, and lifecycle handling
-
-## Example: Host, Client, And Worker
-
-This example uses a generic host/client/worker topology. The host exposes a scheduler service, clients call the host, and workers are routed by capability.
+Policy context uses `remoteIdentity` for `ContextMeta` and `connection` for `ConnectionMeta`:
 
 ```ts
-import { Nexus, TokenSpace, serviceProvider } from "@nexus-js/core";
-
-type EndpointMeta =
-  | { context: "host"; region: string }
-  | { context: "client"; clientId: string; tenantId: string }
-  | { context: "worker"; workerName: string; capabilities: string[] };
-
-type PlatformMeta = {
-  authenticated: boolean;
-  channel: "in-memory" | "tcp";
-};
-
-interface SchedulerService {
-  enqueue(jobName: string): Promise<void>;
-}
-
-const AppTokens = new TokenSpace<EndpointMeta, PlatformMeta>({
-  name: "example",
-}).space("app");
-
-export const SchedulerToken = AppTokens.token<SchedulerService>("scheduler", {
-  defaultTarget: { descriptor: { context: "host" } },
-});
-
-const schedulerService: SchedulerService = {
-  async enqueue(jobName) {
-    console.log("enqueue", jobName);
-  },
-};
-
-const hostNexus = new Nexus<EndpointMeta, PlatformMeta>();
-
-hostNexus.configure({
-  endpoint: {
-    implementation: createHostEndpoint(),
-    meta: { context: "host", region: "us-east" },
-  },
-  providers: [serviceProvider(SchedulerToken, schedulerService)],
-  matchers: {
-    imageWorker: (identity) =>
-      identity.context === "worker" &&
-      identity.capabilities.includes("image-processing"),
-  },
+nexus.configure({
   policy: {
-    canConnect({ remoteIdentity, platform }) {
-      if (!platform.authenticated) return false;
-
+    canConnect({ remoteIdentity, connection }) {
       return (
-        remoteIdentity.context === "client" ||
-        remoteIdentity.context === "worker"
+        remoteIdentity.context === "client" &&
+        connection.transport === "trusted"
       );
     },
   },
 });
 ```
 
-The `context`, `tenantId`, `region`, and `capabilities` fields are `EndpointMeta` because the application uses them for product identity and routing. The `authenticated` and `channel` fields are `PlatformMeta` because the adapter observes or verifies them for each connection.
+Treat `remoteIdentity` as peer-declared unless the adapter documents stronger verification. Prefer adapter-observed or adapter-verified connection facts for security decisions. Do not assume process IDs, user IDs, origins, or sender fields are trustworthy beyond the adapter's documented guarantees.
 
-## Best Practices
+## Updating Identity
 
-- Keep `EndpointMeta` small, serializable, and stable enough for routing.
-- Prefer discriminated unions with a `context` field for endpoint roles.
-- Use `PlatformMeta` for security-sensitive facts only when the adapter actually observes or verifies them.
-- Treat `remoteIdentity` as peer-declared unless your adapter documents stronger guarantees.
-- Put shared metadata types next to shared Tokens so every context imports the same model.
-- Use `new TokenSpace<EndpointMeta, PlatformMeta>({ name: "..." })` and instance `.space("...")` calls so token defaults, descriptors, and matchers stay type-aligned.
-- Runtime-specific tokens keep their endpoint metadata through Nexus public APIs. A `Token<Service, ChromeEndpointMeta>` can be provided, exposed, registered as a store provider, and passed to a Chrome-typed runtime without an adapter-local cast or `asRuntimeToken` shim. Calls that read `token.defaultTarget`, such as `create(...)`, still reject tokens from unrelated endpoint metadata domains.
-- Use `updateIdentity(...)` only for changes that affect routing, policy, diagnostics, or lifecycle behavior.
-- Recreate raw `nexus.create(...)` proxies after session replacement, connection loss, or identity changes that should retarget future calls.
+Use `updateIdentity()` only for local endpoint identity changes that affect routing, policy, diagnostics, or lifecycle behavior. It does not mutate existing `ConnectionMeta`, change an existing session's target, or rebind old proxies.
+
+After session replacement, recreate proxies, references, and remote State handles. Discovery and replacement policy belong to the application.
+
+## First-Party Examples
+
+The first-party adapter types are public and adapter-specific:
+
+- Chrome: `ChromeContextMeta`, `ChromeConnectionMeta`, `ChromeConnectionTarget`, and `ChromeAdapterModel`
+- Node IPC: `NodeIpcContextMeta`, `NodeIpcConnectionMeta`, `NodeIpcConnectionTarget`, and `NodeIpcAdapterModel`
+- Iframe: `IframeContextMeta`, `IframeConnectionMeta`, `IframeConnectionTarget`, and `IframeAdapterModel`
+
+Use the adapter's factory and smart constructors rather than manually reconstructing platform internals.

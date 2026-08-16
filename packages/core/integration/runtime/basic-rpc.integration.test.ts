@@ -26,7 +26,7 @@ describe("Nexus L4 Integration: Basic RPC", () => {
 
   it("should perform basic RPC from client to host", async () => {
     const bgApi = await world.popup.nexus.create(BackgroundServiceToken, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     expect(bgApi).toBeDefined();
 
@@ -37,7 +37,7 @@ describe("Nexus L4 Integration: Basic RPC", () => {
 
   it("should handle host-to-client callbacks", async () => {
     const bgApi = await world.cs1.nexus.create(BackgroundServiceToken, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     expect(bgApi).toBeDefined();
 

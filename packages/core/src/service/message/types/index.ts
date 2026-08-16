@@ -1,27 +1,28 @@
-import type { NexusMessage } from "../../../types/message.js";
-import type { PlatformMeta, EndpointMeta } from "../../../types/identity.js";
-import type { MessageHandlerCallbacks } from "../../engine.js";
-import type { PayloadProcessor } from "../../payload/payload-processor.js";
-import type { ResourceManager } from "../../resource-manager.js";
-import type { NexusAuthorizationPolicy } from "../../../api/types/config.js";
+import type { NexusMessage } from "@/types/message";
+import type {
+  AdapterModel,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "@/types/adapter-model";
+import type { MessageHandlerCallbacks } from "../../engine";
+import type { PayloadProcessor } from "../../payload/payload-processor";
+import type { ResourceManager } from "../../resource-manager";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 /**
  * The shared context object available to all message handlers.
  * It provides access to all the core L3 managers.
  */
-export interface HandlerContext<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
-  readonly engine: MessageHandlerCallbacks<U>;
+export interface HandlerContext<M extends AdapterModel> {
+  readonly engine: MessageHandlerCallbacks<M>;
   readonly resourceManager: ResourceManager.Runtime;
-  readonly payloadProcessor: PayloadProcessor.Runtime<U, P>;
-  policy?: NexusAuthorizationPolicy<U, P>;
+  readonly payloadProcessor: PayloadProcessor.Runtime<M>;
+  policy?: NexusAuthorizationPolicy<M>;
   getConnectionAuthContext?: (connectionId: string) =>
     | {
-        readonly localIdentity: U;
-        readonly remoteIdentity: U;
-        readonly platform: P;
+        readonly localIdentity: ContextMetaOf<M>;
+        readonly remoteIdentity: ContextMetaOf<M>;
+        readonly connection: ConnectionMetaOf<M>;
       }
     | undefined;
 }
@@ -34,10 +35,9 @@ export interface HandlerContext<
  */
 export type MessageHandlerFn<
   T extends NexusMessage,
-  U extends EndpointMeta = EndpointMeta,
-  P extends PlatformMeta = PlatformMeta,
+  M extends AdapterModel = AdapterModel,
 > = (
-  context: HandlerContext<U, P>,
+  context: HandlerContext<M>,
   message: T,
   sourceConnectionId: string,
 ) => Promise<void> | void;
