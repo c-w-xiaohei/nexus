@@ -1,25 +1,25 @@
-import type { PlatformMeta, EndpointMeta } from "../../types/identity.js";
+import type { AdapterModel } from "../../types/adapter-model";
 import {
   getValueType,
   LocalResourceType,
   type ReviveContext,
   type SanitizeContext,
   ValueType,
-} from "../types/index.js";
-import type { ProxyFactory } from "../proxy-factory.js";
-import type { ResourceManager } from "../resource-manager.js";
-import type { NexusAuthorizationPolicy } from "../../api/types/config.js";
-import { isRefWrapper } from "../../types/ref-wrapper.js";
-import { Placeholder } from "./placeholder.js";
+} from "../types";
+import type { ProxyFactory } from "../proxy-factory";
+import type { ResourceManager } from "../resource-manager";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import { isRefWrapper } from "@/types/ref-wrapper";
+import { Placeholder } from "./placeholder";
 import {
   ESCAPE_CHAR,
   PLACEHOLDER_PREFIX,
   PlaceholderType,
   REVIVER_TABLE_CONFIG,
   SANITIZER_TABLE_CONFIG,
-} from "./protocol.js";
-import { Logger } from "../../logger.js";
-import { Result } from "better-result";
+} from "./protocol";
+import { Logger } from "@/logger";
+import { Result, type Result as TResult } from "better-result";
 const { err, ok } = Result;
 
 export namespace PayloadProcessor {
@@ -44,29 +44,30 @@ export namespace PayloadProcessor {
     UnsupportedType: UnsupportedTypeError,
   } as const;
 
-  export interface Runtime<U extends EndpointMeta, _P extends PlatformMeta> {
+  export interface Runtime<M extends AdapterModel> {
     readonly resourceManager: ResourceManager.Runtime;
-    readonly proxyFactory: ProxyFactory<U>;
+    readonly proxyFactory: ProxyFactory<M>;
     safeSanitize(
       args: any[],
       targetConnectionId: string,
-    ): Result<any[], globalThis.Error>;
+    ): TResult<any[], globalThis.Error>;
     safeSanitizeFromService(
       args: any[],
       targetConnectionId: string,
       serviceName: string,
-      servicePolicy?: NexusAuthorizationPolicy<any, any>,
-    ): Result<any[], globalThis.Error>;
+      servicePolicy?: NexusAuthorizationPolicy<M>,
+    ): TResult<any[], globalThis.Error>;
     safeRevive(
       args: any[],
       sourceConnectionId: string,
-    ): Result<any[], globalThis.Error>;
+    ): TResult<any[], globalThis.Error>;
+    releaseSanitizedResources(value: unknown): void;
   }
 
-  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
+  export const create = <M extends AdapterModel>(
     resourceManager: ResourceManager.Runtime,
-    proxyFactory: ProxyFactory<U>,
-  ): Runtime<U, P> => {
+    proxyFactory: ProxyFactory<M>,
+  ): Runtime<M> => {
     const logger = new Logger("L3 --- PayloadProcessor");
 
     const internalSanitize = (value: any, context: SanitizeContext): any => {
@@ -87,6 +88,7 @@ export namespace PayloadProcessor {
         logger.debug(
           `-> Sanitized nexus.ref() object by creating local resource #${resourceId}.`,
         );
+        context.createdResourceIds?.push(resourceId);
         return new Placeholder(PlaceholderType.RESOURCE, resourceId).toString();
       }
 
@@ -138,7 +140,11 @@ export namespace PayloadProcessor {
 
       const handler = SANITIZER_TABLE_CONFIG.get(type);
       if (handler) {
-        return handler(runtime as Runtime<any, any>, value, context).toString();
+        return handler(
+          runtime as unknown as Runtime<AdapterModel>,
+          value,
+          context,
+        ).toString();
       }
 
       logger.error(
@@ -149,6 +155,25 @@ export namespace PayloadProcessor {
         `Nexus serialization error: Unsupported type "${typeof value}"`,
         { context: { valueType: typeof value } },
       );
+    };
+
+    const releaseSanitizedResources = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const item of value) releaseSanitizedResources(item);
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const item of Object.values(value))
+          releaseSanitizedResources(item);
+        return;
+      }
+      const placeholder = Placeholder.fromString(value);
+      if (
+        placeholder?.type === PlaceholderType.RESOURCE &&
+        placeholder.payload
+      ) {
+        resourceManager.releaseLocalResource(placeholder.payload);
+      }
     };
 
     const internalRevive = (value: any, context: ReviveContext): any => {
@@ -164,7 +189,11 @@ export namespace PayloadProcessor {
         );
         const handler = REVIVER_TABLE_CONFIG.get(placeholder.type);
         if (handler) {
-          return handler(runtime as Runtime<any, any>, placeholder, context);
+          return handler(
+            runtime as unknown as Runtime<AdapterModel>,
+            placeholder,
+            context,
+          );
         }
         logger.warn(
           `No reviver handler for placeholder type "${placeholder.type}". Returning as is.`,
@@ -193,15 +222,15 @@ export namespace PayloadProcessor {
     const safeSanitize = (
       args: any[],
       targetConnectionId: string,
-    ): Result<any[], globalThis.Error> =>
+    ): TResult<any[], globalThis.Error> =>
       safeSanitizeWithContext(args, { targetConnectionId });
 
     function safeSanitizeFromService(
       args: any[],
       targetConnectionId: string,
       serviceName: string,
-      servicePolicyOverride?: NexusAuthorizationPolicy<any, any>,
-    ): Result<any[], globalThis.Error> {
+      servicePolicyOverride?: NexusAuthorizationPolicy<M>,
+    ): TResult<any[], globalThis.Error> {
       const servicePolicy =
         arguments.length >= 4
           ? servicePolicyOverride
@@ -216,10 +245,14 @@ export namespace PayloadProcessor {
     const safeSanitizeWithContext = (
       args: any[],
       context: SanitizeContext,
-    ): Result<any[], globalThis.Error> => {
+    ): TResult<any[], globalThis.Error> => {
+      const createdResourceIds: string[] = [];
       const result = Result.try({
         try: () => {
-          const sanitized = internalSanitize(args, context);
+          const sanitized = internalSanitize(args, {
+            ...context,
+            createdResourceIds,
+          });
           return Array.isArray(sanitized) ? sanitized : [sanitized];
         },
         catch: (error) =>
@@ -232,6 +265,9 @@ export namespace PayloadProcessor {
       });
 
       if (result.isErr()) {
+        for (const resourceId of createdResourceIds) {
+          resourceManager.releaseLocalResource(resourceId);
+        }
         return err(result.error);
       }
 
@@ -241,7 +277,7 @@ export namespace PayloadProcessor {
     const safeRevive = (
       args: any[],
       sourceConnectionId: string,
-    ): Result<any[], globalThis.Error> => {
+    ): TResult<any[], globalThis.Error> => {
       const result = Result.try({
         try: () => {
           const revived = internalRevive(args, { sourceConnectionId });
@@ -263,12 +299,13 @@ export namespace PayloadProcessor {
       return ok(result.value);
     };
 
-    const runtime: Runtime<U, P> = {
+    const runtime: Runtime<M> = {
       resourceManager,
       proxyFactory,
       safeSanitize,
       safeSanitizeFromService,
       safeRevive,
+      releaseSanitizedResources,
     };
 
     return runtime;

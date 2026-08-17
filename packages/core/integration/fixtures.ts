@@ -1,11 +1,11 @@
 import { Token } from "../src/api/token";
 import type { NexusInstance } from "../src/api/types";
-import { DecoratorRegistry } from "../src/api/registry";
 import { createStarNetwork } from "../src/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "../src/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "../src/types/symbols";
 import { LogicalConnection } from "../src/connection/logical-connection";
 import type { NexusMessage } from "../src/types/message";
+import type { TestAdapterModel } from "../src/utils/test-utils";
 
 export type AppUserMeta =
   | { context: "background"; version: string }
@@ -23,7 +23,8 @@ export type ContentScriptMeta = Extract<
   { context: "content-script" }
 >;
 
-export type AppPlatformMeta = { from: string };
+export type AppConnectionMeta = { from: string };
+export type AppAdapterModel = TestAdapterModel<AppUserMeta, AppConnectionMeta>;
 
 export interface Settings {
   showAvatars: boolean;
@@ -183,25 +184,23 @@ export class ContentScriptServiceImpl implements IContentScriptService {
 
 export type IssueCompanionWorld = {
   background: {
-    nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
+    nexus: NexusInstance<AppAdapterModel>;
     service: BackgroundServiceImpl;
   };
   cs1: {
-    nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
+    nexus: NexusInstance<AppAdapterModel>;
     service: ContentScriptServiceImpl;
   };
   cs2: {
-    nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
+    nexus: NexusInstance<AppAdapterModel>;
     service: ContentScriptServiceImpl;
   };
   popup: {
-    nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
+    nexus: NexusInstance<AppAdapterModel>;
   };
 };
 
 export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> {
-  DecoratorRegistry.clear();
-
   const bgMeta: AppUserMeta = { context: "background", version: "1.0.0" };
   const cs1Meta: ContentScriptMeta = {
     context: "content-script",
@@ -223,33 +222,27 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
   const cs1Service = new ContentScriptServiceImpl(cs1Meta);
   const cs2Service = new ContentScriptServiceImpl(cs2Meta);
 
-  const network = await createStarNetwork<AppUserMeta, AppPlatformMeta>({
+  const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
     center: {
       meta: bgMeta,
       providers: {
         [BackgroundServiceToken.id]: backgroundService,
-      },
-      matchers: {
-        "is-active": (id) => id.context === "content-script" && id.isActive,
-        "is-github-issue": (id) =>
-          id.context === "content-script" &&
-          id.url.startsWith("github.com/issue"),
       },
     },
     leaves: [
       {
         meta: cs1Meta,
         providers: { [ContentScriptServiceToken.id]: cs1Service },
-        cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        cmConfig: { connectTo: [{ context: "background" }] },
       },
       {
         meta: cs2Meta,
         providers: { [ContentScriptServiceToken.id]: cs2Service },
-        cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        cmConfig: { connectTo: [{ context: "background" }] },
       },
       {
         meta: popupMeta,
-        cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+        cmConfig: { connectTo: [{ context: "background" }] },
       },
     ],
   });
@@ -274,9 +267,7 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
 }
 
 export function closeAllConnections(
-  instances: Array<
-    { nexus: NexusInstance<AppUserMeta, AppPlatformMeta> } | undefined
-  >,
+  instances: Array<{ nexus: NexusInstance<AppAdapterModel> } | undefined>,
 ) {
   for (const instance of instances) {
     if (!instance?.nexus) {
@@ -288,32 +279,32 @@ export function closeAllConnections(
     }
     const connections = Array.from((cm as any).connections.values());
     for (const connection of connections) {
-      (connection as LogicalConnection<any, any>).close();
+      (connection as LogicalConnection<AppAdapterModel>).close();
     }
   }
 }
 
 export function listLogicalConnections(instance: {
-  nexus: NexusInstance<AppUserMeta, AppPlatformMeta>;
-}): Array<LogicalConnection<any, any>> {
+  nexus: NexusInstance<AppAdapterModel>;
+}): Array<LogicalConnection<AppAdapterModel>> {
   const cm = (instance.nexus as any).connectionManager;
   if (!cm) {
     return [];
   }
   return Array.from((cm as any).connections.values()) as Array<
-    LogicalConnection<any, any>
+    LogicalConnection<AppAdapterModel>
   >;
 }
 
 export function findLogicalConnection(
-  instance: { nexus: NexusInstance<AppUserMeta, AppPlatformMeta> },
-  predicate: (connection: LogicalConnection<any, any>) => boolean,
-): LogicalConnection<any, any> | undefined {
+  instance: { nexus: NexusInstance<AppAdapterModel> },
+  predicate: (connection: LogicalConnection<AppAdapterModel>) => boolean,
+): LogicalConnection<AppAdapterModel> | undefined {
   return listLogicalConnections(instance).find(predicate);
 }
 
 export async function injectIncomingMessage(
-  instance: { nexus: NexusInstance<AppUserMeta, AppPlatformMeta> },
+  instance: { nexus: NexusInstance<AppAdapterModel> },
   sourceConnectionId: string,
   message: NexusMessage,
 ): Promise<void> {

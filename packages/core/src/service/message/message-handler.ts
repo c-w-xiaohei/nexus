@@ -1,8 +1,8 @@
-import type { PlatformMeta, EndpointMeta } from "../../types/identity.js";
-import type { NexusMessage } from "../../types/message.js";
-import { getHandler } from "./handler-map.js";
-import type { HandlerContext, MessageHandlerFn } from "./types/index.js";
-import { Logger } from "../../logger.js";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { NexusMessage } from "@/types/message";
+import { getHandler } from "./handler-map";
+import type { HandlerContext, MessageHandlerFn } from "./types";
+import { Logger } from "@/logger";
 import { Result } from "better-result";
 const { err } = Result;
 
@@ -35,8 +35,8 @@ export namespace MessageHandler {
     ): Promise<Result<void, globalThis.Error>>;
   }
 
-  export const create = <U extends EndpointMeta, P extends PlatformMeta>(
-    context: HandlerContext<U, P>,
+  export const create = <M extends AdapterModel>(
+    context: HandlerContext<M>,
   ): Runtime => {
     const logger = new Logger("L3 <- MessageHandler");
 
@@ -46,8 +46,7 @@ export namespace MessageHandler {
     ): Promise<Result<void, globalThis.Error>> => {
       const handler = getHandler(message.type) as MessageHandlerFn<
         NexusMessage,
-        U,
-        P
+        M
       >;
 
       if (handler) {

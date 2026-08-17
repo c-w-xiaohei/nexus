@@ -8,16 +8,25 @@ import {
   usingPopup,
   nexus,
   Token,
+  chromeTarget,
+  whereContentScript,
 } from "@nexus-js/chrome";
 
 // Shared service interface and token
 interface ITabService {
   getCurrentTab(): Promise<chrome.tabs.Tab | null>;
-  executeScript(tabId: number, code: string): Promise<any>;
+  executeScript(tabId: number, message: string): Promise<void>;
   sendNotification(message: string): Promise<void>;
 }
 
+interface IContentNotificationService {
+  notify(message: string): Promise<void>;
+}
+
 const TabServiceToken = new Token<ITabService>("tab-service");
+const ContentNotificationToken = new Token<IContentNotificationService>(
+  "content-notification",
+);
 
 // ===== Background Script =====
 // background.ts
@@ -36,10 +45,13 @@ export function setupBackground() {
       return tabs[0] || null;
     }
 
-    async executeScript(tabId: number, code: string) {
-      return await chrome.scripting.executeScript({
+    async executeScript(tabId: number, message: string) {
+      await chrome.scripting.executeScript({
         target: { tabId },
-        func: new Function(code),
+        func: (value: string) => {
+          console.log(value);
+        },
+        args: [message],
       });
     }
 
@@ -60,11 +72,17 @@ export function setupBackground() {
 // content.ts
 export async function setupContentScript() {
   // Configure Nexus for content script context
-  usingContentScript();
+  const contentNexus = usingContentScript();
+  const notificationService: IContentNotificationService = {
+    async notify(message) {
+      console.log("Notification from background:", message);
+    },
+  };
+  contentNexus.provide(ContentNotificationToken, notificationService);
 
   // Get the background service
   const tabService = await nexus.create(TabServiceToken, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
   });
 
   // Use the service
@@ -83,7 +101,7 @@ export async function setupPopup() {
 
   // Get the background service
   const tabService = await nexus.create(TabServiceToken, {
-    target: { descriptor: { context: "background" } },
+    target: chromeTarget.background(),
   });
 
   // Example: Execute script in current tab
@@ -105,18 +123,20 @@ export async function setupPopup() {
   });
 }
 
-// ===== Advanced: Multi-cast to Content Scripts =====
-export async function broadcastToContentScripts() {
+// ===== Advanced: Multicast to Content Scripts =====
+export async function notifyContentScripts() {
   usingBackgroundScript();
 
-  // Create multicast proxy to all content scripts
-  const contentScripts = await nexus.createMulticast(TabServiceToken, {
-    target: { matcher: "any-content-script" },
-    strategy: "all",
-  });
+  // Bind to the content-script providers available at selection time.
+  const contentScriptProxy = await nexus.selectMulticast(
+    ContentNotificationToken,
+    {
+      where: whereContentScript,
+    },
+  );
 
-  // This will call the method on all connected content scripts
-  await contentScripts.sendNotification(
-    "Broadcast message to all content scripts!",
+  // This calls every provider captured by the selection snapshot.
+  await contentScriptProxy.notify(
+    "Multicast message to all selected content scripts!",
   );
 }

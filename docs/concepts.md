@@ -1,253 +1,143 @@
 # Nexus Concepts
 
-This page explains product-level Nexus concepts. For synchronized state semantics, use the Nexus State concepts guide at `docs/state/concepts.md`.
+Nexus is a service and connection runtime for already-existing JavaScript contexts. It supplies typed contracts, connection acquisition, service exposure, session-bound proxies, resource references, authorization, and lifecycle semantics. The host application owns context startup and discovery.
 
-## What Nexus Actually Does
+## Core Model
 
-Nexus is more than "RPC over a transport".
+1. Define a service contract and `Token` in shared code.
+2. Configure an endpoint and local `ContextMeta` in every participating context.
+3. Expose a provider with `@nexus.Expose(...)` or `provide(...)`.
+4. Acquire a proxy from an exact target with `create`, or select available providers with `select`.
 
-It provides one consistent model for:
+`Token<T>` identifies the service contract. A Token without a default target is portable across adapter models. A model-bound Token or `TokenSpace` may carry a model-checked `defaultTarget`.
 
-- runtime identity
-- service exposure
-- proxy creation
-- target resolution
-- connection lifecycle
-- identity updates over time
+## Adapter Model
 
-The transport is only one layer of the system.
+The public `AdapterModel` associates three adapter-specific type families:
 
-## Contracts And Runtime Identity
+```ts
+interface AdapterModel {
+  contextMeta: object;
+  connectionMeta: object;
+  connectionTarget: object;
+}
+```
 
-Nexus separates compile-time service shape from runtime identity:
+First-party adapters expose their model and related types. `Nexus<M>`, `TokenSpace<M>`, `IEndpoint<M>`, and policy contexts use the same model, so a target from one adapter cannot be accidentally combined with another adapter's identity or connection facts. The model is a compile-time association; it is not a wire schema or an identity-authentication mechanism.
 
-- `Token<T>` is a typed key for a service contract and its runtime identity
-- shared contracts can be imported by multiple contexts
-- consumers create remote proxies from the token, not concrete classes
+## ContextMeta And ConnectionMeta
 
-`EndpointMeta` and `PlatformMeta` are the two typed metadata channels behind runtime identity. Use `EndpointMeta` for self-described product and routing identity, and use `PlatformMeta` for adapter-observed connection facts and adapter-verified security facts when available. See `docs/identity-and-metadata.md` for field placement, trust boundaries, and type-safety guidance.
+`ContextMeta` is the peer-declared product identity exchanged during the handshake. It can contain a context role, application metadata, URL, origin, tenant, or capability labels used by `where` and policy.
 
-## Expose In One Context, Consume In Another
+`ConnectionMeta` is adapter-owned and scoped to one logical connection session. It contains facts the local adapter observes or verifies for that connection, such as a Chrome sender or an IPC authentication result. It is read-only from the core API, is not sent as peer identity, and is not changed through `updateIdentity()`.
 
-The core Nexus model is:
+The distinction is important: a remote context may declare one identity, while different local adapters observe different connection facts for that same context. Do not turn adapter observations into `ContextMeta`, and do not expose adapter-private route details as a general target or identity type.
 
-1. define a contract and token in shared code
-2. configure the local Nexus face with `configure()` or an adapter helper
-3. publish a provider on that face with `@nexus.Expose(...)` or `provide(...)`
-4. create and call a session-bound typed proxy from another context
+## ConnectionTarget And where
 
-This gives local-like API ergonomics while preserving explicit cross-context boundaries.
+`ConnectionTarget` expresses one concrete platform endpoint that the adapter can connect to. For example, Chrome exports `chromeTarget.background()` and `chromeTarget.contentDocument({ tabId, documentId })`; Node IPC uses `NodeIpcConnectionTarget`; iframe uses `IframeConnectionTarget`.
 
-Formal API roles:
-
-- `configure()` configures the local Nexus face: endpoint, identity, policy, descriptors, matchers, and bootstrap composition.
-- `@nexus.Expose(...)` and `provide(...)` publish providers on that local face.
-- `create()` discovers a session-bound remote handle using the call site's target resolution rules.
-
-## Session-Bound Proxies And Connection-Bound References
-
-Nexus handles are intentionally scoped to runtime lifecycle boundaries.
-
-- `nexus.create()` returns a unicast proxy bound to the resolved remote session
-- `nexus.ref()` returns a local wrapper for reference passing; the connection-bound transient capability is the remote resource proxy materialized after transport crossing
-
-These are not immortal objects.
-
-If the remote session is replaced or the connection is lost:
-
-- existing `create()` proxies should be treated as invalid for new work
-- existing remote resource capabilities reached via refs are transient and should be reacquired on a new connection
-
-Target handoff does not mutate existing raw handles.
-
-- an already-created raw `nexus.create()` proxy stays pinned to the live session/connection it resolved at creation time
-- a remote capability proxy materialized from `nexus.ref()` crossing also stays pinned to that same original connection scope
-- later matcher/identity changes can change which endpoint future targeting resolves to, but they do not auto-retarget already-created raw handles
-
-Nexus keeps these boundaries explicit so applications can reason about ownership, cleanup, and failure behavior without hidden rebinding.
-
-## Raw Core vs Higher-Layer Rebuild
-
-Raw core handles and higher-layer orchestration have different jobs.
-
-- raw core: `create()` proxies and remote capabilities are lifecycle-scoped and become invalid across session/connection replacement
-- higher layers (state orchestration, React hooks, app services): detect lifecycle boundaries and build replacement handles
-
-Higher-layer rebuild does not mean raw handles auto-heal. It means your app creates new handles/capabilities for new lifecycle scopes.
-
-Concrete transient capability reacquire example:
-
-1. Context A calls a service method and receives a callback/reference wrapper via `nexus.ref()` semantics.
-2. Context B uses that remote callback capability while the current connection is alive.
-3. The connection drops and re-establishes with a new identity/scope.
-4. Context A must pass a fresh ref/callback again so Context B obtains a new remote capability proxy for the new connection.
-
-Reusing the old capability after step 3 is not valid.
-
-## Startup And Configuration
-
-Before you can create useful proxies, the current context must be configured.
-
-In practice, Nexus startup always includes:
-
-1. endpoint registration
-2. endpoint identity metadata
-
-That is why `configure()` matters at the product level.
-
-Nexus does not infer the current context magically. It needs an endpoint implementation and metadata in order to route and accept connections.
-
-Provider registration is optional at the level of a single context boot. It becomes necessary when you want that context to expose callable services to others. Use `@nexus.Expose(...)` for class declarations and `provide(...)` for object, function, State, Relay, or live providers.
-
-Decorator factories are bound to the Nexus instance captured by the decorator expression. `@nexus.Expose(...)` and `@nexus.Endpoint(...)` bind to the default singleton; `@specificNexus.Expose(...)` and `@specificNexus.Endpoint(...)` bind to that specific instance. Top-level `@Expose(...)` and `@Endpoint(...)` remain compatibility shorthand for the default singleton, not the new multi-instance authoring path.
-
-## Multiple Nexus Instances In One Runtime
-
-One JavaScript context can host more than one isolated `Nexus` instance. Use this when the same runtime bridges different transport graphs, such as a Chrome extension background service that talks to content scripts through the Chrome adapter and to a local broker through another adapter.
-
-Use separate instances:
+`where` filters an established connection with its remote `ContextMeta` and local `ConnectionMeta`:
 
 ```ts
 import { Nexus } from "@nexus-js/core";
+import { chromeTarget, type ChromeAdapterModel } from "@nexus-js/chrome";
+import { CaptureToken } from "./shared-contracts";
 
-const extensionNexus = new Nexus<
-  ExtensionEndpointMeta,
-  ExtensionPlatformMeta
->();
-const brokerNexus = new Nexus<BrokerEndpointMeta, BrokerPlatformMeta>();
-```
+const chromeNexus = new Nexus<ChromeAdapterModel>();
+const tabId = 42;
 
-Name multi-instance variables after the local transport graph or endpoint face
-they represent, not after a remote target. For example, prefer
-`chromeNexus`, `iframeParentNexus`, or `brokerNexus` over
-`toBackgroundNexus` or `backgroundNexus` when the instance actually runs in a
-content script. A `Nexus` instance is a local endpoint face with its own
-identity, policy, services, connections, proxies, and refs; it is not a
-one-way client for a single destination.
-
-Each instance has its own endpoint, metadata, policy, services, connections, proxies, and refs. They do not automatically share a connection graph.
-
-Do not use top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)` with this pattern. Configure endpoints explicitly, publish object providers with instance-local `provide(...)`, and bind class services or endpoint decorators to the owning instance with forms such as `@extensionNexus.Expose(...)` or `@brokerNexus.Endpoint(...)`.
-
-Bridge between instances with normal services:
-
-1. expose a gateway service on one instance
-2. implement that service by calling `create(...)` on the other instance
-3. treat proxies and refs on both sides as session-bound handles
-
-For example, a background service can expose a local-broker gateway on `brokerNexus` and implement it by calling content-script services through `extensionNexus`. That keeps transport admission, extension routing, and broker-facing API boundaries explicit.
-
-If the bridge is forwarding a selected upstream service or Nexus State store into a downstream graph, use Nexus Relay instead of inventing a raw router. Relay is still provider-level forwarding: it exposes an ordinary service or store provider on one instance and implements it by calling another instance. It does not merge graphs or introduce transparent multi-hop routing. See `docs/relay.md`.
-
-## Targeting And Context Resolution
-
-Nexus routes calls through target descriptors and matching rules.
-
-- adapters map platform-specific context identity (for example, extension background/content script)
-- targeting is explicit, so cross-context behavior stays debuggable
-- proxy creation and call dispatch use the same routing model
-
-For unicast proxy creation, Nexus resolves target intent in this order:
-
-1. explicit non-empty `create(..., { target })`
-2. token `defaultTarget`
-3. unique endpoint `connectTo` fallback
-
-Token defaults are consumer-side create defaults, not provider locations. A provider is still published on the local Nexus face where `@nexus.Expose(...)` or `provide(...)` runs.
-
-`expects` is a call-site topology assertion. Put it on `create(...)` when the caller requires one or many matches; do not encode it in token defaults.
-
-If there is no unique target, proxy creation fails.
-
-Two common targeting styles are:
-
-### Inline descriptor
-
-```ts
-const remote = await nexus.create(PingToken, {
-  target: {
-    descriptor: { context: "background" },
-  },
+const remote = await chromeNexus.create(CaptureToken, {
+  target: chromeTarget.contentFrame({ tabId, frameId: 0 }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    contextMeta.isVisible === true &&
+    connectionMeta.observed.tabId === tabId,
+  timeout: 30_000,
+  callTimeout: 5_000,
 });
 ```
 
-### Named descriptor or matcher
+The semantics are always:
 
-If your application registers descriptors or matchers in configuration, you can target by name instead of repeating the rule inline.
+```text
+target matches the connection
+AND
+where(contextMeta, connectionMeta) is true
+```
 
-That is useful when the same routing intent appears in many places.
+There is no find-any mode hidden behind `where`. It filters established peers; it never discovers or connects one.
 
-For example:
+## Resolution And Fallbacks
+
+For unicast `create()`, Nexus resolves in this order:
+
+1. explicit `target: ConnectionTarget`
+2. Token `defaultTarget`
+3. endpoint `defaultTarget`
+4. a structured targeting error
+
+An exact target is actionable: Nexus first reuses a matching ready session and otherwise asks the adapter to connect that target.
+
+`defaultTarget` is only a default address for `create`. It neither preconnects nor affects `select`.
+
+`createMulticast` requires non-empty `targets: readonly ConnectionTarget[]`; it acquires each exact target and fails the whole operation if any target cannot be acquired. `expects: "all"` (the default) returns settled results, while `expects: "stream"` returns an async iterable of settled results; neither includes connection IDs or `from` metadata. Connection IDs are not public acquisition inputs, selection keys, routing targets, or multicast result fields. `selectMulticast({ where })` never connects, has no `wait`, and binds one current provider snapshot, where zero providers is a valid empty result. `where` remains an additional AND filter in either operation. Acquisition `timeout`/`signal` cover target acquisition, `callTimeout` covers later calls, and incompatible provider-catalog protocols are structured protocol errors.
+
+## Session-Bound Handles
+
+`create()` returns a proxy bound to the session acquired for that call. `ref()` transfers a connection-scoped capability; the materialized remote capability is likewise bound to that session. Disconnect, reload, daemon restart, and replacement invalidate old handles. Higher-level application code may observe lifecycle signals and create replacements, but the raw handle never silently retargets or retries.
+
+## Configuration And Providers
+
+Configure each runtime before demand operations such as `create()` or `ref()`:
+
+The following is a structural pseudocode sketch, not a complete copyable
+endpoint implementation. For concrete adapter setup or a custom endpoint,
+see `docs/platforms.md`.
 
 ```ts
+import { nexus } from "@nexus-js/core";
+
 nexus.configure({
-  descriptors: {
-    background: { context: "background" },
+  endpoint: {
+    implementation,
+    meta: { context: "worker", app: { name: "scheduler" } },
+    defaultTarget: undefined,
   },
-  matchers: {
-    visibleContentScript: (identity) =>
-      identity.context === "content-script" && identity.isVisible === true,
-  },
-});
-
-const byDescriptor = await nexus.create(PingToken, {
-  target: { descriptor: "background" },
-});
-
-const byMatcher = await nexus.create(PingToken, {
-  target: { matcher: "visibleContentScript" },
 });
 ```
 
-## Transport-Agnostic Core, Platform Adapters
+Use `@ownedNexus.Expose(Token)` for class providers and `ownedNexus.provide(Token, service)` for object, State, Relay, and runtime-created providers. Use `configure({ providers })` for bootstrap composition. After `ready`, live provider registration uses `provide(...)`.
 
-Nexus keeps core communication APIs in `@nexus-js/core` and layers platform specifics in adapters such as `@nexus-js/chrome`.
+The application owns provider and target discovery. Nexus does not search all contexts for a provider, inject a content script, inspect the active tab, or decide which frames are eligible.
 
-This lets application code keep one programming model while adapting endpoint wiring per platform.
+## Multiple Nexus Instances
+
+One JavaScript context can host isolated Nexus instances for different transport graphs:
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+
+const chromeNexus = new Nexus<ChromeAdapterModel>();
+const iframeNexus = new Nexus<IframeAdapterModel>();
+```
+
+Name instances after the local graph they own, not after a remote destination. Relay can expose a selected service or State provider from one graph through another, but it does not merge graphs or create transparent multi-hop routing.
 
 ## Architecture Layers
 
-At a high level, the implementation splits into layers:
+1. Transport and endpoint layer: ports, endpoints, serializers, and platform channels.
+2. Connection and routing layer: handshake, identity, policy, target matching, lifecycle, and session acquisition.
+3. Service and resource layer: providers, proxies, calls, callbacks, and remote references.
+4. Product API layer: `configure`, `create`, `ref`, adapter helpers, State, and Relay.
 
-- transport / endpoint layer
-- connection and routing layer
-- service / proxy / resource layer
-- product-facing API layer
+## Next Steps
 
-You usually interact with the top layer, but the behavior you observe comes from all of them working together.
-
-Nexus Relay is exposed at the product-facing API layer through `@nexus-js/core/relay`, and implemented using the service/proxy/resource layer plus the Nexus State service contract. It relies on connection identity and routing underneath, but it is not a transport or raw message-routing layer.
-
-## Identity Updates And Lifecycle
-
-Contexts can change identity over time.
-
-Examples:
-
-- a caller chooses a different tab or window target
-- metadata changes
-- group membership changes
-
-Nexus uses identity updates to keep targeting and connection lifecycle behavior correct over time.
-
-This is why `updateIdentity()` exists as part of the public product API: if a context changes meaningfully over time, Nexus needs updated identity information to keep routing and lifecycle decisions correct.
-
-At the application layer, reconnect usually means rebuilding session-bound handles after caller-owned target discovery, identity changes, or connection changes. Higher-layer code may automate that rebuild flow, but raw core handles do not silently heal across session replacement.
-
-## Product Capability Layers
-
-- core RPC and service exposure: `@nexus-js/core`
-- state subsystem for synchronized remote state: `@nexus-js/core/state`
-- relay helpers for explicit graph bridging: `@nexus-js/core/relay`
-- React bindings for Nexus State: `@nexus-js/react`
-
-Nexus State is a subsystem, not the product root.
-
-## Where To Go Next
-
-- Install/setup flow: `docs/getting-started.md`
-- Identity and metadata: `docs/identity-and-metadata.md`
-- Package choices: `docs/packages.md`
-- Platform model: `docs/platforms.md`
-- Nexus Relay: `docs/relay.md`
-- Nexus State docs: `docs/state/README.md`
+- [Getting started](getting-started.md)
+- [Identity and connection metadata](identity-and-metadata.md)
+- [Platforms and adapters](platforms.md)
+- [Authorization and policy](auth-and-policy.md)
+- [Nexus Relay](relay.md)
+- [Nexus State](state/README.md)

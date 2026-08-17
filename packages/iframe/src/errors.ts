@@ -1,6 +1,7 @@
 export type IframeAdapterErrorCode =
   | "E_IFRAME_CONFIG_INVALID"
   | "E_IFRAME_TARGET_NOT_FOUND"
+  | "E_IFRAME_TARGET_AMBIGUOUS"
   | "E_IFRAME_CONNECT_FAILED";
 
 /**

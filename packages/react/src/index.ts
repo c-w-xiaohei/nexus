@@ -1,5 +1,10 @@
 export { NexusProvider, type NexusProviderProps } from "./provider.js";
 export {
+  createNexusScope,
+  type NexusScope,
+  type NexusProviderProps as NexusScopeProviderProps,
+} from "./create-nexus-scope.js";
+export {
   createRemoteStoreScope,
   type RemoteStoreScope,
   type RemoteStoreScopeProviderProps,

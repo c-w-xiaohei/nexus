@@ -17,31 +17,44 @@ interface CounterActions extends Record<string, (...args: any[]) => any> {
   increment(by: number): number;
 }
 
-type ChromeEndpointMeta =
+type ChromeContextMeta =
   | { runtime: "background" }
   | { runtime: "content-script"; tabId: number };
 
-interface ChromePlatformMeta {
+interface ChromeConnectionMeta {
   platform: "chrome";
 }
 
-type UpstreamEndpointMeta = { runtime: "upstream"; workerId: string };
+type ChromeModel = {
+  contextMeta: ChromeContextMeta;
+  connectionMeta: ChromeConnectionMeta;
+  connectionTarget:
+    | { context: "background" }
+    | { context: "content"; tabId: number };
+};
+
+type UpstreamContextMeta = { runtime: "upstream"; workerId: string };
+type UpstreamModel = {
+  contextMeta: UpstreamContextMeta;
+  connectionMeta: ChromeConnectionMeta;
+  connectionTarget: { context: "upstream" };
+};
 
 const ChromeCounterToken = new Token<
   NexusStoreServiceContract<CounterState, CounterActions>,
-  ChromeEndpointMeta
+  ChromeModel
 >("state:chrome-counter", {
   defaultTarget: {
-    descriptor: { runtime: "background" },
+    context: "background",
   },
 });
 
 const UpstreamCounterToken = new Token<
   NexusStoreServiceContract<CounterState, CounterActions>,
-  UpstreamEndpointMeta
+  UpstreamModel
 >("state:upstream-counter", {
   defaultTarget: {
-    descriptor: { runtime: "upstream", workerId: "worker-1" },
+    context: "upstream",
   },
 });
 
@@ -55,11 +68,7 @@ const chromeDefinitionInput = {
       return next;
     },
   }),
-} satisfies DefineNexusStoreOptions<
-  CounterState,
-  CounterActions,
-  ChromeEndpointMeta
->;
+} satisfies DefineNexusStoreOptions<CounterState, CounterActions, ChromeModel>;
 
 void defineNexusStore<CounterState, CounterActions>(chromeDefinitionInput);
 
@@ -70,16 +79,20 @@ const chromeDefinition = defineNexusStore<
 >(chromeDefinitionInput);
 
 type ChromeDefinitionMeta = StoreTokenMetadata<typeof chromeDefinition.token>;
-const assertChromeMeta: ChromeDefinitionMeta = { runtime: "background" };
+const assertChromeMeta: ChromeDefinitionMeta = {
+  contextMeta: { runtime: "background" },
+  connectionMeta: { platform: "chrome" },
+  connectionTarget: { context: "background" },
+};
 void assertChromeMeta;
 
 const chromeDefinitionWithDefaultTarget = defineNexusStore<
   CounterState,
   CounterActions,
-  ChromeEndpointMeta
+  ChromeModel
 >({
   token: ChromeCounterToken,
-  defaultTarget: { descriptor: { runtime: "background" } },
+  defaultTarget: { context: "background" },
   state: () => ({ count: 0 }),
   actions: ({ getState, setState }) => ({
     increment(by) {
@@ -90,7 +103,7 @@ const chromeDefinitionWithDefaultTarget = defineNexusStore<
   }),
 });
 
-const chromeNexus = new Nexus<ChromeEndpointMeta, ChromePlatformMeta>();
+const chromeNexus = new Nexus<ChromeModel>();
 
 chromeNexus.provide(createNexusStore(chromeDefinition).provider);
 chromeNexus.provide(
@@ -98,10 +111,10 @@ chromeNexus.provide(
 );
 
 void connectNexusStore(chromeNexus, chromeDefinition, {
-  target: { descriptor: { runtime: "background" } },
+  target: { context: "background" },
 });
 void safeConnectNexusStore(chromeNexus, chromeDefinition, {
-  target: { descriptor: { runtime: "background" } },
+  target: { context: "background" },
 });
 
 const upstreamDefinitionInput = {
@@ -113,7 +126,7 @@ const upstreamDefinitionInput = {
 } satisfies DefineNexusStoreOptions<
   CounterState,
   CounterActions,
-  UpstreamEndpointMeta
+  UpstreamModel
 >;
 
 const upstreamDefinition = defineNexusStore<

@@ -1,5 +1,5 @@
 import { Nexus, Token } from "@nexus-js/core";
-import { usingIframeParent } from "@nexus-js/iframe";
+import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 
 interface EchoService {
   echo(value: string): Promise<string>;
@@ -17,7 +17,7 @@ const telemetry = {
   parentCalls: [] as Array<{ frameId: string; value: string }>,
   childCalls: [] as Array<{ frameId: string; value: string }>,
   binaryDataEnvelopes: 0,
-  readyFrames: [] as string[],
+  loadedFrames: [] as string[],
 };
 const childEchoServices = new Map<string, EchoService>();
 
@@ -55,7 +55,7 @@ function getFrame(frameId: string) {
   return iframe;
 }
 
-const parent = new Nexus().configure({
+const parent = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
     appId: "browser-app",
@@ -87,8 +87,8 @@ const parent = new Nexus().configure({
 window.addEventListener("message", (event) => {
   const data = event.data as { type?: string; frameId?: string } | undefined;
   if (data?.type !== "child-ready" || !data.frameId) return;
-  if (!telemetry.readyFrames.includes(data.frameId)) {
-    telemetry.readyFrames.push(data.frameId);
+  if (!telemetry.loadedFrames.includes(data.frameId)) {
+    telemetry.loadedFrames.push(data.frameId);
   }
 });
 
@@ -100,11 +100,9 @@ for (const frameId of frameIds) {
 async function callChildEcho(frameId: string, value: string) {
   const service = await parent.create(EchoToken, {
     target: {
-      descriptor: {
-        context: "iframe-child",
-        appId: "browser-app",
-        frameId,
-      },
+      context: "iframe-child",
+      appId: "browser-app",
+      frameId,
     },
   });
   const response = await service.echo(value);
@@ -117,11 +115,9 @@ async function callCachedChildEcho(frameId: string, value: string) {
   if (!service) {
     service = await parent.create(EchoToken, {
       target: {
-        descriptor: {
-          context: "iframe-child",
-          appId: "browser-app",
-          frameId,
-        },
+        context: "iframe-child",
+        appId: "browser-app",
+        frameId,
       },
     });
     childEchoServices.set(frameId, service);
@@ -134,12 +130,14 @@ function getTelemetry() {
     parentCalls: [...telemetry.parentCalls],
     childCalls: [...telemetry.childCalls],
     binaryDataEnvelopes: telemetry.binaryDataEnvelopes,
-    readyFrames: [...telemetry.readyFrames],
+    loadedFrames: [...telemetry.loadedFrames],
   };
 }
 
 async function reloadFrame(frameId: string) {
-  telemetry.readyFrames = telemetry.readyFrames.filter((id) => id !== frameId);
+  telemetry.loadedFrames = telemetry.loadedFrames.filter(
+    (id) => id !== frameId,
+  );
   childEchoServices.delete(frameId);
   const iframe = getFrame(frameId);
   iframe.src = `http://127.0.0.1:3211/child.html?frameId=${frameId}&reload=${Date.now()}`;

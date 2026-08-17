@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readEnvelope } from "./envelope";
+import { readEnvelope } from "./envelope.js";
 
 describe("iframe envelope parsing", () => {
   it("accepts a valid iframe envelope marker with app id and channel", () => {

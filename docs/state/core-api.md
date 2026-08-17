@@ -75,7 +75,7 @@ Connects to a remote Nexus State store and returns a `RemoteStore`.
 
 ```ts
 const remote = await connectNexusStore(nexus, counterStore, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 ```
 

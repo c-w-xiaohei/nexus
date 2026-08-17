@@ -92,9 +92,7 @@ import { connectNexusStore } from "@nexus-js/core/state";
 import { counterStore } from "./counter-store";
 
 const remoteCounter = await connectNexusStore(nexus, counterStore, {
-  target: {
-    descriptor: { context: "background" },
-  },
+  target: { context: "background" },
 });
 ```
 
@@ -239,7 +237,7 @@ function App({ sessionEpoch }: { sessionEpoch: number }) {
     <NexusProvider nexus={nexus}>
       <CounterScope.Provider
         options={{
-          target: { descriptor: { context: "background" } },
+          target: { context: "background" },
           reconnectKey: sessionEpoch,
         }}
       >

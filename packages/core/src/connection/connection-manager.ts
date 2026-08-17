@@ -1,31 +1,37 @@
-import { Transport } from "../transport/transport.js";
+import { Transport } from "../transport/transport";
 import type {
   PortProcessor,
   PortProcessorHandlers,
-} from "../transport/port-processor.js";
-import type { IdentityUpdateMessage, NexusMessage } from "../types/message.js";
-import { NexusMessageType } from "../types/message.js";
+} from "../transport/port-processor";
+import type { IdentityUpdateMessage, NexusMessage } from "../types/message";
+import { NexusMessageType } from "../types/message";
+import type { ConnectionContext } from "../types/identity";
 import type {
-  ConnectionContext,
-  PlatformMeta,
-  EndpointMeta,
-} from "../types/identity.js";
-import { LogicalConnection } from "./logical-connection.js";
+  AdapterModel,
+  ConnectionTargetOf,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "../types/adapter-model";
+import { LogicalConnection } from "./logical-connection";
+import { NexusEndpointCapabilityError } from "../errors/transport-errors";
+import { NexusProtocolIncompatibleError } from "../errors/connection-errors";
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
-  Descriptor,
   MessageTarget,
   ResolveOptions,
-} from "./types.js";
-import { Logger } from "../logger.js";
+} from "./types";
+import { Logger } from "@/logger";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
 type ConnectionManagerErrorCode =
   | "E_HANDSHAKE_FAILED"
   | "E_AUTH_CONNECT_DENIED"
+  | "E_CONNECTION_CONSTRAINT_FAILED"
   | "E_USAGE_INVALID"
+  | "E_ENDPOINT_CAPABILITY_MISMATCH"
+  | "E_PROTOCOL_INCOMPATIBLE"
   | "E_UNKNOWN";
 
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -67,9 +73,20 @@ export class ConnectionManagerAuthorizationDeniedError extends ConnectionManager
   }
 }
 
-export class ConnectionManagerOperationFailedError extends ConnectionManagerError {
+class ConnectionManagerConstraintFailedError extends ConnectionManagerError {
   constructor(message: string, options: ConnectionManagerErrorOptions = {}) {
-    super(message, "E_UNKNOWN", options);
+    super(message, "E_CONNECTION_CONSTRAINT_FAILED", options);
+    this.name = "ConnectionManagerConstraintFailedError";
+  }
+}
+
+export class ConnectionManagerOperationFailedError extends ConnectionManagerError {
+  constructor(
+    message: string,
+    options: ConnectionManagerErrorOptions = {},
+    code: ConnectionManagerErrorCode = "E_UNKNOWN",
+  ) {
+    super(message, code, options);
     this.name = "ConnectionManagerOperationFailedError";
   }
 }
@@ -80,6 +97,25 @@ export const connectionManagerErrorFromUnknown = (
 ): ConnectionManagerError => {
   if (error instanceof ConnectionManagerError) {
     return error;
+  }
+
+  if (error instanceof NexusEndpointCapabilityError) {
+    return new ConnectionManagerOperationFailedError(
+      input.message,
+      {
+        cause: error,
+        context: input.context,
+      },
+      "E_ENDPOINT_CAPABILITY_MISMATCH",
+    );
+  }
+
+  if (error instanceof NexusProtocolIncompatibleError) {
+    return new ConnectionManagerOperationFailedError(
+      error.message,
+      { cause: error, context: error.context },
+      "E_PROTOCOL_INCOMPATIBLE",
+    );
   }
 
   if (error instanceof globalThis.Error) {
@@ -100,32 +136,32 @@ export const connectionManagerErrorFromUnknown = (
   });
 };
 
-export class ConnectionManager<
-  U extends EndpointMeta & { groups?: string[] },
-  P extends PlatformMeta,
-> {
+export class ConnectionManager<M extends AdapterModel> {
   private readonly logger = new Logger("L2 --- ConnectionManager");
-  private readonly connectionsMap = new Map<string, LogicalConnection<U, P>>();
+  private readonly connectionsMap = new Map<string, LogicalConnection<M>>();
+  private readonly sessionsMap = new Map<string, LogicalConnection<M>>();
   private readonly serviceGroupsMap = new Map<string, Set<string>>();
   private readonly pendingCreations = new Map<
     string,
-    Promise<LogicalConnection<U, P>>
+    Promise<LogicalConnection<M>>
   >();
   private nextConnectionOrdinal = 1;
   private nextMessageOrdinal = 1;
   private initialized = false;
+  private readonly localProviders = new Set<string>();
+  private readonly availabilityListeners = new Set<() => void>();
   private initializationInFlight: Promise<
     Result<void, ConnectionManagerError>
   > | null = null;
 
   constructor(
-    private readonly config: ConnectionManagerConfig<U, P>,
-    private readonly transport: Transport.Context<U, P>,
-    private readonly handlers: ConnectionManagerHandlers<U, P>,
-    private localEndpointMeta: U,
+    private readonly config: ConnectionManagerConfig<M>,
+    private readonly transport: Transport.Context<M>,
+    private readonly handlers: ConnectionManagerHandlers<M>,
+    private localEndpointMeta: ContextMetaOf<M>,
   ) {}
 
-  public get connections(): ReadonlyMap<string, LogicalConnection<U, P>> {
+  public get connections(): ReadonlyMap<string, LogicalConnection<M>> {
     return new Map(this.connectionsMap);
   }
 
@@ -138,23 +174,67 @@ export class ConnectionManager<
     );
   }
 
-  public async safeInitialize(): Promise<Result<void, ConnectionManagerError>> {
+  public safePublishProviders(
+    providers: readonly string[],
+  ): Result<void, Error> {
+    for (const provider of providers) this.localProviders.add(provider);
+    for (const connection of this.sessionsMap.values()) {
+      connection.publishProviders(providers).match({
+        ok: () => undefined,
+        err: () => undefined,
+      });
+    }
+    this.notifyAvailabilityChanged();
+    return ok(undefined);
+  }
+
+  public getReadyProviderConnectionIds(provider: string): readonly string[] {
+    return Array.from(this.connectionsMap.values())
+      .filter(
+        (connection) =>
+          connection.isReady() && connection.remoteProviders.has(provider),
+      )
+      .map((connection) => connection.connectionId);
+  }
+
+  public getReadyProviderConnections(
+    provider: string,
+    where?: ResolveOptions<M>["where"],
+  ): readonly LogicalConnection<M>[] {
+    return this.findReadyConnections(where).filter((connection) =>
+      connection.remoteProviders.has(provider),
+    );
+  }
+
+  public getReadyTargetConnections(
+    target: ConnectionTargetOf<M>,
+    where?: ResolveOptions<M>["where"],
+  ): readonly LogicalConnection<M>[] {
+    return this.applyWhere(this.findReadyTargetConnections(target), where);
+  }
+
+  public subscribeAvailabilityChanged(listener: () => void): () => void {
+    this.availabilityListeners.add(listener);
+    return () => this.availabilityListeners.delete(listener);
+  }
+
+  public safeInitialize(): Promise<Result<void, ConnectionManagerError>> {
     if (this.initialized) {
-      return ok(undefined);
+      return Promise.resolve(ok(undefined));
     }
     if (this.initializationInFlight) {
       return this.initializationInFlight;
     }
 
-    const initialization = Transport.safeListen(
+    this.initializationInFlight = Transport.safeListen(
       this.transport,
-      (createProcessor, platformMetadata) => {
+      (createProcessor, connectionMeta) => {
         const connectionId = this.allocateConnectionId();
         void Result.tryPromise({
           try: () =>
             this.acceptIncomingConnection({
               connectionId,
-              platformMetadata: (platformMetadata ?? {}) as P,
+              connectionMeta: connectionMeta ?? ({} as ConnectionMetaOf<M>),
               createProcessor,
             }),
           catch: (error) =>
@@ -165,17 +245,16 @@ export class ConnectionManager<
         }).then((result) =>
           result.match({
             ok: () => undefined,
-            err: (error) => {
+            err: (error) =>
               this.logger.error(
                 `Unexpected error accepting incoming connection #${connectionId}`,
                 error,
-              );
-            },
+              ),
           }),
         );
       },
-    ).then((listenResult) =>
-      listenResult
+    ).then((result) => {
+      const mapped = result
         .mapError((error) =>
           connectionManagerErrorFromUnknown(error, {
             message: "Failed to start connection manager listener",
@@ -183,21 +262,17 @@ export class ConnectionManager<
         )
         .map(() => {
           this.initialized = true;
-          // Pre-warm is asynchronous fire-and-forget. This method returns once
-          // listener activation succeeds (or fails with Result error).
-          this.preWarmConnections();
-        }),
-    );
-    this.initializationInFlight = initialization.then((value) => {
+        });
       this.initializationInFlight = null;
-      return value;
+      return mapped;
     });
+
     return this.initializationInFlight;
   }
 
   public safeResolveConnection(
-    options: ResolveOptions<U, P>,
-  ): Promise<Result<LogicalConnection<U, P> | null, ConnectionManagerError>> {
+    options: ResolveOptions<M>,
+  ): Promise<Result<LogicalConnection<M> | null, ConnectionManagerError>> {
     const initializedCheck = this.ensureInitialized("safeResolveConnection");
     if (initializedCheck.isErr()) {
       return Promise.resolve(err(initializedCheck.error));
@@ -214,10 +289,8 @@ export class ConnectionManager<
   }
 
   public safeResolveConnections(
-    options: ResolveOptions<U, P>,
-  ): Promise<
-    Result<readonly LogicalConnection<U, P>[], ConnectionManagerError>
-  > {
+    options: ResolveOptions<M>,
+  ): Promise<Result<readonly LogicalConnection<M>[], ConnectionManagerError>> {
     const initializedCheck = this.ensureInitialized("safeResolveConnections");
     if (initializedCheck.isErr()) {
       return Promise.resolve(err(initializedCheck.error));
@@ -234,7 +307,7 @@ export class ConnectionManager<
   }
 
   public safeSendMessage(
-    target: MessageTarget<U>,
+    target: MessageTarget<M>,
     message: NexusMessage,
   ): Result<string[], ConnectionManagerError> {
     const initializedCheck = this.ensureInitialized("safeSendMessage");
@@ -264,8 +337,44 @@ export class ConnectionManager<
     }
   }
 
+  public safeGetReadyConnectionIds(
+    target: MessageTarget<M>,
+  ): Result<string[], ConnectionManagerError> {
+    const initializedCheck = this.ensureInitialized(
+      "safeGetReadyConnectionIds",
+    );
+    if (initializedCheck.isErr()) return err(initializedCheck.error);
+
+    if ("connectionId" in target) {
+      return ok(
+        this.connectionsMap.get(target.connectionId)?.isReady()
+          ? [target.connectionId]
+          : [],
+      );
+    }
+    if ("connectionIds" in target) {
+      return ok(
+        target.connectionIds.filter((connectionId) =>
+          this.connectionsMap.get(connectionId)?.isReady(),
+        ),
+      );
+    }
+    if ("group" in target) {
+      return ok(
+        Array.from(this.serviceGroupsMap.get(target.group) ?? []).filter(
+          (connectionId) => this.connectionsMap.get(connectionId)?.isReady(),
+        ),
+      );
+    }
+    return ok(
+      this.findReadyConnections(target.where).map(
+        (connection) => connection.connectionId,
+      ),
+    );
+  }
+
   public safeUpdateLocalIdentity(
-    updates: Partial<U>,
+    updates: Partial<ContextMetaOf<M>>,
   ): Result<void, ConnectionManagerError> {
     const initializedCheck = this.ensureInitialized("safeUpdateLocalIdentity");
     if (initializedCheck.isErr()) {
@@ -323,99 +432,161 @@ export class ConnectionManager<
     return ok(undefined);
   }
 
-  private preWarmConnections(): void {
-    if (!Array.isArray(this.config.connectTo)) {
-      return;
+  private findReadyConnections(
+    where?: ResolveOptions<M>["where"],
+  ): readonly LogicalConnection<M>[] {
+    const matches: LogicalConnection<M>[] = [];
+
+    for (const connection of this.connectionsMap.values()) {
+      if (!connection.isReady() || !connection.remoteIdentity) continue;
+
+      if (
+        !where ||
+        where(connection.remoteIdentity, connection.context.connection)
+      ) {
+        matches.push(connection);
+      }
     }
 
-    for (const target of this.config.connectTo) {
-      this.logger.info("Initiating pre-warmed connection.", target);
-      void this.safeResolveConnection(target).then((result) =>
-        result.match({
-          ok: () => undefined,
-          err: (error) => {
-            console.error(
-              "Nexus DEV: Failed to establish pre-warmed connection for target:",
-              target,
-              error,
-            );
-            this.logger.error(
-              "Failed to establish pre-warmed connection.",
-              target,
-              error,
-            );
-          },
-        }),
-      );
+    return matches;
+  }
+
+  private findReadyTargetConnections(
+    target: ConnectionTargetOf<M>,
+  ): readonly LogicalConnection<M>[] {
+    const matchesTarget = this.transport.endpoint.matchesTarget;
+    if (!matchesTarget) {
+      return [];
     }
+
+    return Array.from(this.connectionsMap.values()).filter(
+      (connection) =>
+        connection.isReady() &&
+        connection.remoteIdentity &&
+        matchesTarget(
+          target,
+          connection.remoteIdentity,
+          connection.context.connection,
+        ),
+    );
+  }
+
+  private applyWhere(
+    connections: readonly LogicalConnection<M>[],
+    where?: ResolveOptions<M>["where"],
+  ): readonly LogicalConnection<M>[] {
+    if (!where) {
+      return connections;
+    }
+
+    return connections.filter(
+      (connection) =>
+        connection.remoteIdentity !== undefined &&
+        where(connection.remoteIdentity, connection.context.connection),
+    );
   }
 
   private async resolveConnectionUnsafe(
-    options: ResolveOptions<U, P>,
-  ): Promise<LogicalConnection<U, P> | null> {
+    options: ResolveOptions<M>,
+  ): Promise<LogicalConnection<M> | null> {
     this.logger.debug("Attempting to resolve connection.", options);
 
-    const found = findReadyConnections(this.connectionsMap, options);
-    if (found.length > 0) {
-      return found[0];
+    if (!options.target) {
+      return null;
     }
 
-    return this.createConnectionForDescriptor(options);
+    const targetMatches = this.findReadyTargetConnections(options.target);
+    if (targetMatches.length > 0) {
+      const constrained = this.applyWhere(targetMatches, options.where);
+      if (constrained.length === 0 && options.where) {
+        throw new ConnectionManagerConstraintFailedError(
+          "A ready connection matched the target but failed its constraint.",
+          { context: { target: options.target } },
+        );
+      }
+      return constrained[0] ?? null;
+    }
+
+    const created = await this.createConnectionForTarget(
+      options.target,
+      options.assignmentMetadata,
+    );
+    const remoteIdentity = created.remoteIdentity;
+    if (
+      !remoteIdentity ||
+      (options.where &&
+        !options.where(remoteIdentity, created.context.connection))
+    ) {
+      throw new ConnectionManagerConstraintFailedError(
+        "The newly connected target failed its constraint.",
+        { context: { target: options.target } },
+      );
+    }
+
+    return created;
   }
 
   private async resolveConnectionsUnsafe(
-    options: ResolveOptions<U, P>,
-  ): Promise<readonly LogicalConnection<U, P>[]> {
+    options: ResolveOptions<M>,
+  ): Promise<readonly LogicalConnection<M>[]> {
     this.logger.debug("Attempting to resolve connection candidates.", options);
 
-    const found = findReadyConnections(this.connectionsMap, options);
-    if (found.length > 0) {
-      return found;
+    if (!options.target) {
+      return this.findReadyConnections(options.where);
     }
 
-    const created = await this.createConnectionForDescriptor(options);
-    if (!created?.remoteIdentity) {
-      return [];
+    const targetMatches = this.findReadyTargetConnections(options.target);
+    if (targetMatches.length > 0) {
+      const constrained = this.applyWhere(targetMatches, options.where);
+      if (constrained.length === 0 && options.where) {
+        throw new ConnectionManagerConstraintFailedError(
+          "A ready connection matched the target but failed its constraint.",
+          { context: { target: options.target } },
+        );
+      }
+      return constrained;
     }
 
-    if (options.matcher && !options.matcher(created.remoteIdentity)) {
-      return [];
+    const created = await this.createConnectionForTarget(
+      options.target,
+      options.assignmentMetadata,
+    );
+    const remoteIdentity = created.remoteIdentity;
+    if (
+      !remoteIdentity ||
+      (options.where &&
+        !options.where(remoteIdentity, created.context.connection))
+    ) {
+      throw new ConnectionManagerConstraintFailedError(
+        "The newly connected target failed its constraint.",
+        { context: { target: options.target } },
+      );
     }
 
     return [created];
   }
 
-  private async createConnectionForDescriptor(
-    options: ResolveOptions<U, P>,
-  ): Promise<LogicalConnection<U, P> | null> {
-    const { matcher, descriptor } = options;
-    if (matcher && !descriptor) {
-      return null;
-    }
-
-    if (!descriptor) {
-      return null;
-    }
-
-    const key = getDescriptorKey(descriptor);
+  private async createConnectionForTarget(
+    target: ConnectionTargetOf<M>,
+    assignmentMetadata?: ContextMetaOf<M>,
+  ): Promise<LogicalConnection<M>> {
+    const key =
+      this.transport.endpoint.targetKey?.(target) ?? getTargetKey(target);
     const pendingExisting = this.pendingCreations.get(key);
     if (pendingExisting) {
       this.logger.debug(
-        "Connection creation already pending for descriptor, returning existing promise.",
-        descriptor,
+        "Connection creation already pending for target, returning existing promise.",
+        target,
       );
       return pendingExisting;
     }
 
     this.logger.debug(
       "No existing connection found. Proceeding to create phase.",
-      descriptor,
+      target,
     );
 
-    const pending = this.createConnectionFromDescriptor(
-      descriptor,
-      options.assignmentMetadata,
-    );
+    const pending = this.createConnectionFromTarget(target, assignmentMetadata);
     this.pendingCreations.set(key, pending);
     pending.then(
       () => {
@@ -431,15 +602,15 @@ export class ConnectionManager<
 
   private async acceptIncomingConnection(input: {
     connectionId: string;
-    platformMetadata: P;
+    connectionMeta: ConnectionMetaOf<M>;
     createProcessor: (handlers: PortProcessorHandlers) => PortProcessor.Context;
   }): Promise<void> {
     this.logger.info(
       `Accepting incoming connection #${input.connectionId}`,
-      input.platformMetadata,
+      input.connectionMeta,
     );
 
-    const connectionRef: { current: LogicalConnection<U, P> | null } = {
+    const connectionRef: { current: LogicalConnection<M> | null } = {
       current: null,
     };
     const pendingMessages: NexusMessage[] = [];
@@ -466,7 +637,8 @@ export class ConnectionManager<
     const portProcessor = input.createProcessor(portHandlers);
     const connection = this.createLogicalConnection(
       input.connectionId,
-      input.platformMetadata,
+      input.connectionMeta,
+      "incoming",
       portProcessor,
       logicalHandlers,
     );
@@ -512,20 +684,20 @@ export class ConnectionManager<
     }
   }
 
-  private async createConnectionFromDescriptor(
-    descriptor: Descriptor<U>,
-    assignmentMetadata?: U,
-  ): Promise<LogicalConnection<U, P>> {
+  private async createConnectionFromTarget(
+    target: ConnectionTargetOf<M>,
+    assignmentMetadata?: ContextMetaOf<M>,
+  ): Promise<LogicalConnection<M>> {
     const connectionId = this.allocateConnectionId();
     this.logger.info(`Creating new outgoing connection #${connectionId}`);
 
-    const connectionRef: { current: LogicalConnection<U, P> | null } = {
+    const connectionRef: { current: LogicalConnection<M> | null } = {
       current: null,
     };
     const pendingMessages: NexusMessage[] = [];
     let disconnectedBeforeReady = false;
     let protocolErrorBeforeReady: unknown = null;
-    const handshake = createDeferred<LogicalConnection<U, P>>();
+    const handshake = createDeferred<LogicalConnection<M>>();
     const handshakeTimeout = setTimeout(() => {
       connectionRef.current?.close();
       handshake.reject(
@@ -560,13 +732,23 @@ export class ConnectionManager<
                       cause: rejection,
                     },
                   )
-                : new ConnectionManagerHandshakeFailedError(
-                    `Connection ${connInfo.connectionId} failed to establish. The remote endpoint may have rejected the connection or is unavailable.`,
-                    {
-                      context: { connectionId: connInfo.connectionId },
-                      cause: rejection,
-                    },
-                  ),
+                : (rejection as (Error & { code?: string }) | undefined)
+                      ?.code === "E_PROTOCOL_INCOMPATIBLE"
+                  ? new ConnectionManagerOperationFailedError(
+                      "Connection rejected because the peer does not support the required protocol capability.",
+                      {
+                        context: { connectionId: connInfo.connectionId },
+                        cause: rejection,
+                      },
+                      "E_PROTOCOL_INCOMPATIBLE",
+                    )
+                  : new ConnectionManagerHandshakeFailedError(
+                      `Connection ${connInfo.connectionId} failed to establish. The remote endpoint may have rejected the connection or is unavailable.`,
+                      {
+                        context: { connectionId: connInfo.connectionId },
+                        cause: rejection,
+                      },
+                    ),
             );
           }
         },
@@ -588,7 +770,7 @@ export class ConnectionManager<
 
     const connectResult = await Transport.safeConnect(
       this.transport,
-      descriptor,
+      target,
       portHandlers,
     );
 
@@ -597,14 +779,15 @@ export class ConnectionManager<
       return handshake.promise;
     }
 
-    const [portProcessor, platformMetadata] = connectResult.value;
+    const { portProcessor, connectionMeta } = connectResult.value;
     const hasBufferedHandshakeRequest = pendingMessages.some(
       (message) => message.type === NexusMessageType.HANDSHAKE_REQ,
     );
 
     const connection = this.createLogicalConnection(
       connectionId,
-      platformMetadata,
+      connectionMeta,
+      "outgoing",
       portProcessor,
       logicalHandlers,
     );
@@ -651,25 +834,30 @@ export class ConnectionManager<
 
   private createLogicalConnection(
     connectionId: string,
-    platformMetadata: P,
+    connectionMeta: ConnectionMetaOf<M>,
+    direction: "incoming" | "outgoing",
     portProcessor: PortProcessor.Context,
-    handlers: ReturnType<ConnectionManager<U, P>["createLogicalHandlers"]>,
-  ): LogicalConnection<U, P> {
-    return new LogicalConnection<U, P>(portProcessor, handlers, {
+    handlers: ReturnType<ConnectionManager<M>["createLogicalHandlers"]>,
+  ): LogicalConnection<M> {
+    const connection = new LogicalConnection<M>(portProcessor, handlers, {
       connectionId,
-      platformMetadata,
+      connectionMeta,
+      direction,
       localEndpointMeta: this.localEndpointMeta,
       nextMessageId: this.nextMessageId,
+      localProviders: () => Array.from(this.localProviders),
     });
+    this.sessionsMap.set(connectionId, connection);
+    return connection;
   }
 
   private createLogicalHandlers(
-    connectionRef: { current: LogicalConnection<U, P> | null },
+    connectionRef: { current: LogicalConnection<M> | null },
     direction: "incoming" | "outgoing",
-    overrides: LogicalHandlersOverrides<U, P> = {},
+    overrides: LogicalHandlersOverrides<M> = {},
   ) {
     return {
-      onVerified: (connInfo: { identity: U }) => {
+      onVerified: (connInfo: { identity: ContextMetaOf<M> }) => {
         const connection = connectionRef.current;
         if (!connection) {
           return;
@@ -678,7 +866,10 @@ export class ConnectionManager<
         this.onConnectionVerified(connection, connInfo.identity);
         overrides.onVerified?.(connection, connInfo.identity);
       },
-      onClosed: (connInfo: { connectionId: string; identity?: U }) => {
+      onClosed: (connInfo: {
+        connectionId: string;
+        identity?: ContextMetaOf<M>;
+      }) => {
         this.onConnectionClosed(connInfo);
         overrides.onClosed?.(connInfo);
       },
@@ -686,10 +877,21 @@ export class ConnectionManager<
         this.handlers.onMessage(message, id),
       onIdentityUpdated: (
         connectionId: string,
-        newIdentity: U,
-        oldIdentity: U,
-      ) => this.onIdentityUpdated(connectionId, newIdentity, oldIdentity),
-      verify: async (identity: U, context: ConnectionContext<P>) => {
+        newIdentity: ContextMetaOf<M>,
+        oldIdentity: ContextMetaOf<M>,
+        connectionMeta: ConnectionMetaOf<M>,
+      ) =>
+        this.onIdentityUpdated(
+          connectionId,
+          newIdentity,
+          oldIdentity,
+          connectionMeta,
+        ),
+      onProviderCatalogUpdated: () => this.notifyAvailabilityChanged(),
+      verify: async (
+        identity: ContextMetaOf<M>,
+        context: ConnectionContext<ConnectionMetaOf<M>>,
+      ) => {
         const canConnect = this.config.policy?.canConnect;
         if (!canConnect) {
           return true;
@@ -700,7 +902,7 @@ export class ConnectionManager<
             localIdentity:
               connectionRef.current?.localIdentity ?? this.localEndpointMeta,
             remoteIdentity: identity,
-            platform: context.platform,
+            connection: context.connection,
             direction,
           });
           return allowed === true;
@@ -714,7 +916,7 @@ export class ConnectionManager<
   private createPortHandlers(options: {
     readonly connectionId: string;
     readonly direction: "incoming" | "outgoing";
-    readonly connectionRef: { current: LogicalConnection<U, P> | null };
+    readonly connectionRef: { current: LogicalConnection<M> | null };
     readonly pendingMessages: NexusMessage[];
     onDisconnectBeforeReady: () => void;
     onProtocolErrorBeforeReady: (error: unknown) => void;
@@ -765,8 +967,8 @@ export class ConnectionManager<
   }
 
   private onConnectionVerified(
-    connection: LogicalConnection<U, P>,
-    identity: U,
+    connection: LogicalConnection<M>,
+    identity: ContextMetaOf<M>,
   ): void {
     const { connectionId } = connection;
     this.logger.info(
@@ -774,15 +976,20 @@ export class ConnectionManager<
       identity,
     );
 
-    registerGroups(this.serviceGroupsMap, connectionId, identity.groups ?? []);
+    registerGroups(
+      this.serviceGroupsMap,
+      connectionId,
+      (identity as { groups?: string[] }).groups ?? [],
+    );
     this.connectionsMap.set(connectionId, connection);
+    this.notifyAvailabilityChanged();
   }
 
   public getConnectionAuthSnapshot(connectionId: string):
     | {
-        readonly localIdentity: U;
-        readonly remoteIdentity: U;
-        readonly platform: P;
+        readonly localIdentity: ContextMetaOf<M>;
+        readonly remoteIdentity: ContextMetaOf<M>;
+        readonly connection: ConnectionMetaOf<M>;
       }
     | undefined {
     const connection = this.connectionsMap.get(connectionId);
@@ -793,13 +1000,13 @@ export class ConnectionManager<
     return {
       localIdentity: connection.localIdentity,
       remoteIdentity: connection.remoteIdentity,
-      platform: connection.context.platform,
+      connection: connection.context.connection,
     };
   }
 
   private onConnectionClosed(connInfo: {
     connectionId: string;
-    identity?: U;
+    identity?: ContextMetaOf<M>;
   }): void {
     const { connectionId, identity } = connInfo;
     this.logger.info(`Connection #${connectionId} closed.`, { identity });
@@ -809,13 +1016,16 @@ export class ConnectionManager<
     }
 
     this.connectionsMap.delete(connectionId);
+    this.sessionsMap.delete(connectionId);
+    this.notifyAvailabilityChanged();
     this.handlers.onDisconnect(connectionId, identity);
   }
 
   private onIdentityUpdated(
     connectionId: string,
-    newIdentity: U,
-    oldIdentity: U,
+    newIdentity: ContextMetaOf<M>,
+    oldIdentity: ContextMetaOf<M>,
+    connectionMeta: ConnectionMetaOf<M>,
   ): void {
     if (!this.connectionsMap.has(connectionId)) {
       return;
@@ -831,7 +1041,17 @@ export class ConnectionManager<
       oldIdentity,
       newIdentity,
     );
-    this.handlers.onIdentityUpdated?.(connectionId, newIdentity, oldIdentity);
+    this.handlers.onIdentityUpdated?.(
+      connectionId,
+      newIdentity,
+      oldIdentity,
+      connectionMeta,
+    );
+    this.notifyAvailabilityChanged();
+  }
+
+  private notifyAvailabilityChanged(): void {
+    for (const listener of this.availabilityListeners) listener();
   }
 }
 
@@ -841,12 +1061,15 @@ type Deferred<T> = {
   readonly reject: (error: unknown) => void;
 };
 
-type LogicalHandlersOverrides<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> = {
-  onVerified?: (connection: LogicalConnection<U, P>, identity: U) => void;
-  onClosed?: (connInfo: { connectionId: string; identity?: U }) => void;
+type LogicalHandlersOverrides<M extends AdapterModel> = {
+  onVerified?: (
+    connection: LogicalConnection<M>,
+    identity: ContextMetaOf<M>,
+  ) => void;
+  onClosed?: (connInfo: {
+    connectionId: string;
+    identity?: ContextMetaOf<M>;
+  }) => void;
 };
 
 function createDeferred<T>(): Deferred<T> {
@@ -868,77 +1091,22 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function getDescriptorKey(descriptor: object): string {
+function getTargetKey(target: object): string {
   return JSON.stringify(
-    Object.keys(descriptor)
+    Object.keys(target)
       .sort()
       .reduce((acc, key) => {
         // @ts-expect-error dynamic object build
-        acc[key] = descriptor[key];
+        acc[key] = target[key];
         return acc;
       }, {}),
   );
 }
 
-function isDeepMatch(target: any, source: any): boolean {
-  if (target === source) {
-    return true;
-  }
-
-  if (
-    source === null ||
-    typeof source !== "object" ||
-    target === null ||
-    typeof target !== "object"
-  ) {
-    return target === source;
-  }
-
-  for (const key of Object.keys(source)) {
-    if (
-      !Object.prototype.hasOwnProperty.call(target, key) ||
-      !isDeepMatch(target[key], source[key])
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function findReadyConnections<U extends EndpointMeta, P extends PlatformMeta>(
-  connections: ReadonlyMap<string, LogicalConnection<U, P>>,
-  options: ResolveOptions<U, P>,
-): readonly LogicalConnection<U, P>[] {
-  const { matcher, descriptor } = options;
-  const matches: LogicalConnection<U, P>[] = [];
-
-  for (const connection of connections.values()) {
-    if (!connection.isReady() || !connection.remoteIdentity) {
-      continue;
-    }
-
-    if (matcher && matcher(connection.remoteIdentity)) {
-      matches.push(connection);
-      continue;
-    }
-
-    if (
-      !matcher &&
-      descriptor &&
-      isDeepMatch(connection.remoteIdentity, descriptor)
-    ) {
-      matches.push(connection);
-    }
-  }
-
-  return matches;
-}
-
-function routeMessage<U extends EndpointMeta, P extends PlatformMeta>(
-  connections: ReadonlyMap<string, LogicalConnection<U, P>>,
+function routeMessage<M extends AdapterModel>(
+  connections: ReadonlyMap<string, LogicalConnection<M>>,
   serviceGroups: ReadonlyMap<string, ReadonlySet<string>>,
-  target: MessageTarget<U>,
+  target: MessageTarget<M>,
   message: NexusMessage,
   logger: Logger,
 ): Result<string[], ConnectionManagerError> {
@@ -968,6 +1136,19 @@ function routeMessage<U extends EndpointMeta, P extends PlatformMeta>(
     return ok(sentConnectionIds);
   }
 
+  if ("connectionIds" in target) {
+    for (const connectionId of target.connectionIds) {
+      const connection = connections.get(connectionId);
+      if (!connection?.isReady()) continue;
+      const sendResult = connection.sendMessage(message);
+      if (sendResult.isErr()) {
+        return err(recordSendError(sendResult.error, connectionId));
+      }
+      sentConnectionIds.push(connectionId);
+    }
+    return ok(sentConnectionIds);
+  }
+
   if ("group" in target) {
     const groupMembers = serviceGroups.get(target.group);
     if (!groupMembers) {
@@ -993,7 +1174,10 @@ function routeMessage<U extends EndpointMeta, P extends PlatformMeta>(
     if (
       connection.isReady() &&
       connection.remoteIdentity &&
-      target.matcher(connection.remoteIdentity)
+      target.where?.(
+        connection.remoteIdentity,
+        connection.context.connection,
+      ) !== false
     ) {
       const sendResult = connection.sendMessage(message);
       if (sendResult.isOk()) {
@@ -1007,12 +1191,9 @@ function routeMessage<U extends EndpointMeta, P extends PlatformMeta>(
   return ok(sentConnectionIds);
 }
 
-function broadcastIdentityUpdate<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
->(
-  connections: ReadonlyMap<string, LogicalConnection<U, P>>,
-  updates: Partial<U>,
+function broadcastIdentityUpdate<M extends AdapterModel>(
+  connections: ReadonlyMap<string, LogicalConnection<M>>,
+  updates: Partial<ContextMetaOf<M>>,
 ): Result<void, ConnectionManagerError> {
   const message: IdentityUpdateMessage = {
     type: NexusMessageType.IDENTITY_UPDATE,
@@ -1036,43 +1217,32 @@ function broadcastIdentityUpdate<
   return ok(undefined);
 }
 
-function flushBufferedMessages<U extends EndpointMeta, P extends PlatformMeta>(
+function flushBufferedMessages<M extends AdapterModel>(
   logger: Logger,
   connectionId: string,
-  connection: LogicalConnection<U, P>,
+  connection: LogicalConnection<M>,
   pendingMessages: NexusMessage[],
 ): Promise<Result<void, ConnectionManagerError>> {
   const messages = pendingMessages.splice(0);
 
-  let chain: Promise<Result<void, ConnectionManagerError>> = Promise.resolve(
-    ok(undefined),
-  );
-
-  for (const message of messages) {
-    chain = chain.then((result) =>
-      result.andThenAsync(() =>
-        connection.safeHandleMessage(message).then((next) =>
-          next.mapError((error) =>
-            connectionManagerErrorFromUnknown(error, {
-              message: `Unhandled error while processing queued message on #${connectionId}`,
-              context: { connectionId, messageId: message.id ?? "N/A" },
-            }),
-          ),
-        ),
-      ),
-    );
-  }
-
-  return chain.then((result) =>
-    result.tryRecover((error) => {
-      logger.error(
-        `Unhandled error while processing queued message on #${connectionId}`,
-        error,
-      );
-      connection.close();
-      return err(error);
-    }),
-  );
+  return (async () => {
+    for (const message of messages) {
+      const result = await connection.safeHandleMessage(message);
+      if (result.isErr()) {
+        const error = connectionManagerErrorFromUnknown(result.error, {
+          message: `Unhandled error while processing queued message on #${connectionId}`,
+          context: { connectionId, messageId: message.id ?? "N/A" },
+        });
+        logger.error(
+          `Unhandled error while processing queued message on #${connectionId}`,
+          error,
+        );
+        connection.close();
+        return err(error);
+      }
+    }
+    return ok(undefined);
+  })();
 }
 
 function registerGroups(
@@ -1088,11 +1258,11 @@ function registerGroups(
   }
 }
 
-function updateServiceGroups<U extends EndpointMeta & { groups?: string[] }>(
+function updateServiceGroups(
   serviceGroups: Map<string, Set<string>>,
   connectionId: string,
-  oldIdentity: U | null,
-  newIdentity: U | null,
+  oldIdentity: (object & { groups?: string[] }) | null,
+  newIdentity: (object & { groups?: string[] }) | null,
 ): void {
   const oldGroups = oldIdentity?.groups ?? [];
   const newGroups = newIdentity?.groups ?? [];

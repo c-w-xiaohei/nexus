@@ -22,10 +22,10 @@ This directory contains the core implementation of Layer 1 of the Nexus architec
 The `Transport` class serves as the facade for this layer. It provides the following API to the `ConnectionManager` (L2):
 
 - **`listen(onConnect)`**: Puts the underlying endpoint into a listening state.
-  - `onConnect(createProcessor, platformMeta)`: A callback invoked by `Transport` for each new incoming physical connection. Layer 2 uses the `createProcessor` function to create a `PortProcessor` for the new connection, which bridges L1 and L2.
+  - `onConnect(createProcessor, connectionMeta)`: A callback invoked by `Transport` for each new incoming physical connection. Layer 2 uses the `createProcessor` function to create a `PortProcessor` for the new connection, which bridges L1 and L2.
 
 - **`connect(target, handlers)`**: Actively initiates a new physical connection to a remote endpoint.
-  - It returns a `Promise` that resolves with a new `PortProcessor` instance and the remote endpoint's platform metadata. Layer 2 uses this `PortProcessor` to manage the new outbound connection.
+  - It returns a `Promise` that resolves with a new `PortProcessor` instance and the remote endpoint's connection metadata. Layer 2 uses this `PortProcessor` to manage the new outbound connection.
 
 ## Serializer Reality And Benchmarking
 

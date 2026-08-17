@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { Expose } from "./expose";
 import { Nexus, nexus } from "../nexus";
 import { Token } from "../token";
-import { DecoratorRegistry } from "../registry";
 
 const decoratorSnapshotOf = (instance: Nexus) =>
   (instance as any).decoratorRegistry.snapshot();
@@ -25,7 +24,6 @@ describe("@Expose", () => {
   });
 
   it("should register service with valid inputs", () => {
-    DecoratorRegistry.clear();
     const token = new Token<object>("valid-service");
     const decorator = Expose(token);
     const context = { kind: "class" } as ClassDecoratorContext;
@@ -40,7 +38,6 @@ describe("@Expose", () => {
   });
 
   it("should accept policy in options", () => {
-    DecoratorRegistry.clear();
     const token = new Token<object>("policy-service");
     const policy = {
       canConnect: () => true,
@@ -58,7 +55,6 @@ describe("@Expose", () => {
   });
 
   it("should accept policy with only canCall in options", () => {
-    DecoratorRegistry.clear();
     const token = new Token<object>("call-policy-service");
     const policy = {
       canCall: () => true,
@@ -131,6 +127,5 @@ describe("@Expose", () => {
     expect(decoratorSnapshotOf(nexus).providers.get(token)?.targetClass).toBe(
       SingletonService,
     );
-    expect(DecoratorRegistry.snapshot().providers.size).toBe(0);
   });
 });

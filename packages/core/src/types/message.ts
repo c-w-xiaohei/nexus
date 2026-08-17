@@ -40,6 +40,7 @@ export enum NexusMessageType {
   HANDSHAKE_REJECT = 12,
   IDENTITY_UPDATE = 13,
   HANDSHAKE_READY = 14,
+  PROVIDER_AVAILABLE = 15,
   // === Layer 1: Transport & Protocol ===
   CHUNK_START = 16,
   CHUNK_DATA = 17,
@@ -137,6 +138,7 @@ export interface HandshakeReqMessage extends NexusMessageBase {
    * connection type.
    */
   assigns?: any;
+  capabilities?: readonly string[];
 }
 
 /** An acknowledgment to a handshake, confirming the connection. */
@@ -144,12 +146,16 @@ export interface HandshakeAckMessage extends NexusMessageBase {
   type: NexusMessageType.HANDSHAKE_ACK;
   id: MessageId;
   metadata: any;
+  capabilities?: readonly string[];
+  providers?: readonly string[];
 }
 
 /** A final confirmation that both sides accepted the handshake. */
 export interface HandshakeReadyMessage extends NexusMessageBase {
   type: NexusMessageType.HANDSHAKE_READY;
   id: MessageId;
+  capabilities?: readonly string[];
+  providers?: readonly string[];
 }
 
 /** A rejection of a handshake request due to policy or error. */
@@ -164,6 +170,13 @@ export interface IdentityUpdateMessage extends NexusMessageBase {
   type: NexusMessageType.IDENTITY_UPDATE;
   id: null;
   updates: Partial<any>;
+}
+
+/** Announces a newly available service on an already negotiated session. */
+export interface ProviderAvailableMessage extends NexusMessageBase {
+  type: NexusMessageType.PROVIDER_AVAILABLE;
+  id: null;
+  providers: readonly string[];
 }
 
 // =============================================================================
@@ -215,7 +228,10 @@ export type ResponseMessage =
   | HandshakeRejectMessage;
 
 /** Represents any message that does not expect a response. */
-export type NotificationMessage = ReleaseMessage | IdentityUpdateMessage;
+export type NotificationMessage =
+  | ReleaseMessage
+  | IdentityUpdateMessage
+  | ProviderAvailableMessage;
 
 /**
  * A comprehensive union type representing any possible message that can be

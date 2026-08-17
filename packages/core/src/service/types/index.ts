@@ -1,4 +1,5 @@
-import type { NexusAuthorizationPolicy } from "../../api/types/config.js";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 /**
  * This barrel file will export all types and interfaces specific to Layer 3.
@@ -28,7 +29,7 @@ export interface LocalResourceRecord {
   /** Origin service name for resources returned from service calls. */
   serviceName?: string;
   /** Origin service policy snapshot for resources returned from service calls. */
-  servicePolicy?: NexusAuthorizationPolicy<any, any>;
+  servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
 }
 
 /**
@@ -81,10 +82,11 @@ export interface RemoteProxy {
 /** Context for sanitizing payloads before sending. */
 export interface SanitizeContext {
   targetConnectionId: string;
+  createdResourceIds?: string[];
   /** Indicates if the value is explicitly marked with @Ref */
   isRef?: boolean;
   serviceName?: string;
-  servicePolicy?: NexusAuthorizationPolicy<any, any>;
+  servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
 }
 
 /** Context for reviving payloads after receiving. */

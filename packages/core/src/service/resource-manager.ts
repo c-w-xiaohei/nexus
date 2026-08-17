@@ -2,24 +2,25 @@ import {
   LocalResourceRecord,
   LocalResourceType,
   RemoteProxyRecord,
-} from "./types/index.js";
-import type { NexusAuthorizationPolicy } from "../api/types/config.js";
-import { NexusConfigurationError } from "../errors/index.js";
-import { Logger } from "../logger.js";
+} from "./types";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import { NexusConfigurationError } from "@/errors";
+import { Logger } from "@/logger";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
 export namespace ResourceManager {
   export interface ExposedServiceRecord {
     readonly service: object;
-    readonly policy?: NexusAuthorizationPolicy<any, any>;
+    readonly policy?: NexusAuthorizationPolicy<AdapterModel>;
   }
 
   export interface Runtime {
     registerExposedService(
       name: string,
       service: object,
-      policy?: NexusAuthorizationPolicy<any, any>,
+      policy?: NexusAuthorizationPolicy<AdapterModel>,
     ): void;
     getExposedService(name: string): object | undefined;
     getExposedServiceRecord(name: string): ExposedServiceRecord | undefined;
@@ -32,13 +33,13 @@ export namespace ResourceManager {
       ownerConnectionId: string,
       type: LocalResourceType,
       serviceName?: string,
-      servicePolicy?: NexusAuthorizationPolicy<any, any>,
+      servicePolicy?: NexusAuthorizationPolicy<AdapterModel>,
     ): string;
     getLocalResource(resourceId: string): LocalResourceRecord | undefined;
     getLocalResourceServiceName(resourceId: string): string | undefined;
     getLocalResourceServicePolicy(
       resourceId: string,
-    ): NexusAuthorizationPolicy<any, any> | undefined;
+    ): NexusAuthorizationPolicy<AdapterModel> | undefined;
     releaseLocalResource(resourceId: string): void;
     registerRemoteProxy(
       resourceId: string,
@@ -57,7 +58,7 @@ export namespace ResourceManager {
   export interface ExposedServiceBatchRegistration {
     readonly name: string;
     readonly service: object;
-    readonly policy?: NexusAuthorizationPolicy<any, any>;
+    readonly policy?: NexusAuthorizationPolicy<AdapterModel>;
   }
 
   export const create = (): Runtime => {
@@ -70,7 +71,7 @@ export namespace ResourceManager {
     const registerExposedService = (
       name: string,
       service: object,
-      policy?: NexusAuthorizationPolicy<any, any>,
+      policy?: NexusAuthorizationPolicy<AdapterModel>,
     ): void => {
       if (exposedServices.has(name)) {
         const message = `Service with name "${name}" is already registered. Overwriting.`;
@@ -132,7 +133,7 @@ export namespace ResourceManager {
       ownerConnectionId: string,
       type: LocalResourceType,
       serviceName?: string,
-      servicePolicy?: NexusAuthorizationPolicy<any, any>,
+      servicePolicy?: NexusAuthorizationPolicy<AdapterModel>,
     ): string => {
       const resourceId = `res-${resourceIdSeq++}`;
       logger.debug(
@@ -159,9 +160,9 @@ export namespace ResourceManager {
 
     const getLocalResourceServicePolicy = (
       resourceId: string,
-    ): NexusAuthorizationPolicy<any, any> | undefined =>
+    ): NexusAuthorizationPolicy<AdapterModel> | undefined =>
       localResourceRegistry.get(resourceId)?.servicePolicy as
-        | NexusAuthorizationPolicy<any, any>
+        | NexusAuthorizationPolicy<AdapterModel>
         | undefined;
 
     const releaseLocalResource = (resourceId: string): void => {

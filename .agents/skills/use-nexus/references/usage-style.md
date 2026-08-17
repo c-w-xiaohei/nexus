@@ -29,18 +29,19 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 ## Core Rules
 
 - Put service interfaces and Tokens in shared modules imported by every host and consumer context.
-- Prefer `TokenSpace` for hierarchical token IDs and repeated `defaultTarget` routing intent.
+- Use shared `Token<Service>` without a default target for contracts used by multiple adapter models. A model-bound `Token<Service, Model>` or `TokenSpace<Model>` may carry `defaultTarget`; an unbound Token remains portable.
 - Import service interfaces with `import type` when defining Tokens; do not repeat anonymous service shapes inline.
 - Configure every runtime context from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
-- Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, descriptors, matchers, or bootstrap bulk compatibility.
+- Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, or bootstrap bulk configuration.
 - For class-style services, import the concrete runtime instance and use `@xxNexus.Expose(Token)`.
 - For function/object-style providers, helper outputs, State, Relay, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
 - For React Nexus State subtree sharing, prefer `createRemoteStoreScope(...)` from `@nexus-js/react`: let the scope provider create one shared remote store connection and let leaf components consume `useSelector`, `useActions`, `useStatus`, and `useError` from that scope.
+- For React applications that use multiple adapter models, use `createNexusScope<Model>()` so the provider, hooks, store definitions, and targeting options share one compile-time model. Keep the default provider and hooks for applications that do not need model-specific context typing.
 - Keep `useRemoteStore(...)` plus `useStoreSelector(...)` for low-level or direct-handle React usage where one component intentionally owns the remote store lifecycle.
 - Use `reconnectKey` for an external committed React lifecycle revision and stable `reconnect()` for an interaction, callback, or timer that requests replacement. Both feed the same replacement path with current committed inputs, do not revive session-bound handles or replay actions, and do not guarantee availability or success. Scope providers accept `reconnectKey`; `Scope.useRemoteStore()` consumers share the provider's reconnect command.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
 - Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
-- Keep explicit targets in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on Token `defaultTarget` or unique `connectTo` fallback.
+- Keep explicit `ConnectionTarget` values in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on a Token or endpoint `defaultTarget`. Use `select(Token, { where, wait })` only for available providers.
 - Use `createMockNexus()` from `@nexus-js/testing` for application unit tests at the `NexusInstance` seam; do not use it to claim adapter, transport, authorization, reload, restart, or real lifecycle coverage.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
 - Do not add consumer-side import shims, preload wrappers, or dynamic-import facades around `@nexus-js/react` unless you have verified a published package import-time compatibility bug. The normal expectation is that static imports from `@nexus-js/react` work directly.
@@ -49,7 +50,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 
 - `references/shared-contracts.md` - service interfaces, `TokenSpace`, Token defaults, and service exposure style
 - `references/runtime-configuration.md` - adapter helpers, direct `nexus.configure(...)`, multi-instance runtimes, and composition rules
-- `references/targeting-and-proxies.md` - `nexus.create(...)`, target resolution, descriptors, matchers, proxies, and refs
+- `references/targeting-and-proxies.md` - `nexus.create(...)`, `nexus.select(...)`, multicast snapshots, `where`, proxies, and refs
 - `references/adapter-node-ipc.md` - node-ipc daemon/client setup, `configure: false`, auth gates, and default-target routing
 - `references/adapter-iframe.md` - iframe parent/child setup, origin checks, nonce usage, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization style, lifecycle expectations, and documentation style

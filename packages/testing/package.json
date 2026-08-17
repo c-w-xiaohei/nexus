@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/testing",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Testing utilities for Nexus applications",
   "private": false,
   "license": "MIT",
@@ -39,7 +39,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@nexus-js/core": ">=0.4.0"
+    "@nexus-js/core": ">=1.0.0"
   },
   "dependencies": {
     "better-result": "3.0.1"

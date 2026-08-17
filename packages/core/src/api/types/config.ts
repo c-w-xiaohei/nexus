@@ -1,204 +1,116 @@
-import type { EndpointMeta, PlatformMeta } from "../../types/identity.js";
-import type { IEndpoint } from "../../transport/index.js";
-import type { Token } from "../token.js";
+import type {
+  AdapterModel,
+  ConnectionTargetOf,
+  ConnectionWhere,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "@/types/adapter-model";
+import type { IEndpoint } from "@/transport";
+import type { Token } from "../token";
 
-type AtLeastOne<T> = {
-  [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>;
-}[keyof T];
-
-export type DescriptorTarget<
-  U,
-  RegisteredDescriptors extends string = string,
-> = Partial<U> | RegisteredDescriptors;
-
-export type MatcherTarget<U, M extends string> = M | ((identity: U) => boolean);
-
-export interface Target<
-  U extends EndpointMeta,
-  M extends string,
-  D extends string,
-> {
-  descriptor?: DescriptorTarget<U, D>;
-  matcher?: MatcherTarget<U, M>;
-}
-
-/**
- * Token default target criteria. This intentionally allows descriptor,
- * matcher, or both together, but only as inline values: named descriptor and
- * matcher strings are resolved at call-sites/config layers, not from tokens.
- */
-export type InlineTarget<U extends EndpointMeta> = AtLeastOne<{
-  descriptor: Partial<U>;
-  matcher: (identity: U) => boolean;
-}>;
-
-export interface MulticastTarget<
-  U extends EndpointMeta,
-  M extends string,
-  D extends string,
-> extends Target<U, M, D> {
-  group?: string;
-}
-
-export interface MessageTarget<
-  U extends EndpointMeta,
-  RegisteredMatchers extends string = string,
-  RegisteredDescriptors extends string = string,
-> {
-  connectionId?: string;
-  group?: string;
-  matcher?: MatcherTarget<U, RegisteredMatchers>;
-  descriptor?: DescriptorTarget<U, RegisteredDescriptors>;
-}
-
-export interface CreateOptions<
-  U extends EndpointMeta,
-  M extends string,
-  D extends string,
-> {
-  target?: Target<U, M, D> | null;
-  expects?: "one" | "first";
+export interface CreateOptions<M extends AdapterModel> {
+  target?: ConnectionTargetOf<M>;
+  where?: ConnectionWhere<M>;
   timeout?: number;
+  signal?: AbortSignal;
+  callTimeout?: number;
 }
 
-export interface CreateMulticastOptions<
-  U extends EndpointMeta,
-  E extends "all" | "stream",
-  M extends string,
-  D extends string,
-> {
-  target?: MulticastTarget<U, M, D> | null;
-  expects?: E;
+export interface CreateMulticastOptions<M extends AdapterModel> {
+  targets: readonly ConnectionTargetOf<M>[];
+  where?: ConnectionWhere<M>;
+  expects?: "all" | "stream";
   timeout?: number;
+  signal?: AbortSignal;
+  callTimeout?: number;
 }
 
-export interface EndpointConfig<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-  _RegisteredMatchers extends string = string,
-  _RegisteredDescriptors extends string = string,
-> {
-  meta?: U;
-  implementation?: IEndpoint<U, P>;
-  connectTo?: readonly Target<U, _RegisteredMatchers, _RegisteredDescriptors>[];
+export interface SelectOptions<M extends AdapterModel> {
+  where?: ConnectionWhere<M>;
+  wait?: { timeout?: number; signal?: AbortSignal };
+  callTimeout?: number;
 }
 
-export interface ConnectionAuthContext<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
-  readonly localIdentity: U;
-  readonly remoteIdentity: U;
-  readonly platform: P;
+export interface SelectMulticastOptions<M extends AdapterModel> {
+  where?: ConnectionWhere<M>;
+  expects?: "all" | "stream";
+  callTimeout?: number;
+}
+
+export interface EndpointConfig<M extends AdapterModel> {
+  meta?: ContextMetaOf<M>;
+  implementation?: IEndpoint<M>;
+  defaultTarget?: ConnectionTargetOf<M>;
+}
+
+export interface ConnectionAuthContext<M extends AdapterModel> {
+  readonly localIdentity: ContextMetaOf<M>;
+  readonly remoteIdentity: ContextMetaOf<M>;
+  readonly connection: ConnectionMetaOf<M>;
   readonly direction: "incoming" | "outgoing";
 }
 
-export interface ServiceCallAuthContext<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
-  readonly localIdentity: U;
-  readonly remoteIdentity: U;
-  readonly platform: P;
+export interface ServiceCallAuthContext<M extends AdapterModel> {
+  readonly localIdentity: ContextMetaOf<M>;
+  readonly remoteIdentity: ContextMetaOf<M>;
+  readonly connection: ConnectionMetaOf<M>;
   readonly connectionId: string;
   readonly serviceName: string;
   readonly path: (string | number)[];
   readonly operation: "GET" | "SET" | "APPLY";
 }
 
-export interface NexusAuthorizationPolicy<
-  U extends EndpointMeta,
-  P extends PlatformMeta = PlatformMeta,
-> {
-  canConnect?(context: ConnectionAuthContext<U, P>): boolean | Promise<boolean>;
-  canCall?(context: ServiceCallAuthContext<U, P>): boolean | Promise<boolean>;
+export interface NexusAuthorizationPolicy<M extends AdapterModel> {
+  canConnect?(context: ConnectionAuthContext<M>): boolean | Promise<boolean>;
+  canCall?(context: ServiceCallAuthContext<M>): boolean | Promise<boolean>;
 }
 
-export type AuthorizationPolicy<
-  U extends EndpointMeta,
-  P extends PlatformMeta = PlatformMeta,
-> = NexusAuthorizationPolicy<U, P>;
+export type AuthorizationPolicy<M extends AdapterModel> =
+  NexusAuthorizationPolicy<M>;
 
-export interface ServiceProvider<
-  T,
-  U extends EndpointMeta = EndpointMeta,
-  P extends PlatformMeta = PlatformMeta,
-> {
-  token: Token<T, any>;
+export interface ServiceProvider<T, M extends AdapterModel> {
+  token: Token<T> | Token<T, M>;
   service: T;
-  policy?: AuthorizationPolicy<U, P>;
+  policy?: AuthorizationPolicy<M>;
 }
 
-export interface NexusConfig<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-  _RegisteredMatchers extends string = string,
-  _RegisteredDescriptors extends string = string,
-> {
-  endpoint?: EndpointConfig<U, P, _RegisteredMatchers, _RegisteredDescriptors>;
-  providers?: ServiceProvider<object, U, P>[];
-  matchers?: Record<string, (identity: U) => boolean>;
-  descriptors?: Record<string, Partial<U>>;
-  policy?: NexusAuthorizationPolicy<U, P>;
+export interface NexusConfig<M extends AdapterModel> {
+  endpoint?: EndpointConfig<M>;
+  providers?: ServiceProvider<object, M>[];
+  policy?: NexusAuthorizationPolicy<M>;
 }
 
-export function serviceProvider<
-  T extends object,
-  U extends EndpointMeta = EndpointMeta,
-  P extends PlatformMeta = PlatformMeta,
->(
+export function serviceProvider<T, M extends AdapterModel>(
   token: Token<T, any>,
   service: T,
-  options?: { policy?: AuthorizationPolicy<U, P> },
-): ServiceProvider<T, U, P> {
+  options?: { policy?: AuthorizationPolicy<M> },
+): ServiceProvider<T, M> {
   return { token, service, policy: options?.policy };
 }
 
-export function defineNexusConfig<const T extends NexusConfig<any, any>>(
+export function defineNexusConfig<const T extends NexusConfig<AdapterModel>>(
   config: T,
 ): T {
   return config;
 }
 
-export function composeNexusConfig<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
->(layers: readonly NexusConfig<U, P, string, string>[]): NexusConfig<U, P> {
-  const composed: NexusConfig<U, P> = {};
-  const providersById = new Map<string, ServiceProvider<object, U, P>>();
+export function composeNexusConfig<M extends AdapterModel>(
+  layers: readonly NexusConfig<M>[],
+): NexusConfig<M> {
+  const composed: NexusConfig<M> = {};
+  const providersById = new Map<string, ServiceProvider<object, M>>();
 
   for (const layer of layers) {
     if (layer.endpoint) {
-      composed.endpoint = {
-        ...(composed.endpoint ?? {}),
-        ...(Object.hasOwn(layer.endpoint, "meta")
-          ? { meta: layer.endpoint.meta }
-          : {}),
-        ...(Object.hasOwn(layer.endpoint, "implementation")
-          ? { implementation: layer.endpoint.implementation }
-          : {}),
-        ...(Object.hasOwn(layer.endpoint, "connectTo")
-          ? { connectTo: layer.endpoint.connectTo }
-          : {}),
-      };
+      composed.endpoint = { ...(composed.endpoint ?? {}), ...layer.endpoint };
     }
     if (Object.hasOwn(layer, "policy")) {
       composed.policy = layer.policy;
-    }
-    if (layer.descriptors) {
-      composed.descriptors = {
-        ...(composed.descriptors ?? {}),
-        ...layer.descriptors,
-      };
-    }
-    if (layer.matchers) {
-      composed.matchers = { ...(composed.matchers ?? {}), ...layer.matchers };
     }
     for (const provider of layer.providers ?? []) {
       providersById.set(provider.token.id, provider);
     }
   }
-
   if (providersById.size > 0) {
     composed.providers = Array.from(providersById.values());
   }

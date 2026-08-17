@@ -17,13 +17,6 @@ Factory helpers:
 - `usingNodeIpcDaemon(options)`
 - `usingNodeIpcClient(options)`
 
-Matcher helpers:
-
-- `daemon(appId)`
-- `client(appId)`
-- `instance(name)`
-- `group(name)`
-
 Public types and errors:
 
 - `NodeIpcError`
@@ -31,10 +24,11 @@ Public types and errors:
 - `NodeIpcAddress`
 - `NodeIpcAddressResolver`
 - `NodeIpcSocketAddress`
-- `NodeIpcEndpointMeta`
+- `NodeIpcContextMeta`
 - `NodeIpcDaemonMeta`
 - `NodeIpcClientMeta`
-- `NodeIpcPlatformMeta`
+- `NodeIpcConnectionTarget`
+- `NodeIpcConnectionMeta`
 - factory option types
 
 ## Minimal Daemon
@@ -60,11 +54,7 @@ import { EchoToken } from "./shared";
 
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
 });
 
 const echo = await nexus.create(EchoToken);
@@ -77,10 +67,41 @@ console.log(await echo.echo("hello"));
 - Default socket path: `$XDG_RUNTIME_DIR/nexus/<appId>/<instance>.sock`
 - Fallback socket path: `/tmp/nexus-<uid>/<appId>/<instance>.sock`
 - `instance` defaults to `default`
+- A client `NodeIpcConnectionTarget` identifies a daemon by `appId` and optional `instance`; the adapter resolves that target to a Unix socket before connecting
+- Pass `resolveAddress(target)` when daemon locations are not on the default filesystem layout; return a `NodeIpcSocketAddress` or `null` for an unresolved target
 - Shared-secret pre-auth is optional and configured with `authToken`
 - Core `policy.canConnect` and `policy.canCall` remain the authorization authority after pre-auth
-- `create(EchoToken)` requires a token `defaultTarget` or a unique `connectTo` fallback; use explicit `target` plus `expects` for complex daemon topologies
+- The client `defaultTarget` applies only to `create(EchoToken)` when the Token has no default; use an exact `NodeIpcConnectionTarget` for another daemon
+- `select(EchoToken, { where, wait })` never opens a socket and chooses only available daemon providers
+- `NodeIpcConnectionMeta` records the selected target, resolved socket address, and observed socket/authentication facts
 - Proxies and refs are session-bound; recreate them after daemon restart or disconnect
+
+Custom target-to-socket resolution:
+
+```ts
+import {
+  type NodeIpcConnectionTarget,
+  type NodeIpcSocketAddress,
+  usingNodeIpcClient,
+} from "@nexus-js/node-ipc";
+
+const resolveAddress = (
+  target: NodeIpcConnectionTarget,
+): NodeIpcSocketAddress | null => ({
+  kind: "path",
+  path: `/var/run/my-daemons/${target.appId}/${target.instance ?? "default"}.sock`,
+});
+
+usingNodeIpcClient({
+  appId: "example-client",
+  defaultTarget: {
+    context: "node-ipc-daemon",
+    appId: "example-app",
+    instance: "main",
+  },
+  resolveAddress,
+});
+```
 
 ## Error Codes
 

@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/core",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "The core engine for Nexus, a type-safe, default-safe, cross-context communication framework.",
   "private": false,
   "license": "MIT",

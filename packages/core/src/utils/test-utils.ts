@@ -8,12 +8,30 @@ import type {
 } from "@/connection/types";
 import { ConnectionManager } from "@/connection/connection-manager";
 import { Engine } from "@/service/engine";
-import type { Descriptor } from "@/connection/types";
-import type { PlatformMeta } from "@/types/identity";
+import type {
+  AdapterModel,
+  ConnectionMetaOf,
+  ConnectionTargetOf,
+  ContextMetaOf,
+} from "@/types/adapter-model";
 import { expect } from "vitest";
 import type { NexusInstance } from "@/api/types";
 import { Nexus } from "@/api/nexus";
 import { Token } from "@/api/token";
+
+export interface TestAdapterModel<
+  U extends object,
+  P extends object,
+> extends AdapterModel {
+  contextMeta: U;
+  connectionMeta: P;
+  connectionTarget: { context: string; issueId?: string };
+}
+
+const matchesObject = (target: object, candidate: object): boolean =>
+  Object.entries(target).every(
+    ([key, value]) => (candidate as Record<string, unknown>)[key] === value,
+  );
 
 /**
  * Creates a mock, interconnected pair of IPorts for testing.
@@ -66,26 +84,23 @@ export function createMockPortPair(): [IPort, IPort] {
  *               for features like `connectTo`.
  * @returns An object containing the created `manager`, its `mockEndpoint`, and `handlers`.
  */
-export async function createConnectionManagerStack<
-  U extends object,
-  P extends object & { from?: string },
->(
-  meta: U & { context?: string },
-  hostOnConnect: (port: IPort, platformMeta?: P) => void,
-  config: ConnectionManagerConfig<U, P> = {},
+export async function createConnectionManagerStack<M extends AdapterModel>(
+  meta: ContextMetaOf<M>,
+  hostOnConnect: (port: IPort, connectionMeta?: ConnectionMetaOf<M>) => void,
+  config: ConnectionManagerConfig<M> = {},
 ) {
-  const mockEndpoint: IEndpoint<U, P> = {
+  const mockEndpoint: IEndpoint<M> = {
     listen: vi.fn(),
-    connect: vi.fn(async (_descriptor: Partial<U>): Promise<[IPort, P]> => {
+    connect: vi.fn(async (_target: ConnectionTargetOf<M>) => {
       const [clientPort, hostPort] = createMockPortPair();
       // Simulate the host receiving the connection from this client
-      hostOnConnect(hostPort, { from: meta.context } as P);
-      // Return the client's side of the connection, with host's platform meta
-      return [clientPort, { from: "host" } as P];
+      hostOnConnect(hostPort, {} as ConnectionMetaOf<M>);
+      // Return the client's side of the connection, with host's connection meta
+      return { port: clientPort, connectionMeta: {} as ConnectionMetaOf<M> };
     }),
   };
   const transport = Transport.create(mockEndpoint);
-  const handlers: ConnectionManagerHandlers<U, P> = {
+  const handlers: ConnectionManagerHandlers<M> = {
     onMessage: vi.fn(),
     onDisconnect: vi.fn(),
   };
@@ -104,21 +119,21 @@ export async function createConnectionManagerStack<
  * @param setup Configuration for the stack.
  * @returns An object containing the L1-L2 components of the created stack.
  */
-export function createNexusTestStack<
-  U extends object,
-  P extends PlatformMeta,
->(setup: { meta: U; cmConfig?: ConnectionManagerConfig<U, P> }) {
-  const handlers: ConnectionManagerHandlers<U, P> = {
+export function createNexusTestStack<M extends AdapterModel>(setup: {
+  meta: ContextMetaOf<M>;
+  cmConfig?: ConnectionManagerConfig<M>;
+}) {
+  const handlers: ConnectionManagerHandlers<M> = {
     onMessage: vi.fn(),
     onDisconnect: vi.fn(),
   };
 
-  const mockEndpoint: IEndpoint<U, P> = {
+  const mockEndpoint: IEndpoint<M> = {
     listen: vi.fn(),
-    connect: vi.fn(async (_descriptor: Partial<U>): Promise<[IPort, P]> => {
+    connect: vi.fn(async (_target: ConnectionTargetOf<M>) => {
       // Default service that creates a mock port pair
       const [clientPort] = createMockPortPair();
-      return [clientPort, { from: "mock" } as P];
+      return { port: clientPort, connectionMeta: {} as ConnectionMetaOf<M> };
     }),
   };
 
@@ -148,20 +163,17 @@ export function createNexusTestStack<
  * @param clientSetup Configuration for the client endpoint.
  * @returns A promise that resolves with the full test setup.
  */
-export async function createL3Endpoints<
-  U extends { id: string },
-  P extends PlatformMeta & { from?: string },
->(
-  hostSetup: { meta: U; providers: Record<string, object> },
+export async function createL3Endpoints<M extends AdapterModel>(
+  hostSetup: { meta: ContextMetaOf<M>; providers: Record<string, object> },
   clientSetup: {
-    meta: U;
-    connectTo?: { descriptor: Descriptor<U> }[];
+    meta: ContextMetaOf<M>;
+    connectTo?: readonly ConnectionTargetOf<M>[];
   },
 ) {
   const [clientPort, hostPort] = createMockPortPair();
 
   // --- Host Setup ---
-  const hostStack = createNexusTestStack<U, P>({
+  const hostStack = createNexusTestStack<M>({
     meta: hostSetup.meta,
   });
   const hostEngine = new Engine(hostStack.connectionManager, {
@@ -182,14 +194,14 @@ export async function createL3Endpoints<
 
   // The host's mock endpoint will listen for incoming connections.
   hostStack.mockEndpoint.listen = vi.fn((onConnect) => {
-    onConnect(hostPort, { from: clientSetup.meta.id } as P);
+    onConnect(hostPort, {} as ConnectionMetaOf<M>);
   });
 
   // --- Client Setup ---
-  const clientStack = createNexusTestStack<U, P>({
+  const clientStack = createNexusTestStack<M>({
     meta: clientSetup.meta,
     cmConfig: {
-      connectTo: clientSetup.connectTo ?? [{ descriptor: hostSetup.meta }],
+      connectTo: clientSetup.connectTo,
     },
   });
   const clientEngine = new Engine(clientStack.connectionManager);
@@ -204,9 +216,12 @@ export async function createL3Endpoints<
 
   // The client's mock endpoint will initiate the connection.
   clientStack.mockEndpoint.connect = vi.fn(
-    async (_descriptor: Descriptor<U>) => {
+    async (_target: ConnectionTargetOf<M>) => {
       // The client's connect method returns its end of the port pair.
-      return [clientPort, { from: hostSetup.meta.id } as P] as [IPort, P];
+      return {
+        port: clientPort,
+        connectionMeta: {} as ConnectionMetaOf<M>,
+      };
     },
   );
 
@@ -218,6 +233,15 @@ export async function createL3Endpoints<
   const clientInitResult = await clientStack.connectionManager.safeInitialize();
   if (clientInitResult.isErr()) {
     throw clientInitResult.error;
+  }
+  const target = clientSetup.connectTo?.[0];
+  if (target) {
+    const connected = await clientStack.connectionManager.safeResolveConnection(
+      {
+        target,
+      },
+    );
+    if (connected.isErr()) throw connected.error;
   }
 
   await vi.waitFor(() => {
@@ -260,21 +284,23 @@ export async function createL3Endpoints<
  */
 export async function createStarNetwork<
   U extends { context: string; issueId?: string },
-  P extends PlatformMeta,
+  P extends object,
 >(config: {
   center: {
     meta: U;
     providers?: Record<string, object>;
-    cmConfig?: ConnectionManagerConfig<U, P>;
-    matchers?: Record<string, (identity: U) => boolean>;
+    cmConfig?: ConnectionManagerConfig<TestAdapterModel<U, P>>;
   };
   leaves: {
     meta: U;
     providers?: Record<string, object>;
-    cmConfig?: ConnectionManagerConfig<U, P>;
+    cmConfig?: ConnectionManagerConfig<TestAdapterModel<U, P>>;
   }[];
 }) {
-  const instances = new Map<string, { nexus: NexusInstance<U, P> }>();
+  const instances = new Map<
+    string,
+    { nexus: NexusInstance<TestAdapterModel<U, P>> }
+  >();
   const allNodes = [config.center, ...config.leaves];
 
   // 1. Create all Nexus instances first
@@ -283,7 +309,7 @@ export async function createStarNetwork<
       node.meta.context === "content-script"
         ? `${node.meta.context}:${node.meta.issueId}`
         : node.meta.context;
-    const nexus = new Nexus<U, P>();
+    const nexus = new Nexus<TestAdapterModel<U, P>>();
     instances.set(key, { nexus });
   }
 
@@ -294,7 +320,7 @@ export async function createStarNetwork<
     ),
   );
 
-  let centerListenCallback: (port: IPort, platformMeta?: P) => void;
+  let centerListenCallback: (port: IPort, connectionMeta?: P) => void;
 
   // 2. Configure the center node
   centerInstance.nexus.configure({
@@ -304,34 +330,36 @@ export async function createStarNetwork<
         listen: vi.fn((onConnect) => (centerListenCallback = onConnect)),
         // This is the crucial fix: The center node must also be able to initiate connections
         // to the leaves, which is needed for "find or create" multicast semantics.
-        connect: vi.fn(async (descriptor: any) => {
-          // Find the target leaf instance based on the descriptor
-          const targetKey =
-            descriptor.context === "content-script"
-              ? `${descriptor.context}:${descriptor.issueId}`
-              : descriptor.context;
-          const targetInstance = leafInstances.get(targetKey);
-          if (!targetInstance) {
-            throw new Error(
-              `[test-utils] Center could not find leaf to connect to: ${targetKey}`,
-            );
-          }
+        connect: vi.fn(
+          async (target: { context: string; issueId?: string }) => {
+            // Find the target leaf instance from its endpoint identity.
+            const targetKey =
+              target.context === "content-script"
+                ? `${target.context}:${target.issueId}`
+                : target.context;
+            const targetInstance = leafInstances.get(targetKey);
+            if (!targetInstance) {
+              throw new Error(
+                `[test-utils] Center could not find leaf to connect to: ${targetKey}`,
+              );
+            }
 
-          // Simulate the connection handshake
-          const [centerPort, leafPort] = createMockPortPair();
-          const targetEndpoint = (targetInstance.nexus as any).config.endpoint
-            .implementation as IEndpoint<U, P>;
+            // Simulate the connection handshake
+            const [centerPort, leafPort] = createMockPortPair();
+            const targetEndpoint = (targetInstance.nexus as any).config.endpoint
+              .implementation as IEndpoint<TestAdapterModel<U, P>>;
 
-          // The leaf's "listen" method needs to be triggered.
-          // We need to get the callback that the leaf's transport registered.
-          const leafListenCallback = (targetEndpoint.listen as any).mock
-            .calls[0][0];
-          leafListenCallback(leafPort, {
-            from: config.center.meta.context,
-          } as P);
+            // The leaf's "listen" method needs to be triggered.
+            // We need to get the callback that the leaf's transport registered.
+            const leafListenCallback = (targetEndpoint.listen as any).mock
+              .calls[0][0];
+            leafListenCallback(leafPort, {} as P);
 
-          return [centerPort, { from: descriptor.context } as P];
-        }) as unknown as IEndpoint<U, P>["connect"],
+            return { port: centerPort, connectionMeta: {} as P };
+          },
+        ) as IEndpoint<TestAdapterModel<U, P>>["connect"],
+        matchesTarget: (target, contextMeta) =>
+          matchesObject(target, contextMeta),
       },
     },
     providers: Object.entries(config.center.providers ?? {}).map(
@@ -340,9 +368,8 @@ export async function createStarNetwork<
         service,
       }),
     ),
-    matchers: config.center.matchers,
   });
-  (centerInstance.nexus as any).scheduleInit();
+  await centerInstance.nexus.ready();
 
   // 3. Configure all leaf nodes
   for (const leaf of config.leaves) {
@@ -359,11 +386,13 @@ export async function createStarNetwork<
           listen: vi.fn(),
           connect: vi.fn(async () => {
             const [leafPort, centerPort] = createMockPortPair();
-            centerListenCallback(centerPort, { from: leaf.meta.context } as P);
-            return [leafPort, { from: config.center.meta.context } as P];
-          }) as unknown as IEndpoint<U, P>["connect"],
+            centerListenCallback(centerPort, {} as P);
+            return { port: leafPort, connectionMeta: {} as P };
+          }) as IEndpoint<TestAdapterModel<U, P>>["connect"],
+          matchesTarget: (target, contextMeta) =>
+            matchesObject(target, contextMeta),
         },
-        connectTo: leaf.cmConfig?.connectTo,
+        defaultTarget: leaf.cmConfig?.connectTo?.[0],
       },
       providers: Object.entries(leaf.providers ?? {}).map(
         ([tokenId, service]) => ({
@@ -372,8 +401,25 @@ export async function createStarNetwork<
         }),
       ),
     });
-    (leafInstance.nexus as any).scheduleInit();
   }
+
+  await Promise.all(
+    Array.from(leafInstances.values(), ({ nexus }) => nexus.ready()),
+  );
+
+  // Test topology setup is explicit: production ready() never acquires peers.
+  await Promise.all(
+    config.leaves.flatMap((leaf) => {
+      const key =
+        leaf.meta.context === "content-script"
+          ? `${leaf.meta.context}:${leaf.meta.issueId}`
+          : leaf.meta.context;
+      const manager = (instances.get(key)!.nexus as any).connectionManager;
+      return (leaf.cmConfig?.connectTo ?? []).map((target) =>
+        manager.safeResolveConnection({ target }),
+      );
+    }),
+  );
 
   // 4. Wait for all connections to be established
   await vi.waitFor(

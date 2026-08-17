@@ -212,6 +212,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -266,7 +267,7 @@ describe("createNexusStore", () => {
         sourceConnectionId: string;
         sourceIdentity?: unknown;
         localIdentity?: unknown;
-        platform?: unknown;
+        connection?: unknown;
       }) => unknown;
     };
 
@@ -274,13 +275,13 @@ describe("createNexusStore", () => {
       sourceConnectionId: "conn-ctx-shape",
       sourceIdentity: { id: "client" },
       localIdentity: { id: "host" },
-      platform: { from: "popup" },
+      connection: { from: "popup" },
     });
     expect(context).toEqual({
       sourceConnectionId: "conn-ctx-shape",
       sourceIdentity: { id: "client" },
       localIdentity: { id: "host" },
-      platform: { from: "popup" },
+      connection: { from: "popup" },
     });
   });
 
@@ -298,14 +299,14 @@ describe("createNexusStore", () => {
           sourceConnectionId: string;
           sourceIdentity?: unknown;
           localIdentity?: unknown;
-          platform?: unknown;
+          connection?: unknown;
         }) => unknown;
       }
     )[SERVICE_INVOKE_START]?.({
       sourceConnectionId: "conn-dispatch-forward",
       sourceIdentity: { id: "client-forward" },
       localIdentity: { id: "host-forward" },
-      platform: { from: "popup-forward" },
+      connection: { from: "popup-forward" },
     });
 
     await service.dispatch("increment", [2], invocation as any);
@@ -346,6 +347,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -370,7 +372,7 @@ describe("createNexusStore", () => {
         sourceConnectionId: clientConnectionId,
         sourceIdentity: { id: "client" },
         localIdentity: { id: "host" },
-        platform: { from: "client" },
+        platform: {},
       },
     ]);
   });
@@ -389,6 +391,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -459,6 +462,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -483,7 +487,7 @@ describe("createNexusStore", () => {
         sourceConnectionId: clientConnectionId,
         sourceIdentity: { id: "client" },
         localIdentity: { id: "host" },
-        platform: { from: "client" },
+        platform: {},
       },
     ]);
 
@@ -525,11 +529,11 @@ describe("createNexusStore", () => {
       leaves: [
         {
           meta: { context: "popup-a" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
           meta: { context: "popup-b" },
-          cmConfig: { connectTo: [{ descriptor: { context: "background" } }] },
+          cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
@@ -538,10 +542,10 @@ describe("createNexusStore", () => {
     const popupB = network.get("popup-b")!.nexus;
 
     const connectA = connectNexusStore(popupA, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     const connectB = connectNexusStore(popupB, definition, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
 
     subscribeBarrier.resolve();
@@ -629,6 +633,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 
@@ -697,6 +702,7 @@ describe("createNexusStore", () => {
       },
       {
         meta: { id: "client" },
+        connectTo: [{ context: "host" }],
       },
     );
 

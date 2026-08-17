@@ -1,4 +1,12 @@
-import { NexusError } from "./nexus-error.js";
+import { NexusError, type NexusErrorOptions } from "./nexus-error.js";
+
+const errorOptions = (
+  contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
+): NexusErrorOptions =>
+  contextOrOptions &&
+  ("cause" in contextOrOptions || "context" in contextOrOptions)
+    ? (contextOrOptions as NexusErrorOptions)
+    : { context: contextOrOptions as Record<string, unknown> | undefined };
 
 /**
  * Base class for all Layer 1 (Transport & Protocol) errors.
@@ -16,8 +24,11 @@ export class NexusTransportError extends NexusError {}
  * when their connect() method fails to establish a connection with the underlying platform.
  */
 export class NexusEndpointConnectError extends NexusTransportError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, "E_ENDPOINT_CONNECT_FAILED", { context });
+  constructor(
+    message: string,
+    contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
+  ) {
+    super(message, "E_ENDPOINT_CONNECT_FAILED", errorOptions(contextOrOptions));
   }
 }
 
@@ -46,8 +57,15 @@ export class NexusEndpointListenError extends NexusTransportError {
  * match IEndpoint.capabilities.
  */
 export class NexusEndpointCapabilityError extends NexusTransportError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, "E_ENDPOINT_CAPABILITY_MISMATCH", { context });
+  constructor(
+    message: string,
+    contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
+  ) {
+    super(
+      message,
+      "E_ENDPOINT_CAPABILITY_MISMATCH",
+      errorOptions(contextOrOptions),
+    );
   }
 }
 

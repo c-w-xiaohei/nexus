@@ -14,11 +14,104 @@ import {
   usingOptionsPage,
   usingPopup,
 } from "../factory";
+import type {
+  ChromeAdapterModel,
+  ChromeConnectionTarget,
+  ChromeContentScriptMeta,
+} from "./meta";
+import { chromeTarget } from "./meta";
+import {
+  Token,
+  type AdapterModel,
+  type ConnectionWhere,
+  type NexusInstance,
+} from "@nexus-js/core";
 
 type AppMeta = { feature: string };
 
+interface OtherAdapterModel extends AdapterModel {
+  contextMeta: { context: "other" };
+  connectionMeta: { other: true };
+  connectionTarget: { kind: "other" };
+}
+
+interface PingService {
+  ping(): string;
+}
+
+const backgroundTarget: ChromeConnectionTarget = { kind: "background" };
+const contentTarget: ChromeConnectionTarget = {
+  kind: "content-frame",
+  tabId: 1,
+  frameId: 0,
+};
+void backgroundTarget;
+void contentTarget;
+
+const backgroundConstructor = chromeTarget.background();
+const contentConstructor = chromeTarget.contentDocument({
+  tabId: 1,
+  documentId: "document-1",
+});
+void backgroundConstructor;
+void contentConstructor;
+
+const where: ConnectionWhere<ChromeAdapterModel> = (
+  _contextMeta,
+  _connectionMeta,
+) => true;
+void where;
+// @ts-expect-error target values cannot be predicates.
+const targetAsWhere: ConnectionWhere<ChromeAdapterModel> =
+  backgroundConstructor;
+void targetAsWhere;
+// @ts-expect-error frame targets require a frame ID.
+chromeTarget.contentFrame({ tabId: 1 });
+// @ts-expect-error document targets require a document ID.
+chromeTarget.contentDocument({ tabId: 1 });
+
+const contentMeta: ChromeContentScriptMeta = {
+  context: "content-script",
+  url: "https://example.com",
+  origin: "https://example.com",
+};
+void contentMeta;
+
+const model: ChromeAdapterModel = {
+  contextMeta: contentMeta,
+  connectionMeta: { observed: { sender: undefined } },
+  connectionTarget: contentTarget,
+};
+void model;
+
+// @ts-expect-error selected routing data is not public connection metadata.
+model.connectionMeta.selected;
+
+const contentMetaWithoutRouteFields: ChromeContentScriptMeta = {
+  context: "content-script",
+  url: "https://example.com",
+  origin: "https://example.com",
+};
+void contentMetaWithoutRouteFields;
+
 createBackgroundScriptConfig<AppMeta>({ app: { feature: "background" } });
 usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
+const backgroundNexus: NexusInstance<ChromeAdapterModel<AppMeta>> =
+  usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
+const chromePingToken = new Token<PingService, ChromeAdapterModel<AppMeta>>(
+  "chrome-model-bound-ping",
+);
+void backgroundNexus.create(chromePingToken, {
+  target: chromeTarget.contentFrame({ tabId: 1, frameId: 0 }),
+  where: (_contextMeta: AppMeta, _connectionMeta: object) => true,
+});
+const otherPingToken = new Token<PingService, OtherAdapterModel>(
+  "other-model-bound-ping",
+);
+// @ts-expect-error Chrome instances reject tokens bound to another adapter model.
+void backgroundNexus.create(otherPingToken, {
+  target: { kind: "other" },
+});
 createContentScriptConfig<AppMeta>({ app: { feature: "content" } });
 usingContentScript<AppMeta>({ app: { feature: "content" } });
 createPopupConfig<AppMeta>({ app: { feature: "popup" }, tabId: 1 });
@@ -82,6 +175,13 @@ usingExtensionPage({
   context: "reports",
   app: { feature: "reports" },
 });
+const extensionNexus: NexusInstance<
+  ChromeAdapterModel<AppMeta, { context: "reports"; app: AppMeta }>
+> = usingExtensionPage<AppMeta, { context: "reports"; app: AppMeta }>({
+  context: "reports",
+  app: { feature: "reports" },
+});
+void extensionNexus;
 
 createExtensionPageConfig({
   context: "side-panel",

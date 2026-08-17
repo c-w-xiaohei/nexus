@@ -5,14 +5,17 @@ import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import {
   NodeIpcAddress,
   type NodeIpcAddressResolver,
+  type NodeIpcSocketAddress,
 } from "../types/address.js";
 import type {
-  NodeIpcPlatformMeta,
-  NodeIpcEndpointMeta,
+  NodeIpcAdapterModel,
+  NodeIpcConnectionTarget,
+  NodeIpcConnectionMeta,
+  NodeIpcContextMeta,
 } from "../types/meta.js";
 
 type EndpointCapabilities = NonNullable<
-  IEndpoint<NodeIpcEndpointMeta, NodeIpcPlatformMeta>["capabilities"]
+  IEndpoint<NodeIpcAdapterModel>["capabilities"]
 >;
 
 const createCapabilities = (): EndpointCapabilities => {
@@ -27,11 +30,15 @@ const createCapabilities = (): EndpointCapabilities => {
   return capabilities;
 };
 
-export class UnixSocketClientEndpoint implements IEndpoint<
-  NodeIpcEndpointMeta,
-  NodeIpcPlatformMeta
-> {
+export class UnixSocketClientEndpoint implements IEndpoint<NodeIpcAdapterModel> {
   readonly capabilities = createCapabilities();
+
+  targetKey = (target: NodeIpcConnectionTarget): string =>
+    JSON.stringify({
+      context: target.context,
+      appId: target.appId,
+      instance: target.instance ?? "default",
+    });
 
   constructor(
     private readonly resolveAddress?: NodeIpcAddressResolver,
@@ -45,13 +52,10 @@ export class UnixSocketClientEndpoint implements IEndpoint<
   }
 
   async connect(
-    targetDescriptor: Partial<NodeIpcEndpointMeta>,
-  ): Promise<[UnixSocketPort, NodeIpcPlatformMeta]> {
+    target: NodeIpcConnectionTarget,
+  ): Promise<{ port: UnixSocketPort; connectionMeta: NodeIpcConnectionMeta }> {
     validateAuthToken(this.authToken);
-    const addressResult = NodeIpcAddress.resolve(
-      targetDescriptor,
-      this.resolveAddress,
-    );
+    const addressResult = NodeIpcAddress.resolve(target, this.resolveAddress);
     if (addressResult.isErr()) throw addressResult.error;
     const address = addressResult.value;
     if (address.kind !== "path")
@@ -83,15 +87,86 @@ export class UnixSocketClientEndpoint implements IEndpoint<
       }
     }
 
-    return [
-      new UnixSocketPort(socket),
-      {
-        socket: address,
-        authenticated: this.authToken !== undefined,
-        authMethod: this.authToken ? "shared-secret" : "none",
-      },
-    ];
+    return {
+      port: new UnixSocketPort(socket),
+      connectionMeta: Object.freeze({
+        selected: normalizeTarget(target),
+        resolved: NodeIpcAddress.freeze(address),
+        observed: Object.freeze({
+          socket: NodeIpcAddress.freeze(address),
+          authenticated: this.authToken !== undefined,
+          authMethod: this.authToken ? "shared-secret" : "none",
+        }),
+      }),
+    };
   }
+
+  matchesTarget = (
+    target: NodeIpcConnectionTarget,
+    contextMeta: NodeIpcContextMeta,
+    connectionMeta: NodeIpcConnectionMeta,
+  ): boolean => {
+    if (
+      contextMeta.context !== "node-ipc-daemon" ||
+      !connectionMeta.selected ||
+      !connectionMeta.resolved
+    ) {
+      return false;
+    }
+
+    const resolved = NodeIpcAddress.resolve(target, this.resolveAddress);
+    if (resolved.isErr()) return false;
+
+    const selected = normalizeTarget(target);
+    const remote = normalizeTarget({
+      context: "node-ipc-daemon",
+      appId: contextMeta.appId,
+      instance: contextMeta.instance,
+    });
+    return (
+      sameTarget(selected, connectionMeta.selected) &&
+      sameTarget(selected, remote) &&
+      sameSocket(resolved.value, connectionMeta.resolved) &&
+      sameSocket(resolved.value, connectionMeta.observed.socket)
+    );
+  };
+}
+
+function normalizeTarget(
+  target: NodeIpcConnectionTarget,
+): NodeIpcConnectionTarget {
+  return Object.freeze({ ...target, instance: target.instance ?? "default" });
+}
+
+function sameTarget(
+  left: NodeIpcConnectionTarget,
+  right: NodeIpcConnectionTarget,
+): boolean {
+  return (
+    left.context === right.context &&
+    left.appId === right.appId &&
+    (left.instance ?? "default") === (right.instance ?? "default")
+  );
+}
+
+function sameSocket(
+  left: NodeIpcSocketAddress,
+  right: NodeIpcSocketAddress,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "path" && right.kind === "path") {
+    const normalizedLeft = NodeIpcAddress.normalize(left);
+    const normalizedRight = NodeIpcAddress.normalize(right);
+    return (
+      normalizedLeft.kind === "path" &&
+      normalizedRight.kind === "path" &&
+      normalizedLeft.path === normalizedRight.path
+    );
+  }
+  if (left.kind === "abstract" && right.kind === "abstract") {
+    return left.name === right.name;
+  }
+  return false;
 }
 
 const DEFAULT_AUTH_TIMEOUT_MS = 5_000;

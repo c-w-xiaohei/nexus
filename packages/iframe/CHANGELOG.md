@@ -1,5 +1,18 @@
 # @nexus-js/iframe
 
+## 0.4.0
+
+### Minor Changes
+
+- Replace connection-oriented targeting with service acquisition and provider selection. Core now requires the `provider-catalog-v1` protocol capability, uses endpoint `defaultTarget`, adds `select` and `selectMulticast`, binds multicast proxies to acquisition or selection snapshots, and supports acquisition `timeout`/`signal` plus proxy `callTimeout`. This wire-protocol change requires all peers to use core 1.0.0 or later.
+
+  Chrome, iframe, node-ipc, React, and testing now require `@nexus-js/core >=1.0.0`. Adapters use exact connection targets and `where(contextMeta, connectionMeta)` predicates; testing supports metadata-backed provider selection and bound multicast snapshots.
+
+### Patch Changes
+
+- Updated dependencies
+  - @nexus-js/core@1.0.0
+
 ## 0.3.2
 
 ### Patch Changes

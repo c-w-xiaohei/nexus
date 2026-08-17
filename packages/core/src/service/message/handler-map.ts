@@ -7,11 +7,11 @@ import {
   type ResMessage,
   type GetMessage,
   type SetMessage,
-} from "../../types/message.js";
-import { toSerializedError } from "../../utils/error.js";
+} from "@/types/message";
+import { toSerializedError } from "@/utils/error";
 import { get, set } from "es-toolkit/compat";
-import type { MessageHandlerFn, HandlerContext } from "./types/index.js";
-import { ResourceManager } from "../resource-manager.js";
+import type { MessageHandlerFn, HandlerContext } from "./types";
+import { ResourceManager } from "../resource-manager";
 import { Result } from "better-result";
 const { err, ok } = Result;
 import {
@@ -20,7 +20,7 @@ import {
   isServiceWithHooks,
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
-} from "../service-invocation-hooks.js";
+} from "../service-invocation-hooks";
 
 type MessageResourceErrorCode =
   | "E_RESOURCE_NOT_FOUND"
@@ -37,7 +37,7 @@ type MessageResourceErrorOptions = {
 
 type AuthorizedCall = {
   readonly serviceName: string;
-  readonly servicePolicy?: HandlerContext<any, any>["policy"];
+  readonly servicePolicy?: HandlerContext<any>["policy"];
 };
 
 type ExecutionPath = {
@@ -73,7 +73,7 @@ const toError = (error: unknown): globalThis.Error =>
     : new globalThis.Error(String(error));
 
 const safeSend = (
-  context: HandlerContext<any, any>,
+  context: HandlerContext<any>,
   message:
     | { type: NexusMessageType.RES; id: MessageId; result: any }
     | { type: NexusMessageType.ERR; id: MessageId; error: any },
@@ -109,7 +109,7 @@ const safeSend = (
  */
 function createRequestHandler<T extends GetMessage | SetMessage | ApplyMessage>(
   executor: (
-    context: HandlerContext<any, any>,
+    context: HandlerContext<any>,
     message: T,
     sourceConnectionId: string,
   ) => Promise<
@@ -118,13 +118,12 @@ function createRequestHandler<T extends GetMessage | SetMessage | ApplyMessage>(
       globalThis.Error
     >
   >,
-): MessageHandlerFn<T, any, any> {
+): MessageHandlerFn<T, any> {
   return async (context, message, sourceConnectionId) => {
     const { id } = message;
 
-    const handled = (
-      await executor(context, message, sourceConnectionId)
-    ).match({
+    const execution = await executor(context, message, sourceConnectionId);
+    const handled = execution.match({
       ok: ({ result, authorizedCall }) => {
         const sanitizeResult = context.payloadProcessor.safeSanitizeFromService(
           [result],
@@ -298,7 +297,7 @@ const operationName = (
 };
 
 const resolveAuthoritativeServiceName = (
-  context: HandlerContext<any, any>,
+  context: HandlerContext<any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
 ): Result<string, InstanceType<typeof MessageHandlerMapError.Resource>> => {
@@ -335,17 +334,19 @@ const resolveAuthoritativeServiceName = (
 };
 
 const authorizeServiceCall = (
-  context: HandlerContext<any, any>,
+  context: HandlerContext<any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
-): Promise<Result<AuthorizedCall, globalThis.Error>> => {
+):
+  | Result<AuthorizedCall, globalThis.Error>
+  | Promise<Result<AuthorizedCall, globalThis.Error>> => {
   const serviceNameResult = resolveAuthoritativeServiceName(
     context,
     message,
     sourceConnectionId,
   );
   if (serviceNameResult.isErr()) {
-    return Promise.resolve(err(serviceNameResult.error));
+    return err(serviceNameResult.error);
   }
 
   const serviceName = serviceNameResult.value;
@@ -353,18 +354,16 @@ const authorizeServiceCall = (
   const canCall = policy?.canCall;
 
   if (!canCall) {
-    return Promise.resolve(ok({ serviceName, servicePolicy: policy }));
+    return ok({ serviceName, servicePolicy: policy });
   }
 
   const authBase = context.getConnectionAuthContext?.(sourceConnectionId);
   if (!authBase) {
-    return Promise.resolve(
-      err(
-        new MessageHandlerMapError.Resource(
-          `Connection "${sourceConnectionId}" is not authorized to call service "${serviceName}".`,
-          "E_AUTH_CALL_DENIED",
-          { context: { sourceConnectionId, path: message.path } },
-        ),
+    return err(
+      new MessageHandlerMapError.Resource(
+        `Connection "${sourceConnectionId}" is not authorized to call service "${serviceName}".`,
+        "E_AUTH_CALL_DENIED",
+        { context: { sourceConnectionId, path: message.path } },
       ),
     );
   }
@@ -399,13 +398,15 @@ const authorizeServiceCall = (
 };
 
 const validateAuthorizableCall = (
-  context: HandlerContext<any, any>,
+  context: HandlerContext<any>,
   message: GetMessage | SetMessage | ApplyMessage,
   sourceConnectionId: string,
-): Promise<Result<AuthorizedCall, globalThis.Error>> => {
+):
+  | Result<AuthorizedCall, globalThis.Error>
+  | Promise<Result<AuthorizedCall, globalThis.Error>> => {
   const pathCheck = validateSafeRpcPath(message.path);
   if (pathCheck.isErr()) {
-    return Promise.resolve(err(pathCheck.error));
+    return err(pathCheck.error);
   }
 
   if (message.resourceId !== null) {
@@ -413,27 +414,23 @@ const validateAuthorizableCall = (
       message.resourceId,
     );
     if (!resource) {
-      return Promise.resolve(
-        err(
-          new MessageHandlerMapError.Resource(
-            `Local resource with ID "${message.resourceId}" not found.`,
-            "E_RESOURCE_NOT_FOUND",
-            { context: { resourceId: message.resourceId } },
-          ),
+      return err(
+        new MessageHandlerMapError.Resource(
+          `Local resource with ID "${message.resourceId}" not found.`,
+          "E_RESOURCE_NOT_FOUND",
+          { context: { resourceId: message.resourceId } },
         ),
       );
     }
 
     if (resource.ownerConnectionId !== sourceConnectionId) {
-      return Promise.resolve(
-        err(
-          new MessageHandlerMapError.Resource(
-            `Connection "${sourceConnectionId}" is not authorized to access resource "${message.resourceId}".`,
-            "E_RESOURCE_ACCESS_DENIED",
-            {
-              context: { sourceConnectionId, resourceId: message.resourceId },
-            },
-          ),
+      return err(
+        new MessageHandlerMapError.Resource(
+          `Connection "${sourceConnectionId}" is not authorized to access resource "${message.resourceId}".`,
+          "E_RESOURCE_ACCESS_DENIED",
+          {
+            context: { sourceConnectionId, resourceId: message.resourceId },
+          },
         ),
       );
     }
@@ -443,7 +440,7 @@ const validateAuthorizableCall = (
 };
 
 const getCallPolicy = (
-  context: HandlerContext<any, any>,
+  context: HandlerContext<any>,
   message: GetMessage | SetMessage | ApplyMessage,
   serviceName: string,
 ) => {
@@ -474,7 +471,7 @@ const createCallDeniedError = (
     { context: { sourceConnectionId, path } },
   );
 
-const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
+const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any>>([
   [
     NexusMessageType.APPLY,
     createRequestHandler(
@@ -488,106 +485,112 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           sourceConnectionId,
         );
 
-        return authResult.then((auth) =>
-          auth.andThenAsync(async (authorizedCall) => {
-            const pathResult = resolveExecutionPath(
-              context.resourceManager,
-              resourceId,
-              path,
-              sourceConnectionId,
-            );
+        const execute = (authorizedCall: AuthorizedCall) => {
+          const pathResult = resolveExecutionPath(
+            context.resourceManager,
+            resourceId,
+            path,
+            sourceConnectionId,
+          );
 
-            if (pathResult.isErr()) {
-              return err(pathResult.error);
-            }
+          if (pathResult.isErr()) {
+            return Promise.resolve(err(pathResult.error));
+          }
 
-            const { root, target, parent } = pathResult.value;
+          const { root, target, parent } = pathResult.value;
 
-            if (typeof target !== "function") {
-              return err(
+          if (typeof target !== "function") {
+            return Promise.resolve(
+              err(
                 new MessageHandlerMapError.Resource(
                   `Target at path [${[resourceId, ...path].join(".")}] is not a function.`,
                   "E_TARGET_NOT_CALLABLE",
                   { context: { resourceId, path } },
                 ),
-              );
-            }
-
-            const hookTarget = !authorizedCall.serviceName.startsWith(
-              "resource:",
-            )
-              ? context.resourceManager.getExposedService(
-                  authorizedCall.serviceName,
-                )
-              : undefined;
-            const invocationHookTarget = isServiceWithHooks(hookTarget)
-              ? hookTarget
-              : isServiceWithHooks(root)
-                ? root
-                : isServiceWithHooks(parent ?? target)
-                  ? (parent ?? target)
-                  : undefined;
-            const onInvokeStart = getServiceInvocationHook(
-              invocationHookTarget,
-              SERVICE_INVOKE_START,
-            ) as
-              | ((
-                  invocationContext: ServiceInvocationContext,
-                ) => ServiceInvocationContext)
-              | undefined;
-            const onInvokeEnd = getServiceInvocationHook(
-              invocationHookTarget,
-              SERVICE_INVOKE_END,
-            ) as
-              | ((invocationContext?: ServiceInvocationContext) => void)
-              | undefined;
-            return Result.tryPromise({
-              try: () =>
-                Promise.resolve().then(async () => {
-                  const invocationContext:
-                    | ServiceInvocationContext
-                    | undefined = onInvokeStart
-                    ? onInvokeStart({
-                        sourceConnectionId,
-                        sourceIdentity:
-                          context.getConnectionAuthContext?.(sourceConnectionId)
-                            ?.remoteIdentity,
-                        localIdentity:
-                          context.getConnectionAuthContext?.(sourceConnectionId)
-                            ?.localIdentity,
-                        platform:
-                          context.getConnectionAuthContext?.(sourceConnectionId)
-                            ?.platform,
-                      })
-                    : undefined;
-                  try {
-                    const revivedArgsResult = payloadProcessor.safeRevive(
-                      args,
-                      sourceConnectionId,
-                    );
-
-                    if (revivedArgsResult.isErr()) {
-                      throw revivedArgsResult.error;
-                    }
-
-                    const invokeArgs =
-                      typeof invocationContext === "undefined"
-                        ? revivedArgsResult.value
-                        : [...revivedArgsResult.value, invocationContext];
-
-                    return await Reflect.apply(target, parent, invokeArgs);
-                  } finally {
-                    if (onInvokeEnd) {
-                      onInvokeEnd(invocationContext);
-                    }
-                  }
-                }),
-              catch: toError,
-            }).then((result) =>
-              result.map((value) => ({ result: value, authorizedCall })),
+              ),
             );
-          }),
-        );
+          }
+
+          const hookTarget = !authorizedCall.serviceName.startsWith("resource:")
+            ? context.resourceManager.getExposedService(
+                authorizedCall.serviceName,
+              )
+            : undefined;
+          const invocationHookTarget = isServiceWithHooks(hookTarget)
+            ? hookTarget
+            : isServiceWithHooks(root)
+              ? root
+              : isServiceWithHooks(parent ?? target)
+                ? (parent ?? target)
+                : undefined;
+          const onInvokeStart = getServiceInvocationHook(
+            invocationHookTarget,
+            SERVICE_INVOKE_START,
+          ) as
+            | ((
+                invocationContext: ServiceInvocationContext,
+              ) => ServiceInvocationContext)
+            | undefined;
+          const onInvokeEnd = getServiceInvocationHook(
+            invocationHookTarget,
+            SERVICE_INVOKE_END,
+          ) as
+            | ((invocationContext?: ServiceInvocationContext) => void)
+            | undefined;
+          const invocation = Result.try({
+            try: () => {
+              const invocationContext: ServiceInvocationContext | undefined =
+                onInvokeStart
+                  ? onInvokeStart({
+                      sourceConnectionId,
+                      sourceIdentity:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.remoteIdentity,
+                      localIdentity:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.localIdentity,
+                      platform:
+                        context.getConnectionAuthContext?.(sourceConnectionId)
+                          ?.connection,
+                    })
+                  : undefined;
+              try {
+                const revivedArgsResult = payloadProcessor.safeRevive(
+                  args,
+                  sourceConnectionId,
+                );
+
+                if (revivedArgsResult.isErr()) {
+                  throw revivedArgsResult.error;
+                }
+
+                const invokeArgs =
+                  typeof invocationContext === "undefined"
+                    ? revivedArgsResult.value
+                    : [...revivedArgsResult.value, invocationContext];
+
+                return Reflect.apply(target, parent, invokeArgs);
+              } finally {
+                if (onInvokeEnd) {
+                  onInvokeEnd(invocationContext);
+                }
+              }
+            },
+            catch: toError,
+          });
+          if (invocation.isErr()) {
+            return Promise.resolve(err(invocation.error));
+          }
+          return Result.tryPromise({
+            try: () => Promise.resolve(invocation.value),
+            catch: toError,
+          }).then((result) =>
+            result.map((value) => ({ result: value, authorizedCall })),
+          );
+        };
+        return authResult instanceof Promise
+          ? authResult.then((result) => result.andThenAsync(execute))
+          : Promise.resolve(authResult.andThenAsync(execute));
       },
     ),
   ],
@@ -596,7 +599,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
   [
     NexusMessageType.RES,
     async (
-      context: HandlerContext<any, any>,
+      context: HandlerContext<any>,
       message: ResMessage,
       sourceConnectionId: string,
     ) => {
@@ -626,7 +629,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
   [
     NexusMessageType.ERR,
     (
-      context: HandlerContext<any, any>,
+      context: HandlerContext<any>,
       message: ErrMessage,
       sourceConnectionId: string,
     ) => {
@@ -643,7 +646,7 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
   [
     NexusMessageType.RELEASE,
     (
-      context: HandlerContext<any, any>,
+      context: HandlerContext<any>,
       message: ReleaseMessage,
       sourceConnectionId: string,
     ) => {
@@ -657,17 +660,17 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
   ],
   [
     NexusMessageType.GET,
-    createRequestHandler((context, message: GetMessage, sourceConnectionId) => {
-      const { resourceId, path } = message;
+    createRequestHandler(
+      async (context, message: GetMessage, sourceConnectionId) => {
+        const { resourceId, path } = message;
 
-      const authResult = validateAuthorizableCall(
-        context,
-        message,
-        sourceConnectionId,
-      );
+        const authResult = validateAuthorizableCall(
+          context,
+          message,
+          sourceConnectionId,
+        );
 
-      return authResult.then((auth) =>
-        auth.andThen((authorizedCall) => {
+        return (await authResult).andThen((authorizedCall) => {
           const pathResult = resolveExecutionPath(
             context.resourceManager,
             resourceId,
@@ -680,24 +683,24 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           }
 
           return ok({ result: pathResult.value.target, authorizedCall });
-        }),
-      );
-    }),
+        });
+      },
+    ),
   ],
   [
     NexusMessageType.SET,
-    createRequestHandler((context, message: SetMessage, sourceConnectionId) => {
-      const { payloadProcessor } = context;
-      const { resourceId, path, value } = message;
+    createRequestHandler(
+      async (context, message: SetMessage, sourceConnectionId) => {
+        const { payloadProcessor } = context;
+        const { resourceId, path, value } = message;
 
-      const authResult = validateAuthorizableCall(
-        context,
-        message,
-        sourceConnectionId,
-      );
+        const authResult = validateAuthorizableCall(
+          context,
+          message,
+          sourceConnectionId,
+        );
 
-      return authResult.then((auth) =>
-        auth.andThen((authorizedCall) => {
+        return (await authResult).andThen((authorizedCall) => {
           const pathResult = resolveExecutionPath(
             context.resourceManager,
             resourceId,
@@ -743,9 +746,9 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
           }
 
           return ok({ result: setResult.value, authorizedCall });
-        }),
-      );
-    }),
+        });
+      },
+    ),
   ],
 ]);
 
@@ -756,6 +759,6 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any, any>>([
  */
 export function getHandler(
   type: NexusMessageType,
-): MessageHandlerFn<any, any, any> | undefined {
+): MessageHandlerFn<any, any> | undefined {
   return handlerMap.get(type);
 }

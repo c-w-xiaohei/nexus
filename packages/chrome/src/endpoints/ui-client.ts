@@ -3,25 +3,41 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "@nexus-js/core";
-import type { ChromeEndpointMeta, ChromePlatformMeta } from "../types/meta.js";
+import type {
+  ChromeAdapterModel,
+  ChromeConnectionTarget,
+  ChromeConnectionMeta,
+} from "../types/meta.js";
 import { ChromePort } from "../ports/chrome-port.js";
+import {
+  createChromeConnectionMeta,
+  matchesChromeTarget,
+} from "./connection-meta.js";
 
 /**
  * Generic UI client endpoint implementation for Chrome extension contexts
  * that primarily connect to background script (popup, options page, devtools page, etc.)
  */
-export class UIClientEndpoint implements IEndpoint<
-  ChromeEndpointMeta,
-  ChromePlatformMeta
-> {
+export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
   capabilities = {
     supportsTransferables: false,
   };
 
+  matchesTarget(
+    target: ChromeConnectionTarget,
+    contextMeta: ChromeAdapterModel["contextMeta"],
+    connectionMeta: ChromeConnectionMeta,
+  ): boolean {
+    return (
+      target.kind === "background" &&
+      matchesChromeTarget(target, contextMeta, connectionMeta)
+    );
+  }
+
   /**
    * UI clients typically don't listen for connections
    */
-  listen?(_onConnect: (port: IPort, meta?: ChromePlatformMeta) => void): void {
+  listen?(_onConnect: (port: IPort, meta: ChromeConnectionMeta) => void): void {
     try {
       console.warn(
         "UIClientEndpoint.listen is not commonly used for this context.",
@@ -39,16 +55,16 @@ export class UIClientEndpoint implements IEndpoint<
    * Connect to target, typically background script
    */
   async connect(
-    target: Partial<ChromeEndpointMeta>,
-  ): Promise<[IPort, ChromePlatformMeta]> {
+    target: ChromeConnectionTarget,
+  ): Promise<{ port: IPort; connectionMeta: ChromeConnectionMeta }> {
     try {
-      if (target.context === "background") {
+      if (target.kind === "background") {
         const port = chrome.runtime.connect();
         const chromePort = new ChromePort(port);
-        const platformMeta: ChromePlatformMeta = {
-          sender: port.sender,
-        };
-        return [chromePort, platformMeta];
+        const connectionMeta = createChromeConnectionMeta(port.sender, {
+          kind: "background",
+        });
+        return { port: chromePort, connectionMeta };
       }
 
       throw new NexusEndpointConnectError(

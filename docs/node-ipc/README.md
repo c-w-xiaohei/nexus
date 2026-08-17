@@ -45,7 +45,7 @@ Do not use it for browser contexts, cross-machine networking, or long-lived hand
 - binary packet framing over socket streams
 - optional shared-secret pre-auth
 - runtime directory and stale socket safety checks
-- node-ipc metadata and matcher helpers
+- node-ipc endpoint and connection metadata, exact targets, and address helpers
 
 ## What Core Still Owns
 

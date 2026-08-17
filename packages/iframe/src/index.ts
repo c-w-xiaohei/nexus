@@ -1,7 +1,6 @@
 export { IframeChildEndpoint } from "./child-endpoint.js";
 export { IframeAdapterError } from "./errors.js";
 export { usingIframeChild, usingIframeParent } from "./factory.js";
-export { IframeMatchers } from "./matchers.js";
 export { IframeParentEndpoint } from "./parent-endpoint.js";
 export type { IframeAdapterErrorCode } from "./errors.js";
 export type {
@@ -14,6 +13,11 @@ export type {
   IframeParentEndpointOptions,
   IframeParentMeta,
   IframeParentOptions,
-  IframePlatformMeta,
-  IframeEndpointMeta,
+  IframeConnectionMeta,
+  IframeConnectionFacts,
+  IframeContextMeta,
+  IframeAdapterModel,
+  IframeChildConnectionTarget,
+  IframeConnectionTarget,
+  IframeParentConnectionTarget,
 } from "./types.js";

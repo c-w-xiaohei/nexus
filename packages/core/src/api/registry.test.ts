@@ -1,53 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { DecoratorRegistry } from "./registry";
+import { describe, expect, it } from "vitest";
+import { InstanceDecoratorRegistry } from "./registry";
 import { Token } from "./token";
-import type { EndpointRegistrationData } from "./registry";
 
-describe("DecoratorRegistry", () => {
-  it("clear() should leave the legacy registry empty", () => {
-    DecoratorRegistry.clear();
-    expect(DecoratorRegistry.hasRegistrations()).toBe(false);
-  });
+describe("InstanceDecoratorRegistry", () => {
+  it("preserves instance registrations across snapshots", () => {
+    const registry = new InstanceDecoratorRegistry();
+    const token = new Token<object>("registered-service");
 
-  it("should warn on duplicate service and endpoint registrations", () => {
-    DecoratorRegistry.clear();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const token = new Token<object>("service-a");
-    const serviceData = {
-      targetClass: class ServiceA {},
-    };
-
-    DecoratorRegistry.registerService(token, serviceData);
-    DecoratorRegistry.registerService(token, serviceData);
-
-    const endpointData: EndpointRegistrationData = {
-      targetClass: class EndpointA {},
-      options: { meta: { context: "bg" } },
-    };
-    DecoratorRegistry.registerEndpoint(endpointData);
-    DecoratorRegistry.registerEndpoint(endpointData);
-
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    warnSpy.mockRestore();
-  });
-
-  it("snapshot() should copy providers and clear() should reset all state", () => {
-    DecoratorRegistry.clear();
-
-    const token = new Token<object>("service-b");
-    DecoratorRegistry.registerService(token, {
-      targetClass: class ServiceB {},
+    registry.registerService(token, {
+      targetClass: class RegisteredService {},
     });
+    const snapshot = registry.snapshot();
 
-    const snapshot = DecoratorRegistry.snapshot();
-    expect(snapshot.providers.size).toBe(1);
-    expect(DecoratorRegistry.hasRegistrations()).toBe(true);
-
-    DecoratorRegistry.clear();
-    const postClearSnapshot = DecoratorRegistry.snapshot();
-    expect(postClearSnapshot.providers.size).toBe(0);
-    expect(postClearSnapshot.endpoint).toBeNull();
-    expect(DecoratorRegistry.hasRegistrations()).toBe(false);
+    expect(snapshot.providers.has(token)).toBe(true);
+    expect(registry.snapshot().providers.has(token)).toBe(true);
   });
 });

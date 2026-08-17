@@ -8,7 +8,7 @@ import { NexusConfigurationError } from "../errors/usage-errors";
 describe("NexusKernelBuilder", () => {
   it("should type service policy with config metadata generics", () => {
     type UserMeta = { role: "admin" | "guest" };
-    type PlatformMeta = { processId: number };
+    type ConnectionMeta = { processId: number };
 
     const registration = {
       token: { id: "typed-service" },
@@ -17,38 +17,9 @@ describe("NexusKernelBuilder", () => {
         canCall: ({ localIdentity, platform }) =>
           localIdentity.role === "admin" && platform.processId > 0,
       },
-    } satisfies ServiceProvider<object, UserMeta, PlatformMeta>;
+    } satisfies ServiceProvider<object, UserMeta, ConnectionMeta>;
 
     expect(registration.policy.canCall).toBeTypeOf("function");
-  });
-
-  it("should fail when connectTo target is missing descriptor", async () => {
-    const nexus = new Nexus();
-    const config = {
-      endpoint: {
-        meta: { context: "bg" },
-        implementation: {},
-        connectTo: [{ matcher: "foo" } as any], // Missing descriptor
-      },
-    };
-
-    const builder = NexusKernelBuilder.create(
-      config as any,
-      new Map(),
-      null,
-      nexus,
-      new Map([["foo", () => true]]),
-      new Map(),
-    );
-
-    const result = await builder.build();
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusConfigurationError);
-      expect(result.error.message).toContain(
-        "connectTo targets must include a descriptor",
-      );
-    }
   });
 
   it("should fail when endpoint implementation or meta is missing", async () => {
@@ -71,7 +42,7 @@ describe("NexusKernelBuilder", () => {
     if (result.isErr()) {
       expect(result.error).toBeInstanceOf(NexusConfigurationError);
       expect(result.error.message).toContain(
-        "Endpoint 'implementation' and 'meta' must be provided",
+        "endpoint implementation and meta",
       );
     }
   });
@@ -220,13 +191,13 @@ describe("NexusKernelBuilder", () => {
     }
   });
 
-  it("should fail endpoint source conflicts when configured endpoint only has connectTo", async () => {
+  it("should fail endpoint source conflicts when configured endpoint has a defaultTarget", async () => {
     const nexus = new Nexus();
 
     const builder = NexusKernelBuilder.create(
       {
         endpoint: {
-          connectTo: [{ descriptor: { context: "peer" } }],
+          defaultTarget: { context: "peer" },
         },
       } as any,
       new Map(),

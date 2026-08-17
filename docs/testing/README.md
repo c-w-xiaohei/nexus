@@ -27,7 +27,7 @@ const userService: UserService = {
 mock.service(UserToken, userService);
 
 const user = await mock.nexus.create(UserToken, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 
 await expect(user.getUser("u1")).resolves.toEqual({ id: "u1", name: "Ada" });

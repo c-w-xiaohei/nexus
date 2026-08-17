@@ -1,15 +1,13 @@
 import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
 import { IframeChildEndpoint } from "./child-endpoint.js";
 import { DEFAULT_INSTANCE } from "./constants.js";
-import { baseMatchers } from "./matchers.js";
 import { IframeParentEndpoint } from "./parent-endpoint.js";
 import type {
   IframeChildConfigOptions,
   IframeChildOptions,
   IframeParentConfigOptions,
   IframeParentOptions,
-  IframePlatformMeta,
-  IframeEndpointMeta,
+  IframeAdapterModel,
 } from "./types.js";
 import { getOrigin } from "./window.js";
 
@@ -20,16 +18,16 @@ import { getOrigin } from "./window.js";
  */
 export function usingIframeParent(
   options: IframeParentConfigOptions,
-): NexusConfig<IframeEndpointMeta, IframePlatformMeta>;
+): NexusConfig<IframeAdapterModel>;
 export function usingIframeParent(
   options: IframeParentOptions,
-): NexusInstance<IframeEndpointMeta, IframePlatformMeta>;
+): NexusInstance<IframeAdapterModel>;
 export function usingIframeParent(
   options: IframeParentOptions | IframeParentConfigOptions,
-) {
+): NexusConfig<IframeAdapterModel> | NexusInstance<IframeAdapterModel> {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const origin = getOrigin(options.localWindow ?? options.window);
-  const config: NexusConfig<IframeEndpointMeta, IframePlatformMeta> = {
+  const config: NexusConfig<IframeAdapterModel> = {
     ...options,
     endpoint: {
       meta: {
@@ -40,21 +38,10 @@ export function usingIframeParent(
       },
       implementation: new IframeParentEndpoint(options),
     },
-    matchers: baseMatchers(options.appId, instance),
-    descriptors: Object.fromEntries(
-      options.frames.map((frame, index) => [
-        index === 0 ? "child" : `child:${frame.frameId}`,
-        {
-          context: "iframe-child",
-          appId: options.appId,
-          instance: frame.instance ?? instance,
-          frameId: frame.frameId,
-          origin: frame.origin,
-        },
-      ]),
-    ) as Record<string, Partial<IframeEndpointMeta>>,
   };
-  return options.configure === false ? config : nexus.configure(config);
+  return options.configure === false
+    ? config
+    : (nexus as unknown as NexusInstance<IframeAdapterModel>).configure(config);
 }
 
 /**
@@ -64,16 +51,16 @@ export function usingIframeParent(
  */
 export function usingIframeChild(
   options: IframeChildConfigOptions,
-): NexusConfig<IframeEndpointMeta, IframePlatformMeta>;
+): NexusConfig<IframeAdapterModel>;
 export function usingIframeChild(
   options: IframeChildOptions,
-): NexusInstance<IframeEndpointMeta, IframePlatformMeta>;
+): NexusInstance<IframeAdapterModel>;
 export function usingIframeChild(
   options: IframeChildOptions | IframeChildConfigOptions,
-) {
+): NexusConfig<IframeAdapterModel> | NexusInstance<IframeAdapterModel> {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const frameId = options.frameId ?? "default";
-  const config: NexusConfig<IframeEndpointMeta, IframePlatformMeta> = {
+  const config: NexusConfig<IframeAdapterModel> = {
     ...options,
     endpoint: {
       meta: {
@@ -83,18 +70,23 @@ export function usingIframeChild(
         origin: getOrigin(options.localWindow ?? options.window),
         frameId,
       },
-      implementation: new IframeChildEndpoint({ ...options, frameId }),
-      connectTo: options.connectTo,
-    },
-    matchers: baseMatchers(options.appId, instance),
-    descriptors: {
-      parent: {
-        context: "iframe-parent",
-        appId: options.appId,
-        instance,
-        origin: options.parentOrigin,
-      },
+      implementation: new IframeChildEndpoint({
+        ...options,
+        frameId,
+      }),
+      defaultTarget: Object.freeze(
+        options.defaultTarget
+          ? { ...options.defaultTarget }
+          : {
+              context: "iframe-parent",
+              appId: options.appId,
+              instance,
+              origin: options.parentOrigin,
+            },
+      ),
     },
   };
-  return options.configure === false ? config : nexus.configure(config);
+  return options.configure === false
+    ? config
+    : (nexus as unknown as NexusInstance<IframeAdapterModel>).configure(config);
 }

@@ -3,12 +3,12 @@ import {
   createNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
-import { usingIframeParent } from "@nexus-js/iframe";
+import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 import {
   RelayProfileToken,
   RELAY_APP_ID,
   RELAY_ORIGIN,
-  counterStore,
+  iframeCounterStore,
   relayFrameNonce,
   type CounterActions,
   type CounterState,
@@ -62,8 +62,12 @@ function instrumentStore(implementation: StoreImplementation) {
   return wrapper;
 }
 
-const { provider } = createNexusStore(counterStore);
-const hostNexus = new Nexus().configure({
+const { provider } = createNexusStore<
+  CounterState,
+  CounterActions,
+  IframeAdapterModel
+>(iframeCounterStore);
+const hostNexus = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
     appId: RELAY_APP_ID,

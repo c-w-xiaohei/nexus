@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TargetSchema } from "./target-schema.js";
+import { ConnectionTargetSchema } from "./target-schema";
 
 export const SubscribeResultSchema = z.object({
   storeInstanceId: z.string(),
@@ -49,7 +49,8 @@ export const DispatchResultEnvelopeSchema = z.object({
 });
 
 export const ConnectNexusStoreOptionsSchema = z.object({
-  target: TargetSchema.optional(),
+  target: ConnectionTargetSchema.optional(),
+  where: z.function().optional(),
   timeout: z.number().nonnegative().optional(),
 });
 

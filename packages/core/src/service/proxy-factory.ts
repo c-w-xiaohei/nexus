@@ -1,11 +1,15 @@
-import type { EndpointMeta } from "../types/identity.js";
-import type { DispatchCallOptions } from "./engine.js";
-import type { ResourceManager } from "./resource-manager.js";
-import type { CallTarget, ResolveOptions } from "../connection/types.js";
-import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
-import { Logger } from "../logger.js";
+import type { AdapterModel } from "../types/adapter-model";
+import type { DispatchCallOptions } from "./engine";
+import type { ResourceManager } from "./resource-manager";
+import type { CallTarget, ResolveOptions } from "@/connection/types";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import {
+  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+} from "@/types/symbols";
+import { Logger } from "@/logger";
 import type { Result } from "better-result";
-import { NexusResourceError } from "../errors/resource-errors.js";
+import { NexusResourceError } from "@/errors/resource-errors";
 
 type ReleaseContext = {
   resourceId: string;
@@ -23,9 +27,9 @@ const INTERNAL_PROXY_PROPERTIES = new Set([
 /**
  * Options for creating a service proxy, specifying the target and behavior.
  */
-export interface CreateProxyOptions<U extends EndpointMeta> {
-  target: CallTarget<U, any>;
-  staleTarget?: Pick<ResolveOptions<U, any>, "descriptor" | "matcher">;
+export interface CreateProxyOptions<M extends AdapterModel> {
+  target: CallTarget<M>;
+  staleTarget?: Pick<ResolveOptions<M>, "where">;
   strategy?: "one" | "first" | "all" | "stream";
   timeout?: number;
   broadcastOptions?: {
@@ -65,7 +69,7 @@ type ChainableProxyConfig = {
  * It encapsulates the complexity of setting up proxy traps and managing their
  * registration with the ResourceManager.
  */
-export class ProxyFactory<U extends EndpointMeta> {
+export class ProxyFactory<_M extends AdapterModel> {
   private readonly releaseRegistry: FinalizationRegistry<ReleaseContext>;
   private readonly logger: Logger = new Logger("L3 -> ProxyFactory");
 
@@ -90,7 +94,7 @@ export class ProxyFactory<U extends EndpointMeta> {
     return value;
   }
 
-  private unwrapResult<T>(
+  private unwrapResultAsync<T>(
     value: Promise<Result<T, globalThis.Error>>,
   ): Promise<T> {
     return value.then((result) => {
@@ -133,7 +137,7 @@ export class ProxyFactory<U extends EndpointMeta> {
               const rejected = toRejectedPromise(error);
               return rejected.then.bind(rejected);
             }
-            const unwrapped = this.unwrapResult(result);
+            const unwrapped = this.unwrapResultAsync(result);
             return unwrapped.then.bind(unwrapped);
           }
 
@@ -147,6 +151,13 @@ export class ProxyFactory<U extends EndpointMeta> {
             );
           }
 
+          if (
+            prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
+            prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL
+          ) {
+            return Reflect.get(_target, prop);
+          }
+
           if (this.isInternalAccess(prop)) {
             return Reflect.get(_target, prop, receiver);
           }
@@ -156,7 +167,7 @@ export class ProxyFactory<U extends EndpointMeta> {
         apply: (_target, _thisArg, args) => {
           try {
             return this.trackFireAndForget(
-              this.unwrapResult(
+              this.unwrapResultAsync(
                 this.engine.safeDispatchCall(
                   config.buildCallOptions("APPLY", path, { args }),
                 ),
@@ -166,33 +177,31 @@ export class ProxyFactory<U extends EndpointMeta> {
             return this.trackFireAndForget(toRejectedPromise(error));
           }
         },
-        ...(config.hasSetter
-          ? {
-              set: (_target: any, prop: string | symbol, value: any) => {
-                try {
-                  this.trackFireAndForget(
-                    this.unwrapResult(
-                      this.engine.safeDispatchCall(
-                        config.buildCallOptions(
-                          "SET",
-                          [...path, prop as string],
-                          {
-                            value,
-                          },
-                        ),
-                      ),
-                    ),
-                  );
-                } catch (error) {
-                  if (error instanceof NexusResourceError) {
-                    throw error;
-                  }
-                  this.trackFireAndForget(toRejectedPromise(error));
-                }
-                return true;
-              },
-            }
-          : {}),
+        set: (_target, prop, value) => {
+          if (
+            prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
+            prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL
+          ) {
+            Reflect.set(_target, prop, value);
+            return true;
+          }
+          if (!config.hasSetter) return false;
+          try {
+            this.trackFireAndForget(
+              this.unwrapResultAsync(
+                this.engine.safeDispatchCall(
+                  config.buildCallOptions("SET", [...path, prop as string], {
+                    value,
+                  }),
+                ),
+              ),
+            );
+          } catch (error) {
+            if (error instanceof NexusResourceError) throw error;
+            this.trackFireAndForget(toRejectedPromise(error));
+          }
+          return true;
+        },
       });
     };
 
@@ -205,7 +214,7 @@ export class ProxyFactory<U extends EndpointMeta> {
    */
   public createServiceProxy<T extends object>(
     serviceName: string,
-    options: CreateProxyOptions<U>,
+    options: CreateProxyOptions<_M>,
   ): T {
     const strategy = options.strategy ?? options.broadcastOptions?.strategy;
 

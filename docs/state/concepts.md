@@ -27,7 +27,7 @@ The host:
 - owns the real store state
 - executes actions
 - advances versions
-- broadcasts snapshot updates
+- publishes snapshot updates to subscribed clients
 - cleans up connection-owned subscriptions on disconnect
 
 ### Client

@@ -42,7 +42,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
 
     const service = registration.service as TestService & {
@@ -60,7 +60,7 @@ describe("relayService", () => {
     service[SERVICE_INVOKE_END](invocation);
 
     expect(create).toHaveBeenCalledWith(token, {
-      target: { descriptor: { context: "background" } },
+      target: { context: "background" },
     });
     expect(update).toHaveBeenCalledWith({ name: "Ada" });
     expect(result).toEqual({ ok: true });
@@ -80,7 +80,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
       policy: { canCall },
     });
 
@@ -96,7 +96,7 @@ describe("relayService", () => {
     expect(canCall).toHaveBeenCalledWith({
       origin: { context: "iframe-leaf" },
       relay: { context: "content-relay" },
-      platform: { from: "iframe" },
+      connection: { from: "iframe" },
       tokenId: token.id,
       path: ["profile", "update"],
       operation: "APPLY",
@@ -114,7 +114,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
@@ -146,7 +146,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
@@ -173,7 +173,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
       [SERVICE_INVOKE_START](
@@ -197,7 +197,7 @@ describe("relayService", () => {
       TestPlatform
     >(token, {
       forwardThrough: { create: vi.fn() } as any,
-      forwardTarget: { descriptor: { context: "background" } },
+      forwardTarget: { context: "background" },
     });
 
     expect(() => {

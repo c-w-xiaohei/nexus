@@ -1,150 +1,136 @@
-# Platforms And Contexts
+# Platforms And Adapters
 
-Nexus provides one programming model across multiple JavaScript execution contexts. You define contracts once, expose services in one context, and call them from another context through typed proxies.
-
-## Typical Context Pairs
-
-- Browser extension background <-> content script
-- Main window <-> iframe
-- Main thread <-> web worker
-- Electron process boundaries via suitable transport wiring
+Nexus supplies connection and service semantics over contexts that already exist. An adapter supplies the endpoint channel, adapter-owned metadata, exact target types, and context factories. The application or host platform owns context startup and target discovery.
 
 ## Adapter Strategy
 
-- `@nexus-js/core` contains the core transport-agnostic API and runtime
-- Adapter packages provide platform-specific endpoint setup and conventions
-- `@nexus-js/chrome` is the dedicated adapter for Chrome extension contexts
-- `@nexus-js/iframe` is the dedicated adapter for parent window <-> iframe contexts
-- `@nexus-js/node-ipc` is the local Node process adapter for Linux filesystem Unix sockets
+- `@nexus-js/core` contains the transport-agnostic runtime and public API.
+- `@nexus-js/chrome` configures Chrome extension contexts and exports Chrome target constructors and `where` predicates.
+- `@nexus-js/iframe` configures parent and child windows over `postMessage`.
+- `@nexus-js/node-ipc` configures local daemon/client communication over Unix sockets.
+- Other runtimes implement `IEndpoint<M>` and provide an `AdapterModel`.
 
-Today, the repository ships first-party Chrome, iframe, and Node IPC adapters. Other environments use the core model plus custom endpoint wiring.
+An adapter context factory constructs local `ContextMeta`, installs the endpoint driver, and may supply an endpoint `defaultTarget`. It does not discover providers, inject contexts, or own application-level multicast orchestration.
 
-## Choosing A Platform Entry
+## Chrome Extension
 
-Use this decision rule:
+Install `@nexus-js/core` and `@nexus-js/chrome`, then use `usingBackgroundScript()`, `usingContentScript()`, `usingPopup()`, or the other exported context helpers.
 
-1. Always start with `@nexus-js/core`
-2. If your environment has a first-party adapter, use it
-3. If it does not, provide your own endpoint implementation through the core APIs
-4. Add subsystem entrypoints only after the base Nexus path works
+The public Chrome target constructors are:
 
-### Chrome Extension
+```ts
+import { chromeTarget } from "@nexus-js/chrome";
 
-Use:
+const tabId = 42;
+const documentId = "document-1";
 
-- `@nexus-js/core`
-- `@nexus-js/chrome`
+const exactBackground = chromeTarget.background();
+const exactContent = chromeTarget.contentDocument({
+  tabId,
+  documentId,
+});
+```
 
-This is the clearest path if your app has background/content-script/popup/options-style contexts.
+An exact target can reuse a ready connection or ask the adapter to connect that endpoint:
 
-If that matches your environment, start here before reading subsystem docs.
+```ts
+import { Nexus } from "@nexus-js/core";
+import { chromeTarget } from "@nexus-js/chrome";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import { CaptureToken } from "./shared-contracts";
 
-Next step: use the Chrome adapter README/examples first, then return to `docs/getting-started.md` or `docs/state/README.md` depending on whether you need plain RPC or state sync.
+const backgroundNexus = new Nexus<ChromeAdapterModel>();
+const tabId = 42;
+const documentId = "document-1";
 
-### Iframe
+const capture = await backgroundNexus.create(CaptureToken, {
+  target: chromeTarget.contentDocument({ tabId, documentId }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    contextMeta.isVisible === true &&
+    connectionMeta.observed.documentId === documentId,
+});
+```
 
-Use:
+For a creation-time snapshot of currently available providers, use `selectMulticast`:
 
-- `@nexus-js/core`
-- `@nexus-js/iframe`
+```ts
+const captures = await backgroundNexus.selectMulticast(CaptureToken, {
+  where: (contextMeta, _connectionMeta) =>
+    contextMeta.context === "content-script" && contextMeta.isVisible === true,
+});
+```
 
-This path targets a parent browser window and one or more iframe children. The adapter maps each frame to Nexus descriptors, routes connections over iframe `postMessage`, and applies source window, exact origin, app id, channel, and optional nonce transport gates before core authorization policies run.
+`createMulticast` instead takes a non-empty `targets` array of exact Chrome targets, acquires every target, and fails the whole operation if one target fails. Both operations support `expects: "all"` (default) or `expects: "stream"`; calls settle as `{ status, value }` or `{ status, reason }` without connection IDs or `from` metadata. Connection IDs are not acquisition inputs, selection keys, or routing targets. `selectMulticast` never connects, has no `wait`, and an empty provider snapshot is valid. Acquisition `timeout`/`signal` cover `create` and `createMulticast`; `callTimeout` covers later proxy calls. Unknown option keys and incompatible provider-catalog protocols are structured errors.
 
-Important behavior:
+The background context does not automatically find an active tab or inject a content script. Application code performs that workflow and passes the resulting tab/frame/document target to Nexus. A content script helper supplies `chromeTarget.background()` as endpoint `defaultTarget`, so `nexus.create(Token)` is valid when the Token has no default.
 
-- Parent code should register each iframe with a stable `frameId`, the `HTMLIFrameElement`, and the expected child `origin`.
-- Child code must configure the expected `parentOrigin`.
-- `origin` and `parentOrigin` must match the browser origin exactly, including scheme, host, and port.
-- Avoid `allowAnyOrigin: true` unless the iframe content is intentionally public and core policy still restricts access.
-- Proxies and refs are session-bound. Iframe reloads replace the child session, so callers must call `create()` again after reload or reconnect.
+Chrome's `tabId`, `frameId`, and `documentId` are target-side platform addressing inputs, not content endpoint identity. Observed sender facts belong to Chrome's `ChromeConnectionMeta`. Private selected-route implementation state is not a public metadata contract.
 
-Next step: read `docs/iframe/README.md` for parent/child setup, targeting, security notes, and lifecycle behavior.
+## Iframe
 
-### Worker / custom runtime
+Use `usingIframeParent({ appId, frames })` in the parent and `usingIframeChild({ appId, frameId, parentOrigin })` in the child. Register each frame with a stable `frameId` and exact expected origin. The child helper supplies a parent endpoint `defaultTarget` unless an explicit one is configured.
 
-Start with `@nexus-js/core`, then wire your own endpoint implementation and metadata through `configure({ endpoint })` or an instance-bound endpoint decorator such as `@nexus.Endpoint(...)`.
+Public iframe targets are `IframeConnectionTarget` variants. Use an exact `IframeChildConnectionTarget` or `IframeParentConnectionTarget` when Nexus may need to open a connection. Use `selectMulticast({ where })` to bind a current snapshot of ready frame providers. The application owns the list of frames and any discovery of eligible frames.
 
-This route is lower-level, but it is the right one when no first-party adapter exists for your environment.
+The adapter validates source window, origin, app id, channel, and optional nonce before core policy. Iframe reload replaces the session; old proxies and refs must be recreated.
 
-If you use the decorator path directly, bind decorators to the Nexus instance that owns the local endpoint face. The default singleton can use `@nexus.Endpoint(...)` / `@nexus.Expose(...)`; multi-instance setups should use instance-specific forms such as `@brokerNexus.Endpoint(...)` and `@brokerNexus.Expose(...)`. Use `configure({ providers })` for bootstrap bulk composition, and prefer `.provide(Token, service)` for ordinary provider registration.
+## Node IPC
 
-Next step: implement a minimal `IEndpoint`, configure it through `nexus.configure({ endpoint })`, then follow `docs/getting-started.md` for the rest of the bootstrap flow.
+Use `usingNodeIpcDaemon({ appId, instance })` and `usingNodeIpcClient({ appId, defaultTarget })`. The client target is `NodeIpcConnectionTarget`:
 
-### Bridge Contexts With Multiple Transports
+```ts
+const daemon = {
+  context: "node-ipc-daemon" as const,
+  appId: "example-app",
+  instance: "default",
+};
 
-Some runtimes need to bridge two separate Nexus transport graphs. A Chrome extension background service is a common example: it may talk to extension contexts through the Chrome adapter and to a local broker through a browser-compatible transport.
+usingNodeIpcClient({ appId: "example-app", defaultTarget: daemon });
+```
 
-Use two explicit `Nexus` instances in that runtime:
+The adapter maps that exact target to a Unix socket address. Socket paths and pre-auth results are connection metadata or transport implementation details, not peer-declared endpoint identity. A daemon restart invalidates old sessions and proxies.
 
-- one instance for extension-internal contexts
-- one instance for the local broker transport
-- explicit endpoint configuration on both instances
-- provider registration through `.provide(...)` or instance-bound decorators such as `@brokerNexus.Expose(...)`
-- no top-level singleton shorthand `@Expose(...)` or `@Endpoint(...)`; bind decorators to the owning instance instead
+## Worker And Custom Runtime
 
-Name these instances after the local graph or endpoint face they represent,
-such as `extensionNexus`, `chromeNexus`, `iframeParentNexus`, or
-`brokerNexus`. Avoid names such as `toBackgroundNexus` or `backgroundNexus`
-for an instance running in a content script; the instance represents the local
-face in a transport graph, not a one-way direction to a remote context.
+Implement the public `IEndpoint<M>` seam for a custom transport:
 
-Then publish a gateway provider on one instance and implement it by calling services through the other instance. Nexus does not merge the two connection graphs automatically.
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { AdapterModel, IEndpoint } from "@nexus-js/core";
 
-When the gateway should forward an existing service contract or Nexus State store, use `@nexus-js/core/relay`. Relay registers an ordinary provider on one graph and forwards through another `Nexus` instance with explicit `forwardThrough` and `forwardTarget` options. It is not a `target.via` tunnel and does not forward raw Nexus messages. See `docs/relay.md`.
+interface WorkerModel extends AdapterModel {
+  contextMeta: { context: "worker" | "host" };
+  connectionMeta: { readonly transport: "worker-port" };
+  connectionTarget: { context: "worker"; workerId: string };
+}
 
-### Local Node Daemon / CLI
+const workerNexus = new Nexus<WorkerModel>();
+const endpoint: IEndpoint<WorkerModel> = createWorkerEndpoint();
 
-Use:
+workerNexus.configure({
+  endpoint: {
+    implementation: endpoint,
+    meta: { context: "host" },
+  },
+});
+```
 
-- `@nexus-js/core`
-- `@nexus-js/node-ipc`
+The driver accepts ports, connects exact targets, matches ready targets, and closes platform resources. It does not implement Token discovery, proxy lifecycle, retry, replay, or business policy.
 
-This path targets one local daemon process and one or more local Node clients. The adapter maps Nexus daemon descriptors to Unix socket paths, applies optional shared-secret pre-auth, frames binary L1 packets over the socket stream, and then lets core `policy.canConnect` / `policy.canCall` make authorization decisions.
+## Multiple Graphs
 
-Important behavior:
+Use separate named `Nexus<M>` instances when one JavaScript context owns multiple transport graphs. Relay can forward an explicitly selected service or State provider between adjacent graphs; it does not merge connection graphs or provide transparent multi-hop routing.
 
-- Default socket paths resolve to `$XDG_RUNTIME_DIR/nexus/<appId>/<instance>.sock` or `/tmp/nexus-<uid>/<appId>/<instance>.sock` when `XDG_RUNTIME_DIR` is absent.
-- Custom address resolvers can override that mapping, but a resolver returning `null` is an explicit address failure.
-- Runtime directories should be user-private, and stale socket cleanup must not unlink a live daemon socket.
-- Platform metadata currently reports adapter facts such as socket address and shared-secret auth status. It does not claim OS-verified peer `pid`, `uid`, or `gid` unless peer credential support is implemented.
-- Proxies and refs are session-bound. A daemon restart or socket disconnect invalidates old proxies; callers must reconnect and call `create()` again.
+## Testing Boundary
 
-Next step: read `docs/node-ipc/README.md` for node-ipc setup, addressing, adapter pre-auth, framing, lifecycle, and error behavior. Use `docs/auth-and-policy.md` for cross-adapter authorization policy and `packages/node-ipc/README.md` when you need the package export surface.
-
-### When To Add Nexus State
-
-Add `Nexus State` only after:
-
-- endpoint configuration works
-- a service can be exposed
-- a proxy can be created
-- a basic remote method call succeeds
-
-At that point, adding `Nexus State` is a layering decision, not a bootstrap requirement.
-
-## Testing Strategy
-
-Choose the test layer based on what you need to prove:
-
-| Behavior                                                                      | Test with                                                                  |
-| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Application code calls the right Nexus service Token                          | `@nexus-js/testing` and `createMockNexus()`                                |
-| React components receive a Nexus instance                                     | `NexusProvider` with `createMockNexus()`                                   |
-| Nexus State application code consumes a store service contract                | `createMockNexus()` plus real state service registration where appropriate |
-| Iframe origin, source window, nonce, heartbeat, or reload behavior            | iframe adapter tests or browser integration tests                          |
-| Node IPC socket path, framing, shared-secret auth, or daemon restart behavior | node-ipc real socket integration tests                                     |
-| Chrome runtime ports, tabs, frames, or service worker behavior                | Chrome adapter tests or extension E2E tests                                |
-| Core connection lifecycle, authorization, routing, or multicast semantics     | core integration tests                                                     |
-
-`createMockNexus()` is for user-level unit tests at the Nexus API seam. It does not create runtime contexts, endpoints, transports, or real connections.
+Use `createMockNexus()` for application code at the `NexusInstance` seam. Use core integration tests or adapter/browser tests for real transport, connection lifecycle, authorization, reload, restart, and multicast behavior.
 
 ## Related Guides
 
-- Product docs landing: `docs/README.md`
-- Package map and install choices: `docs/packages.md`
-- Authorization and policy: `docs/auth-and-policy.md`
-- Nexus Relay: `docs/relay.md`
-- Iframe adapter docs: `docs/iframe/README.md`
-- Node IPC adapter docs: `docs/node-ipc/README.md`
-- Nexus State subsystem docs: `docs/state/README.md`
-- Testing application code: `docs/testing/README.md`
+- [Getting started](getting-started.md)
+- [Identity and connection metadata](identity-and-metadata.md)
+- [Authorization and policy](auth-and-policy.md)
+- [Iframe adapter](iframe/README.md)
+- [Node IPC adapter](node-ipc/README.md)
+- [Testing](testing/README.md)

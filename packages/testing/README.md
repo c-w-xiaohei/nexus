@@ -32,14 +32,17 @@ const settings: SettingsService = {
 mock.service(SettingsToken, settings);
 
 const proxy = await mock.nexus.create(SettingsToken, {
-  target: { descriptor: { context: "background" } },
+  target: { context: "background" },
 });
 
 await expect(proxy.getSettings()).resolves.toEqual({ theme: "dark" });
 ```
 
+`target` is an exact target object for the adapter model under test. When omitted,
+the mock applies the Token `defaultTarget`, then endpoint `defaultTarget`.
+
 ## Scope
 
 Use this package to test application code that consumes a `NexusInstance`.
 
-It does not simulate transports, adapters, real connections, reconnects, browser frames, Chrome runtime ports, Unix sockets, or multicast semantics.
+The mock supports unscoped or metadata-backed registrations, `create`, `select` with object `wait`, and bound `createMulticast`/snapshot `selectMulticast` fanouts. It does not simulate real target acquisition, provider-catalog negotiation, adapter connection metadata, transports, adapters, or lifecycle behavior.

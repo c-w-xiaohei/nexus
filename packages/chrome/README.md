@@ -17,6 +17,10 @@ import { Token } from "@nexus-js/core";
 import { usingBackgroundScript } from "@nexus-js/chrome";
 
 // Define service interface and token
+type Settings = {
+  theme: "light" | "dark";
+};
+
 interface IBackgroundService {
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
@@ -33,7 +37,8 @@ const backgroundNexus = usingBackgroundScript();
 @backgroundNexus.Expose(BackgroundServiceToken)
 class BackgroundService implements IBackgroundService {
   async getSettings() {
-    return await chrome.storage.sync.get("settings");
+    const result = await chrome.storage.sync.get("settings");
+    return (result.settings as Settings | undefined) ?? { theme: "light" };
   }
 
   async saveSettings(settings: Settings) {
@@ -88,11 +93,13 @@ initPopup();
 
 - **Type-safe communication** between all Chrome extension contexts
 - **Chrome runtime port integration** for extension context messaging
-- **Pre-configured matchers** for common scenarios
+- **Target constructors and predicates** for common Chrome contexts
 - **Zero-configuration setup** for standard use cases
 - **Full TypeScript support** with discriminated union types
 
-Content scripts, popups, and options pages can usually call background services with `nexus.create(Token)` when the Token has a `defaultTarget` for the background or the adapter has a unique background `connectTo` fallback. Background-to-content-script calls usually need an explicit descriptor or matcher because there may be many content scripts. Application code owns tab/window discovery and decides when identity changes require new handles. Raw proxies and refs are session-bound: after disconnect, service worker restart, or other session replacement, application code should recreate handles and decide any retry or rebuild policy explicitly.
+Content scripts, popups, and options pages receive `chromeTarget.background()` as their endpoint `defaultTarget`, so `nexus.create(Token)` acquires a background provider by default. Background-to-content calls use an exact `chromeTarget.contentFrame(...)` or `chromeTarget.contentDocument(...)`. Use `select` with a `where...` predicate only for already available providers; it never connects. `selectMulticast` binds a snapshot, not a changing set of tabs. Application code owns tab/window discovery and decides when identity changes require new handles. Raw proxies and refs are session-bound: after disconnect, service worker restart, or other session replacement, application code should recreate handles and decide any retry or rebuild policy explicitly.
+
+`createMulticast` requires a non-empty array of exact `chromeTarget` values and fails all acquisition if any target fails. Both multicast methods support `expects: "all"` (default) and `expects: "stream"`; calls return settled `{ status, value }` or `{ status, reason }` entries without connection IDs or `from` metadata. Connection IDs are not acquisition inputs, selection keys, or routing targets. `selectMulticast` has no `wait` and may return an empty snapshot. Acquisition `timeout`/`signal` apply before `create` or `createMulticast`; `callTimeout` applies to proxy calls. Invalid option keys, timeout values, aborts, and incompatible provider-catalog protocols return structured errors.
 
 For object services, Nexus State stores, or Relay providers, configure the runtime and call `provide(...)` instead of using class decorators:
 
@@ -126,35 +133,50 @@ Effectful runtime helpers:
 - `usingOffscreenDocument(options)` - Configure for offscreen document
 - `usingExtensionPage(meta)` - Configure for a custom extension page connected to background
 
-### Pre-defined Matchers
+### Target Constructors And Predicates
 
-- `any-content-script` - Match any content script
-- `any-popup` - Match any popup
-- `visible-content-script` - Match visible content scripts
-- `background` - Match background script
+- `chromeTarget.background()` - Exact background target
+- `chromeTarget.contentFrame({ tabId, frameId })` - Exact content-script frame target
+- `chromeTarget.contentDocument({ tabId, documentId })` - Exact content-script document target
+- `whereBackground` - Select background endpoints
+- `whereContentScript` - Select content-script endpoints
+- `whereContentScriptByOrigin(origin)` - Select content scripts by origin
+- `whereContentScriptByUrl(pattern)` - Select content scripts by URL
+- `wherePopup` - Select popup endpoints
+- `whereVisibleContentScript` - Select visible content scripts
 
 ### Types
 
-- `ChromeEndpointMeta` - Discriminated union for built-in Chrome contexts plus custom contexts that include a `context` discriminator
-- `ChromePlatformMeta` - Chrome-specific platform metadata
-- Context-specific types: `ChromeBackgroundMeta`, `ChromeContentScriptMeta`, etc.
+- `ChromeContextMeta` - Discriminated union for built-in Chrome contexts plus custom contexts that include a `context` discriminator
+- `ChromeConnectionMeta` - Adapter-observed connection facts
+- `ChromeConnectionTarget` - Exact target variants
+- Context-specific endpoint types: `ChromeBackgroundMeta`, `ChromeContentScriptMeta`, etc.
 
 ## Advanced Usage
 
-### Custom Matchers
+### Exact Acquisition And Provider Selection
 
 ```typescript
-import { ChromeMatchers, type ChromeEndpointMeta } from "@nexus-js/chrome";
+import { nexus } from "@nexus-js/core";
+import { chromeTarget, whereContentScriptByUrl } from "@nexus-js/chrome";
+import { ServiceToken } from "./shared";
 
-// Use built-in matchers
-const githubContentScripts = await nexus.createMulticast(ServiceToken, {
-  target: { matcher: ChromeMatchers.contentScriptByUrl("github.com") },
+const tabId = 42;
+
+// The snippet runs in a previously configured consumer context.
+// Select one known tab/frame with an exact target.
+const tabService = await nexus.create(ServiceToken, {
+  target: chromeTarget.contentFrame({ tabId, frameId: 0 }),
 });
 
-// Custom matcher
-const customMatcher = (identity: ChromeEndpointMeta) =>
-  identity.context === "content-script" &&
-  identity.url.includes("special-page");
+// Dynamically fan out to matching ready content-script sessions.
+const githubContentScripts = await nexus.selectMulticast(ServiceToken, {
+  where: whereContentScriptByUrl("github.com"),
+});
+
+const whereSpecialPage = (contextMeta: ChromeContextMeta) =>
+  contextMeta.context === "content-script" &&
+  contextMeta.url.includes("special-page");
 ```
 
 ### Dynamic Metadata Updates

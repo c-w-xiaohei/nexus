@@ -7,10 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Nexus } from "../../src/api/nexus";
 import { Token } from "../../src/api/token";
-
 import type {
-  AppPlatformMeta,
-  AppUserMeta,
+  AppAdapterModel,
   Comment,
   ICommentService,
   ISettingsService,
@@ -19,7 +17,7 @@ import type {
 
 describe("Nexus L4 Integration: Service Bootstrapping", () => {
   it("should use a factory for dependency injection", async () => {
-    const hostNexus = new Nexus<any, any>();
+    const hostNexus = new Nexus<AppAdapterModel>();
 
     class Dependency {
       getValue() {
@@ -53,12 +51,12 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     hostNexus.configure({
       endpoint: {
-        meta: { context: "host" },
+        meta: { context: "background", version: "1.0" },
         implementation: { listen: vi.fn() },
       },
     });
 
-    await (hostNexus as any)._initialize();
+    await hostNexus.ready();
 
     const service = (hostNexus as any).engine.resourceManager.getExposedService(
       "service-with-dep",
@@ -70,7 +68,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
   });
 
   it("should create basic tokens and use them with @Expose decorator", async () => {
-    const nexus = new Nexus<AppUserMeta, AppPlatformMeta>();
+    const nexus = new Nexus<AppAdapterModel>();
 
     const SettingsToken = new Token<ISettingsService>("settings-service");
     const CommentToken = new Token<ICommentService>("comment-service");
@@ -112,7 +110,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
       },
     });
 
-    await (nexus as any)._initialize();
+    await nexus.ready();
 
     const settingsService = (
       nexus as any
@@ -141,18 +139,17 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
   it("should support TokenSpace for structured token namespaces", async () => {
     const { TokenSpace } = await import("../../src/api/token-space");
 
-    const app = new TokenSpace<AppUserMeta, AppPlatformMeta>({ name: "app" });
+    const app = new TokenSpace<AppAdapterModel>({ name: "app" });
 
     const background = app.space("background", {
       defaultTarget: {
-        descriptor: { context: "background", version: "1.0" },
+        context: "background",
       },
     });
 
     const contentScript = app.space("content-script", {
       defaultTarget: {
-        matcher: (identity: AppUserMeta) =>
-          identity.context === "content-script",
+        context: "content-script",
       },
     });
 
@@ -165,34 +162,20 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
     expect(ContentCommentToken.id).toBe("app:content-script:comments");
 
     expect(BackgroundSettingsToken.defaultTarget).toEqual({
-      descriptor: { context: "background", version: "1.0" },
+      context: "background",
     });
     expect(ContentCommentToken.defaultTarget).toEqual({
-      matcher: expect.any(Function),
+      context: "content-script",
     });
-
-    const matcher = ContentCommentToken.defaultTarget?.matcher;
-    expect(matcher).toBeDefined();
-    if (matcher) {
-      expect(
-        matcher({
-          context: "content-script",
-          url: "test",
-          issueId: "1",
-          isActive: true,
-        }),
-      ).toBe(true);
-      expect(matcher({ context: "background", version: "1.0" })).toBe(false);
-    }
   });
 
   it("should support nested TokenSpace configuration inheritance", async () => {
     const { TokenSpace } = await import("../../src/api/token-space");
 
-    const company = new TokenSpace<AppUserMeta, AppPlatformMeta>({
+    const company = new TokenSpace<AppAdapterModel>({
       name: "company",
       defaultTarget: {
-        descriptor: { context: "background", version: "1.0" },
+        context: "background",
       },
     });
 
@@ -200,8 +183,7 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
     const backend = product.space("backend");
     const microservices = backend.space("microservices", {
       defaultTarget: {
-        matcher: (identity: AppUserMeta) =>
-          identity.context === "content-script",
+        context: "content-script",
       },
     });
     const auth = microservices.space("auth");
@@ -211,22 +193,6 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
     expect(UserToken.id).toBe(
       "company:product:backend:microservices:auth:profile",
     );
-    expect(UserToken.defaultTarget).toEqual({
-      matcher: expect.any(Function),
-    });
-
-    const matcher = UserToken.defaultTarget?.matcher;
-    expect(matcher).toBeDefined();
-    if (matcher) {
-      expect(
-        matcher({
-          context: "content-script",
-          url: "test",
-          issueId: "1",
-          isActive: true,
-        }),
-      ).toBe(true);
-      expect(matcher({ context: "background", version: "1.0" })).toBe(false);
-    }
+    expect(UserToken.defaultTarget).toEqual({ context: "content-script" });
   });
 });

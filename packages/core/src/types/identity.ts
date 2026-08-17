@@ -1,33 +1,40 @@
 /**
  * A marker for user-defined metadata. It must be an object type.
  */
-export type EndpointMeta = object;
+export type ContextMeta = object;
 
 /**
- * A marker for platform-specific metadata discovered by an IEndpoint.
+ * A marker for connection metadata discovered by an IEndpoint.
  * It must be an object type.
  */
-export type PlatformMeta = object;
+export type ConnectionMeta = object;
+
+/**
+ * A marker for adapter-defined connection acquisition targets. It must be an
+ * object type.
+ */
+export type ConnectionTarget = object;
 
 /**
  * The business identity of an endpoint, as defined by the user.
- * This is the object that matchers and descriptors operate on for service discovery.
+ * This is the peer-declared identity used by `where` predicates after target
+ * selection.
  * e.g., `{ context: 'background', version: '1.0.0' }`
  */
-export type EndpointIdentity<U extends EndpointMeta> = U;
+export type EndpointIdentity<U extends ContextMeta> = U;
 
 /**
  * The physical context of a live connection, containing non-forgeable
  * information provided by the platform and the Nexus kernel. This is used
  * primarily for security policies.
  */
-export interface ConnectionContext<P extends PlatformMeta> {
+export interface ConnectionContext<P extends ConnectionMeta> {
   /**
-   * Platform-specific metadata discovered by the L1 Endpoint/Adapter
+   * Connection metadata discovered by the L1 Endpoint/Adapter
    * from the underlying transport layer.
    * e.g., `{ tabId: 123, origin: 'https://example.com' }`
    */
-  readonly platform: P;
+  readonly connection: P;
 
   /** A unique identifier for this specific connection instance. */
   readonly connectionId: string;

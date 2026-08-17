@@ -100,14 +100,16 @@ export namespace PendingCallManager {
   export type BroadcastStrategy = "all" | "stream";
 
   type SettledResult =
-    | { status: "fulfilled"; value: any; from: string }
-    | { status: "rejected"; reason: any; from: string };
+    | { status: "fulfilled"; value: any }
+    | { status: "rejected"; reason: any };
 
   interface PendingCallBase {
     readonly messageId: MessageId;
     readonly isBroadcast: boolean;
     readonly targetConnectionIds: string[];
     readonly respondedConnectionIds: Set<string>;
+    readonly disconnectedConnectionIds: Set<string>;
+    readonly resultsByConnectionId: Map<string, SettledResult>;
     expectedResponses: number;
     readonly timeoutHandle: ReturnType<typeof setTimeout>;
   }
@@ -124,6 +126,7 @@ export namespace PendingCallManager {
     readonly strategy: "stream";
     readonly iteratorController: AsyncIteratorController<SettledResult>;
     receivedResponses: number;
+    nextResultIndex: number;
   }
 
   type PendingCall = CollectPendingCall | StreamPendingCall;
@@ -148,6 +151,7 @@ export namespace PendingCallManager {
       isTimeout?: boolean,
     ): void;
     onDisconnect(connectionId: string): void;
+    fail(messageId: MessageId, error: globalThis.Error): void;
   }
 
   export const create = (): Runtime => {
@@ -156,7 +160,7 @@ export namespace PendingCallManager {
 
     const rejectSafely = (
       pending: CollectPendingCall,
-      error: InstanceType<typeof Error.Base>,
+      error: globalThis.Error,
     ): void => {
       pending.promise.catch((promiseError) => {
         logger.error(
@@ -170,20 +174,17 @@ export namespace PendingCallManager {
     const createSettledResult = (
       result: any,
       error: SerializedError | null,
-      sourceConnectionId?: string,
     ): SettledResult => {
       if (error) {
         return {
           status: "rejected",
           reason: error,
-          from: sourceConnectionId ?? "unknown",
         };
       }
 
       return {
         status: "fulfilled",
         value: result,
-        from: sourceConnectionId ?? "unknown",
       };
     };
 
@@ -191,19 +192,57 @@ export namespace PendingCallManager {
       pendingCalls.delete(messageId);
     };
 
+    const orderedResults = (pending: PendingCallBase): SettledResult[] =>
+      pending.targetConnectionIds.flatMap((connectionId) => {
+        const result = pending.resultsByConnectionId.get(connectionId);
+        return result ? [result] : [];
+      });
+
+    const flushStreamResults = (pending: StreamPendingCall): void => {
+      while (pending.nextResultIndex < pending.targetConnectionIds.length) {
+        const connectionId =
+          pending.targetConnectionIds[pending.nextResultIndex];
+        const nextResult = pending.resultsByConnectionId.get(connectionId);
+        if (
+          !nextResult &&
+          !pending.disconnectedConnectionIds.has(connectionId)
+        ) {
+          break;
+        }
+        if (nextResult) pending.iteratorController.push(nextResult);
+        pending.nextResultIndex += 1;
+      }
+    };
+
     const handleStreamResponse = (
       pending: StreamPendingCall,
       settledResult: SettledResult | null,
       isTimeout: boolean,
+      sourceConnectionId?: string,
     ): void => {
       if (isTimeout) {
+        for (
+          let index = pending.nextResultIndex;
+          index < pending.targetConnectionIds.length;
+          index += 1
+        ) {
+          const result = pending.resultsByConnectionId.get(
+            pending.targetConnectionIds[index],
+          );
+          if (result) {
+            pending.iteratorController.push(result);
+          }
+        }
         pending.iteratorController.end();
         finalizeCall(pending.messageId);
         return;
       }
 
       if (settledResult) {
-        pending.iteratorController.push(settledResult);
+        if (sourceConnectionId) {
+          pending.resultsByConnectionId.set(sourceConnectionId, settledResult);
+        }
+        flushStreamResults(pending);
       }
 
       pending.receivedResponses += 1;
@@ -218,6 +257,7 @@ export namespace PendingCallManager {
       pending: CollectPendingCall,
       settledResult: SettledResult | null,
       isTimeout: boolean,
+      sourceConnectionId?: string,
     ): void => {
       if (isTimeout) {
         clearTimeout(pending.timeoutHandle);
@@ -225,7 +265,7 @@ export namespace PendingCallManager {
           isBroadcast: pending.isBroadcast,
         });
         if (pending.isBroadcast) {
-          pending.resolve(pending.results);
+          pending.resolve(orderedResults(pending));
         } else {
           rejectSafely(
             pending,
@@ -243,6 +283,9 @@ export namespace PendingCallManager {
 
       if (settledResult) {
         pending.results.push(settledResult);
+        if (sourceConnectionId) {
+          pending.resultsByConnectionId.set(sourceConnectionId, settledResult);
+        }
       }
 
       if (pending.results.length >= pending.expectedResponses) {
@@ -250,7 +293,7 @@ export namespace PendingCallManager {
         logger.debug(
           `Call #${pending.messageId} fulfilled. Got ${pending.results.length} of ${pending.expectedResponses} expected responses.`,
         );
-        pending.resolve(pending.results);
+        pending.resolve(orderedResults(pending));
         finalizeCall(pending.messageId);
       }
     };
@@ -303,16 +346,24 @@ export namespace PendingCallManager {
       );
 
       const settledResult =
-        isTimeout && error === null
-          ? null
-          : createSettledResult(result, error, sourceConnectionId);
+        isTimeout && error === null ? null : createSettledResult(result, error);
 
       switch (pending.strategy) {
         case "stream":
-          handleStreamResponse(pending, settledResult, isTimeout);
+          handleStreamResponse(
+            pending,
+            settledResult,
+            isTimeout,
+            sourceConnectionId,
+          );
           break;
         case "all":
-          handleCollectResponse(pending, settledResult, isTimeout);
+          handleCollectResponse(
+            pending,
+            settledResult,
+            isTimeout,
+            sourceConnectionId,
+          );
           break;
       }
     };
@@ -339,8 +390,11 @@ export namespace PendingCallManager {
           isBroadcast,
           targetConnectionIds: sentConnectionIds,
           respondedConnectionIds: new Set(),
+          disconnectedConnectionIds: new Set(),
+          resultsByConnectionId: new Map(),
           iteratorController: controller,
           receivedResponses: 0,
+          nextResultIndex: 0,
           expectedResponses: sentConnectionIds.length,
           timeoutHandle,
         };
@@ -367,6 +421,8 @@ export namespace PendingCallManager {
         isBroadcast,
         targetConnectionIds: sentConnectionIds,
         respondedConnectionIds: new Set(),
+        disconnectedConnectionIds: new Set(),
+        resultsByConnectionId: new Map(),
         resolve: resolveCall,
         reject: rejectCall,
         promise,
@@ -416,9 +472,11 @@ export namespace PendingCallManager {
           pending.respondedConnectionIds.has(connectionId);
         if (!alreadyResponded) {
           pending.expectedResponses -= 1;
+          pending.disconnectedConnectionIds.add(connectionId);
         }
 
         if (pending.strategy === "stream") {
+          flushStreamResults(pending);
           if (pending.receivedResponses >= pending.expectedResponses) {
             clearTimeout(pending.timeoutHandle);
             logger.debug(
@@ -447,17 +505,31 @@ export namespace PendingCallManager {
               `Broadcast call #${id} failed. All targets disconnected.`,
             );
           } else {
-            pending.resolve(pending.results);
+            pending.resolve(orderedResults(pending));
           }
           pendingCalls.delete(id);
         }
       }
     };
 
+    const fail = (messageId: MessageId, error: globalThis.Error): void => {
+      const pending = pendingCalls.get(messageId);
+      if (!pending) return;
+
+      clearTimeout(pending.timeoutHandle);
+      if (pending.strategy === "all") {
+        rejectSafely(pending, error);
+      } else {
+        pending.iteratorController.end();
+      }
+      finalizeCall(messageId);
+    };
+
     return {
       register,
       handleResponse,
       onDisconnect,
+      fail,
     };
   };
 }

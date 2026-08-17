@@ -1,4 +1,11 @@
-import { Nexus, Token, type IEndpoint, type IPort } from "@nexus-js/core";
+import {
+  Nexus,
+  Token,
+  type AdapterModel,
+  type ConnectionTargetOf,
+  type IEndpoint,
+  type IPort,
+} from "@nexus-js/core";
 import {
   createNexusStore,
   defineNexusStore,
@@ -9,8 +16,15 @@ import {
 type Meta =
   | { context: "client"; id: "react-client" }
   | { context: "host"; hostId: string };
+type ConnectionTarget = Meta;
 
-type PlatformMeta = { from: string };
+type ConnectionMeta = { from: string };
+
+export interface ReactAdapterModel extends AdapterModel {
+  contextMeta: Meta;
+  connectionMeta: ConnectionMeta;
+  connectionTarget: ConnectionTarget;
+}
 
 type PortState = {
   onMessageHandlers: Array<(message: any) => void>;
@@ -43,7 +57,7 @@ type HarnessOptions = {
 };
 
 export type CounterHarness = {
-  client: { nexus: Nexus<Meta, PlatformMeta> };
+  client: { nexus: Nexus<ReactAdapterModel> };
   disconnectHost(hostId: string): void;
   getHostSubscriptions(hostId: string): number;
   teardown(): void;
@@ -59,53 +73,55 @@ class MemoryNetwork {
 
   public connect(
     callerId: string,
-    targetDescriptor: Partial<Meta>,
-  ): Promise<[IPort, PlatformMeta]> {
+    target: ConnectionTargetOf<ReactAdapterModel>,
+  ): Promise<{ port: IPort; connectionMeta: ConnectionMeta }> {
     const caller = this.endpoints.get(callerId);
     if (!caller) {
       return Promise.reject(new Error(`Unknown caller endpoint: ${callerId}`));
     }
 
-    const target = Array.from(this.endpoints.values()).find((candidate) => {
-      if (candidate.id === caller.id) {
-        return false;
-      }
+    const matchedEndpoint = Array.from(this.endpoints.values()).find(
+      (candidate) => {
+        if (candidate.id === caller.id) {
+          return false;
+        }
 
-      return matchesDescriptor(candidate.meta, targetDescriptor);
-    });
+        return matchesTarget(candidate.meta, target);
+      },
+    );
 
-    if (!target) {
+    if (!matchedEndpoint) {
       return Promise.reject(
-        new Error(
-          `No endpoint found for descriptor: ${JSON.stringify(targetDescriptor)}`,
-        ),
+        new Error(`No endpoint found for target: ${JSON.stringify(target)}`),
       );
     }
 
     const [callerPort, targetPort, stateA, stateB] = createLinkedPorts();
     this.connections.add({
       endpointA: caller,
-      endpointB: target,
+      endpointB: matchedEndpoint,
       stateA,
       stateB,
     });
 
     const connectNow = () => {
-      target.endpoint.acceptIncoming(targetPort, {
+      matchedEndpoint.endpoint.acceptIncoming(targetPort, {
         from: toEndpointLabel(caller.meta),
       });
 
-      return [callerPort, { from: toEndpointLabel(target.meta) }] as [
-        IPort,
-        PlatformMeta,
-      ];
+      return {
+        port: callerPort,
+        connectionMeta: { from: toEndpointLabel(matchedEndpoint.meta) },
+      };
     };
 
-    const targetDelayMs = target.endpoint.getConnectDelayMs();
+    const targetDelayMs = matchedEndpoint.endpoint.getConnectDelayMs();
     if (targetDelayMs > 0) {
-      return new Promise<[IPort, PlatformMeta]>((resolve) => {
-        setTimeout(() => resolve(connectNow()), targetDelayMs);
-      });
+      return new Promise<{ port: IPort; connectionMeta: ConnectionMeta }>(
+        (resolve) => {
+          setTimeout(() => resolve(connectNow()), targetDelayMs);
+        },
+      );
     }
 
     return Promise.resolve(connectNow());
@@ -139,9 +155,9 @@ class MemoryNetwork {
   }
 }
 
-class MemoryEndpoint implements IEndpoint<Meta, PlatformMeta> {
+class MemoryEndpoint implements IEndpoint<ReactAdapterModel> {
   private onConnectHandler:
-    | ((port: IPort, platformMeta?: PlatformMeta) => void)
+    | ((port: IPort, connectionMeta: ConnectionMeta) => void)
     | null = null;
 
   public constructor(
@@ -151,27 +167,27 @@ class MemoryEndpoint implements IEndpoint<Meta, PlatformMeta> {
   ) {}
 
   public listen(
-    onConnect: (port: IPort, platformMetadata?: PlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: ConnectionMeta) => void,
   ): void {
     this.onConnectHandler = onConnect;
   }
 
   public connect(
-    targetDescriptor: Partial<Meta>,
-  ): Promise<[IPort, PlatformMeta]> {
-    return this.network.connect(this.endpointId, targetDescriptor);
+    target: ConnectionTargetOf<ReactAdapterModel>,
+  ): Promise<{ port: IPort; connectionMeta: ConnectionMeta }> {
+    return this.network.connect(this.endpointId, target);
   }
 
   public getConnectDelayMs(): number {
     return this.connectDelayMs;
   }
 
-  public acceptIncoming(port: IPort, platformMeta: PlatformMeta): void {
+  public acceptIncoming(port: IPort, connectionMeta: ConnectionMeta): void {
     if (!this.onConnectHandler) {
       throw new Error(`Endpoint ${this.endpointId} is not listening.`);
     }
 
-    this.onConnectHandler(port, platformMeta);
+    this.onConnectHandler(port, connectionMeta);
   }
 }
 
@@ -179,8 +195,8 @@ const toEndpointLabel = (meta: Meta): string => {
   return meta.context === "host" ? meta.hostId : meta.id;
 };
 
-const matchesDescriptor = (meta: Meta, descriptor: Partial<Meta>): boolean => {
-  for (const [key, value] of Object.entries(descriptor)) {
+const matchesTarget = (meta: Meta, target: ConnectionTarget): boolean => {
+  for (const [key, value] of Object.entries(target)) {
     if ((meta as Record<string, unknown>)[key] !== value) {
       return false;
     }
@@ -207,7 +223,7 @@ const createLinkedPorts = (): [IPort, IPort, PortState, PortState] => {
   bState.peer = aState;
 
   const makePort = (state: PortState): IPort => ({
-    postMessage(message) {
+    postMessage(message: unknown) {
       if (state.closed || !state.peer || state.peer.closed) {
         return;
       }
@@ -222,10 +238,10 @@ const createLinkedPorts = (): [IPort, IPort, PortState, PortState] => {
         }
       }, 0);
     },
-    onMessage(handler) {
+    onMessage(handler: (message: unknown) => void) {
       state.onMessageHandlers.push(handler);
     },
-    onDisconnect(handler) {
+    onDisconnect(handler: () => void) {
       state.onDisconnectHandlers.push(handler);
     },
     close() {
@@ -264,7 +280,7 @@ type CounterState = { count: number };
 type CounterActions = { increment(by: number): number };
 
 export const createCounterDefinition = () => {
-  return defineNexusStore<CounterState, CounterActions>({
+  return defineNexusStore<CounterState, CounterActions, ReactAdapterModel>({
     token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
       "state:react:integration:counter",
     ),
@@ -281,8 +297,8 @@ export const createCounterDefinition = () => {
 
 const createDefinitionWithInitialState = (
   initialCount: number,
-): NexusStoreDefinition<CounterState, CounterActions> => {
-  return defineNexusStore<CounterState, CounterActions>({
+): NexusStoreDefinition<CounterState, CounterActions, ReactAdapterModel> => {
+  return defineNexusStore<CounterState, CounterActions, ReactAdapterModel>({
     token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
       "state:react:integration:counter",
     ),
@@ -304,10 +320,10 @@ export const createReactNexusHarness = async (
   const subscriptionCounts = new Map<string, Set<string>>();
   const hostNexusList: Array<{
     hostId: string;
-    nexus: Nexus<Meta, PlatformMeta>;
+    nexus: Nexus<ReactAdapterModel>;
   }> = [];
 
-  const clientNexus = new Nexus<Meta, PlatformMeta>();
+  const clientNexus = new Nexus<ReactAdapterModel>();
   const clientEndpoint = new MemoryEndpoint(network, "client", 0);
   network.register(
     "client",
@@ -323,7 +339,7 @@ export const createReactNexusHarness = async (
   });
 
   for (const host of options.hosts) {
-    const hostNexus = new Nexus<Meta, PlatformMeta>();
+    const hostNexus = new Nexus<ReactAdapterModel>();
     const hostEndpoint = new MemoryEndpoint(
       network,
       `host:${host.id}`,
@@ -361,7 +377,7 @@ export const createReactNexusHarness = async (
       },
       providers: [
         {
-          token: provider.token,
+          token: provider.token as Token<object, ReactAdapterModel>,
           service: wrappedImplementation,
         },
       ],

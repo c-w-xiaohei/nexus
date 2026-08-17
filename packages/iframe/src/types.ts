@@ -1,49 +1,77 @@
 import type {
+  AdapterModel,
   IEndpoint,
   NexusConfig,
   NexusInstance,
-  Target,
 } from "@nexus-js/core";
 import type { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 export type IframeParentMeta = {
-  context: "iframe-parent";
-  appId: string;
-  instance?: string;
-  origin: string;
+  readonly context: "iframe-parent";
+  readonly appId: string;
+  readonly instance?: string;
+  readonly origin: string;
 };
 
 export type IframeChildMeta = {
-  context: "iframe-child";
-  appId: string;
-  instance?: string;
-  origin: string;
-  frameId: string;
+  readonly context: "iframe-child";
+  readonly appId: string;
+  readonly instance?: string;
+  readonly origin: string;
+  readonly frameId: string;
 };
 
-export type IframeEndpointMeta = IframeParentMeta | IframeChildMeta;
+export type IframeContextMeta = IframeParentMeta | IframeChildMeta;
 
-export type IframePlatformMeta = {
-  transport: "iframe-postmessage";
-  appId: string;
-  channel: string;
-  frameId?: string;
-  localRole: "iframe-parent" | "iframe-child";
-  remoteRole: "iframe-parent" | "iframe-child";
-  origin: string;
-  expectedOrigin: string;
-  /** True only when the MessageEvent source is the exact expected Window. */
-  sourceMatched: boolean;
-  /** True only when the MessageEvent origin satisfies the configured origin policy. */
-  originMatched: boolean;
-  /** True only when the optional channel nonce matches the configured peer nonce. */
-  nonceMatched: boolean;
-  /** Trusted is true only after source, origin, app id, channel, and nonce checks pass. */
-  trusted: boolean;
+/** Exact target for connecting an iframe child to its parent. */
+export type IframeParentConnectionTarget = {
+  readonly context: "iframe-parent";
+  readonly appId: string;
+  readonly instance?: string;
+  readonly origin: string;
 };
+
+/** Target for a configured parent frame. `frameId` identifies one frame. */
+export type IframeChildConnectionTarget = {
+  readonly context: "iframe-child";
+  readonly frameId: string;
+  readonly appId?: string;
+  readonly instance?: string;
+  readonly origin?: string;
+};
+
+export type IframeConnectionTarget =
+  | IframeParentConnectionTarget
+  | IframeChildConnectionTarget;
+
+export type IframeConnectionFacts = {
+  readonly sourceMatched: boolean;
+  readonly originMatched: boolean;
+  readonly nonceMatched: boolean;
+  readonly trusted: boolean;
+};
+
+export type IframeConnectionMeta = {
+  readonly transport: "iframe-postmessage";
+  readonly appId: string;
+  readonly channel: string;
+  readonly frameId?: string;
+  readonly localRole: "iframe-parent" | "iframe-child";
+  readonly remoteRole: "iframe-parent" | "iframe-child";
+  readonly origin: string;
+  readonly expectedOrigin: string;
+  /** Own, immutable validation facts for this connection session. */
+  readonly facts: IframeConnectionFacts;
+};
+
+export interface IframeAdapterModel extends AdapterModel {
+  contextMeta: IframeContextMeta;
+  connectionMeta: IframeConnectionMeta;
+  connectionTarget: IframeConnectionTarget;
+}
 
 export type EndpointCapabilities = NonNullable<
-  IEndpoint<IframeEndpointMeta, IframePlatformMeta>["capabilities"]
+  IEndpoint<IframeAdapterModel>["capabilities"]
 >;
 
 export type WindowLike = Window & {
@@ -98,10 +126,7 @@ export type IframeChildEndpointOptions = {
 };
 
 export type IframeParentOptions = IframeParentEndpointOptions &
-  Omit<
-    NexusConfig<IframeEndpointMeta, IframePlatformMeta>,
-    "endpoint" | "matchers" | "descriptors"
-  > & { configure?: true };
+  Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & { configure?: true };
 
 export type IframeParentConfigOptions = Omit<
   IframeParentOptions,
@@ -109,23 +134,14 @@ export type IframeParentConfigOptions = Omit<
 > & { configure: false };
 
 export type IframeChildOptions = IframeChildEndpointOptions &
-  Omit<
-    NexusConfig<IframeEndpointMeta, IframePlatformMeta>,
-    "endpoint" | "matchers" | "descriptors"
-  > & {
+  Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & {
     configure?: true;
-    connectTo?: readonly Target<IframeEndpointMeta, string, string>[];
+    defaultTarget?: IframeParentConnectionTarget;
   };
 
 export type IframeChildConfigOptions = Omit<IframeChildOptions, "configure"> & {
   configure: false;
 };
 
-export type IframeParentResult = NexusConfig<
-  IframeEndpointMeta,
-  IframePlatformMeta
->;
-export type IframeParentConfigured = NexusInstance<
-  IframeEndpointMeta,
-  IframePlatformMeta
->;
+export type IframeParentResult = NexusConfig<IframeAdapterModel>;
+export type IframeParentConfigured = NexusInstance<IframeAdapterModel>;

@@ -38,7 +38,10 @@ describe("node-ipc auth protocol", () => {
     const endpoint = new EndpointWithAuth(() => harness!.address, "secret");
 
     await expect(
-      endpoint.connect({ context: "node-ipc-daemon", appId: "test-daemon" }),
+      endpoint.connect({
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+      }),
     ).rejects.toMatchObject({ code: "E_IPC_PROTOCOL_ERROR" });
   });
 
@@ -58,16 +61,24 @@ describe("node-ipc auth protocol", () => {
       "secret",
     );
 
-    const [port, meta] = await endpoint.connect({
+    const { port, connectionMeta: meta } = await endpoint.connect({
       context: "node-ipc-daemon",
       appId: "test-daemon",
     });
 
-    expect(meta.authenticated).toBe(true);
-    expect(meta.authMethod).toBe("shared-secret");
-    expect(meta).not.toHaveProperty("pid");
-    expect(meta).not.toHaveProperty("uid");
-    expect(meta).not.toHaveProperty("gid");
+    expect(meta).toEqual({
+      selected: {
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+        instance: "default",
+      },
+      resolved: harness.address,
+      observed: {
+        socket: harness.address,
+        authenticated: true,
+        authMethod: "shared-secret",
+      },
+    });
     port.close();
   });
 
@@ -87,14 +98,26 @@ describe("node-ipc auth protocol", () => {
 
     await vi.waitFor(() => expect(onConnect).toHaveBeenCalledOnce());
     expect(onConnect.mock.calls[0][1]).toMatchObject({
-      authenticated: true,
-      authMethod: "shared-secret",
+      observed: {
+        socket: harness.address,
+        authenticated: true,
+        authMethod: "shared-secret",
+      },
     });
-    expect(onConnect.mock.calls[0][1]).not.toHaveProperty("pid");
-    expect(onConnect.mock.calls[0][1]).not.toHaveProperty("uid");
-    expect(onConnect.mock.calls[0][1]).not.toHaveProperty("gid");
+    expect(onConnect.mock.calls[0][1]).not.toHaveProperty("selected");
+    expect(onConnect.mock.calls[0][1]).not.toHaveProperty("resolved");
     socket.destroy();
     endpoint.close();
+  });
+
+  it("returns a close handle from listen for direct endpoint callers", async () => {
+    harness = await createHarness();
+    const endpoint = new UnixSocketServerEndpoint(harness.address);
+
+    const handle = await endpoint.listen(vi.fn());
+
+    expect(handle.close).toBeTypeOf("function");
+    handle.close();
   });
 
   it("fails authentication when a server accepts but sends no auth response", async () => {
@@ -116,7 +139,10 @@ describe("node-ipc auth protocol", () => {
     });
 
     await expect(
-      endpoint.connect({ context: "node-ipc-daemon", appId: "test-daemon" }),
+      endpoint.connect({
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+      }),
     ).rejects.toMatchObject({ code: "E_IPC_AUTH_FAILED" });
   });
 
@@ -158,7 +184,10 @@ describe("node-ipc auth protocol", () => {
     Object.defineProperty(endpoint, "authToken", { value: "" });
 
     await expect(
-      endpoint.connect({ context: "node-ipc-daemon", appId: "test-daemon" }),
+      endpoint.connect({
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+      }),
     ).rejects.toMatchObject({ code: "E_IPC_AUTH_FAILED" });
   });
 
@@ -187,7 +216,10 @@ describe("node-ipc auth protocol", () => {
     );
 
     await expect(
-      endpoint.connect({ context: "node-ipc-daemon", appId: "test-daemon" }),
+      endpoint.connect({
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+      }),
     ).rejects.toMatchObject({ code: "E_IPC_PROTOCOL_ERROR" });
 
     expect(clientSocket?.destroyed).toBe(true);
@@ -237,7 +269,10 @@ describe("node-ipc auth protocol", () => {
     );
 
     await expect(
-      endpoint.connect({ context: "node-ipc-daemon", appId: "test-daemon" }),
+      endpoint.connect({
+        context: "node-ipc-daemon",
+        appId: "test-daemon",
+      }),
     ).rejects.toMatchObject({ code: "E_IPC_PROTOCOL_ERROR" });
     expect(clientSocket?.destroyed).toBe(true);
     createConnection.mockRestore();

@@ -90,8 +90,7 @@ describe("state protocol schemas", () => {
     const protocol = await import("./protocol");
     const valid = protocol.ConnectNexusStoreOptionsSchema.safeParse({
       target: {
-        descriptor: { context: "background" },
-        matcher: "active",
+        context: "background",
       },
       timeout: 1000,
     });
@@ -146,7 +145,7 @@ describe("defineNexusStore", () => {
         },
       }),
       defaultTarget: {
-        descriptor: { context: "background" },
+        context: "background",
       },
       sync: {
         mode: "snapshot",
@@ -155,21 +154,13 @@ describe("defineNexusStore", () => {
 
     expect(definition.token.id).toBe("state:counter");
     expect(definition.token).not.toBe(token);
-    expect(definition.token.defaultTarget).toEqual({
-      descriptor: { context: "background" },
-    });
+    expect(definition.token.defaultTarget).toEqual({ context: "background" });
     expect("defaultTarget" in definition).toBe(false);
   });
 
   it("merges token and authoring defaultTarget with authoring precedence", () => {
-    const baseMatcher = (identity: { context: string }) =>
-      identity.context === "content";
-    const authorMatcher = (identity: { context: string }) =>
-      identity.context === "background";
-
     const token = new Token<unknown>("state:counter:merge", {
-      descriptor: { context: "content" },
-      matcher: baseMatcher,
+      defaultTarget: { context: "content" } as never,
     });
 
     const definition = state.defineNexusStore({
@@ -179,15 +170,11 @@ describe("defineNexusStore", () => {
         increment() {},
       }),
       defaultTarget: {
-        descriptor: { context: "background" },
-        matcher: authorMatcher,
+        context: "background",
       },
     });
 
-    expect(definition.token.defaultTarget).toEqual({
-      descriptor: { context: "background" },
-      matcher: authorMatcher,
-    });
+    expect(definition.token.defaultTarget).toEqual({ context: "background" });
   });
 
   it("keeps original token when defaultTarget is omitted", () => {
@@ -301,10 +288,7 @@ describe("state public types", () => {
     expectTypeOf<
       ConnectNexusStoreOptions<{ context: string }, "active", "background">
     >().toMatchTypeOf<{
-      target?: {
-        descriptor?: "background" | { context?: string };
-        matcher?: "active" | ((identity: { context: string }) => boolean);
-      };
+      target?: { context: string };
       timeout?: number;
     }>();
   });

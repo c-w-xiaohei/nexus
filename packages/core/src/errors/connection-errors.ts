@@ -1,9 +1,12 @@
-import { NexusError } from "./nexus-error.js";
+import { NexusError, type NexusErrorOptions } from "./nexus-error.js";
+import type { SerializedError } from "../types/message.js";
 
 export type NexusConnectionErrorCode =
   | "E_CONN_CLOSED"
   | "E_HANDSHAKE_FAILED"
-  | "E_HANDSHAKE_REJECTED";
+  | "E_HANDSHAKE_REJECTED"
+  | "E_CONNECTION_CONSTRAINT_FAILED"
+  | "E_PROTOCOL_INCOMPATIBLE";
 
 export type NexusHandshakeErrorCode =
   | "E_HANDSHAKE_REJECTED"
@@ -18,8 +21,27 @@ export class NexusConnectionError extends NexusError {
     message: string,
     code: NexusConnectionErrorCode,
     context?: Record<string, unknown>,
+    cause?: SerializedError,
   ) {
-    super(message, code, { context });
+    super(message, code, { context, cause });
+  }
+}
+
+/** A target was acquired but its additional connection constraint failed. */
+export class NexusConnectionConstraintFailedError extends NexusConnectionError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "E_CONNECTION_CONSTRAINT_FAILED", context);
+  }
+}
+
+/** The remote peer does not implement a capability required by this protocol. */
+export class NexusProtocolIncompatibleError extends NexusConnectionError {
+  constructor(
+    message: string,
+    context?: Record<string, unknown>,
+    cause?: SerializedError,
+  ) {
+    super(message, "E_PROTOCOL_INCOMPATIBLE", context, cause);
   }
 }
 
@@ -33,7 +55,9 @@ export class NexusHandshakeError extends NexusConnectionError {
     message: string,
     code: NexusHandshakeErrorCode = "E_HANDSHAKE_REJECTED",
     context?: Record<string, unknown>,
+    options?: NexusErrorOptions,
   ) {
-    super(message, code, context);
+    super(message, code, context, options?.cause);
+    if (options?.stack) this.stack = options.stack;
   }
 }

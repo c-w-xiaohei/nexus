@@ -1,822 +1,497 @@
 import {
   NexusUsageError,
   Token,
+  type AdapterModel,
   type Asyncified,
-  type NexusConfig,
   type NexusInstance,
 } from "@nexus-js/core";
-import {
-  connectNexusStore,
-  createNexusStore,
-  defineNexusStore,
-} from "@nexus-js/core/state";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createMockNexus, NexusMockError } from "./index";
+import { createMockNexus } from "./index.js";
 
 type AppMeta = {
-  context: "background" | "content" | "popup";
-  active?: boolean;
-  instance?: string;
+  readonly context: "background" | "content" | "popup";
+  readonly active?: boolean;
 };
-
-type PlatformMeta = {
-  origin?: string;
-};
-
+type ConnectionMeta = { readonly origin: string };
+interface TestAdapterModel extends AdapterModel {
+  contextMeta: AppMeta;
+  connectionMeta: ConnectionMeta;
+  connectionTarget: Partial<AppMeta>;
+}
 interface ExampleService {
-  greet(name: string): string;
-  greetAsync(name: string): Promise<string>;
-  explode(): string;
-  version: number;
-  delayedVersion: Promise<number>;
-  nested: {
-    label: string;
-    getLabel(): string;
-  };
+  readonly greet: (name: string) => string;
+  readonly explode: () => string;
+  readonly version: number;
 }
 
-const ExampleToken = new Token<ExampleService>("testing:example");
-const OtherToken = new Token<ExampleService>("testing:other");
-const MissingToken = new Token<ExampleService>("testing:missing");
-
-const createOptions = {
-  target: { descriptor: { context: "background" as const } },
-};
-
-const createExampleService = () =>
+const ExampleToken = new Token<ExampleService, TestAdapterModel>(
+  "testing:example",
+  { defaultTarget: { context: "background" } },
+);
+const MissingToken = new Token<ExampleService, TestAdapterModel>(
+  "testing:missing",
+);
+const service = (label: string) =>
   ({
-    greet: vi.fn((name: string) => `hello ${name}`),
-    greetAsync: vi.fn(async (name: string) => `async ${name}`),
-    explode: vi.fn(() => {
-      throw new Error("boom");
-    }),
-    version: 3,
-    delayedVersion: Promise.resolve(4),
-    nested: {
-      label: "raw-nested",
-      getLabel: () => "nested-label",
+    greet: vi.fn((name: string) => `${label}:${name}`),
+    explode: () => {
+      throw new Error(label);
     },
+    version: 1,
   }) satisfies ExampleService;
-
-describe("NexusMockError", () => {
-  it("preserves code, context, name, and cause", () => {
-    const cause = new Error("root cause");
-    const error = new NexusMockError(
-      "missing service",
-      "E_MOCK_SERVICE_NOT_FOUND",
-      { tokenId: "testing:missing" },
-      { cause },
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error.name).toBe("NexusMockError");
-    expect(error.message).toBe("missing service");
-    expect(error.code).toBe("E_MOCK_SERVICE_NOT_FOUND");
-    expect(error.context).toEqual({ tokenId: "testing:missing" });
-    expect(error.cause).toBe(cause);
-  });
+const provider = (context: AppMeta["context"], origin: string = context) => ({
+  target: { context },
+  contextMeta: { context },
+  connectionMeta: { origin },
 });
 
 describe("createMockNexus", () => {
-  it("returns an async proxy for a registered service", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    mock.service(ExampleToken, service);
-
-    const proxy = await mock.nexus.create(ExampleToken, createOptions);
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-    expect(service.greet).toHaveBeenCalledWith("Ada");
-    await expect(proxy.greetAsync("Ada")).resolves.toBe("async Ada");
-    expect(service.greetAsync).toHaveBeenCalledWith("Ada");
-    await expect(proxy.version).resolves.toBe(3);
-    await expect(proxy.delayedVersion).resolves.toBe(4);
-  });
-
-  it("keeps nested object values raw inside the resolved property promise", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    mock.service(ExampleToken, service);
-
-    const proxy = await mock.nexus.create(ExampleToken, createOptions);
-    const nested = await proxy.nested;
-
-    expect(nested).toBe(service.nested);
-    expect(nested.label).toBe("raw-nested");
-    expect(nested.getLabel()).toBe("nested-label");
-  });
-
-  it("converts service method throws into rejected promises", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    mock.service(ExampleToken, service);
-
-    const proxy = await mock.nexus.create(ExampleToken, createOptions);
-
-    await expect(proxy.explode()).rejects.toThrow("boom");
-    expect(service.explode).toHaveBeenCalledOnce();
-  });
-
-  it("creates proxies that are not thenable and tolerate reflection", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    const proxy = await mock.nexus.create(ExampleToken, createOptions);
-
-    expect((proxy as unknown as { then?: unknown }).then).toBeUndefined();
-    expect(typeof (proxy as unknown as { toString: unknown }).toString).toBe(
-      "function",
+  it("accepts unscoped mock.service, configure providers, and provide providers", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("manual"));
+    await expect(
+      (await mock.nexus.create(ExampleToken)).greet("Ada"),
+    ).resolves.toBe("manual:Ada");
+    const configured = createMockNexus<TestAdapterModel>();
+    configured.nexus.configure({
+      providers: [{ token: ExampleToken, service: service("configured") }],
+    });
+    await expect(
+      (await configured.nexus.create(ExampleToken)).greet("Ada"),
+    ).resolves.toBe("configured:Ada");
+    const provided = createMockNexus<TestAdapterModel>();
+    expect(provided.nexus.provide(ExampleToken, service("provided"))).toBe(
+      provided.nexus,
     );
-    expect(() => String(proxy)).not.toThrow();
-    expect(() => Reflect.ownKeys(proxy)).not.toThrow();
+    await expect(
+      (await provided.nexus.create(ExampleToken)).greet("Ada"),
+    ).resolves.toBe("provided:Ada");
   });
 
-  it("rejects create with E_MOCK_SERVICE_NOT_FOUND for an unregistered token", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
+  it("supports safe configure, provide, and ready", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    expect(mock.nexus.safeConfigure({}).isOk()).toBe(true);
+    expect(mock.nexus.safeProvide(ExampleToken, service("safe")).isOk()).toBe(
+      true,
+    );
+    expect((await mock.nexus.safeReady()).isOk()).toBe(true);
+    await expect(mock.nexus.ready()).resolves.toBeUndefined();
+  });
+
+  it("creates an async proxy from the first stable matching provider", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("first"), provider("background"));
+    mock.service(
+      ExampleToken,
+      service("second"),
+      provider("background", "two"),
+    );
+
+    const proxy = await mock.nexus.create(ExampleToken, {
+      target: { context: "background" },
+    });
+
+    await expect(proxy.greet("Ada")).resolves.toBe("first:Ada");
+    expect(mock.calls.create(ExampleToken)).toHaveLength(1);
+  });
+
+  it("resolves create targets explicitly, then from Token, then endpoint defaultTarget", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("background"), provider("background"));
+    mock.service(ExampleToken, service("popup"), provider("popup"));
+    mock.nexus.configure({ endpoint: { defaultTarget: { context: "popup" } } });
 
     await expect(
-      mock.nexus.create(MissingToken, createOptions),
-    ).rejects.toMatchObject({
-      name: "NexusMockError",
-      code: "E_MOCK_SERVICE_NOT_FOUND",
-      context: { tokenId: "testing:missing" },
-    });
-  });
-
-  it("returns ok from safeCreate for a registered service", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    const result = await mock.nexus.safeCreate(ExampleToken, createOptions);
-
-    expect(result.isOk()).toBe(true);
-    if (result.isOk()) {
-      await expect(result.value.greet("Grace")).resolves.toBe("hello Grace");
-    }
-  });
-
-  it("returns err from safeCreate for an unregistered token", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    const result = await mock.nexus.safeCreate(MissingToken, createOptions);
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusMockError);
-      expect(result.error).toMatchObject({
-        code: "E_MOCK_SERVICE_NOT_FOUND",
-        context: { tokenId: "testing:missing" },
-      });
-    }
-  });
-
-  it("returns err from safeCreate for malformed runtime input", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    const invalidToken = await mock.nexus.safeCreate(
-      { id: "not-a-token" } as never,
-      createOptions,
+      (await mock.nexus.create(ExampleToken)).greet("Ada"),
+    ).resolves.toBe("background:Ada");
+    await expect(
+      (
+        await mock.nexus.create(ExampleToken, { target: { context: "popup" } })
+      ).greet("Ada"),
+    ).resolves.toBe("popup:Ada");
+    const noDefault = new Token<ExampleService, TestAdapterModel>(
+      "testing:configured",
     );
-    const arrayTarget = await mock.nexus.safeCreate(ExampleToken, {
-      target: [] as never,
-    });
-
-    for (const result of [invalidToken, arrayTarget]) {
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(NexusUsageError);
-      }
-    }
+    mock.service(noDefault, service("configured"), provider("popup"));
+    await expect(
+      (await mock.nexus.create(noDefault)).greet("Ada"),
+    ).resolves.toBe("configured:Ada");
   });
 
-  it("rejects invalid create expects before recording the call", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
+  it("selects immediately with exact two-argument where metadata", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const where = vi.fn(
+      (contextMeta: AppMeta, connectionMeta: ConnectionMeta) =>
+        contextMeta.context === "popup" && connectionMeta.origin === "tab-2",
+    );
+    mock.service(ExampleToken, service("background"), provider("background"));
+    mock.service(ExampleToken, service("popup"), provider("popup", "tab-2"));
 
-    const result = await mock.nexus.safeCreate(ExampleToken, {
-      ...createOptions,
-      expects: "all" as never,
+    const proxy = await mock.nexus.select(ExampleToken, { where });
+
+    await expect(proxy.greet("Ada")).resolves.toBe("popup:Ada");
+    expect(where).toHaveBeenCalledWith(
+      { context: "background" },
+      { origin: "background" },
+    );
+    expect(where).toHaveBeenCalledWith(
+      { context: "popup" },
+      { origin: "tab-2" },
+    );
+  });
+
+  it("returns no-match and ambiguity errors for immediate select", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    await expect(mock.nexus.select(MissingToken)).rejects.toMatchObject({
+      code: "E_SERVICE_NO_MATCH",
     });
-
+    mock.service(ExampleToken, service("one"), provider("background"));
+    mock.service(ExampleToken, service("two"), provider("popup"));
+    const result = await mock.nexus.safeSelect(ExampleToken);
     expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusUsageError);
-    }
-    expect(mock.calls.create()).toHaveLength(0);
+    if (result.isErr())
+      expect(result.error).toMatchObject({ code: "E_SERVICE_AMBIGUOUS" });
   });
 
-  it("rejects invalid create timeout before recording the call", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
+  it("uses production codes for missing create targets and select wait timeout", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const unconfigured = new Token<ExampleService, TestAdapterModel>(
+      "testing:unconfigured",
+    );
+    const targetResult = await mock.nexus.safeCreate(unconfigured);
+    expect(targetResult).toMatchObject({
+      error: { code: "E_TARGET_REQUIRED" },
+    });
 
+    vi.useFakeTimers();
+    try {
+      const pending = mock.nexus.safeSelect(MissingToken, {
+        wait: { timeout: 10 },
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(pending).resolves.toMatchObject({
+        error: { code: "E_SERVICE_WAIT_TIMEOUT" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers select rescan so same-turn provider registrations are ambiguous", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const pending = mock.nexus.safeSelect(ExampleToken, {
+      wait: { timeout: 1_000 },
+    });
+    mock.service(ExampleToken, service("one"), provider("background"));
+    mock.service(ExampleToken, service("two"), provider("popup"));
+
+    const result = await pending;
+
+    expect(result).toMatchObject({ error: { code: "E_SERVICE_AMBIGUOUS" } });
+  });
+
+  it("waits race-safely for a matching later provider and ignores unrelated registrations", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const pending = mock.nexus.select(ExampleToken, {
+      where: (contextMeta: AppMeta) => contextMeta.context === "popup",
+      wait: { timeout: 1_000 },
+    });
+    mock.service(ExampleToken, service("background"), provider("background"));
+    mock.service(ExampleToken, service("popup"), provider("popup"));
+
+    await expect((await pending).greet("Ada")).resolves.toBe("popup:Ada");
+  });
+
+  it("cleans waiting selection on abort", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const controller = new globalThis.AbortController();
+    const pending = mock.nexus.safeSelect(ExampleToken, {
+      wait: { signal: controller.signal },
+    });
+    controller.abort();
+    const result = await pending;
+    expect(result.isErr()).toBe(true);
+    if (result.isErr())
+      expect(result.error).toMatchObject({
+        code: "E_ABORTED",
+      });
+  });
+
+  it("does not let failCreate affect selection", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const failure = new Error("blocked");
+    mock.service(ExampleToken, service("available"), provider("background"));
+    mock.failCreate(ExampleToken, failure);
+    await expect(mock.nexus.create(ExampleToken)).rejects.toBe(failure);
+    await expect(
+      (await mock.nexus.select(ExampleToken)).greet("Ada"),
+    ).resolves.toBe("available:Ada");
+  });
+
+  it("accepts explicitly undefined optional acquisition options", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("available"), provider("background"));
     await expect(
       mock.nexus.create(ExampleToken, {
-        ...createOptions,
-        timeout: "100" as never,
+        timeout: undefined,
+        callTimeout: undefined,
+        signal: undefined,
       }),
-    ).rejects.toBeInstanceOf(NexusUsageError);
-    expect(mock.calls.create()).toHaveLength(0);
-  });
-
-  it("makes create and safeCreate expose the same injected failure", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    const injected = new Error("offline");
-    mock.service(ExampleToken, service);
-    mock.failCreate(ExampleToken, injected);
-
-    await expect(mock.nexus.create(ExampleToken, createOptions)).rejects.toBe(
-      injected,
-    );
-    const result = await mock.nexus.safeCreate(ExampleToken, createOptions);
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBe(injected);
-    }
-    expect(service.greet).not.toHaveBeenCalled();
-  });
-
-  it("records create calls and filters them by token", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    const options = {
-      target: { descriptor: { context: "background" as const } },
-      timeout: 123,
-    };
-    mock.service(ExampleToken, service);
-
-    await mock.nexus.create(ExampleToken, options);
-
-    expect(mock.calls.create()).toHaveLength(1);
-    expect(mock.calls.create(ExampleToken)).toHaveLength(1);
-    expect(mock.calls.create(OtherToken)).toHaveLength(0);
-    expect(mock.calls.create(ExampleToken)[0]).toMatchObject({
-      tokenId: "testing:example",
-      token: ExampleToken,
-      options,
-    });
-  });
-
-  it("records failed create attempts", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
+    ).resolves.toBeDefined();
     await expect(
-      mock.nexus.create(MissingToken, createOptions),
-    ).rejects.toThrow();
-
-    expect(mock.calls.create()).toHaveLength(1);
-    expect(mock.calls.create(MissingToken)[0]).toMatchObject({
-      tokenId: "testing:missing",
-      token: MissingToken,
-      options: createOptions,
-    });
-  });
-
-  it("returns create call copies", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    await mock.nexus.create(ExampleToken, createOptions);
-
-    const calls = mock.calls.create() as unknown as unknown[];
-    calls.push({ tokenId: "mutated" });
-
-    expect(mock.calls.create()).toHaveLength(1);
-    expect(mock.calls.create()[0]?.tokenId).toBe("testing:example");
-  });
-
-  it("accepts an empty target when the token has a default target", async () => {
-    const tokenWithDefault = new Token<ExampleService>(
-      "testing:default-target",
-      { defaultTarget: { descriptor: { context: "background" } } },
-    );
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(tokenWithDefault, createExampleService());
-
-    const proxy = await mock.nexus.create(tokenWithDefault, { target: {} });
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("accepts omitted create options when the token has a defaultTarget", async () => {
-    const tokenWithDefaultTarget = new Token<ExampleService>(
-      "testing:default-target-omitted-options",
-      {
-        defaultTarget: { descriptor: { context: "background" } },
-      },
-    );
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(tokenWithDefaultTarget, createExampleService());
-
-    const proxy = await mock.nexus.create(tokenWithDefaultTarget);
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("accepts omitted create options when endpoint connectTo has one target", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [{ descriptor: { context: "background" } }],
-      },
-    });
-
-    const proxy = await mock.nexus.create(ExampleToken);
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("accepts an empty target when endpoint connectTo has one target", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [{ descriptor: { context: "background" } }],
-      },
-    });
-
-    const proxy = await mock.nexus.create(ExampleToken, { target: {} });
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("uses an explicit target before ambiguous connectTo fallback", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [
-          { descriptor: { context: "background" } },
-          { descriptor: { context: "popup" } },
-        ],
-      },
-    });
-
-    const proxy = await mock.nexus.create(ExampleToken, createOptions);
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("rejects an empty target when connectTo fallback is ambiguous", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [
-          { descriptor: { context: "background" } },
-          { descriptor: { context: "popup" } },
-        ],
-      },
-    });
-
-    await expect(
-      mock.nexus.create(ExampleToken, { target: {} }),
-    ).rejects.toMatchObject({ code: "E_TARGET_UNEXPECTED_COUNT" });
-  });
-
-  it("rejects an empty target without a default target or connectTo fallback", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    await expect(
-      mock.nexus.create(ExampleToken, { target: {} }),
-    ).rejects.toMatchObject({ code: "E_TARGET_NO_MATCH" });
-  });
-
-  it("rejects omitted create options without a default target or connectTo fallback", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-
-    await expect(mock.nexus.create(ExampleToken)).rejects.toMatchObject({
-      code: "E_TARGET_NO_MATCH",
-    });
-  });
-
-  it("records configure, registers services, and does not execute policy", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    const canConnect = vi.fn(() => true);
-    const canCall = vi.fn(() => true);
-    const config = {
-      providers: [{ token: ExampleToken, service }],
-      matchers: {
-        active: (identity: AppMeta) => identity.active === true,
-      },
-      descriptors: {
-        background: { context: "background" },
-      },
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [{ descriptor: "background" }],
-      },
-      policy: { canConnect, canCall },
-    } satisfies NexusConfig<AppMeta, PlatformMeta>;
-
-    const configured = mock.nexus.configure(config);
-    const proxy = await configured.create(ExampleToken, {
-      target: { descriptor: "background" },
-    });
-
-    expect(configured).toBe(mock.nexus);
-    expect(mock.calls.configure()).toEqual([{ config }]);
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-    expect(canConnect).not.toHaveBeenCalled();
-    expect(canCall).not.toHaveBeenCalled();
-  });
-
-  it("preserves endpoint configuration across incremental configure calls", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [{ descriptor: { context: "background" } }],
-      },
-    });
-    mock.nexus.configure({
-      providers: [{ token: ExampleToken, service: createExampleService() }],
-    });
-
-    const proxy = await mock.nexus.create(ExampleToken, { target: {} });
-
-    await expect(proxy.greet("Ada")).resolves.toBe("hello Ada");
-  });
-
-  it("rejects unknown named descriptors and matchers during create", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const configured = mock.nexus.configure({
-      providers: [{ token: ExampleToken, service: createExampleService() }],
-      descriptors: { background: { context: "background" } },
-      matchers: { active: (identity) => identity.active === true },
-    });
-
-    await expect(
-      configured.create(ExampleToken, {
-        target: { descriptor: "missing" as never },
+      mock.nexus.select(ExampleToken, {
+        callTimeout: undefined,
+        wait: { timeout: undefined, signal: undefined },
       }),
-    ).rejects.toBeInstanceOf(NexusUsageError);
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects pre-aborted create and multicast signals before binding a provider", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("available"), provider("background"));
+    const controller = new globalThis.AbortController();
+    controller.abort();
     await expect(
-      configured.create(ExampleToken, {
-        target: { matcher: "missing" as never },
-      }),
-    ).rejects.toBeInstanceOf(NexusUsageError);
-  });
-
-  it("rejects unknown named descriptors and matchers in fallback targets", async () => {
-    expect(
-      () =>
-        new Token<ExampleService>("testing:missing-default-target", {
-          defaultTarget: { descriptor: "missing" as never },
-        }),
-    ).toThrow(NexusUsageError);
-
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.nexus.configure({
-      endpoint: {
-        meta: { context: "content" },
-        connectTo: [{ matcher: "missing" as never }],
-      },
-    });
-
-    await expect(
-      mock.nexus.create(ExampleToken, { target: {} }),
-    ).rejects.toBeInstanceOf(NexusUsageError);
-  });
-
-  it("returns ok from safeConfigure with the same nexus", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const service = createExampleService();
-    const config = {
-      providers: [{ token: ExampleToken, service }],
-    } satisfies NexusConfig<AppMeta, PlatformMeta>;
-
-    const result = mock.nexus.safeConfigure(config);
-
-    expect(result.isOk()).toBe(true);
-    if (result.isOk()) {
-      expect(result.value).toBe(mock.nexus);
-    }
-    expect(mock.calls.configure()).toEqual([{ config }]);
-  });
-
-  it("returns err from safeConfigure for malformed runtime input", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    const result = mock.nexus.safeConfigure(null as never);
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusUsageError);
-    }
-    expect(mock.calls.configure()).toHaveLength(0);
-  });
-
-  it("throws from configure for malformed runtime input", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    expect(() => mock.nexus.configure(null as never)).toThrow(NexusUsageError);
-    expect(mock.calls.configure()).toHaveLength(0);
-  });
-
-  it("returns configure call copies", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.nexus.configure({});
-
-    const calls = mock.calls.configure() as unknown as unknown[];
-    calls.push({ config: { mutated: true } });
-
-    expect(mock.calls.configure()).toHaveLength(1);
-    expect(mock.calls.configure()[0]?.config).toEqual({});
-  });
-
-  it("matches inline and configured named matchers", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const configured = mock.nexus.configure({
-      matchers: {
-        active: (identity) => identity.active === true,
-      },
-    });
-
-    const andMatcher = configured.matchers.and(
-      "active",
-      (identity) => identity.context === "background",
-    );
-    const orMatcher = configured.matchers.or(
-      "active",
-      (identity) => identity.context === "popup",
-    );
-    const notMatcher = configured.matchers.not("active");
-
-    expect(andMatcher({ context: "background", active: true })).toBe(true);
-    expect(andMatcher({ context: "background", active: false })).toBe(false);
-    expect(orMatcher({ context: "popup", active: false })).toBe(true);
-    expect(orMatcher({ context: "content", active: false })).toBe(false);
-    expect(notMatcher({ context: "background", active: true })).toBe(false);
-    expect(notMatcher({ context: "background", active: false })).toBe(true);
-  });
-
-  it("matches unknown named matchers with core combinator semantics", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const identity = { context: "background", active: true } satisfies AppMeta;
-
-    const runtimeMatchers = mock.nexus.matchers as unknown as {
-      and(name: string): (identity: AppMeta) => boolean;
-      or(name: string): (identity: AppMeta) => boolean;
-      not(name: string): (identity: AppMeta) => boolean;
-    };
-
-    expect(runtimeMatchers.and("missing")(identity)).toBe(false);
-    expect(runtimeMatchers.or("missing")(identity)).toBe(false);
-    expect(runtimeMatchers.not("missing")(identity)).toBe(true);
-  });
-
-  it("records release and safeRelease calls", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const firstProxy = {};
-    const secondProxy = {};
-
-    mock.nexus.release(firstProxy);
-    const result = mock.nexus.safeRelease(secondProxy);
-
-    expect(result.isOk()).toBe(true);
-    expect(mock.calls.release()).toEqual([
-      { proxy: firstProxy },
-      { proxy: secondProxy },
-    ]);
-  });
-
-  it("records updateIdentity and safeUpdateIdentity calls", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    await mock.nexus.updateIdentity({ active: true, instance: "one" });
-    const result = await mock.nexus.safeUpdateIdentity({ active: false });
-
-    expect(result.isOk()).toBe(true);
-    expect(mock.calls.updateIdentity()).toEqual([
-      { updates: { active: true, instance: "one" } },
-      { updates: { active: false } },
-    ]);
-  });
-
-  it("returns err from safeUpdateIdentity for malformed runtime input", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    const result = await mock.nexus.safeUpdateIdentity(null as never);
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusUsageError);
-    }
-    expect(mock.calls.updateIdentity()).toHaveLength(0);
-  });
-
-  it("throws from updateIdentity for malformed runtime input", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    await expect(mock.nexus.updateIdentity(null as never)).rejects.toThrow(
-      NexusUsageError,
-    );
-    expect(mock.calls.updateIdentity()).toHaveLength(0);
-  });
-
-  it("returns release and updateIdentity call copies", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.nexus.release({});
-    await mock.nexus.updateIdentity({ active: true });
-
-    const releaseCalls = mock.calls.release() as unknown as unknown[];
-    const updateCalls = mock.calls.updateIdentity() as unknown as unknown[];
-    releaseCalls.push({ proxy: "mutated" });
-    updateCalls.push({ updates: { mutated: true } });
-
-    expect(mock.calls.release()).toHaveLength(1);
-    expect(mock.calls.updateIdentity()).toHaveLength(1);
-  });
-
-  it("wraps object refs and rejects invalid refs", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const target = { value: 1 };
-
-    const ref = mock.nexus.ref(target);
-    const safeRef = mock.nexus.safeRef(target);
-    const invalid = mock.nexus.safeRef(null as never);
-
-    expect(ref.target).toBe(target);
-    expect((ref as any)[Symbol.for("nexus.ref.wrapper")]).toBe(true);
-    expect(safeRef.isOk()).toBe(true);
-    if (safeRef.isOk()) {
-      expect(safeRef.value.target).toBe(target);
-    }
-    expect(() => mock.nexus.ref(null as never)).toThrow(NexusUsageError);
-    expect(() => mock.nexus.ref(123 as never)).toThrow(NexusUsageError);
-    expect(invalid.isErr()).toBe(true);
-    if (invalid.isErr()) {
-      expect(invalid.error).toBeInstanceOf(NexusUsageError);
-    }
-  });
-
-  it("rejects unsupported multicast APIs", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
+      mock.nexus.create(ExampleToken, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "E_ABORTED" });
     await expect(
       mock.nexus.createMulticast(ExampleToken, {
-        target: { descriptor: { context: "background" } },
+        targets: [{ context: "background" }],
+        signal: controller.signal,
       }),
-    ).rejects.toMatchObject({
-      name: "NexusMockError",
-      code: "E_MOCK_UNSUPPORTED_OPERATION",
-    });
+    ).rejects.toMatchObject({ code: "E_ABORTED" });
+  });
 
-    const result = await mock.nexus.safeCreateMulticast(ExampleToken, {
-      target: { descriptor: { context: "background" } },
-    });
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(NexusMockError);
-      expect(result.error).toMatchObject({
-        code: "E_MOCK_UNSUPPORTED_OPERATION",
-      });
+  it("waits for a late create provider with fake timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = createMockNexus<TestAdapterModel>();
+      const pending = mock.nexus.create(ExampleToken, { timeout: 50 });
+      globalThis.setTimeout(
+        () =>
+          mock.service(ExampleToken, service("late"), provider("background")),
+        10,
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await expect((await pending).greet("Ada")).resolves.toBe("late:Ada");
+    } finally {
+      vi.useRealTimers();
     }
   });
 
-  it("clear(token) removes only that token service, failure, and create calls", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.service(OtherToken, createExampleService());
-    await mock.nexus.create(ExampleToken, createOptions);
-    await mock.nexus.create(OtherToken, createOptions);
-    mock.failCreate(ExampleToken, new Error("blocked"));
+  it("uses one deadline while waiting for staggered multicast targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = createMockNexus<TestAdapterModel>();
+      const pending = mock.nexus.safeCreateMulticast(ExampleToken, {
+        targets: [{ context: "background" }, { context: "popup" }],
+        timeout: 30,
+      });
+      globalThis.setTimeout(
+        () =>
+          mock.service(
+            ExampleToken,
+            service("background"),
+            provider("background"),
+          ),
+        10,
+      );
+      globalThis.setTimeout(
+        () => mock.service(ExampleToken, service("popup"), provider("popup")),
+        35,
+      );
+      await vi.advanceTimersByTimeAsync(35);
+      const result = await pending;
+      expect(result.isErr()).toBe(true);
+      if (result.isErr())
+        expect(result.error).toMatchObject({
+          code: "E_SERVICE_ACQUISITION_TIMEOUT",
+        });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves staggered multicast targets in stable target order", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = createMockNexus<TestAdapterModel>();
+      const pending = mock.nexus.createMulticast(ExampleToken, {
+        targets: [{ context: "background" }, { context: "popup" }],
+        timeout: 30,
+      });
+      globalThis.setTimeout(
+        () =>
+          mock.service(
+            ExampleToken,
+            service("target-a"),
+            provider("background"),
+          ),
+        10,
+      );
+      globalThis.setTimeout(
+        () =>
+          mock.service(ExampleToken, service("target-b"), provider("popup")),
+        20,
+      );
+
+      await vi.advanceTimersByTimeAsync(20);
+      const multicast = await pending;
+
+      await expect(multicast.greet("Ada")).resolves.toEqual([
+        { status: "fulfilled", value: "target-a:Ada" },
+        { status: "fulfilled", value: "target-b:Ada" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails multicast if any explicit target has no provider and deduplicates matching providers", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("background"), provider("background"));
+    const missing = await mock.nexus.safeCreateMulticast(ExampleToken, {
+      targets: [{ context: "background" }, { context: "popup" }],
+      timeout: 0,
+    });
+    expect(missing.isErr()).toBe(true);
+    const all = await mock.nexus.createMulticast(ExampleToken, {
+      targets: [{ context: "background" }, { context: "background" }],
+    });
+    await expect(all.greet("Ada")).resolves.toEqual([
+      { status: "fulfilled", value: "background:Ada" },
+    ]);
+  });
+
+  it("returns all and stream select multicast snapshots without from metadata", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("background"), provider("background"));
+    mock.service(ExampleToken, service("popup"), provider("popup"));
+    const all = await mock.nexus.selectMulticast(ExampleToken);
+    const stream = await mock.nexus.selectMulticast(ExampleToken, {
+      expects: "stream",
+    });
+    const streamed = [];
+    for await (const value of await stream.greet("Ada")) streamed.push(value);
+    await expect(all.greet("Ada")).resolves.toEqual([
+      { status: "fulfilled", value: "background:Ada" },
+      { status: "fulfilled", value: "popup:Ada" },
+    ]);
+    expect(streamed).toEqual([
+      { status: "fulfilled", value: "background:Ada" },
+      { status: "fulfilled", value: "popup:Ada" },
+    ]);
+    expect(streamed[0]).not.toHaveProperty("from");
+  });
+
+  it("settles multicast value properties for all and stream", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("background"), provider("background"));
+    const all = await mock.nexus.createMulticast(ExampleToken, {
+      targets: [{ context: "background" }],
+    });
+    const stream = await mock.nexus.createMulticast(ExampleToken, {
+      targets: [{ context: "background" }],
+      expects: "stream",
+    });
+    await expect(all.version).resolves.toEqual([
+      { status: "fulfilled", value: 1 },
+    ]);
+    const values = [];
+    for await (const value of await stream.version) values.push(value);
+    expect(values).toEqual([{ status: "fulfilled", value: 1 }]);
+  });
+
+  it("preserves proxy reflection and rejects service method errors", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("boom"));
+    const proxy = await mock.nexus.create(ExampleToken);
+    expect((proxy as unknown as { then?: unknown }).then).toBeUndefined();
+    expect(() => String(proxy)).not.toThrow();
+    await expect(proxy.explode()).rejects.toThrow("boom");
+  });
+
+  it("records release and identity updates, and accepts array refs", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const ref = mock.nexus.ref([]);
+    expect(ref.target).toEqual([]);
     mock.nexus.release({});
-    mock.nexus.configure({});
     await mock.nexus.updateIdentity({ active: true });
+    expect(mock.calls.release()).toHaveLength(1);
+    expect(mock.calls.updateIdentity()).toEqual([
+      { updates: { active: true } },
+    ]);
+    expect(mock.nexus.safeRef(null as never).isErr()).toBe(true);
+  });
 
+  it("clears token acquisition records without clearing unrelated lifecycle records", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("one"), provider("background"));
+    await mock.nexus.create(ExampleToken);
+    await mock.nexus.createMulticast(ExampleToken, {
+      targets: [{ context: "background" }],
+    });
+    await mock.nexus.select(ExampleToken);
+    await mock.nexus.selectMulticast(ExampleToken);
+    mock.nexus.configure({});
+    mock.nexus.release({});
+    await mock.nexus.updateIdentity({ active: true });
     mock.clear(ExampleToken);
-
     expect(mock.calls.create(ExampleToken)).toHaveLength(0);
-    expect(mock.calls.create(OtherToken)).toHaveLength(1);
-    await expect(
-      mock.nexus.create(ExampleToken, createOptions),
-    ).rejects.toMatchObject({ code: "E_MOCK_SERVICE_NOT_FOUND" });
-    const otherProxy = await mock.nexus.create(OtherToken, createOptions);
-    await expect(otherProxy.greet("Ada")).resolves.toBe("hello Ada");
+    expect(mock.calls.createMulticast(ExampleToken)).toHaveLength(0);
+    expect(mock.calls.select(ExampleToken)).toHaveLength(0);
+    expect(mock.calls.selectMulticast(ExampleToken)).toHaveLength(0);
     expect(mock.calls.configure()).toHaveLength(1);
     expect(mock.calls.release()).toHaveLength(1);
     expect(mock.calls.updateIdentity()).toHaveLength(1);
   });
 
-  it("clear() removes all services, failures, and call records", async () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    mock.service(ExampleToken, createExampleService());
-    mock.failCreate(OtherToken, new Error("blocked"));
-    await mock.nexus.create(ExampleToken, createOptions);
-    await expect(
-      mock.nexus.create(OtherToken, createOptions),
-    ).rejects.toThrow();
-    mock.nexus.configure({});
-    mock.nexus.release({});
-    await mock.nexus.updateIdentity({ active: true });
-
+  it("returns independent call record arrays and clears all records", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("one"));
+    await mock.nexus.create(ExampleToken);
+    const calls = mock.calls.create() as unknown as unknown[];
+    calls.push({});
+    expect(mock.calls.create()).toHaveLength(1);
     mock.clear();
-
     expect(mock.calls.create()).toHaveLength(0);
     expect(mock.calls.configure()).toHaveLength(0);
-    expect(mock.calls.release()).toHaveLength(0);
-    expect(mock.calls.updateIdentity()).toHaveLength(0);
+  });
+
+  it("strictly validates acquisition option keys and values before recording", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    for (const options of [
+      { target: null },
+      { where: "no" },
+      { timeout: Number.NaN },
+      { signal: {} },
+      { callTimeout: -1 },
+      { unexpected: true },
+    ]) {
+      await expect(
+        mock.nexus.create(ExampleToken, options as never),
+      ).rejects.toBeInstanceOf(NexusUsageError);
+    }
     await expect(
-      mock.nexus.create(ExampleToken, createOptions),
-    ).rejects.toMatchObject({ code: "E_MOCK_SERVICE_NOT_FOUND" });
-    const result = await mock.nexus.safeCreate(OtherToken, createOptions);
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toMatchObject({ code: "E_MOCK_SERVICE_NOT_FOUND" });
-    }
+      mock.nexus.select(ExampleToken, {
+        target: { context: "background" },
+      } as never),
+    ).rejects.toBeInstanceOf(NexusUsageError);
+    expect(mock.calls.create()).toHaveLength(0);
+    expect(mock.calls.select()).toHaveLength(0);
   });
 
-  it("supports connectNexusStore with a registered store service", async () => {
-    const CounterToken = new Token<any>("testing:counter-store");
-    const counterStore = defineNexusStore({
-      token: CounterToken,
-      state: () => ({ count: 0 }),
-      actions: ({ getState, setState }) => ({
-        increment(by: number) {
-          const next = getState().count + by;
-          setState({ count: next });
-          return next;
-        },
-      }),
-    });
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-    const { provider } = createNexusStore(counterStore);
-    mock.nexus.configure({
-      providers: [provider],
-      endpoint: {
-        meta: { context: "background" },
-        connectTo: [{ descriptor: { context: "background" } }],
-      },
-    });
-
-    const remote = await connectNexusStore(mock.nexus, counterStore, {
-      target: { descriptor: { context: "background" } },
-    });
-
-    expect(remote.getState()).toEqual({ count: 0 });
-    await expect(remote.actions.increment(2)).resolves.toBe(2);
-    expect(remote.getState()).toEqual({ count: 2 });
-    expect(mock.calls.create(counterStore.token)).toHaveLength(1);
-    remote.destroy();
-  });
-
-  it("preserves public types", () => {
-    const mock = createMockNexus<AppMeta, PlatformMeta>();
-
-    mock.service(ExampleToken, createExampleService());
-    // @ts-expect-error missing required service members
-    mock.service(ExampleToken, { greet: (name: string) => name });
-
-    expectTypeOf(mock.nexus.create(ExampleToken, createOptions)).toEqualTypeOf<
-      Promise<Asyncified<ExampleService>>
-    >();
-    expectTypeOf(mock.nexus).toMatchTypeOf<
-      NexusInstance<AppMeta, PlatformMeta>
-    >();
-
-    const configured = mock.nexus.configure({
-      matchers: {
-        active: (identity: AppMeta) => identity.active === true,
-      },
-      descriptors: {
-        background: { context: "background" },
-      },
-    });
-
-    expectTypeOf(configured).toMatchTypeOf<
-      NexusInstance<AppMeta, PlatformMeta, "active", "background">
-    >();
-    configured.matchers.and("active");
-    configured.matchers.or("active");
-    configured.matchers.not("active");
-    configured.create(ExampleToken, {
-      target: { descriptor: "background", matcher: "active" },
-    });
-
-    // @ts-expect-error mock.nexus does not evolve in place
-    mock.nexus.matchers.and("active");
+  it("keeps safe methods as Promise<Result> and exposes final required methods", () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    expectTypeOf(mock.nexus).toMatchTypeOf<NexusInstance<TestAdapterModel>>();
     if (false) {
-      configured.create(ExampleToken);
-      configured.safeCreate(ExampleToken);
+      expectTypeOf(mock.nexus.create(ExampleToken)).toEqualTypeOf<
+        Promise<Asyncified<ExampleService>>
+      >();
     }
-
-    mock.nexus.matchers.and((identity) => identity.context === "background");
-    mock.nexus.matchers.or((identity) => identity.active === true);
-    mock.nexus.matchers.not((identity) => identity.context === "popup");
+    expect(mock.nexus).toHaveProperty("select");
+    expect(mock.nexus).toHaveProperty("safeSelect");
+    expect(mock.nexus).toHaveProperty("selectMulticast");
+    expect(mock.nexus).toHaveProperty("safeSelectMulticast");
   });
 });

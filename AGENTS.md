@@ -10,7 +10,7 @@ remote resource references, state synchronization, and platform adapters such as
 contexts.
 
 This is a pnpm/Turbo monorepo. Current packages are `@nexus-js/core`, `@nexus-js/chrome`,
-`@nexus-js/react`, and `@nexus-js/node-ipc`.
+`@nexus-js/iframe`, `@nexus-js/react`, and `@nexus-js/node-ipc`.
 
 No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 (`.github/copilot-instructions.md`) are present at the time this file was written.
@@ -19,6 +19,7 @@ No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 
 - `packages/core` - core runtime, RPC engine, connection management, transport abstractions, and Nexus State.
 - `packages/chrome` - Chrome extension adapter and `using...` context helpers.
+- `packages/iframe` - iframe parent/child adapter over `postMessage`.
 - `packages/react` - React bindings for Nexus State.
 - `packages/node-ipc` - Node IPC adapter for daemon/client runtimes.
 - `docs` - public documentation.
@@ -173,9 +174,11 @@ pnpm dev
 - Import existing service types instead of redefining service shapes inline.
 - Configure every runtime context before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers like `usingBackgroundScript()` and `usingContentScript()` for standard runtime setup.
-- Use `nexus.configure(...)` for runtime bootstrap configuration: custom endpoints, multi-instance tests, policy, matchers, descriptors, and low-level composition.
+- Use `nexus.configure(...)` for runtime bootstrap configuration: custom endpoints, adapter model-bound policy, multi-instance tests, and low-level composition.
 - Use `@xxNexus.Expose(...)` for class services, where `xxNexus` is the configured owner instance. Use `xxNexus.provide(...)` for object services, State stores, Relay providers, runtime-created dependencies, and live provider registration.
-- Use `nexus.create(Token)` when a Token `defaultTarget` or unique `connectTo` fallback intentionally supplies the target; use explicit targets plus `expects` in introductory debugging or complex topology examples.
+- Use an adapter's exact `ConnectionTarget` constructor for `create`, or use `nexus.create(Token)` when a Token or endpoint `defaultTarget` supplies the target. Use `nexus.select(Token, { where, wait })` only to choose available providers without connecting.
+- Treat `where(contextMeta, connectionMeta)` as a strict AND predicate over remote handshake identity and local adapter connection facts; it never discovers or connects to a provider by itself.
+- Application code owns target discovery such as active-tab, eligible-frame, or process selection. Nexus consumes the resulting `ConnectionTarget` values and does not perform global provider discovery.
 - Raw `nexus.create(...)` proxies and refs are session-bound. Recreate them after disconnect, daemon restart, or session replacement.
 - See `.agents/skills/use-nexus/references/usage-style.md` for detailed external usage style.
 
@@ -198,7 +201,7 @@ pnpm dev
 
 - Public docs live in `docs/`; internal proposals and style notes live in `.doc/`.
 - Keep adapter docs focused on adapter-specific setup; do not redefine shared service contracts in every adapter guide.
-- Prefer minimal, type-correct examples with explicit targets first, then explain defaults or shortcuts.
+- Prefer minimal, type-correct examples with adapter-exported exact targets first, then explain Token and endpoint `defaultTarget`.
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.

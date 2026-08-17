@@ -7,20 +7,25 @@ import {
   type MessageEnvelope,
 } from "./envelope.js";
 import { IframeAdapterError } from "./errors.js";
-import { createPlatformMeta } from "./platform-meta.js";
+import {
+  createConnectionMeta,
+  isTrustedConnectionMeta,
+} from "./connection-meta.js";
 import { createCapabilities } from "./shared.js";
 import type {
   EndpointCapabilities,
+  IframeAdapterModel,
+  IframeConnectionMeta,
+  IframeContextMeta,
   IframeFrameTarget,
   IframeParentEndpointOptions,
-  IframePlatformMeta,
-  IframeEndpointMeta,
 } from "./types.js";
 import { originMatches, validateAppId, validateOrigin } from "./validation.js";
 import { getWindow, postMessageFrom } from "./window.js";
 
 type ParentFrameState = IframeFrameTarget & {
   router?: VirtualPortRouter.Context;
+  observedOrigin?: string;
   removeLoad: () => void;
 };
 
@@ -28,14 +33,11 @@ type ParentFrameState = IframeFrameTarget & {
  * Parent-side endpoint. Its trust boundary is the iframe contentWindow configured
  * for each frame: matching origin is not enough when same-origin frames coexist.
  */
-export class IframeParentEndpoint implements IEndpoint<
-  IframeEndpointMeta,
-  IframePlatformMeta
-> {
+export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
   readonly capabilities: EndpointCapabilities;
-  private readonly frames = new Map<string, ParentFrameState>();
+  private readonly frames: ParentFrameState[] = [];
   private onConnect:
-    | ((port: IPort, platformMetadata?: IframePlatformMeta) => void)
+    | ((port: IPort, connectionMeta: IframeConnectionMeta) => void)
     | undefined;
   private closed = false;
 
@@ -43,47 +45,55 @@ export class IframeParentEndpoint implements IEndpoint<
     validateAppId(options.appId);
     this.capabilities = createCapabilities(options.binaryPackets);
     for (const frame of options.frames)
-      this.frames.set(frame.frameId, this.createFrameState(frame));
+      this.frames.push(this.createFrameState(frame));
   }
 
   listen(
-    onConnect: (port: IPort, platformMetadata?: IframePlatformMeta) => void,
+    onConnect: (port: IPort, connectionMeta: IframeConnectionMeta) => void,
   ): void {
     this.closed = false;
     this.onConnect = onConnect;
-    for (const state of this.frames.values()) {
+    for (const state of this.frames) {
       this.ensureRouter(state);
       this.listenFrame(state);
     }
   }
 
   async connect(
-    targetDescriptor: Partial<IframeEndpointMeta>,
-  ): Promise<[IPort, IframePlatformMeta]> {
-    const state = this.resolveFrame(targetDescriptor);
+    target: IframeAdapterModel["connectionTarget"],
+  ): Promise<{ port: IPort; connectionMeta: IframeConnectionMeta }> {
+    const state = this.resolveFrame(target);
     this.ensureRouter(state);
     if (!state.router)
       throw new IframeAdapterError(
         "Iframe router is unavailable",
         "E_IFRAME_CONNECT_FAILED",
       );
-    const connectResult = await VirtualPortRouter.safeConnect(state.router);
-    if (connectResult.isErr()) {
+    const result = await VirtualPortRouter.safeConnect(state.router);
+    if (result.isErr()) {
       throw new IframeAdapterError(
         "Could not connect to iframe",
         "E_IFRAME_CONNECT_FAILED",
-        connectResult.error,
+        result.error,
       );
     }
-    const port = connectResult.value;
-    return [port, this.createMeta(state)];
+    const port = result.value;
+    return { port, connectionMeta: this.createMeta(state) };
+  }
+
+  matchesTarget(
+    target: IframeAdapterModel["connectionTarget"],
+    contextMeta: IframeContextMeta,
+    connectionMeta: IframeConnectionMeta,
+  ): boolean {
+    return matchesTarget(target, contextMeta, connectionMeta);
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.onConnect = undefined;
-    for (const state of this.frames.values()) {
+    for (const state of this.frames) {
       this.closeFrame(state);
       state.removeLoad();
     }
@@ -154,6 +164,7 @@ export class IframeParentEndpoint implements IEndpoint<
           const envelope = readEnvelope(event.data);
           if (!envelope || !this.matchesEnvelope(envelope, state, event.origin))
             return;
+          state.observedOrigin = event.origin;
           handler(envelope.payload);
         };
         localWindow.addEventListener("message", listener as EventListener);
@@ -185,32 +196,49 @@ export class IframeParentEndpoint implements IEndpoint<
     );
   }
 
-  private resolveFrame(target: Partial<IframeEndpointMeta>): ParentFrameState {
-    if (target.context !== undefined && target.context !== "iframe-child")
+  private resolveFrame(
+    target: IframeAdapterModel["connectionTarget"],
+  ): ParentFrameState {
+    if (target.context !== "iframe-child" || !target.frameId)
       throw new IframeAdapterError(
-        "No iframe matched target descriptor",
+        "No iframe matched target",
         "E_IFRAME_TARGET_NOT_FOUND",
       );
-    const frameId =
-      target.context === "iframe-child" ? target.frameId : undefined;
-    const candidates = Array.from(this.frames.values()).filter((state) => {
-      if (frameId && state.frameId !== frameId) return false;
-      if (target.appId && target.appId !== this.options.appId) return false;
+    const candidates = this.frames.filter((state) => {
+      if (state.frameId !== target.frameId) return false;
+      if (target.appId !== undefined && target.appId !== this.options.appId)
+        return false;
       if (
-        target.instance &&
+        target.instance !== undefined &&
         (state.instance ?? DEFAULT_INSTANCE) !== target.instance
       )
         return false;
-      if (target.origin && state.origin !== target.origin) return false;
+      if (
+        target.origin !== undefined &&
+        !(
+          (target.origin === "*" && state.origin === "*") ||
+          originMatches(
+            target.origin,
+            state.origin,
+            this.options.allowAnyOrigin,
+          )
+        )
+      )
+        return false;
       return true;
     });
-    const match = candidates[0];
-    if (!match)
+    if (candidates.length === 0)
       throw new IframeAdapterError(
-        "No iframe matched target descriptor",
+        "No iframe matched target",
         "E_IFRAME_TARGET_NOT_FOUND",
       );
-    return match;
+    if (candidates.length > 1)
+      throw new IframeAdapterError(
+        "Multiple iframes matched target",
+        "E_IFRAME_TARGET_AMBIGUOUS",
+      );
+    const [match] = candidates;
+    return match!;
   }
 
   private closeFrame(state: ParentFrameState): void {
@@ -221,22 +249,63 @@ export class IframeParentEndpoint implements IEndpoint<
   private resetFrame(state: ParentFrameState): void {
     if (state.router) VirtualPortRouter.safeClose(state.router);
     state.router = undefined;
+    state.observedOrigin = undefined;
   }
 
-  private createMeta(state: ParentFrameState): IframePlatformMeta {
-    return createPlatformMeta({
+  private createMeta(state: ParentFrameState): IframeConnectionMeta {
+    return createConnectionMeta({
       transport: "iframe-postmessage",
       appId: this.options.appId,
       channel: this.options.channel ?? DEFAULT_CHANNEL,
       frameId: state.frameId,
       localRole: "iframe-parent",
       remoteRole: "iframe-child",
-      origin: state.origin,
+      origin: state.observedOrigin ?? state.origin,
       expectedOrigin: state.origin,
-      sourceMatched: true,
-      originMatched: true,
-      nonceMatched: true,
-      trusted: true,
+      facts: {
+        sourceMatched: true,
+        originMatched: true,
+        nonceMatched: true,
+        trusted: true,
+      },
     });
   }
+}
+
+const matchesTarget = (
+  target: IframeAdapterModel["connectionTarget"],
+  contextMeta: IframeContextMeta,
+  connectionMeta: IframeConnectionMeta,
+): boolean => {
+  if (target.context === "iframe-parent") {
+    return false;
+  }
+
+  return (
+    contextMeta.context === "iframe-child" &&
+    (target.appId === undefined || contextMeta.appId === target.appId) &&
+    (target.instance === undefined ||
+      (contextMeta.instance ?? DEFAULT_INSTANCE) === target.instance) &&
+    (target.origin === undefined ||
+      matchesOriginTarget(target.origin, contextMeta.origin, connectionMeta)) &&
+    (target.frameId === undefined ||
+      connectionMeta.frameId === target.frameId) &&
+    connectionMeta.appId === contextMeta.appId &&
+    connectionMeta.origin === contextMeta.origin &&
+    (connectionMeta.expectedOrigin === "*" ||
+      connectionMeta.expectedOrigin === contextMeta.origin) &&
+    connectionMeta.remoteRole === "iframe-child" &&
+    isTrustedConnectionMeta(connectionMeta)
+  );
+};
+
+function matchesOriginTarget(
+  targetOrigin: string,
+  peerOrigin: string,
+  connectionMeta: IframeConnectionMeta,
+): boolean {
+  if (targetOrigin === "*") {
+    return connectionMeta.expectedOrigin === "*" && peerOrigin !== "*";
+  }
+  return targetOrigin === peerOrigin && connectionMeta.origin === peerOrigin;
 }

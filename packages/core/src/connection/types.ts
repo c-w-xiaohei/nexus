@@ -1,10 +1,13 @@
 import type {
-  EndpointMeta,
-  PlatformMeta,
-  ConnectionContext,
-} from "../types/identity.js";
-import type { NexusMessage } from "../types/message.js";
-import type { NexusAuthorizationPolicy } from "../api/types/config.js";
+  AdapterModel,
+  ConnectionTargetOf,
+  ConnectionWhere,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "../types/adapter-model";
+import type { ConnectionContext } from "../types/identity";
+import type { NexusMessage } from "../types/message";
+import type { NexusAuthorizationPolicy } from "../api/types/config";
 
 export enum ConnectionStatus {
   INITIALIZING,
@@ -14,64 +17,65 @@ export enum ConnectionStatus {
   CLOSED,
 }
 
-export type Descriptor<U extends EndpointMeta> = Partial<U>;
-
-export type ResolveOptions<U extends EndpointMeta, _P extends PlatformMeta> = {
-  matcher?: (identity: U) => boolean;
-  descriptor?: Descriptor<U>;
-  assignmentMetadata?: U;
+export type ResolveOptions<M extends AdapterModel> = {
+  target?: ConnectionTargetOf<M>;
+  where?: ConnectionWhere<M>;
+  assignmentMetadata?: ContextMetaOf<M>;
 };
 
-export type MessageTarget<U extends EndpointMeta> =
+export type MessageTarget<M extends AdapterModel> =
   | { connectionId: string }
+  | { connectionIds: readonly string[] }
   | { group: string }
-  | { matcher: (identity: U) => boolean };
+  | {
+      where: ConnectionWhere<M>;
+    };
 
-/**
- * A union type representing all possible ways to target a remote endpoint for a call.
- * It can be a direct target for sending a message (`MessageTarget`) or options
- * for finding/creating a connection first (`ResolveOptions`).
- */
-export type CallTarget<U extends EndpointMeta, P extends PlatformMeta> =
-  | MessageTarget<U>
-  | ResolveOptions<U, P>;
+export type CallTarget<M extends AdapterModel> = MessageTarget<M>;
 
-export interface LogicalConnectionHandlers<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
-  onVerified(connInfo: { connectionId: string; identity: U }): void;
-  onClosed(connInfo: { connectionId: string; identity?: U }): void;
+export interface LogicalConnectionHandlers<M extends AdapterModel> {
+  onVerified(connInfo: {
+    connectionId: string;
+    identity: ContextMetaOf<M>;
+  }): void;
+  onClosed(connInfo: {
+    connectionId: string;
+    identity?: ContextMetaOf<M>;
+  }): void;
   onMessage(message: NexusMessage, connectionId: string): void | Promise<void>;
-  onIdentityUpdated(connectionId: string, newIdentity: U, oldIdentity: U): void;
-  verify(identity: U, context: ConnectionContext<P>): Promise<boolean>;
+  onIdentityUpdated(
+    connectionId: string,
+    newIdentity: ContextMetaOf<M>,
+    oldIdentity: ContextMetaOf<M>,
+    connectionMeta: ConnectionMetaOf<M>,
+  ): void;
+  onProviderCatalogUpdated?(
+    connectionId: string,
+    providers: readonly string[],
+  ): void;
+  verify(
+    identity: ContextMetaOf<M>,
+    context: ConnectionContext<ConnectionMetaOf<M>>,
+  ): Promise<boolean>;
 }
 
-export type ConnectToTarget<U extends EndpointMeta> =
-  | { descriptor: Descriptor<U> }
-  | { matcher: (identity: U) => boolean; descriptor: Descriptor<U> };
-
-export interface ConnectionManagerConfig<
-  U extends EndpointMeta,
-  P extends PlatformMeta,
-> {
-  connectTo?: ConnectToTarget<U>[];
-  policy?: NexusAuthorizationPolicy<U, P>;
+export interface ConnectionManagerConfig<M extends AdapterModel> {
+  /** Internal test topology seed; ConnectionManager never consumes or prewarms it. */
+  connectTo?: readonly ConnectionTargetOf<M>[];
+  policy?: NexusAuthorizationPolicy<M>;
   handshakeTimeoutMs?: number;
 }
 
-export interface ConnectionManagerHandlers<
-  U extends EndpointMeta,
-  _P extends PlatformMeta,
-> {
+export interface ConnectionManagerHandlers<M extends AdapterModel> {
   onMessage(
     message: NexusMessage,
     sourceConnectionId: string,
   ): void | Promise<void>;
-  onDisconnect(connectionId: string, identity?: U): void;
+  onDisconnect(connectionId: string, identity?: ContextMetaOf<M>): void;
   onIdentityUpdated?(
     connectionId: string,
-    newIdentity: U,
-    oldIdentity: U,
+    newIdentity: ContextMetaOf<M>,
+    oldIdentity: ContextMetaOf<M>,
+    connectionMeta: ConnectionMetaOf<M>,
   ): void;
 }

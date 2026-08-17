@@ -38,11 +38,7 @@ Client:
 ```ts
 usingNodeIpcClient({
   appId: "example-app",
-  connectTo: [
-    {
-      descriptor: { context: "node-ipc-daemon", appId: "example-app" },
-    },
-  ],
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
   authToken: process.env.NEXUS_IPC_TOKEN,
 });
 ```
@@ -62,19 +58,21 @@ Common failures:
 - malformed JSON or wrong protocol shape: `E_IPC_PROTOCOL_ERROR`
 - oversized auth line: `E_IPC_PROTOCOL_ERROR`
 
-## Platform Metadata
+## ConnectionMeta
 
-After pre-auth, node-ipc provides platform metadata to Nexus core:
+After pre-auth, node-ipc provides connection metadata to Nexus core:
 
 ```ts
 {
-  socket: { kind: "path", path: "..." },
-  authenticated: true,
-  authMethod: "shared-secret"
+  observed: {
+    socket: { kind: "path", path: "..." },
+    authenticated: true,
+    authMethod: "shared-secret"
+  }
 }
 ```
 
-If no shared secret is configured, `authenticated` is `false` and `authMethod` is `"none"`.
+If no shared secret is configured, `observed.authenticated` is `false` and `observed.authMethod` is `"none"`.
 
 This metadata is the bridge from adapter pre-auth into core policy.
 
@@ -86,6 +84,7 @@ For policy composition, ask the helper for a pure config object with `configure:
 
 ```ts
 import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
 
 nexus.configure(
   composeNexusConfig([
@@ -96,8 +95,8 @@ nexus.configure(
     }),
     {
       policy: {
-        canConnect({ platform }) {
-          return platform.authenticated === true;
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
         },
       },
     },

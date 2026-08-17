@@ -1,22 +1,27 @@
-import { PortProcessor } from "../transport/port-processor.js";
+import { PortProcessor } from "../transport/port-processor";
 import type {
-  EndpointMeta,
-  PlatformMeta,
-  ConnectionContext,
-} from "../types/identity.js";
+  AdapterModel,
+  ConnectionMetaOf,
+  ContextMetaOf,
+} from "../types/adapter-model";
+import type { ConnectionContext } from "../types/identity";
 import type {
   NexusMessage,
   HandshakeReqMessage,
   HandshakeAckMessage,
   HandshakeReadyMessage,
   IdentityUpdateMessage,
-} from "../types/message.js";
-import { NexusMessageType } from "../types/message.js";
-import { ConnectionStatus, type LogicalConnectionHandlers } from "./types.js";
-import { Logger } from "../logger.js";
-import { toSerializedError } from "../utils/error.js";
+  ProviderAvailableMessage,
+} from "../types/message";
+import { NexusMessageType } from "../types/message";
+import { ConnectionStatus, type LogicalConnectionHandlers } from "./types";
+import { Logger } from "@/logger";
+import { toSerializedError } from "@/utils/error";
+import { NexusProtocolIncompatibleError } from "@/errors";
 import { Result } from "better-result";
 const { err, ok } = Result;
+
+const PROVIDER_CATALOG_CAPABILITY = "provider-catalog-v1";
 
 type LogicalConnectionErrorCode = "E_AUTH_CONNECT_DENIED" | "E_USAGE_INVALID";
 
@@ -74,42 +79,53 @@ export const LogicalConnectionError = {
  * It manages the connection lifecycle, orchestrates the handshake protocol,
  * and acts as the bridge between the ConnectionManager and a low-level PortProcessor.
  */
-export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
+export class LogicalConnection<M extends AdapterModel> {
   public readonly connectionId: string;
+  public readonly direction: "incoming" | "outgoing";
   private status: ConnectionStatus = ConnectionStatus.INITIALIZING;
-  public readonly context: ConnectionContext<P>;
-  private _remoteIdentity?: U;
+  public readonly context: ConnectionContext<ConnectionMetaOf<M>>;
+  private _remoteIdentity?: ContextMetaOf<M>;
   private wasEstablished = false;
   private rejectionError?: Error;
   private outboundHandshakeId?: HandshakeReqMessage["id"];
+  private inboundHandshakeId?: HandshakeReqMessage["id"];
   private acknowledgedHandshakeId?: HandshakeReqMessage["id"];
   private inboundOrderingGate: Promise<void> = Promise.resolve();
   private readonly logger: Logger;
   private readonly nextMessageId: () => number;
+  private readonly localProviders: () => readonly string[];
+  private readonly remoteProvidersSet = new Set<string>();
+  private readonly queuedProviders = new Set<string>();
+  private readonly queuedOutboundMessages: NexusMessage[] = [];
+  private outboundReadyGate = false;
 
   // This connection's own user metadata. It can be reassigned during a
   // "christening" handshake if this is a child context.
-  private localEndpointMeta: U;
+  private localEndpointMeta: ContextMetaOf<M>;
 
   constructor(
     // Dependencies injected by ConnectionManager
     private readonly portProcessor: PortProcessor.Context,
-    private readonly handlers: LogicalConnectionHandlers<U, P>,
+    private readonly handlers: LogicalConnectionHandlers<M>,
     // Initial state
     config: {
       connectionId: string;
-      localEndpointMeta: U;
+      localEndpointMeta: ContextMetaOf<M>;
       // For ALL connections, this is the metadata of the remote endpoint discovered by L1.
-      platformMetadata: P;
+      connectionMeta: ConnectionMetaOf<M>;
+      direction: "incoming" | "outgoing";
       nextMessageId: () => number;
+      localProviders?: () => readonly string[];
     },
   ) {
     this.connectionId = config.connectionId;
+    this.direction = config.direction;
     this.localEndpointMeta = config.localEndpointMeta;
     this.nextMessageId = config.nextMessageId;
+    this.localProviders = config.localProviders ?? (() => []);
     this.context = {
-      platform: config.platformMetadata,
       connectionId: this.connectionId,
+      connection: Object.freeze({ ...config.connectionMeta }),
     };
     this.logger = new Logger(`L2 --- LogicalConnection<${this.connectionId}>`);
     this.logger.info("Created.", this.context);
@@ -126,20 +142,31 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
     return this.status === ConnectionStatus.CONNECTED;
   }
 
-  public get remoteIdentity(): U | undefined {
+  public get remoteIdentity(): ContextMetaOf<M> | undefined {
     return this._remoteIdentity;
   }
 
-  public get localIdentity(): U {
+  public get localIdentity(): ContextMetaOf<M> {
     return this.localEndpointMeta;
   }
 
-  public updateLocalIdentity(updates: Partial<U>): void {
+  public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
     this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
   }
 
   public get handshakeRejectionError(): Error | undefined {
     return this.rejectionError;
+  }
+
+  public get remoteProviders(): ReadonlySet<string> {
+    return new Set(this.remoteProvidersSet);
+  }
+
+  public publishProviders(providers: readonly string[]): Result<void, Error> {
+    for (const provider of providers) this.queuedProviders.add(provider);
+    if (!this.isReady() || this.queuedProviders.size === 0)
+      return ok(undefined);
+    return this.flushQueuedProviders();
   }
 
   /**
@@ -148,8 +175,8 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
    * @param assignmentMetadata Optional metadata to be assigned to the remote (child) endpoint.
    */
   public initiateHandshake(
-    localEndpointMeta: U,
-    assignmentMetadata?: U,
+    localEndpointMeta: ContextMetaOf<M>,
+    assignmentMetadata?: ContextMetaOf<M>,
   ): Result<void, Error> {
     if (this.status !== ConnectionStatus.INITIALIZING) {
       this.logger.warn(
@@ -169,6 +196,7 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       type: NexusMessageType.HANDSHAKE_REQ,
       id: this.nextMessageId(),
       metadata: localEndpointMeta,
+      capabilities: [PROVIDER_CATALOG_CAPABILITY],
       ...(assignmentMetadata && { assigns: assignmentMetadata }),
     };
     const sendResult = this.portProcessor.sendMessage(handshakeReq);
@@ -203,7 +231,9 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
     if (closeResult.isErr()) {
       this.logger.error("Failed to close port processor", closeResult.error);
     }
-    // The onDisconnect handler is now the single source of truth for all cleanup.
+    // Some transports do not synchronously emit onDisconnect from close().
+    // handleDisconnect is idempotent and preserves the manager/Engine cleanup path.
+    this.handleDisconnect();
   }
 
   /**
@@ -211,6 +241,14 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
    * @param message The `NexusMessage` to send.
    */
   public sendMessage(message: NexusMessage): Result<void, Error> {
+    if (this.outboundReadyGate) {
+      this.queuedOutboundMessages.push(message);
+      return ok(undefined);
+    }
+    return this.sendImmediately(message);
+  }
+
+  private sendImmediately(message: NexusMessage): Result<void, Error> {
     const sendResult = this.portProcessor.sendMessage(message);
     if (sendResult.isErr()) {
       this.logger.error("Failed to send message", sendResult.error);
@@ -233,12 +271,11 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
   public safeHandleMessage(
     message: NexusMessage,
   ): Promise<Result<void, globalThis.Error>> {
-    const orderingGate = this.shouldWaitForInboundOrdering(message)
-      ? this.inboundOrderingGate
-      : Promise.resolve();
-    const messageHandling = orderingGate.then(() =>
-      this.handleMessageInTransportOrder(message),
-    );
+    const messageHandling = this.shouldWaitForInboundOrdering(message)
+      ? this.inboundOrderingGate.then(() =>
+          this.handleMessageInTransportOrder(message),
+        )
+      : this.handleMessageInTransportOrder(message);
 
     if (this.shouldGateInboundOrdering(message)) {
       this.inboundOrderingGate = messageHandling.catch(() => undefined);
@@ -274,6 +311,13 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
     // wait so L3 observes the same identity order as the transport.
     if (message.type === NexusMessageType.IDENTITY_UPDATE) {
       await this.handleIdentityUpdate(message as IdentityUpdateMessage);
+      return;
+    }
+
+    if (message.type === NexusMessageType.PROVIDER_AVAILABLE) {
+      this.mergeRemoteProviders(
+        (message as ProviderAvailableMessage).providers,
+      );
       return;
     }
 
@@ -354,6 +398,7 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       this.connectionId,
       newIdentity,
       oldIdentity,
+      this.context.connection,
     );
   }
 
@@ -390,8 +435,24 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
 
   private async handleHandshakeRequest(req: HandshakeReqMessage) {
     this.logger.debug("Handling HANDSHAKE_REQ.", req);
-    const assignedMetadata = req.assigns as U | undefined;
-    const remoteIdentity = req.metadata as U;
+    if (
+      this.inboundHandshakeId !== undefined &&
+      this.inboundHandshakeId !== req.id
+    ) {
+      this.logger.warn("Ignoring HANDSHAKE_REQ for unknown handshake.", {
+        requestId: req.id,
+        inboundHandshakeId: this.inboundHandshakeId,
+      });
+      return;
+    }
+    if (!hasProviderCatalogCapability(req.capabilities)) {
+      this.rejectProtocol(req.id);
+      return;
+    }
+    this.inboundHandshakeId = req.id;
+
+    const assignedMetadata = req.assigns as ContextMetaOf<M> | undefined;
+    const remoteIdentity = req.metadata as ContextMetaOf<M>;
 
     this.logger.debug("Verifying remote identity.", remoteIdentity);
     const isVerified = await this.handlers.verify(remoteIdentity, this.context);
@@ -434,6 +495,8 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       type: NexusMessageType.HANDSHAKE_ACK,
       id: req.id,
       metadata: this.localEndpointMeta,
+      capabilities: [PROVIDER_CATALOG_CAPABILITY],
+      providers: this.localProviders(),
     };
     const ackResult = this.portProcessor.sendMessage(ack);
     if (ackResult.isErr()) {
@@ -457,9 +520,14 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       return;
     }
 
+    if (!hasProviderCatalogCapability(ack.capabilities)) {
+      this.rejectProtocol(ack.id);
+      return;
+    }
+
     // We are the active side. We sent a REQ and got an ACK.
     // The ACK contains the server's user metadata.
-    this._remoteIdentity = ack.metadata as U;
+    this._remoteIdentity = ack.metadata as ContextMetaOf<M>;
 
     const isVerified = await this.handlers.verify(
       this._remoteIdentity,
@@ -475,9 +543,13 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       return;
     }
 
+    this.mergeRemoteProviders(ack.providers ?? []);
+
     const readyResult = this.portProcessor.sendMessage({
       type: NexusMessageType.HANDSHAKE_READY,
       id: ack.id,
+      capabilities: [PROVIDER_CATALOG_CAPABILITY],
+      providers: this.localProviders(),
     });
     if (readyResult.isErr()) {
       this.logger.error("Failed to send HANDSHAKE_READY", readyResult.error);
@@ -485,22 +557,11 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       return;
     }
 
-    // Let the passive side process HANDSHAKE_READY before callers can use the
-    // active connection returned from resolution.
+    this.outboundReadyGate = true;
+    this.markReady(false);
     setTimeout(() => {
-      if (
-        this.status !== ConnectionStatus.HANDSHAKING ||
-        !this._remoteIdentity
-      ) {
-        return;
-      }
-      this.status = ConnectionStatus.CONNECTED;
-      this.wasEstablished = true;
-      this.logger.info("Handshake complete (active). Connection is now live.");
-      this.handlers.onVerified({
-        connectionId: this.connectionId,
-        identity: this._remoteIdentity,
-      });
+      this.flushOutboundReadyGate();
+      this.notifyReady();
     }, 0);
   }
 
@@ -521,13 +582,77 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
       return;
     }
 
+    if (!hasProviderCatalogCapability(ready.capabilities)) {
+      this.rejectProtocol(ready.id);
+      return;
+    }
+
+    this.mergeRemoteProviders(ready.providers ?? []);
+
+    this.markReady();
+  }
+
+  private markReady(notify = true): void {
+    if (!this._remoteIdentity) return;
+    const published = this.flushQueuedProviders();
+    if (published.isErr()) return;
     this.status = ConnectionStatus.CONNECTED;
     this.wasEstablished = true;
-    this.logger.info("Handshake complete (passive). Connection is now live.");
+    this.logger.info("Handshake complete. Connection is now live.");
+    if (notify) this.notifyReady();
+  }
+
+  private notifyReady(): void {
+    if (!this.isReady() || !this._remoteIdentity) return;
     this.handlers.onVerified({
       connectionId: this.connectionId,
       identity: this._remoteIdentity,
     });
+    this.notifyProviderCatalogUpdated();
+  }
+
+  private mergeRemoteProviders(providers: readonly string[]): void {
+    for (const provider of providers) this.remoteProvidersSet.add(provider);
+    if (this.isReady()) this.notifyProviderCatalogUpdated();
+  }
+
+  private notifyProviderCatalogUpdated(): void {
+    this.handlers.onProviderCatalogUpdated?.(
+      this.connectionId,
+      Array.from(this.remoteProvidersSet),
+    );
+  }
+
+  private flushQueuedProviders(): Result<void, Error> {
+    const providers = Array.from(this.queuedProviders);
+    this.queuedProviders.clear();
+    if (providers.length === 0) return ok(undefined);
+    const sent = this.portProcessor.sendMessage({
+      type: NexusMessageType.PROVIDER_AVAILABLE,
+      id: null,
+      providers,
+    });
+    if (sent.isErr()) {
+      this.close();
+      return err(sent.error);
+    }
+    return ok(undefined);
+  }
+
+  private flushOutboundReadyGate(): void {
+    this.outboundReadyGate = false;
+    for (const message of this.queuedOutboundMessages.splice(0)) {
+      const sent = this.sendImmediately(message);
+      if (sent.isErr()) break;
+    }
+  }
+
+  private rejectProtocol(id: HandshakeReadyMessage["id"]): void {
+    this.rejectionError = new NexusProtocolIncompatibleError(
+      `Peer does not support required capability ${PROVIDER_CATALOG_CAPABILITY}.`,
+    );
+    this.sendHandshakeReject(id, this.rejectionError);
+    this.close();
   }
 
   private sendHandshakeReject(id: HandshakeReadyMessage["id"], error: Error) {
@@ -542,11 +667,25 @@ export class LogicalConnection<U extends EndpointMeta, P extends PlatformMeta> {
   }
 }
 
+function hasProviderCatalogCapability(
+  capabilities: readonly string[] | undefined,
+): boolean {
+  return capabilities?.includes(PROVIDER_CATALOG_CAPABILITY) ?? false;
+}
+
 function serializedErrorToError(input: {
   message?: string;
   code?: string;
   name?: string;
+  cause?: import("../types/message").SerializedError;
 }): Error {
+  if (input.code === "E_PROTOCOL_INCOMPATIBLE") {
+    return new NexusProtocolIncompatibleError(
+      input.message ?? "",
+      {},
+      input.cause,
+    );
+  }
   const error = new Error(input.message ?? "Handshake rejected by remote.");
   error.name = input.name ?? "HandshakeRejectedError";
   if (input.code) {
