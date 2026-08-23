@@ -13,7 +13,6 @@ describe("ResourceManager", () => {
     },
   };
   const mockResource = () => {};
-  const mockProxy = {};
 
   beforeEach(() => {
     // Create a new instance for each test to ensure isolation.
@@ -109,8 +108,8 @@ describe("ResourceManager", () => {
         "conn-B",
         LocalResourceType.OBJECT,
       );
-      resourceManager.registerRemoteProxy("remote-res-A", mockProxy, "conn-A");
-      resourceManager.registerRemoteProxy("remote-res-B", mockProxy, "conn-B");
+      resourceManager.registerRemoteProxy("remote-res-A", "conn-A");
+      resourceManager.registerRemoteProxy("remote-res-B", "conn-B");
     });
 
     it("should clean up all resources and proxies associated with a specific connection ID", () => {
@@ -140,11 +139,24 @@ describe("ResourceManager", () => {
 
     it("should release a remote proxy explicitly without disconnect cleanup", () => {
       const initialProxyCount = resourceManager.countRemoteProxies();
-      resourceManager.registerRemoteProxy("remote-res-X", mockProxy, "conn-X");
+      resourceManager.registerRemoteProxy("remote-res-X", "conn-X");
 
       expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount + 1);
-      resourceManager.releaseRemoteProxy("remote-res-X");
+      resourceManager.releaseRemoteProxy("remote-res-X", "conn-X");
       expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount);
+    });
+
+    it("keeps same resource IDs from separate source connections distinct", () => {
+      const initialProxyCount = resourceManager.countRemoteProxies();
+      resourceManager.registerRemoteProxy("res-1", "conn-A");
+      resourceManager.registerRemoteProxy("res-1", "conn-B");
+
+      resourceManager.releaseRemoteProxy("res-1", "conn-A");
+
+      expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount + 1);
+      expect(resourceManager.listRemoteProxyIdsBySource("conn-B")).toContain(
+        "res-1",
+      );
     });
   });
 });

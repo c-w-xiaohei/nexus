@@ -150,6 +150,7 @@ export namespace PendingCallManager {
       sourceConnectionId?: string,
       isTimeout?: boolean,
     ): void;
+    canHandleResponse(id: MessageId, sourceConnectionId: string): boolean;
     onDisconnect(connectionId: string): void;
     fail(messageId: MessageId, error: globalThis.Error): void;
   }
@@ -298,6 +299,14 @@ export namespace PendingCallManager {
       }
     };
 
+    const isExpectedResponse = (
+      pending: PendingCall,
+      sourceConnectionId: string,
+    ): boolean =>
+      pending.targetConnectionIds.includes(sourceConnectionId) &&
+      !pending.respondedConnectionIds.has(sourceConnectionId) &&
+      !pending.disconnectedConnectionIds.has(sourceConnectionId);
+
     const handleResponse = (
       id: MessageId,
       result: any,
@@ -314,24 +323,13 @@ export namespace PendingCallManager {
       }
 
       if (!isTimeout) {
-        if (!sourceConnectionId) {
-          logger.warn(
-            `Ignoring response for call #${id} without source connection id.`,
-          );
-          return;
-        }
-
-        if (!pending.targetConnectionIds.includes(sourceConnectionId)) {
-          logger.warn(
-            `Ignoring response for call #${id} from unexpected connection ${sourceConnectionId}.`,
-          );
-          return;
-        }
-
-        if (pending.respondedConnectionIds.has(sourceConnectionId)) {
-          logger.warn(
-            `Ignoring duplicate response for call #${id} from connection ${sourceConnectionId}.`,
-          );
+        if (
+          !sourceConnectionId ||
+          !isExpectedResponse(pending, sourceConnectionId)
+        ) {
+          logger.warn(`Ignoring invalid response for call #${id}.`, {
+            sourceConnectionId,
+          });
           return;
         }
 
@@ -366,6 +364,16 @@ export namespace PendingCallManager {
           );
           break;
       }
+    };
+
+    const canHandleResponse = (
+      id: MessageId,
+      sourceConnectionId: string,
+    ): boolean => {
+      const pending = pendingCalls.get(id);
+      return (
+        pending !== undefined && isExpectedResponse(pending, sourceConnectionId)
+      );
     };
 
     const register = (
@@ -528,6 +536,7 @@ export namespace PendingCallManager {
     return {
       register,
       handleResponse,
+      canHandleResponse,
       onDisconnect,
       fail,
     };

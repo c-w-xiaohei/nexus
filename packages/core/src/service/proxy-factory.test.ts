@@ -11,14 +11,28 @@ import { NexusResourceError } from "@/errors/resource-errors";
 const mockFinalizationRegistryCallback = vi.fn();
 const mockRegister = vi.fn();
 const mockUnregister = vi.fn();
+const finalizationRegistrations = new Map<object, unknown>();
 global.FinalizationRegistry = class {
   constructor(callback: any) {
     mockFinalizationRegistryCallback.mockImplementation(callback);
   }
 
-  register = mockRegister;
-  unregister = mockUnregister;
+  register = mockRegister.mockImplementation(
+    (target: object, heldValue: unknown, unregisterToken?: object) => {
+      finalizationRegistrations.set(unregisterToken ?? target, heldValue);
+    },
+  );
+  unregister = mockUnregister.mockImplementation((unregisterToken: object) =>
+    finalizationRegistrations.delete(unregisterToken),
+  );
 } as any;
+
+const simulateFinalization = (unregisterToken: object): void => {
+  const heldValue = finalizationRegistrations.get(unregisterToken);
+  if (!heldValue) return;
+  finalizationRegistrations.delete(unregisterToken);
+  mockFinalizationRegistryCallback(heldValue);
+};
 
 describe("ProxyFactory", () => {
   let proxyFactory: ProxyFactory<any>;
@@ -27,6 +41,7 @@ describe("ProxyFactory", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    finalizationRegistrations.clear();
 
     mockEngine = {
       safeDispatchCall: vi
@@ -141,16 +156,19 @@ describe("ProxyFactory", () => {
       expect(spyRegisterRemoteProxy).toHaveBeenCalledOnce();
       const resourceManagerCallArgs = spyRegisterRemoteProxy.mock.calls[0];
       expect(resourceManagerCallArgs[0]).toBe("res-123");
-      expect(resourceManagerCallArgs[1]).toBe(proxy); // Check for reference equality
-      expect(resourceManagerCallArgs[2]).toBe("conn-1");
+      expect(resourceManagerCallArgs[1]).toBe("conn-1");
 
       expect(mockRegister).toHaveBeenCalledOnce();
       const finalizationRegistryCallArgs = mockRegister.mock.calls[0];
-      expect(finalizationRegistryCallArgs[0]).toBe(proxy); // Check for reference equality
+      expect(finalizationRegistryCallArgs[0]).not.toBe(proxy);
+      expect(finalizationRegistryCallArgs[0]).toBeTypeOf("object");
       expect(finalizationRegistryCallArgs[1]).toEqual({
         resourceId: "res-123",
         connectionId: "conn-1",
       });
+      expect(finalizationRegistryCallArgs[2]).toBe(
+        finalizationRegistryCallArgs[0],
+      );
     });
 
     it("should dispatch an APPLY call when the proxy is called as a function", () => {
@@ -221,6 +239,31 @@ describe("ProxyFactory", () => {
         "conn-5",
       );
       expect(resourceManager.countRemoteProxies()).toBe(0);
+      expect(mockUnregister).toHaveBeenCalledWith(
+        mockRegister.mock.calls[0][0],
+      );
+      simulateFinalization(mockRegister.mock.calls[0][0]);
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
+    });
+
+    it("uses one finalization anchor for root and deep resource facades", async () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-shared-lifetime",
+        "conn-8",
+      );
+      const nested = remoteObj.deep.path;
+
+      expect(mockRegister).toHaveBeenCalledOnce();
+      expect(mockRegister.mock.calls[0][0]).not.toBe(remoteObj);
+      expect(mockRegister.mock.calls[0][0]).not.toBe(nested);
+
+      nested[RELEASE_PROXY_SYMBOL]();
+
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
+      expect(mockUnregister).toHaveBeenCalledWith(
+        mockRegister.mock.calls[0][0],
+      );
+      await expect(remoteObj.run()).rejects.toThrow(/released/i);
     });
 
     it("should reject calls after explicit release", async () => {

@@ -10,6 +10,7 @@ import type { ProxyFactory } from "../proxy-factory";
 import type { ResourceManager } from "../resource-manager";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { isRefWrapper } from "@/types/ref-wrapper";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { Placeholder } from "./placeholder";
 import {
   ESCAPE_CHAR,
@@ -176,7 +177,15 @@ export namespace PayloadProcessor {
       }
     };
 
-    const internalRevive = (value: any, context: ReviveContext): any => {
+    const internalRevive = (
+      value: any,
+      context: ReviveContext & {
+        readonly revivedResourcesByIdentity: Map<
+          string,
+          { proxy: object; existedBeforeRevive: boolean }
+        >;
+      },
+    ): any => {
       if (typeof value === "string" && value.startsWith(ESCAPE_CHAR)) {
         return value.substring(ESCAPE_CHAR.length);
       }
@@ -189,11 +198,33 @@ export namespace PayloadProcessor {
         );
         const handler = REVIVER_TABLE_CONFIG.get(placeholder.type);
         if (handler) {
-          return handler(
+          if (placeholder.type !== PlaceholderType.RESOURCE) {
+            return handler(
+              runtime as unknown as Runtime<AdapterModel>,
+              placeholder,
+              context,
+            );
+          }
+
+          const resourceIdentity = `${context.sourceConnectionId}\u0000${placeholder.payload}`;
+          const previousRevival =
+            context.revivedResourcesByIdentity.get(resourceIdentity);
+          if (previousRevival) return previousRevival.proxy;
+
+          const existedBeforeRevive = runtime.resourceManager.hasRemoteProxy(
+            placeholder.payload!,
+            context.sourceConnectionId,
+          );
+          const revived = handler(
             runtime as unknown as Runtime<AdapterModel>,
             placeholder,
             context,
           );
+          context.revivedResourcesByIdentity.set(resourceIdentity, {
+            proxy: revived,
+            existedBeforeRevive,
+          });
+          return revived;
         }
         logger.warn(
           `No reviver handler for placeholder type "${placeholder.type}". Returning as is.`,
@@ -278,9 +309,13 @@ export namespace PayloadProcessor {
       args: any[],
       sourceConnectionId: string,
     ): TResult<any[], globalThis.Error> => {
+      const context = {
+        sourceConnectionId,
+        revivedResourcesByIdentity: new Map(),
+      };
       const result = Result.try({
         try: () => {
-          const revived = internalRevive(args, { sourceConnectionId });
+          const revived = internalRevive(args, context);
           return Array.isArray(revived) ? revived : [revived];
         },
         catch: (error) =>
@@ -293,6 +328,19 @@ export namespace PayloadProcessor {
       });
 
       if (result.isErr()) {
+        for (const {
+          proxy,
+          existedBeforeRevive,
+        } of context.revivedResourcesByIdentity.values()) {
+          if (existedBeforeRevive) {
+            proxyFactory.discardRemoteResourceProxy(proxy);
+            continue;
+          }
+          const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
+            RELEASE_PROXY_SYMBOL
+          ];
+          if (typeof release === "function") release();
+        }
         return err(result.error);
       }
 

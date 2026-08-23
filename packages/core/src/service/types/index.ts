@@ -33,17 +33,6 @@ export interface LocalResourceRecord {
 }
 
 /**
- * A record for a proxy object that exists in the local context and represents
- * a resource in a remote context.
- */
-export interface RemoteProxyRecord {
-  /** The local proxy object that forwards calls to the remote resource. */
-  proxy: object;
-  /** The ID of the connection from which this resource originates. */
-  sourceConnectionId: string;
-}
-
-/**
  * Represents a pending remote call that is waiting for a response.
  */
 export interface PendingCall {
@@ -58,25 +47,6 @@ export interface PendingCall {
 export interface ExposedService<T> {
   instance: T;
   // TODO: Add options like `isSingleton` etc.
-}
-
-/**
- * Represents a local resource that has been passed by reference to a remote
- * context.
- */
-export interface LocalResource {
-  type: LocalResourceType;
-  target: object; // The actual function or object
-  ownerConnectionIds: Set<string>; // Which connections have a proxy to this
-  cleanup: () => void; // The cleanup function from FinalizationRegistry
-}
-
-/**
- * Represents a remote resource for which a local proxy has been created.
- */
-export interface RemoteProxy {
-  proxy: object; // The actual proxy object
-  sourceConnectionId: string; // The connection this proxy belongs to
 }
 
 /** Context for sanitizing payloads before sending. */

@@ -8,6 +8,7 @@ import { LocalResourceType } from "../types";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 import { Placeholder } from "./placeholder";
 import { ESCAPE_CHAR, PlaceholderType } from "./protocol";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 
 vi.mock("../proxy-factory");
 
@@ -351,6 +352,52 @@ describe("PayloadProcessor", () => {
         true,
       );
       expect(Object.getPrototypeOf(result)).toBeNull();
+    });
+
+    it("releases resources created before a later placeholder fails to revive", () => {
+      const released = vi.fn();
+      vi.mocked(proxyFactory.createRemoteResourceProxy)
+        .mockReturnValueOnce({ [RELEASE_PROXY_SYMBOL]: released })
+        .mockImplementationOnce(() => {
+          throw new Error("cannot revive");
+        });
+      const resource = (id: string) =>
+        new Placeholder(PlaceholderType.RESOURCE, id).toString();
+
+      const result = payloadProcessor.safeRevive(
+        [resource("res-first"), resource("res-second")],
+        mockConnectionId,
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(released).toHaveBeenCalledOnce();
+    });
+
+    it("does not release an identity that existed before a failed revive", () => {
+      const existingRelease = vi.fn();
+      const newRelease = vi.fn();
+      vi.mocked(proxyFactory.createRemoteResourceProxy)
+        .mockReturnValueOnce({ [RELEASE_PROXY_SYMBOL]: existingRelease })
+        .mockReturnValueOnce({ [RELEASE_PROXY_SYMBOL]: newRelease })
+        .mockImplementationOnce(() => {
+          throw new Error("cannot revive");
+        });
+      vi.spyOn(resourceManager, "hasRemoteProxy").mockImplementation(
+        (resourceId, sourceConnectionId) =>
+          resourceId === "res-existing" &&
+          sourceConnectionId === mockConnectionId,
+      );
+      const resource = (id: string) =>
+        new Placeholder(PlaceholderType.RESOURCE, id).toString();
+
+      const result = payloadProcessor.safeRevive(
+        [resource("res-existing"), resource("res-new"), resource("res-bad")],
+        mockConnectionId,
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(existingRelease).not.toHaveBeenCalled();
+      expect(newRelease).toHaveBeenCalledOnce();
     });
   });
 });

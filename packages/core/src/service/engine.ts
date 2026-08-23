@@ -82,11 +82,11 @@ export interface MessageHandlerCallbacks<M extends AdapterModel> {
     sourceConnectionId?: string,
     isTimeout?: boolean,
   ): void;
+  canHandleResponse(id: MessageId, sourceConnectionId: string): boolean;
+  dispatchRelease(resourceId: string, connectionId: string): void;
 }
 
-export class Engine<
-  M extends AdapterModel,
-> implements MessageHandlerCallbacks<M> {
+export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
   private readonly resourceManager: ResourceManager.Runtime;
   private readonly payloadProcessor: PayloadProcessor.Runtime<M>;
@@ -139,6 +139,10 @@ export class Engine<
           this.safeSendMessage(message, target),
         handleResponse: (id, result, error, sourceConnectionId, isTimeout) =>
           this.handleResponse(id, result, error, sourceConnectionId, isTimeout),
+        canHandleResponse: (id, sourceConnectionId) =>
+          this.pendingCallManager.canHandleResponse(id, sourceConnectionId),
+        dispatchRelease: (resourceId, connectionId) =>
+          this.dispatchRelease(resourceId, connectionId),
       },
       resourceManager: this.resourceManager,
       payloadProcessor: this.payloadProcessor,

@@ -11,7 +11,9 @@ import {
 import { toSerializedError } from "@/utils/error";
 import { get, set } from "es-toolkit/compat";
 import type { MessageHandlerFn, HandlerContext } from "./types";
-import { ResourceManager } from "../resource-manager";
+import type { ResourceManager } from "../resource-manager";
+import { Placeholder } from "../payload/placeholder";
+import { PlaceholderType } from "../payload/protocol";
 import { Result } from "better-result";
 const { err, ok } = Result;
 import {
@@ -71,6 +73,39 @@ const toError = (error: unknown): globalThis.Error =>
   error instanceof globalThis.Error
     ? error
     : new globalThis.Error(String(error));
+
+const releaseOrphanedResponseResources = (
+  value: unknown,
+  sourceConnectionId: string,
+  dispatchRelease: (resourceId: string, connectionId: string) => void,
+  resourceManager: ResourceManager.Runtime,
+): void => {
+  const releasedResourceIds = new Set<string>();
+
+  const visit = (current: unknown): void => {
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item);
+      return;
+    }
+    if (current && typeof current === "object") {
+      for (const item of Object.values(current)) visit(item);
+      return;
+    }
+
+    const placeholder = Placeholder.fromString(current);
+    if (
+      placeholder?.type === PlaceholderType.RESOURCE &&
+      placeholder.payload &&
+      !releasedResourceIds.has(placeholder.payload) &&
+      !resourceManager.hasRemoteProxy(placeholder.payload, sourceConnectionId)
+    ) {
+      releasedResourceIds.add(placeholder.payload);
+      dispatchRelease(placeholder.payload, sourceConnectionId);
+    }
+  };
+
+  visit(value);
+};
 
 const safeSend = (
   context: HandlerContext<any>,
@@ -603,6 +638,15 @@ const handlerMap = new Map<NexusMessageType, MessageHandlerFn<any, any>>([
       message: ResMessage,
       sourceConnectionId: string,
     ) => {
+      if (!context.engine.canHandleResponse(message.id, sourceConnectionId)) {
+        releaseOrphanedResponseResources(
+          message.result,
+          sourceConnectionId,
+          context.engine.dispatchRelease,
+          context.resourceManager,
+        );
+        return;
+      }
       const revivedResult = context.payloadProcessor.safeRevive(
         [message.result],
         sourceConnectionId,

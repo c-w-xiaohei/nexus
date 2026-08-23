@@ -1,8 +1,4 @@
-import {
-  LocalResourceRecord,
-  LocalResourceType,
-  RemoteProxyRecord,
-} from "./types";
+import { LocalResourceRecord, LocalResourceType } from "./types";
 import type { AdapterModel } from "@/types/adapter-model";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { NexusConfigurationError } from "@/errors";
@@ -41,12 +37,9 @@ export namespace ResourceManager {
       resourceId: string,
     ): NexusAuthorizationPolicy<AdapterModel> | undefined;
     releaseLocalResource(resourceId: string): void;
-    registerRemoteProxy(
-      resourceId: string,
-      proxy: object,
-      sourceConnectionId: string,
-    ): void;
-    releaseRemoteProxy(resourceId: string): void;
+    registerRemoteProxy(resourceId: string, sourceConnectionId: string): void;
+    releaseRemoteProxy(resourceId: string, sourceConnectionId: string): void;
+    hasRemoteProxy(resourceId: string, sourceConnectionId: string): boolean;
     hasLocalResource(resourceId: string): boolean;
     countLocalResources(): number;
     countRemoteProxies(): number;
@@ -65,7 +58,7 @@ export namespace ResourceManager {
     const logger = new Logger("L3 --- ResourceManager");
     const exposedServices = new Map<string, ExposedServiceRecord>();
     const localResourceRegistry = new Map<string, LocalResourceRecord>();
-    const remoteProxyRegistry = new Map<string, RemoteProxyRecord>();
+    const remoteProxyRegistry = new Set<string>();
     let resourceIdSeq = 1;
 
     const registerExposedService = (
@@ -172,19 +165,33 @@ export namespace ResourceManager {
 
     const registerRemoteProxy = (
       resourceId: string,
-      proxy: object,
       sourceConnectionId: string,
     ): void => {
       logger.debug(
         `Registering remote proxy #${resourceId} from connection ${sourceConnectionId}.`,
       );
-      remoteProxyRegistry.set(resourceId, { proxy, sourceConnectionId });
+      remoteProxyRegistry.add(
+        createRemoteProxyKey(resourceId, sourceConnectionId),
+      );
     };
 
-    const releaseRemoteProxy = (resourceId: string): void => {
+    const releaseRemoteProxy = (
+      resourceId: string,
+      sourceConnectionId: string,
+    ): void => {
       logger.debug(`Releasing remote proxy #${resourceId}`);
-      remoteProxyRegistry.delete(resourceId);
+      remoteProxyRegistry.delete(
+        createRemoteProxyKey(resourceId, sourceConnectionId),
+      );
     };
+
+    const hasRemoteProxy = (
+      resourceId: string,
+      sourceConnectionId: string,
+    ): boolean =>
+      remoteProxyRegistry.has(
+        createRemoteProxyKey(resourceId, sourceConnectionId),
+      );
 
     const hasLocalResource = (resourceId: string): boolean =>
       localResourceRegistry.has(resourceId);
@@ -195,8 +202,9 @@ export namespace ResourceManager {
 
     const listRemoteProxyIdsBySource = (connectionId: string): string[] => {
       const result: string[] = [];
-      for (const [resourceId, record] of remoteProxyRegistry.entries()) {
-        if (record.sourceConnectionId === connectionId) {
+      for (const key of remoteProxyRegistry) {
+        const [sourceConnectionId, resourceId] = parseRemoteProxyKey(key);
+        if (sourceConnectionId === connectionId) {
           result.push(resourceId);
         }
       }
@@ -217,7 +225,7 @@ export namespace ResourceManager {
       logger.info(`Cleaning up all resources for connection ${connectionId}`);
 
       const localResourceIdsToDelete: string[] = [];
-      const remoteProxyIdsToDelete: string[] = [];
+      const remoteProxyKeysToDelete: string[] = [];
 
       for (const [resourceId, record] of localResourceRegistry.entries()) {
         if (record.ownerConnectionId === connectionId) {
@@ -232,17 +240,18 @@ export namespace ResourceManager {
         localResourceRegistry.delete(resourceId);
       }
 
-      for (const [resourceId, record] of remoteProxyRegistry.entries()) {
-        if (record.sourceConnectionId === connectionId) {
+      for (const key of remoteProxyRegistry) {
+        const [sourceConnectionId, resourceId] = parseRemoteProxyKey(key);
+        if (sourceConnectionId === connectionId) {
           logger.debug(
             `Cleaning up remote proxy #${resourceId} due to disconnect.`,
           );
-          remoteProxyIdsToDelete.push(resourceId);
+          remoteProxyKeysToDelete.push(key);
         }
       }
 
-      for (const resourceId of remoteProxyIdsToDelete) {
-        remoteProxyRegistry.delete(resourceId);
+      for (const key of remoteProxyKeysToDelete) {
+        remoteProxyRegistry.delete(key);
       }
     };
 
@@ -259,6 +268,7 @@ export namespace ResourceManager {
       releaseLocalResource,
       registerRemoteProxy,
       releaseRemoteProxy,
+      hasRemoteProxy,
       hasLocalResource,
       countLocalResources,
       countRemoteProxies,
@@ -270,3 +280,18 @@ export namespace ResourceManager {
     return runtime;
   };
 }
+
+const REMOTE_PROXY_KEY_SEPARATOR = "\u0000";
+
+const createRemoteProxyKey = (
+  resourceId: string,
+  sourceConnectionId: string,
+): string => `${sourceConnectionId}${REMOTE_PROXY_KEY_SEPARATOR}${resourceId}`;
+
+const parseRemoteProxyKey = (key: string): [string, string] => {
+  const separator = key.indexOf(REMOTE_PROXY_KEY_SEPARATOR);
+  return [
+    key.slice(0, separator),
+    key.slice(separator + REMOTE_PROXY_KEY_SEPARATOR.length),
+  ];
+};

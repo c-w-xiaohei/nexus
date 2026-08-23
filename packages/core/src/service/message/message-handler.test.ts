@@ -25,6 +25,8 @@ import {
 const mockEngine = {
   safeSendMessage: vi.fn(() => ok([])),
   handleResponse: vi.fn(),
+  canHandleResponse: vi.fn(() => true),
+  dispatchRelease: vi.fn(),
 } as unknown as MessageHandlerCallbacks<any>;
 
 describe("MessageHandler", () => {
@@ -1206,6 +1208,49 @@ describe("MessageHandler", () => {
         40,
         null,
         error,
+        sourceConnectionId,
+      );
+    });
+  });
+
+  describe("Orphaned RES Handler", () => {
+    it("releases resource placeholders from a response without a pending consumer", async () => {
+      vi.mocked(mockEngine.canHandleResponse).mockReturnValue(false);
+      const resource = "\u0003R:res-orphan";
+      const message: ResMessage = {
+        type: NexusMessageType.RES,
+        id: 41,
+        result: { resource },
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(reviveSpy).not.toHaveBeenCalled();
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
+        "res-orphan",
+        sourceConnectionId,
+      );
+      expect(mockEngine.handleResponse).not.toHaveBeenCalled();
+    });
+
+    it("only releases unregistered resource identities from duplicate responses", async () => {
+      vi.mocked(mockEngine.canHandleResponse).mockReturnValue(false);
+      resourceManager.registerRemoteProxy("res-1", sourceConnectionId);
+      const message: ResMessage = {
+        type: NexusMessageType.RES,
+        id: 42,
+        result: {
+          existing: "\u0003R:res-1",
+          newResource: "\u0003R:res-2",
+          repeatedNewResource: "\u0003R:res-2",
+        },
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledTimes(1);
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
+        "res-2",
         sourceConnectionId,
       );
     });

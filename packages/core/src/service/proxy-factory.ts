@@ -71,6 +71,7 @@ type ChainableProxyConfig = {
  */
 export class ProxyFactory<_M extends AdapterModel> {
   private readonly releaseRegistry: FinalizationRegistry<ReleaseContext>;
+  private readonly remoteProxyLifetimeAnchors = new WeakMap<object, object>();
   private readonly logger: Logger = new Logger("L3 -> ProxyFactory");
 
   constructor(
@@ -79,7 +80,7 @@ export class ProxyFactory<_M extends AdapterModel> {
   ) {
     this.releaseRegistry = new FinalizationRegistry(
       ({ resourceId, connectionId }) => {
-        this.resourceManager.releaseRemoteProxy(resourceId);
+        this.resourceManager.releaseRemoteProxy(resourceId, connectionId);
         this.engine.dispatchRelease(resourceId, connectionId);
       },
     );
@@ -104,6 +105,14 @@ export class ProxyFactory<_M extends AdapterModel> {
       }
       return result.value;
     });
+  }
+
+  /** Unregisters a facade's finalizer without releasing its resource identity. */
+  public discardRemoteResourceProxy(proxy: object): void {
+    const lifetimeAnchor = this.remoteProxyLifetimeAnchors.get(proxy);
+    if (!lifetimeAnchor) return;
+    this.releaseRegistry.unregister(lifetimeAnchor);
+    this.remoteProxyLifetimeAnchors.delete(proxy);
   }
 
   private isInternalAccess(prop: string | symbol): boolean {
@@ -273,6 +282,11 @@ export class ProxyFactory<_M extends AdapterModel> {
     sourceConnectionId: string,
   ): object {
     let released = false;
+
+    // Every facade closes over this anchor, so one surviving path keeps the
+    // capability registered without the registry retaining a user proxy.
+    const lifetimeAnchor = {};
+
     const assertActive = (): void => {
       if (released) {
         throw new NexusResourceError(
@@ -288,7 +302,8 @@ export class ProxyFactory<_M extends AdapterModel> {
         return;
       }
       released = true;
-      this.resourceManager.releaseRemoteProxy(resourceId);
+      this.discardRemoteResourceProxy(rootProxy);
+      this.resourceManager.releaseRemoteProxy(resourceId, sourceConnectionId);
       this.engine.dispatchRelease(resourceId, sourceConnectionId);
     };
 
@@ -338,16 +353,17 @@ export class ProxyFactory<_M extends AdapterModel> {
       },
     });
 
-    this.releaseRegistry.register(rootProxy, {
-      resourceId,
-      connectionId: sourceConnectionId,
-    });
-
-    this.resourceManager.registerRemoteProxy(
-      resourceId,
-      rootProxy,
-      sourceConnectionId,
+    this.releaseRegistry.register(
+      lifetimeAnchor,
+      {
+        resourceId,
+        connectionId: sourceConnectionId,
+      },
+      lifetimeAnchor,
     );
+
+    this.resourceManager.registerRemoteProxy(resourceId, sourceConnectionId);
+    this.remoteProxyLifetimeAnchors.set(rootProxy, lifetimeAnchor);
 
     return rootProxy;
   }
