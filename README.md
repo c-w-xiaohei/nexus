@@ -1,6 +1,8 @@
-# Nexus
+<p align="center">
+  <img src="./assets/nexus-banner.png" alt="Nexus" width="900" />
+</p>
 
-**Type-safe services instead of cross-context message protocols.**
+<p align="center"><strong>Type-safe services instead of cross-context message protocols.</strong></p>
 
 [![Quality Check](https://github.com/c-w-xiaohei/nexus/actions/workflows/quality-check.yml/badge.svg)](https://github.com/c-w-xiaohei/nexus/actions/workflows/quality-check.yml)
 [![npm](https://img.shields.io/npm/v/@nexus-js/core)](https://www.npmjs.com/package/@nexus-js/core)
