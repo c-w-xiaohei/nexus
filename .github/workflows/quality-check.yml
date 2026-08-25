@@ -10,9 +10,12 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    - cron: "17 2 * * *"
 
 jobs:
   validate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
@@ -49,6 +52,7 @@ jobs:
         run: pnpm test
 
   iframe-browser-tests:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
@@ -77,3 +81,144 @@ jobs:
 
       - name: Run iframe browser tests
         run: pnpm --filter @nexus-js/iframe test:browser
+
+  chrome-browser-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Install Chromium
+        run: pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
+
+      - name: Run Chrome browser scaffold unit tests
+        run: pnpm --filter @nexus-js/chrome test:browser:scaffold:unit
+
+      - name: Ensure Chrome test extension
+        run: pnpm --filter @nexus-js/chrome ensure:test-extension
+
+      - name: Run Chrome normal browser tests
+        run: pnpm --filter @nexus-js/chrome test:browser
+
+      - name: Upload Chrome normal failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-browser-tests-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/chrome/test-results/
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/manifest.json
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/.nexus-e2e-output.sha256
+          if-no-files-found: ignore
+          retention-days: 14
+
+  chrome-worker-p0:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Install Chromium
+        run: pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
+
+      - name: Ensure Chrome test extension
+        run: pnpm --filter @nexus-js/chrome ensure:test-extension
+
+      - name: Run Chrome worker P0 tests
+        run: pnpm --filter @nexus-js/chrome test:browser:worker:p0
+
+      - name: Upload Chrome worker P0 failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-worker-p0-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/chrome/test-results/
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/manifest.json
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/.nexus-e2e-output.sha256
+          if-no-files-found: ignore
+          retention-days: 14
+
+  chrome-worker-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        run-id:
+          - chrome-nightly-1
+          - chrome-nightly-2
+          - chrome-nightly-3
+          - chrome-nightly-4
+          - chrome-nightly-5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Install Chromium
+        run: pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
+
+      - name: Ensure Chrome test extension
+        run: pnpm --filter @nexus-js/chrome ensure:test-extension
+
+      - name: Run Chrome worker P0 nightly tests
+        run: pnpm --filter @nexus-js/chrome test:browser:worker:p0
+
+      - name: Upload Chrome worker nightly failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-worker-nightly-${{ matrix.run-id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/chrome/test-results/
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/manifest.json
+            packages/chrome/tests/browser/extension/.output/chrome-mv3/.nexus-e2e-output.sha256
+          if-no-files-found: ignore
+          retention-days: 14

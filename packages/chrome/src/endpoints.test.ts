@@ -4,6 +4,8 @@ import {
   createChromeConnectionMeta,
   matchesChromeTarget,
 } from "./endpoints/connection-meta";
+import { ContentScriptEndpoint } from "./endpoints/content-script";
+import { UIClientEndpoint } from "./endpoints/ui-client";
 import { chromeTarget } from "./types/meta";
 
 const mockPort = {
@@ -177,6 +179,38 @@ describe("Chrome endpoint connection metadata", () => {
         chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
       ),
     ).rejects.toMatchObject({ code: "E_ENDPOINT_CAPABILITY_MISMATCH" });
+  });
+
+  it("rejects unsupported endpoint target kinds without opening a Chrome port", async () => {
+    const background = new BackgroundEndpoint();
+    const content = new ContentScriptEndpoint();
+    const ui = new UIClientEndpoint();
+
+    await expect(
+      background.connect(chromeTarget.background()),
+    ).rejects.toMatchObject({
+      code: "E_ENDPOINT_CONNECT_FAILED",
+    });
+    await expect(
+      content.connect(chromeTarget.contentFrame({ tabId: 7, frameId: 2 })),
+    ).rejects.toMatchObject({ code: "E_ENDPOINT_CONNECT_FAILED" });
+    await expect(
+      ui.connect(
+        chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
+      ),
+    ).rejects.toMatchObject({ code: "E_ENDPOINT_CONNECT_FAILED" });
+    expect(mockChrome.tabs.connect).not.toHaveBeenCalled();
+    expect(mockChrome.runtime.connect).not.toHaveBeenCalled();
+  });
+
+  it("declares that every Chrome endpoint does not support transferables", () => {
+    for (const endpoint of [
+      new BackgroundEndpoint(),
+      new ContentScriptEndpoint(),
+      new UIClientEndpoint(),
+    ]) {
+      expect(endpoint.capabilities).toEqual({ supportsTransferables: false });
+    }
   });
 
   it("builds frozen, tagged exact targets", () => {

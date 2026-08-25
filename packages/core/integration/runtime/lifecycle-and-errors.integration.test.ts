@@ -108,6 +108,10 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     expect(oldConnection).toBeDefined();
     oldConnection!.close();
 
+    await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
+      CallProcessor.Error.Disconnected,
+    );
+
     const freshApi = await world.background.nexus.create(
       ContentScriptServiceToken,
       {

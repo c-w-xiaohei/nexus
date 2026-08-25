@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus fixture workspace</title>
+  </head>
+  <body>
+    <main>
+      <output data-status>loading</output
+      ><button data-command="state-ui-action">
+        Increment shared workspace State</button
+      ><button data-command="relay-call">Relay call</button
+      ><button data-command="relay-register">Relay register</button
+      ><button data-command="relay-policy-mode" data-mode="allow">
+        Relay policy allow</button
+      ><button data-command="relay-policy-mode" data-mode="deny">
+        Relay policy deny</button
+      ><button data-command="relay-refresh">Relay refresh</button
+      ><button data-command="audit">Audit</button
+      ><button data-command="session">Session</button>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -36,7 +36,18 @@
   "scripts": {
     "build": "vite build && tsc -p tsconfig.build.json",
     "dev": "node ../../scripts/watch-package.mjs",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts",
+    "prepare:test-extension": "pnpm exec wxt prepare tests/browser/extension",
+    "build:test-extension": "pnpm --filter @nexus-js/core build && pnpm --filter @nexus-js/chrome build && rm -rf tests/browser/extension/.output tests/browser/extension/.wxt && pnpm exec wxt build tests/browser/extension --browser chrome && if [ -f tests/browser/build-extension.ts ]; then tsx tests/browser/build-extension.ts; fi",
+    "typecheck:browser": "pnpm run prepare:test-extension && tsc --noEmit -p tsconfig.browser.json && tsc --noEmit -p tests/browser/extension/tsconfig.json",
+    "ensure:test-extension": "pnpm run prepare:test-extension && pnpm run build:test-extension && pnpm run typecheck:browser",
+    "test:browser:scaffold:unit": "vitest run --config tests/browser/vitest.config.ts",
+    "test:browser:foundation": "pnpm run ensure:test-extension && playwright test --project=foundation-normal",
+    "test:browser:worker:gate": "pnpm run ensure:test-extension && playwright test --project=worker-gate",
+    "test:browser": "pnpm run ensure:test-extension && playwright test --project=foundation-normal && playwright test --project=normal",
+    "test:browser:worker:p0": "pnpm run ensure:test-extension && playwright test --project=worker-gate && playwright test --project=worker-p0",
+    "test:browser:worker": "pnpm run ensure:test-extension && playwright test --project=worker-gate && playwright test --project=worker",
+    "test:browser:scaffold": "pnpm run test:browser:scaffold:unit && pnpm run ensure:test-extension && playwright test --project=foundation-normal && playwright test --project=worker-gate",
     "lint": "oxlint .",
     "typecheck": "tsc --noEmit"
   },
@@ -44,11 +55,15 @@
     "@nexus-js/core": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "1.57.0",
     "@types/chrome": "0.1.36",
+    "@types/node": "24.10.2",
     "@vitejs/plugin-react-swc": "4.2.3",
+    "tsx": "4.21.0",
     "typescript": "7.0.2",
     "vite": "7.3.1",
-    "vitest": "4.0.18"
+    "vitest": "4.0.18",
+    "wxt": "0.21.4"
   },
   "peerDependencies": {
     "@nexus-js/core": ">=1.0.0"

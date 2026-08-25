@@ -198,6 +198,87 @@ Do not use the mock to validate Chrome adapter behavior. It does not exercise Ch
 
 Use Chrome adapter tests or extension E2E tests for those platform behaviors.
 
+## Chrome E2E Testing
+
+The browser suite requires a local dependency install and the Playwright-bundled
+Chromium browser:
+
+```bash
+pnpm install
+pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
+```
+
+Run the package-local gates and lanes with these exact commands:
+
+```bash
+pnpm --filter @nexus-js/chrome ensure:test-extension
+pnpm --filter @nexus-js/chrome test:browser:foundation
+pnpm --filter @nexus-js/chrome test:browser
+pnpm --filter @nexus-js/chrome test:browser:worker:gate
+pnpm --filter @nexus-js/chrome test:browser:worker:p0
+pnpm --filter @nexus-js/chrome test:browser:worker
+pnpm --filter @nexus-js/chrome test:browser:scaffold
+```
+
+`ensure:test-extension` builds `@nexus-js/core` and `@nexus-js/chrome`,
+produces the WXT `0.21.4` production Chrome MV3 fixture, validates and hashes
+the generated output, and runs browser typechecks. The Playwright commands
+invoke that same ensure step before their selected project; this is intentional
+when using the exact package scripts. Every browser run uses the sole
+`@playwright/test` harness, headless persistent bundled Chromium, a fresh
+external profile per case, and a dynamically discovered extension ID. The
+harness uses strict local loopback hosts and a negative origin. The origin
+`http://127.0.0.1:4175` is intentionally excluded from generated manifest
+content-script matches and host permissions; `http://127.0.0.1:4173/*` and
+`http://127.0.0.1:4174/*` are the only allowed generated matches and host
+permissions. Bootstrap asserts no top-level content marker, bridge-ready
+event, or provider effect on `4175`; its embedded beta iframe on allowed
+`4174` remains eligible and is asserted separately. The harness never uploads
+a default browser profile. It does not use WXT dev/HMR, a raw Vite extension
+fixture, Puppeteer, or `@wxt-dev/runner`.
+
+The Playwright runner contract is `workers: 1`, `fullyParallel: false`, and
+`retries: 0`. Package and CI commands are therefore serialized by the checked-in
+configuration: all Chrome E2E projects share fixed host ports `4173`--`4175`,
+one WXT output, and shared artifact roots. This prevents concurrent cases from
+overwriting shared fixture state or interfering with one another; no CLI
+override is needed.
+
+On failure, the harness retains a screenshot when a live page exists, a trace,
+console and page-error logs, diagnostics or a diagnostic-read-error log,
+manifest/output hash evidence, worker URL history, extension target/runtime
+evidence, and cleanup errors. Profiles remain outside the artifact paths and
+are removed by cleanup. The worker lifecycle rule is mandatory:
+`Target.getTargets` discovery and `Target.closeTarget` must pass before worker
+tests run. If that gate is blocked, worker lifecycle coverage cannot be
+claimed; the suite has no natural-idle fallback.
+
+The real E2E boundary covers common Chrome contexts and capabilities, including
+background/content, popup, options, custom, offscreen, RPC, selection,
+multicast, policy, resources, callbacks, State, storage, and explicit worker
+replacement. Relay coverage exercises popup/workspace -> the same background
+Nexus `relayService` -> the exact current top-frame main content document,
+including policy and target identity, navigation refresh, and downstream
+isolation. Direct multi-context State coverage exercises main content, popup,
+and workspace against one background-authoritative store, including exact
+0/1/2/3 versions and late join; it does not use State Relay. Offscreen Relay
+remains explicitly unsupported because Chrome's public target union has no
+offscreen target; CE21 covers direct offscreen lifecycle, not Relay. Inner
+tests own exact protocol error codes where applicable. The suite excludes
+DevTools, natural worker idle, toolbar UX, visual approval, and a broad browser
+matrix.
+
+CI keeps the browser-free `validate` job and iframe job. Pull requests run the
+normal lane and the worker P0 lane. The scheduled workflow runs a five-entry
+nightly matrix with zero retries; every matrix failure fails the workflow.
+Failure artifacts use unique job/matrix names and include only the package
+`packages/chrome/test-results/` bundles plus generated manifest/hash files under
+`tests/browser/extension/.output/chrome-mv3/`. Profiles are never included.
+
+This adds test, documentation, and CI infrastructure only. It does not change
+published package runtime behavior, public APIs, or the install contract, so no
+changeset is required. It is not an npm-facing capability change.
+
 ### New Context Support
 
 ```typescript

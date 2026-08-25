@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["chrome", "node", "vitest/globals"]
+  },
+  "include": ["playwright.config.ts", "tests/browser/**/*.ts"],
+  "exclude": [
+    "tests/browser/extension/entrypoints/**",
+    "tests/browser/extension/shared/**"
+  ]
+}
