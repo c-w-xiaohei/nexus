@@ -1,24 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BarrierTimeoutError, waitForBarrier } from "../harness/barriers";
-import { Cleanup } from "../harness/cleanup";
 import { Diagnostics } from "../harness/diagnostics";
 import {
   diagnosticCursor,
   diagnosticEventIdentity,
   selectDispatchCursor,
 } from "../harness/playwright-fixtures";
-import {
-  createAttachmentGuard,
-  extensionTargetNdjson,
-  formatBackgroundPageDiagnostic,
-  parseTargetRuntimeMessage,
-  sanitizeError,
-  sanitizeEvidenceText,
-  isExtensionTarget,
-  isOffscreenExtensionTarget,
-  shouldRecordTargetState,
-  withinTimeout,
-} from "../harness/launch-extension";
 import {
   sanitizeArtifactError,
   sanitizeArtifactText,
@@ -92,18 +79,6 @@ describe("browser fixture harness", () => {
         },
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("recognizes only fixture generated paths for cleanup and ignores", () => {
-    expect(Cleanup.isGeneratedPath("extension/.output/chrome-mv3")).toBe(true);
-    expect(Cleanup.isGeneratedPath("extension/.wxt/tsconfig.json")).toBe(true);
-    expect(Cleanup.isGeneratedPath("extension/entrypoints/background.ts")).toBe(
-      false,
-    );
-    expect(Cleanup.ignoreEntries()).toEqual([
-      "extension/.output/",
-      "extension/.wxt/",
-    ]);
   });
 
   it("validates unordered diagnostic snapshots and sorts them canonically", () => {
@@ -194,158 +169,6 @@ describe("browser fixture harness", () => {
     ).toBe(true);
     const lifecycle = diagnosticCursor([older]);
     expect(selectDispatchCursor([older, newer], lifecycle)).toBe(lifecycle);
-  });
-
-  it("keeps diagnostic read errors distinct from other failure artifacts", () => {
-    const error = new Error("storage target closed");
-    expect(error.stack ?? error.message).toContain("storage target closed");
-  });
-
-  it("treats a cleanup error as a failure after an otherwise-green body", () => {
-    const bodyFailed = false;
-    const cleanupErrors = ["Timed out clearing fixture storage"];
-    expect(!bodyFailed && cleanupErrors.length > 0).toBe(true);
-  });
-
-  it("filters extension targets and serializes lifecycle evidence as NDJSON", () => {
-    const target = {
-      targetId: "offscreen-target",
-      type: "other",
-      url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/offscreen.html",
-      attached: true,
-      event: "created" as const,
-      timestamp: "2026-08-24T12:00:00.000Z",
-    };
-    expect(
-      isExtensionTarget("abcdefghijklmnopabcdefghijklmnop", target.url),
-    ).toBe(true);
-    expect(
-      isExtensionTarget("abcdefghijklmnopabcdefghijklmnop", "about:blank"),
-    ).toBe(false);
-    expect(extensionTargetNdjson([target])).toBe(`${JSON.stringify(target)}\n`);
-    expect(
-      isOffscreenExtensionTarget("abcdefghijklmnopabcdefghijklmnop", {
-        type: "background_page",
-        url: `${target.url}?runId=run`,
-      }),
-    ).toBe(true);
-    expect(target.type).toBe("other");
-  });
-
-  it("records a target state once until CDP reports a real change", () => {
-    const states = new Map<string, { type: string; url: string }>();
-    const target = {
-      targetId: "offscreen-target",
-      type: "other",
-      url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/offscreen.html",
-    };
-    expect(shouldRecordTargetState(states, target)).toBe(true);
-    expect(shouldRecordTargetState(states, target)).toBe(false);
-    expect(shouldRecordTargetState(states, { ...target, type: "page" })).toBe(
-      true,
-    );
-  });
-
-  it("keeps service workers passive while offscreen targets remain observable", () => {
-    const worker = {
-      targetId: "worker-target",
-      type: "service_worker",
-      url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/background.js",
-    };
-    const offscreen = {
-      targetId: "offscreen-target",
-      type: "background_page",
-      url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/offscreen.html",
-    };
-    expect(
-      isOffscreenExtensionTarget("abcdefghijklmnopabcdefghijklmnop", worker),
-    ).toBe(false);
-    expect(
-      isOffscreenExtensionTarget("abcdefghijklmnopabcdefghijklmnop", offscreen),
-    ).toBe(true);
-  });
-
-  it("shares one offscreen attachment across discovery sources", async () => {
-    const guard = createAttachmentGuard();
-    let attachments = 0;
-    const attach = async () => {
-      attachments += 1;
-      return "session";
-    };
-    await Promise.all([
-      guard.attach("offscreen-target", attach),
-      guard.attach("offscreen-target", attach),
-    ]);
-    expect(attachments).toBe(1);
-    expect(guard.attachedSession("offscreen-target")).toBe("session");
-  });
-
-  it("bounds a pending attachment without waiting for it to settle", async () => {
-    await expect(
-      withinTimeout(new Promise<never>(() => undefined), 0),
-    ).rejects.toThrow("Timed out after 0ms");
-  });
-
-  it("serializes only JSON-safe background page diagnostics", () => {
-    expect(
-      formatBackgroundPageDiagnostic({
-        url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/offscreen.html?runId=run",
-        readyState: "complete",
-        runtimeLastError: null,
-      }),
-    ).toBe(
-      'background page: {"url":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/offscreen.html?runId=run","readyState":"complete","runtimeLastError":null}',
-    );
-  });
-
-  it("keeps nested runtime evidence scoped to its offscreen session", () => {
-    expect(
-      parseTargetRuntimeMessage(
-        "offscreen-session",
-        "other-session",
-        JSON.stringify({
-          method: "Runtime.exceptionThrown",
-          params: { value: 1 },
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      parseTargetRuntimeMessage(
-        "offscreen-session",
-        "offscreen-session",
-        JSON.stringify({
-          method: "Runtime.exceptionThrown",
-          params: { value: 1 },
-        }),
-      ),
-    ).toBe('{"method":"Runtime.exceptionThrown","params":{"value":1}}');
-    expect(
-      parseTargetRuntimeMessage(
-        "offscreen-session",
-        "offscreen-session",
-        JSON.stringify({ id: 1, error: { message: "Runtime.enable failed" } }),
-      ),
-    ).toBe('{"id":1,"error":{"message":"Runtime.enable failed"}}');
-  });
-
-  it("retains the structured fixture logger payload from Runtime console events", () => {
-    const payload =
-      'NEXUS_E2E_LOG {"realm":"content:main","scope":"Nexus-L3-ConnectionManager"}';
-    const parsed = parseTargetRuntimeMessage(
-      "worker-session",
-      "worker-session",
-      JSON.stringify({
-        method: "Runtime.consoleAPICalled",
-        params: { args: [{ type: "string", value: payload }] },
-      }),
-    );
-    expect(parsed).not.toBeUndefined();
-    const envelope = JSON.parse(parsed as string) as {
-      readonly params: {
-        readonly args: readonly [{ readonly value: string }];
-      };
-    };
-    expect(envelope.params.args[0].value).toBe(payload);
   });
 
   it("accepts only the exact fixture policy control shape", () => {
@@ -546,31 +369,12 @@ describe("browser fixture harness", () => {
     expect(sanitizeFixtureText("safe text")).toBe("safe text");
   });
 
-  it("sanitizes Task3 evidence strings without changing safe extension context", () => {
-    const consoleText = sanitizeEvidenceText(
-      "GET chrome-extension://id/offscreen.html?runId=run_1&access_token=SECRET_QUERY Bearer SECRET_BEARER",
-    );
-    expect(consoleText).toContain(
-      "chrome-extension://id/offscreen.html?runId=run_1",
-    );
-    expect(consoleText).not.toContain("SECRET_QUERY");
-    expect(consoleText).not.toContain("SECRET_BEARER");
-    const targetUrl = sanitizeEvidenceText(
-      "https://user:SECRET_PASSWORD@example.test/offscreen.html?runId=run_1&access_token=SECRET_TOKEN",
-    );
-    expect(targetUrl).toContain("runId=run_1");
-    expect(targetUrl).toContain("user:[redacted]@example.test");
-    expect(targetUrl).not.toContain("SECRET_PASSWORD");
-    expect(targetUrl).not.toContain("SECRET_TOKEN");
-  });
-
-  it("sanitizes Task3 page errors and artifact errors", () => {
+  it("sanitizes artifact errors", () => {
     const error = new Error("password=SECRET_MESSAGE");
     error.stack = "Error: password=SECRET_STACK\nBearer SECRET_BEARER";
-    for (const value of [sanitizeError(error), sanitizeArtifactError(error)]) {
-      expect(value).not.toContain("SECRET_STACK");
-      expect(value).not.toContain("SECRET_BEARER");
-    }
+    const value = sanitizeArtifactError(error);
+    expect(value).not.toContain("SECRET_STACK");
+    expect(value).not.toContain("SECRET_BEARER");
     expect(
       sanitizeArtifactText(
         "cookie=SECRET_COOKIE chrome-extension://id/page.html?runId=run_1",

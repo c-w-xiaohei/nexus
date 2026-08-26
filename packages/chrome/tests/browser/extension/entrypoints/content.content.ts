@@ -344,10 +344,6 @@ export default defineContentScript({
           );
           return;
         }
-        if (command === "content-echo") {
-          await reporter.result(`${label}:echo`);
-          return;
-        }
         if (command === "content-hold") {
           const result = await chrome.runtime.sendMessage({
             kind: "fixture-command",
@@ -571,19 +567,6 @@ export default defineContentScript({
           }
           return;
         }
-        if (command === "worker-capability-release") {
-          if (!retainedCapability)
-            throw new Error("worker capability was not retained");
-          const released = nexus.safeRelease(retainedCapability);
-          await reporter.result(
-            JSON.stringify(
-              released.isErr()
-                ? errorResult(released.error)
-                : { released: true },
-            ),
-          );
-          return;
-        }
         if (command === "worker-capability-fresh") {
           const workspace = await nexus.create(WorkspaceToken, {
             callTimeout: 30_000,
@@ -723,7 +706,6 @@ function isBackgroundCommand(
     "create-frame",
     "create-document",
     "create-concurrent",
-    "pre-ready-close",
     "multicast-create",
     "multicast-select",
     "reference-callback",
@@ -758,7 +740,6 @@ function isBackgroundCommand(
     "worker-storage-read",
     "worker-capability-retain",
     "worker-capability-invoke",
-    "worker-capability-release",
     "worker-capability-fresh",
     "worker-capability-fresh-release",
     "worker-capability-fresh-invoke",

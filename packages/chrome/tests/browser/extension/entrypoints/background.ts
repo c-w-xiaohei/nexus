@@ -602,20 +602,6 @@ export default defineBackground(() => {
           observedPortDelta: observedContentPorts - beforePorts,
         };
       }
-      if (command === "pre-ready-close") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const controller = new AbortController();
-        const pending = nexus.safeCreate(DocumentToolToken, {
-          target,
-          signal: controller.signal,
-        });
-        controller.abort();
-        const result = await pending;
-        await reporter?.barrier("pre-ready-closed");
-        return result.isErr()
-          ? errorResult(result.error)
-          : { code: "E_FIXTURE_UNEXPECTED_PROXY" };
-      }
       if (command === "pre-ready-port-close") {
         if (!target) return { code: "E_TARGET_UNAVAILABLE" };
         const created = await nexus.safeCreate(DocumentToolToken, { target });

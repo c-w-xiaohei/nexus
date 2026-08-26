@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +8,6 @@ const requiredPermissions = ["storage", "webNavigation", "offscreen", "tabs"];
 const requiredHosts = ["http://127.0.0.1:4173/*", "http://127.0.0.1:4174/*"];
 
 export interface BuildValidation {
-  readonly hash: string;
   readonly manifest: Record<string, unknown>;
 }
 
@@ -58,26 +56,12 @@ export function validateExtensionBuild(
     assert(!hasPrivateImport(source), `private or source import in ${path}`);
     assert(!hasBareImport(source), `unresolved bare import in ${path}`);
   }
-  const hash = createHash("sha256")
-    .update(
-      Object.entries(files)
-        .filter(([path]) => path !== ".nexus-e2e-output.sha256")
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([path, source]) => `${path}\0${source}`)
-        .join("\0"),
-    )
-    .digest("hex");
-  return { hash, manifest };
+  return { manifest };
 }
 
 async function main(): Promise<void> {
   const files = await readOutput(outputDirectory);
-  const result = validateExtensionBuild(files);
-  await writeFile(
-    join(outputDirectory, ".nexus-e2e-output.sha256"),
-    `${result.hash}\n`,
-  );
-  process.stdout.write(`${result.hash}\n`);
+  validateExtensionBuild(files);
 }
 
 async function readOutput(directory: string): Promise<Record<string, string>> {

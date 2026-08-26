@@ -4,9 +4,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { outputDirectory } from "../build-extension";
+import { rm, writeFile } from "node:fs/promises";
 import type { DiagnosticEvent } from "../protocol";
 import { sanitizeFixtureText } from "../extension/shared/runtime";
 import {
@@ -14,11 +12,7 @@ import {
   waitForBarrier as waitForDiagnosticBarrier,
 } from "./barriers";
 import { Diagnostics } from "./diagnostics";
-import {
-  extensionTargetNdjson,
-  launchExtension,
-  type ExtensionLaunch,
-} from "./launch-extension";
+import { launchExtension, type ExtensionLaunch } from "./launch-extension";
 import { ServiceWorkerController } from "./service-worker-controller";
 
 type ResultEvent = DiagnosticEvent & {
@@ -122,12 +116,6 @@ export const test = base.extend<Fixture>({
           "clear-storage",
           () => clearFixtureStorage(launch.context, launch.extensionId),
           false,
-        );
-        await cleanupStage(
-          cleanupStages,
-          cleanupErrors,
-          "detach-target-observer",
-          () => launch.detachTargetObserver(),
         );
         if (cleanupErrors.length > 0 && !artifactsCollected) {
           await collectFailureArtifacts({
@@ -357,40 +345,6 @@ async function collectFailureArtifacts({
       message,
     );
   }
-  try {
-    await writeAndAttachTextArtifact(
-      testInfo,
-      cleanupErrors,
-      "manifest-output-hash",
-      await readFile(join(outputDirectory, ".nexus-e2e-output.sha256"), "utf8"),
-    );
-  } catch (error) {
-    await writeAndAttachTextArtifact(
-      testInfo,
-      cleanupErrors,
-      "manifest-read-error.log",
-      sanitizeArtifactError(error),
-    );
-  }
-  await writeAndAttachTextArtifact(
-    testInfo,
-    cleanupErrors,
-    "worker-urls",
-    sanitizeArtifactText(launch.workerUrls.join("\n")),
-  );
-  await writeAndAttachTextArtifact(
-    testInfo,
-    cleanupErrors,
-    "extension-targets.ndjson",
-    extensionTargetNdjson(launch.targetHistory),
-    "application/x-ndjson",
-  );
-  await writeAndAttachTextArtifact(
-    testInfo,
-    cleanupErrors,
-    "extension-runtime.log",
-    sanitizeArtifactText(launch.runtimeLogs.join("\n")),
-  );
 }
 
 async function writeAndAttachTextArtifact(

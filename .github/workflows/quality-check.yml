@@ -105,9 +105,6 @@ jobs:
       - name: Run Chrome browser scaffold unit tests
         run: pnpm --filter @nexus-js/chrome test:browser:scaffold:unit
 
-      - name: Ensure Chrome test extension
-        run: pnpm --filter @nexus-js/chrome ensure:test-extension
-
       - name: Run Chrome normal browser tests
         run: pnpm --filter @nexus-js/chrome test:browser
 
@@ -119,7 +116,6 @@ jobs:
           path: |
             packages/chrome/test-results/
             packages/chrome/tests/browser/extension/.output/chrome-mv3/manifest.json
-            packages/chrome/tests/browser/extension/.output/chrome-mv3/.nexus-e2e-output.sha256
           if-no-files-found: ignore
           retention-days: 14
 
@@ -147,9 +143,6 @@ jobs:
       - name: Install Chromium
         run: pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
 
-      - name: Ensure Chrome test extension
-        run: pnpm --filter @nexus-js/chrome ensure:test-extension
-
       - name: Run Chrome worker P0 tests
         run: pnpm --filter @nexus-js/chrome test:browser:worker:p0
 
@@ -161,6 +154,5 @@ jobs:
           path: |
             packages/chrome/test-results/
             packages/chrome/tests/browser/extension/.output/chrome-mv3/manifest.json
-            packages/chrome/tests/browser/extension/.output/chrome-mv3/.nexus-e2e-output.sha256
           if-no-files-found: ignore
           retention-days: 14

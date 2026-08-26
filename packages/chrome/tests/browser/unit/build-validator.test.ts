@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { validateExtensionBuild } from "../build-extension";
 
 describe("validateExtensionBuild", () => {
-  test("accepts a complete WXT Chrome MV3 output and returns a stable hash", () => {
+  test("accepts a complete WXT Chrome MV3 output", () => {
     const output = {
       "manifest.json": JSON.stringify({
         manifest_version: 3,
@@ -34,14 +34,9 @@ describe("validateExtensionBuild", () => {
       "offscreen.html": '<script src="chunks/offscreen.js"></script>',
     };
 
-    const first = validateExtensionBuild(output);
-    expect(first).toMatchObject({
-      hash: expect.any(String),
+    expect(validateExtensionBuild(output).manifest).toMatchObject({
+      manifest_version: 3,
     });
-    expect(
-      validateExtensionBuild({ ...output, ".nexus-e2e-output.sha256": "old" })
-        .hash,
-    ).toBe(first.hash);
   });
 
   test("rejects source paths and bare imports in every executable output", () => {
