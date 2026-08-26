@@ -269,11 +269,10 @@ DevTools, natural worker idle, toolbar UX, visual approval, and a broad browser
 matrix.
 
 CI keeps the browser-free `validate` job and iframe job. Pull requests run the
-normal lane and the worker P0 lane. The scheduled workflow runs a five-entry
-nightly matrix with zero retries; every matrix failure fails the workflow.
-Failure artifacts use unique job/matrix names and include only the package
-`packages/chrome/test-results/` bundles plus generated manifest/hash files under
-`tests/browser/extension/.output/chrome-mv3/`. Profiles are never included.
+normal lane and the worker P0 lane. Failure artifacts use unique job names and
+include only the package `packages/chrome/test-results/` bundles plus generated
+manifest/hash files under `tests/browser/extension/.output/chrome-mv3/`.
+Profiles are never included.
 
 This adds test, documentation, and CI infrastructure only. It does not change
 published package runtime behavior, public APIs, or the install contract, so no
