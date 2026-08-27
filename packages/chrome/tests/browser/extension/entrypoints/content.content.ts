@@ -1,4 +1,9 @@
-import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
+import { type ChromeAdapterModel, usingContentScript } from "@nexus-js/chrome";
+import type {
+  Asyncified,
+  ConnectionWhere,
+  NexusInstance,
+} from "@nexus-js/core";
 import { connectNexusStore, type RemoteStore } from "@nexus-js/core/state";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
@@ -6,11 +11,19 @@ import {
   DocumentRelayToken,
   DocumentRouteToken,
   FixtureAdminToken,
+  type FixtureAppMeta,
+  type DocumentRouteFacts,
   TargetedContentAdminToken,
   WorkspaceToken,
+  type WorkspaceCapability,
   type WorkspaceService,
 } from "../shared/contracts";
-import { isScenarioCommand, scenarioCommands } from "../shared/scenario";
+import {
+  isPreRouteCommand,
+  isScenarioCommand,
+  scenarioCommands,
+  type ScenarioCommand,
+} from "../shared/scenario";
 import {
   configureFixtureLogger,
   createReporter,
@@ -25,6 +38,45 @@ import {
   type WorkspaceState,
   type WorkspaceStateActions,
 } from "../shared/workspace-state";
+
+type FixtureChromeModel = ChromeAdapterModel<FixtureAppMeta>;
+type FixtureWhere = ConnectionWhere<FixtureChromeModel>;
+type FixtureContext = Parameters<FixtureWhere>[0];
+type FixtureNexus = NexusInstance<FixtureChromeModel>;
+type ContentStateClient = RemoteStore<WorkspaceState, WorkspaceStateActions>;
+type WorkspaceProxy = Asyncified<WorkspaceService>;
+type ContentReporter = ReturnType<typeof createReporter>;
+type ContentCommandReporter = Pick<
+  ContentReporter,
+  "barrier" | "result" | "error" | "terminalResult"
+>;
+
+type MainContentState = {
+  client: ContentStateClient | undefined;
+  unsubscribe: (() => void) | undefined;
+  subscriptionSequence: number;
+};
+
+type WorkerContentState = {
+  retained: ContentStateClient | undefined;
+  retainedUnsubscribe: (() => void) | undefined;
+  fresh: ContentStateClient | undefined;
+};
+
+type WorkerProxyHandles = {
+  retained: WorkspaceProxy | undefined;
+};
+
+type WorkerCapabilityHandles = {
+  retained: WorkspaceCapability | undefined;
+  fresh: WorkspaceCapability | undefined;
+};
+
+type ContentRouteProbe = {
+  readonly facts: () => DocumentRouteFacts;
+  readonly recordInvocation: () => void;
+  readonly armPreReadyClose: () => Promise<void>;
+};
 
 export default defineContentScript({
   matches: ["http://127.0.0.1:4173/*", "http://127.0.0.1:4174/*"],
@@ -42,7 +94,7 @@ export default defineContentScript({
     const autoInitiate = searchParams.get("auto-initiate") === "true";
     const nonce = crypto.randomUUID();
     const declaredFrameId = searchParams.get("declared-frame");
-    const nexus = usingContentScript({
+    const nexus = usingContentScript<FixtureAppMeta>({
       app: {
         fixture: true,
         sessionId: identity.sessionId,
@@ -53,39 +105,34 @@ export default defineContentScript({
           : { declaredFrameId: Number(declaredFrameId) }),
       },
     });
-    let retainedWorkspace:
-      | Awaited<ReturnType<typeof nexus.create<WorkspaceService>>>
-      | undefined;
-    let retainedState:
-      | RemoteStore<WorkspaceState, WorkspaceStateActions>
-      | undefined;
-    let unsubscribeState: (() => void) | undefined;
-    let retainedStateUnsubscribe: (() => void) | undefined;
-    let freshState:
-      | RemoteStore<WorkspaceState, WorkspaceStateActions>
-      | undefined;
-    let retainedCapability: any;
-    let acceptedRoutes = 0;
-    let invocationCount = 0;
-    let preReadyArmed = false;
-    chrome.runtime.onConnect.addListener((port) => {
-      if (port.sender?.tab?.id !== undefined) return;
-      acceptedRoutes += 1;
-      void reporter.barrier("content-route-accepted");
-      if (!preReadyArmed) return;
-      preReadyArmed = false;
-      void reporter.barrier("pre-ready-port-open");
-      port.disconnect();
-    });
-    let freshCapability: any;
+    const mainState: MainContentState = {
+      client: undefined,
+      unsubscribe: undefined,
+      subscriptionSequence: 0,
+    };
+    const workerState: WorkerContentState = {
+      retained: undefined,
+      retainedUnsubscribe: undefined,
+      fresh: undefined,
+    };
+    const workerProxy: WorkerProxyHandles = { retained: undefined };
+    const workerCapability: WorkerCapabilityHandles = {
+      retained: undefined,
+      fresh: undefined,
+    };
+    const routeProbe = createContentRouteProbe(
+      reporter,
+      identity.sessionId,
+      nonce,
+    );
     if (label === "main") {
       nexus.provide(DocumentRelayToken, {
         identity: async () => {
-          invocationCount += 1;
+          routeProbe.recordInvocation();
           return { label, nonce, sessionId: identity.sessionId };
         },
         echo: async (value) => {
-          invocationCount += 1;
+          routeProbe.recordInvocation();
           return `${label}:${value}`;
         },
       });
@@ -94,11 +141,11 @@ export default defineContentScript({
       DocumentToolToken,
       {
         identity: async () => {
-          invocationCount += 1;
+          routeProbe.recordInvocation();
           return { label, nonce, sessionId: identity.sessionId };
         },
         echo: async (value) => {
-          invocationCount += 1;
+          routeProbe.recordInvocation();
           return `${label}:${value}`;
         },
         fail: async () => Promise.reject(new Error("fixture remote failure")),
@@ -119,10 +166,7 @@ export default defineContentScript({
     );
     nexus.provide(DocumentRouteToken, {
       facts: async () => ({
-        accepted: acceptedRoutes,
-        invocationCount,
-        sessionId: identity.sessionId,
-        nonce,
+        ...routeProbe.facts(),
       }),
     });
     void nexus.ready().then(async () => {
@@ -140,13 +184,12 @@ export default defineContentScript({
         hasStateClientFlag(window.location, identity.runId) &&
         window.top === window
       ) {
-        retainedState = await connectNexusStore(
+        mainState.client = await connectNexusStore(
           nexus,
           workspaceStateDefinition,
         );
-        let subscriptionSequence = 0;
-        unsubscribeState = retainedState.subscribe(() => {
-          const state = retainedState!;
+        const state = mainState.client;
+        mainState.unsubscribe = state.subscribe(() => {
           const status = state.getStatus();
           void reporter.result(
             JSON.stringify({
@@ -164,12 +207,12 @@ export default defineContentScript({
                 status.type === "ready" ? status.storeInstanceId : null,
               version: status.type === "ready" ? status.version : null,
               state: state.getState(),
-              subscriptionSequence: ++subscriptionSequence,
+              subscriptionSequence: ++mainState.subscriptionSequence,
               error: null,
             }),
           );
         });
-        const status = retainedState.getStatus();
+        const status = state.getStatus();
         await reporter.result(
           JSON.stringify({
             result: "state-client-ready",
@@ -180,7 +223,7 @@ export default defineContentScript({
             storeInstanceId:
               status.type === "ready" ? status.storeInstanceId : null,
             version: status.type === "ready" ? status.version : null,
-            state: retainedState.getState(),
+            state: state.getState(),
             subscriptionSequence: 0,
             error: null,
           }),
@@ -239,7 +282,7 @@ export default defineContentScript({
     });
 
     async function connectBackground(
-      commandReporter = reporter,
+      commandReporter: ContentCommandReporter = reporter,
     ): Promise<void> {
       await reporter.barrier("content-connect");
       const workspace = await nexus.create(WorkspaceToken);
@@ -254,417 +297,45 @@ export default defineContentScript({
       reporter: ReturnType<typeof createReporter>,
     ): Promise<void> {
       try {
-        if (command === "state-content-action") {
-          if (!retainedState) {
-            await reporter.result(
-              JSON.stringify({
-                result: "state-action-result",
-                participant: "main",
-                sessionId: identity.sessionId,
-                status: null,
-                state: null,
-                error: "E_STATE_CLIENT_ABSENT",
-              }),
-            );
-            return;
-          }
-          const value = await retainedState.actions.increment();
-          await reporter.result(
-            JSON.stringify({
-              result: "state-action-result",
-              participant: "main",
-              sessionId: identity.sessionId,
-              status: retainedState.getStatus(),
-              state: retainedState.getState(),
-              value,
-              error: null,
-            }),
-          );
-          return;
-        }
-        if (command === "state-client-cleanup") {
-          const state = retainedState;
-          if (state) {
-            unsubscribeState?.();
-            state.destroy();
-          }
-          await reporter.result(
-            JSON.stringify({
-              result: "state-client-cleanup-result",
-              participant: "main",
-              sessionId: identity.sessionId,
-              status: state ? state.getStatus() : null,
-              state: null,
-              error: state ? null : "E_STATE_CLIENT_ABSENT",
-            }),
-          );
-          return;
-        }
-        if (command === "content-connect")
-          return await connectBackground(reporter);
-        if (command === "provider-first-select") {
-          await connectBackground(reporter);
-          const admin = await nexus.create(TargetedContentAdminToken);
-          const result = await admin.providerFirstSelect();
-          await reporter.result(JSON.stringify(result));
-          return;
-        }
-        if (command === "background-summary") {
-          const workspace = await nexus.create(WorkspaceToken, {
-            callTimeout: 30_000,
-          });
-          await reporter.result(JSON.stringify(await workspace.summary()));
-          return;
-        }
-        if (command === "background-increment") {
-          const workspace = await nexus.create(WorkspaceToken);
-          await reporter.result(String(await workspace.increment()));
-          return;
-        }
-        if (command === "background-setting") {
-          const workspace = await nexus.create(WorkspaceToken);
-          await reporter.result(await workspace.setting());
-          return;
-        }
-        if (command === "content-identity") {
-          await reporter.result(
-            JSON.stringify({ label, nonce, sessionId: identity.sessionId }),
-          );
-          return;
-        }
-        if (command === "document-route-facts") {
-          await reporter.result(
-            JSON.stringify({
-              accepted: acceptedRoutes,
-              invocationCount,
-              sessionId: identity.sessionId,
-              nonce,
-            }),
-          );
-          return;
-        }
-        if (command === "content-hold") {
-          const admin = await nexus.create(TargetedContentAdminToken);
-          const result = await admin.contentHold(label);
-          await reporter.result(JSON.stringify(result));
-          return;
-        }
         if (
-          command === "multicast-bound-invoke" ||
-          command === "multicast-fail" ||
-          command === "capability-invoke" ||
-          command === "capability-proxy-invoke" ||
-          command === "capability-reference-invoke" ||
-          command === "capability-release" ||
-          command === "identity-pinned" ||
-          command === "offscreen-create" ||
-          command === "offscreen-close"
-        ) {
-          const admin = await nexus.create(FixtureAdminToken);
-          const result =
-            command === "multicast-bound-invoke"
-              ? await admin.multicastBoundInvoke()
-              : command === "multicast-fail"
-                ? await admin.multicastFail()
-                : command === "capability-invoke"
-                  ? await admin.capabilityInvoke()
-                  : command === "capability-proxy-invoke"
-                    ? await admin.capabilityProxyInvoke()
-                    : command === "capability-reference-invoke"
-                      ? await admin.capabilityReferenceInvoke()
-                      : command === "capability-release"
-                        ? await admin.capabilityRelease()
-                        : command === "identity-pinned"
-                          ? await admin.identityPinned()
-                          : command === "offscreen-create"
-                            ? await admin.createOffscreen()
-                            : await admin.closeOffscreen();
-          await reporter.result(JSON.stringify(result));
-          return;
-        }
-        if (command === "identity-constraint") {
-          const admin = await nexus.create(TargetedContentAdminToken);
-          await reporter.result(
-            JSON.stringify(await admin.identityConstraint()),
-          );
-          return;
-        }
-        if (command === "pre-ready-port-close") {
-          preReadyArmed = true;
-          await reporter.barrier("pre-ready-armed");
-          // This must create the first native route while the content listener
-          // is armed, before an admin Nexus proxy can establish one.
-          const result = await chrome.runtime.sendMessage({
-            kind: "fixture-command",
-            runId: identity.runId,
-            senderSessionId: identity.sessionId,
+          await runContentStateCommand(
             command,
-          });
-          await reporter.result(JSON.stringify(result));
+            mainState,
+            reporter,
+            identity.sessionId,
+          )
+        )
           return;
-        }
-        if (command === "worker-pending") {
-          const callTimeoutMs = 30_000;
-          const workspace = await nexus.create(WorkspaceToken, {
-            callTimeout: callTimeoutMs,
-          });
-          await reporter.barrier("worker-pending-call-started");
-          const started = performance.now();
-          try {
-            await workspace.pending();
-          } catch (error) {
-            const settled = performance.now();
-            await reporter.terminalResult(
-              JSON.stringify({
-                ...errorResult(error),
-                callTimeoutMs,
-                started,
-                settled,
-              }),
-            );
-          }
-          return;
-        }
-        if (command === "worker-proxy-retain") {
-          retainedWorkspace = await nexus.create(WorkspaceToken, {
-            callTimeout: 30_000,
-          });
-          await reporter.result(
-            JSON.stringify({ retained: await retainedWorkspace.summary() }),
-          );
-          return;
-        }
-        if (command === "worker-proxy-invoke") {
-          if (!retainedWorkspace) {
-            await reporter.result(
-              JSON.stringify({ code: "E_FIXTURE_PROXY_ABSENT" }),
-            );
-            return;
-          }
-          try {
-            await reporter.result(
-              JSON.stringify({ old: await retainedWorkspace.summary() }),
-            );
-          } catch (error) {
-            await reporter.terminalResult(JSON.stringify(errorResult(error)));
-            nexus.safeRelease(retainedWorkspace);
-            retainedWorkspace = undefined;
-          }
-          return;
-        }
-        if (command === "worker-proxy-fresh") {
-          const created = await nexus.safeCreate(WorkspaceToken, {
-            timeout: 5_000,
-            callTimeout: 30_000,
-          });
-          if (created.isErr()) {
-            await reporter.terminalResult(
-              JSON.stringify(errorResult(created.error)),
-            );
-            return;
-          }
-          const workspace = created.value;
-          const fresh = await workspace.summary();
-          await reporter.terminalResult(JSON.stringify({ fresh }));
-          return;
-        }
-        if (command === "worker-state-retain") {
-          retainedState = await connectNexusStore(
+        if (
+          await runContentBackgroundCommand(
+            command,
             nexus,
-            workspaceStateDefinition,
-          );
-          retainedStateUnsubscribe = retainedState.subscribe(() => {});
-          await reporter.terminalResult(
-            JSON.stringify({
-              state: retainedState.getState(),
-              status: retainedState.getStatus(),
-            }),
-          );
+            reporter,
+            label,
+            nonce,
+            identity.runId,
+            identity.sessionId,
+            routeProbe,
+            connectBackground,
+          )
+        )
           return;
-        }
-        if (command === "worker-state-write") {
-          if (!retainedState) throw new Error("worker State was not retained");
-          const value = await retainedState.actions.increment();
-          await reporter.result(
-            JSON.stringify({ value, status: retainedState.getStatus() }),
-          );
+        if (await runFixtureAdminCommand(command, nexus, reporter)) return;
+        if (await runWorkerProxyCommand(command, nexus, workerProxy, reporter))
           return;
-        }
-        if (command === "worker-state-status") {
-          await reporter.result(
-            JSON.stringify(retainedState?.getStatus() ?? { type: "absent" }),
-          );
+        if (await runWorkerStateCommand(command, nexus, workerState, reporter))
           return;
-        }
-        if (command === "worker-state-fresh") {
-          freshState = await connectNexusStore(nexus, workspaceStateDefinition);
-          await reporter.terminalResult(
-            JSON.stringify({
-              state: freshState.getState(),
-              status: freshState.getStatus(),
-            }),
-          );
+        if (await runWorkerStorageCommand(command, nexus, reporter)) return;
+        if (
+          await runWorkerCapabilityCommand(
+            command,
+            nexus,
+            workerCapability,
+            reporter,
+          )
+        )
           return;
-        }
-        if (command === "worker-state-cleanup") {
-          const cleanupState = (
-            state:
-              | RemoteStore<WorkspaceState, WorkspaceStateActions>
-              | undefined,
-            unsubscribe: (() => void) | undefined,
-          ) => {
-            let error: string | null = null;
-            try {
-              unsubscribe?.();
-            } catch (cause) {
-              error = fixtureErrorCode(cause);
-            }
-            try {
-              state?.destroy();
-            } catch (cause) {
-              error ??= fixtureErrorCode(cause);
-            }
-            let status: ReturnType<
-              RemoteStore<WorkspaceState, WorkspaceStateActions>["getStatus"]
-            > | null = null;
-            try {
-              status = state?.getStatus() ?? null;
-            } catch (cause) {
-              error ??= fixtureErrorCode(cause);
-            }
-            if (!state) error ??= "E_STATE_CLIENT_ABSENT";
-            return { status, error };
-          };
-          const retained = cleanupState(
-            retainedState,
-            retainedStateUnsubscribe,
-          );
-          const fresh = cleanupState(freshState, undefined);
-          retainedState = undefined;
-          retainedStateUnsubscribe = undefined;
-          freshState = undefined;
-          await reporter.terminalResult(
-            JSON.stringify({
-              result: "worker-state-cleanup-result",
-              retained,
-              fresh,
-            }),
-          );
-          return;
-        }
-        if (command === "worker-storage-write") {
-          const workspace = await nexus.create(WorkspaceToken);
-          const value = await workspace.setSetting("worker-durable");
-          await reporter.result(JSON.stringify({ durable: value }));
-          return;
-        }
-        if (command === "worker-storage-read") {
-          const workspace = await nexus.create(WorkspaceToken);
-          await reporter.result(
-            JSON.stringify({ durable: await workspace.setting() }),
-          );
-          return;
-        }
-        if (command === "worker-capability-retain") {
-          const workspace = await nexus.create(WorkspaceToken);
-          const callback = await workspace.acceptCallback(
-            async () => "callback-ok",
-          );
-          retainedCapability = await workspace.createCapability();
-          await reporter.result(
-            JSON.stringify({
-              capability: await retainedCapability.ping(),
-              callback,
-            }),
-          );
-          return;
-        }
-        if (command === "worker-capability-invoke") {
-          if (!retainedCapability)
-            throw new Error("worker capability was not retained");
-          try {
-            await reporter.result(
-              JSON.stringify({ capability: await retainedCapability.ping() }),
-            );
-          } catch (error) {
-            await reporter.terminalResult(JSON.stringify(errorResult(error)));
-          }
-          return;
-        }
-        if (command === "worker-capability-fresh") {
-          const workspace = await nexus.create(WorkspaceToken, {
-            callTimeout: 30_000,
-          });
-          const callback = await workspace.acceptCallback(
-            async () => "callback-fresh",
-          );
-          freshCapability = await workspace.createCapability();
-          const value = await freshCapability.ping();
-          await reporter.terminalResult(
-            JSON.stringify({
-              capability: value,
-              callback,
-              summary: await workspace.summary(),
-            }),
-          );
-          return;
-        }
-        if (command === "worker-capability-fresh-release") {
-          if (!freshCapability)
-            throw new Error("fresh capability was not acquired");
-          const released = nexus.safeRelease(freshCapability);
-          await reporter.result(
-            JSON.stringify(
-              released.isErr()
-                ? errorResult(released.error)
-                : { released: true },
-            ),
-          );
-          return;
-        }
-        if (command === "worker-capability-fresh-invoke") {
-          if (!freshCapability)
-            throw new Error("fresh capability was not acquired");
-          try {
-            await reporter.result(
-              JSON.stringify({ capability: await freshCapability.ping() }),
-            );
-          } catch (error) {
-            await reporter.terminalResult(JSON.stringify(errorResult(error)));
-          }
-          return;
-        }
-        if (command === "policy-deny" || command === "policy-allow") {
-          const denyCalls = command === "policy-deny";
-          const admin = await nexus.create(FixtureAdminToken);
-          const result = await admin.setCallPolicy(denyCalls);
-          await reporter.result(JSON.stringify(result));
-          return;
-        }
-        if (command === "abort-acquire") {
-          const controller = new AbortController();
-          const pending = nexus.safeSelect(DocumentToolToken, {
-            where: (context: any) =>
-              context.app.label === "fixture-impossible-provider",
-            wait: { signal: controller.signal },
-          });
-          await reporter.barrier("abort-started");
-          controller.abort();
-          const result = await pending;
-          await reporter.result(
-            JSON.stringify(
-              result.isErr()
-                ? { code: (result.error as Error & { code?: string }).code }
-                : { code: "E_FIXTURE_UNEXPECTED_PROXY" },
-            ),
-          );
-          return;
-        }
-        if (command === "security-counter") {
-          const workspace = await nexus.create(WorkspaceToken);
-          await reporter.result(JSON.stringify(await workspace.summary()));
-          return;
-        }
+        if (await runContentControlCommand(command, nexus, reporter)) return;
         const result = await runTargetedCommand(
           command,
           identity.runId,
@@ -674,25 +345,18 @@ export default defineContentScript({
           await reporter.result(JSON.stringify(result));
           return;
         }
-        if (command === "identity-update") {
-          await nexus.updateIdentity({
-            app: {
-              fixture: true,
-              sessionId: identity.sessionId,
-              runId: identity.runId,
-              label: `${label}-updated`,
-            },
-          });
-          await chrome.runtime.sendMessage({
-            kind: "content-identity",
-            runId: identity.runId,
-            label: `${label}-updated`,
-            sessionId: identity.sessionId,
+        if (
+          await runIdentityUpdateCommand(
+            command,
+            nexus,
+            reporter,
+            label,
+            identity.runId,
+            identity.sessionId,
             nonce,
-          });
-          await reporter.barrier("identity update");
+          )
+        )
           return;
-        }
         await reporter.result(`unsupported:${command}`);
       } catch (error) {
         await reporter.error(JSON.stringify(errorResult(error)));
@@ -700,6 +364,498 @@ export default defineContentScript({
     }
   },
 });
+
+function createContentRouteProbe(
+  reporter: ContentReporter,
+  sessionId: string,
+  nonce: string,
+): ContentRouteProbe {
+  let acceptedRoutes = 0;
+  let invocationCount = 0;
+  let preReadyArmed = false;
+
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port.sender?.tab?.id !== undefined) return;
+    acceptedRoutes += 1;
+    void reporter.barrier("content-route-accepted");
+    if (!preReadyArmed) return;
+    preReadyArmed = false;
+    void reporter.barrier("pre-ready-port-open");
+    port.disconnect();
+  });
+
+  return {
+    facts: () => ({
+      accepted: acceptedRoutes,
+      invocationCount,
+      sessionId,
+      nonce,
+    }),
+    recordInvocation: () => {
+      invocationCount += 1;
+    },
+    armPreReadyClose: async () => {
+      preReadyArmed = true;
+      await reporter.barrier("pre-ready-armed");
+    },
+  };
+}
+
+async function runContentBackgroundCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+  label: string,
+  nonce: string,
+  runId: string,
+  sessionId: string,
+  routeProbe: ContentRouteProbe,
+  connectBackground: (reporter?: ContentCommandReporter) => Promise<void>,
+): Promise<boolean> {
+  if (command === "content-connect") {
+    await connectBackground(reporter);
+    return true;
+  }
+  if (command === "provider-first-select") {
+    await connectBackground(reporter);
+    const admin = await nexus.create(TargetedContentAdminToken);
+    await reporter.result(JSON.stringify(await admin.providerFirstSelect()));
+    return true;
+  }
+  if (command === "background-summary") {
+    const workspace = await nexus.create(WorkspaceToken, {
+      callTimeout: 30_000,
+    });
+    await reporter.result(JSON.stringify(await workspace.summary()));
+    return true;
+  }
+  if (command === "background-increment") {
+    const workspace = await nexus.create(WorkspaceToken);
+    await reporter.result(String(await workspace.increment()));
+    return true;
+  }
+  if (command === "background-setting") {
+    const workspace = await nexus.create(WorkspaceToken);
+    await reporter.result(await workspace.setting());
+    return true;
+  }
+  if (command === "content-identity") {
+    await reporter.result(JSON.stringify({ label, nonce, sessionId }));
+    return true;
+  }
+  if (command === "document-route-facts") {
+    await reporter.result(JSON.stringify(routeProbe.facts()));
+    return true;
+  }
+  if (command === "content-hold") {
+    const admin = await nexus.create(TargetedContentAdminToken);
+    await reporter.result(JSON.stringify(await admin.contentHold(label)));
+    return true;
+  }
+  if (command !== "pre-ready-port-close") return false;
+  await routeProbe.armPreReadyClose();
+  // This must create the first native route while the content listener is
+  // armed, before an admin Nexus proxy can establish one.
+  const result = await chrome.runtime.sendMessage({
+    kind: "fixture-command",
+    runId,
+    senderSessionId: sessionId,
+    command,
+  });
+  await reporter.result(JSON.stringify(result));
+  return true;
+}
+
+async function runFixtureAdminCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (
+    command !== "multicast-bound-invoke" &&
+    command !== "multicast-fail" &&
+    command !== "capability-invoke" &&
+    command !== "capability-proxy-invoke" &&
+    command !== "capability-reference-invoke" &&
+    command !== "capability-release" &&
+    command !== "identity-pinned" &&
+    command !== "offscreen-create" &&
+    command !== "offscreen-close" &&
+    command !== "identity-constraint"
+  )
+    return false;
+  if (command === "identity-constraint") {
+    const admin = await nexus.create(TargetedContentAdminToken);
+    await reporter.result(JSON.stringify(await admin.identityConstraint()));
+    return true;
+  }
+  const admin = await nexus.create(FixtureAdminToken);
+  const result =
+    command === "multicast-bound-invoke"
+      ? await admin.multicastBoundInvoke()
+      : command === "multicast-fail"
+        ? await admin.multicastFail()
+        : command === "capability-invoke"
+          ? await admin.capabilityInvoke()
+          : command === "capability-proxy-invoke"
+            ? await admin.capabilityProxyInvoke()
+            : command === "capability-reference-invoke"
+              ? await admin.capabilityReferenceInvoke()
+              : command === "capability-release"
+                ? await admin.capabilityRelease()
+                : command === "identity-pinned"
+                  ? await admin.identityPinned()
+                  : command === "offscreen-create"
+                    ? await admin.createOffscreen()
+                    : await admin.closeOffscreen();
+  await reporter.result(JSON.stringify(result));
+  return true;
+}
+
+async function runWorkerStorageCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (command === "worker-storage-write") {
+    const workspace = await nexus.create(WorkspaceToken);
+    await reporter.result(
+      JSON.stringify({ durable: await workspace.setSetting("worker-durable") }),
+    );
+    return true;
+  }
+  if (command !== "worker-storage-read") return false;
+  const workspace = await nexus.create(WorkspaceToken);
+  await reporter.result(JSON.stringify({ durable: await workspace.setting() }));
+  return true;
+}
+
+async function runContentControlCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (command === "policy-deny" || command === "policy-allow") {
+    const admin = await nexus.create(FixtureAdminToken);
+    await reporter.result(
+      JSON.stringify(await admin.setCallPolicy(command === "policy-deny")),
+    );
+    return true;
+  }
+  if (command === "abort-acquire") {
+    const controller = new AbortController();
+    const pending = nexus.safeSelect(DocumentToolToken, {
+      where: (context: FixtureContext) =>
+        context.app.label === "fixture-impossible-provider",
+      wait: { signal: controller.signal },
+    });
+    await reporter.barrier("abort-started");
+    controller.abort();
+    const result = await pending;
+    await reporter.result(
+      JSON.stringify(
+        result.isErr()
+          ? { code: (result.error as Error & { code?: string }).code }
+          : { code: "E_FIXTURE_UNEXPECTED_PROXY" },
+      ),
+    );
+    return true;
+  }
+  if (command !== "security-counter") return false;
+  const workspace = await nexus.create(WorkspaceToken);
+  await reporter.result(JSON.stringify(await workspace.summary()));
+  return true;
+}
+
+async function runIdentityUpdateCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+  label: string,
+  runId: string,
+  sessionId: string,
+  nonce: string,
+): Promise<boolean> {
+  if (command !== "identity-update") return false;
+  await nexus.updateIdentity({
+    app: { fixture: true, sessionId, runId, label: `${label}-updated` },
+  });
+  await chrome.runtime.sendMessage({
+    kind: "content-identity",
+    runId,
+    label: `${label}-updated`,
+    sessionId,
+    nonce,
+  });
+  await reporter.barrier("identity update");
+  return true;
+}
+
+async function runContentStateCommand(
+  command: ScenarioCommand,
+  state: MainContentState,
+  reporter: ContentCommandReporter,
+  sessionId: string,
+): Promise<boolean> {
+  if (command === "state-content-action") {
+    if (!state.client) {
+      await reporter.result(
+        JSON.stringify({
+          result: "state-action-result",
+          participant: "main",
+          sessionId,
+          status: null,
+          state: null,
+          error: "E_STATE_CLIENT_ABSENT",
+        }),
+      );
+      return true;
+    }
+    const value = await state.client.actions.increment();
+    await reporter.result(
+      JSON.stringify({
+        result: "state-action-result",
+        participant: "main",
+        sessionId,
+        status: state.client.getStatus(),
+        state: state.client.getState(),
+        value,
+        error: null,
+      }),
+    );
+    return true;
+  }
+  if (command !== "state-client-cleanup") return false;
+  const client = state.client;
+  if (client) {
+    state.unsubscribe?.();
+    client.destroy();
+  }
+  await reporter.result(
+    JSON.stringify({
+      result: "state-client-cleanup-result",
+      participant: "main",
+      sessionId,
+      status: client ? client.getStatus() : null,
+      state: null,
+      error: client ? null : "E_STATE_CLIENT_ABSENT",
+    }),
+  );
+  state.client = undefined;
+  state.unsubscribe = undefined;
+  return true;
+}
+
+async function runWorkerProxyCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  handles: WorkerProxyHandles,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (command === "worker-pending") {
+    const callTimeoutMs = 30_000;
+    const workspace = await nexus.create(WorkspaceToken, {
+      callTimeout: callTimeoutMs,
+    });
+    await reporter.barrier("worker-pending-call-started");
+    const started = performance.now();
+    try {
+      await workspace.pending();
+    } catch (error) {
+      await reporter.terminalResult(
+        JSON.stringify({
+          ...errorResult(error),
+          callTimeoutMs,
+          started,
+          settled: performance.now(),
+        }),
+      );
+    }
+    return true;
+  }
+  if (command === "worker-proxy-retain") {
+    handles.retained = await nexus.create(WorkspaceToken, {
+      callTimeout: 30_000,
+    });
+    await reporter.result(
+      JSON.stringify({ retained: await handles.retained.summary() }),
+    );
+    return true;
+  }
+  if (command === "worker-proxy-invoke") {
+    if (!handles.retained) {
+      await reporter.result(JSON.stringify({ code: "E_FIXTURE_PROXY_ABSENT" }));
+      return true;
+    }
+    try {
+      await reporter.result(
+        JSON.stringify({ old: await handles.retained.summary() }),
+      );
+    } catch (error) {
+      await reporter.terminalResult(JSON.stringify(errorResult(error)));
+      nexus.safeRelease(handles.retained);
+      handles.retained = undefined;
+    }
+    return true;
+  }
+  if (command !== "worker-proxy-fresh") return false;
+  const created = await nexus.safeCreate(WorkspaceToken, {
+    timeout: 5_000,
+    callTimeout: 30_000,
+  });
+  if (created.isErr()) {
+    await reporter.terminalResult(JSON.stringify(errorResult(created.error)));
+    return true;
+  }
+  await reporter.terminalResult(
+    JSON.stringify({ fresh: await created.value.summary() }),
+  );
+  return true;
+}
+
+async function runWorkerStateCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  state: WorkerContentState,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (command === "worker-state-retain") {
+    state.retained = await connectNexusStore(nexus, workspaceStateDefinition);
+    state.retainedUnsubscribe = state.retained.subscribe(() => {});
+    await reporter.terminalResult(
+      JSON.stringify({
+        state: state.retained.getState(),
+        status: state.retained.getStatus(),
+      }),
+    );
+    return true;
+  }
+  if (command === "worker-state-write") {
+    if (!state.retained) throw new Error("worker State was not retained");
+    const value = await state.retained.actions.increment();
+    await reporter.result(
+      JSON.stringify({ value, status: state.retained.getStatus() }),
+    );
+    return true;
+  }
+  if (command === "worker-state-status") {
+    await reporter.result(
+      JSON.stringify(state.retained?.getStatus() ?? { type: "absent" }),
+    );
+    return true;
+  }
+  if (command === "worker-state-fresh") {
+    state.fresh = await connectNexusStore(nexus, workspaceStateDefinition);
+    await reporter.terminalResult(
+      JSON.stringify({
+        state: state.fresh.getState(),
+        status: state.fresh.getStatus(),
+      }),
+    );
+    return true;
+  }
+  if (command !== "worker-state-cleanup") return false;
+  const retained = cleanupState(state.retained, state.retainedUnsubscribe);
+  const fresh = cleanupState(state.fresh, undefined);
+  state.retained = undefined;
+  state.retainedUnsubscribe = undefined;
+  state.fresh = undefined;
+  await reporter.terminalResult(
+    JSON.stringify({ result: "worker-state-cleanup-result", retained, fresh }),
+  );
+  return true;
+}
+
+function cleanupState(
+  state: ContentStateClient | undefined,
+  unsubscribe: (() => void) | undefined,
+) {
+  let error: string | null = null;
+  try {
+    unsubscribe?.();
+  } catch (cause) {
+    error = fixtureErrorCode(cause);
+  }
+  try {
+    state?.destroy();
+  } catch (cause) {
+    error ??= fixtureErrorCode(cause);
+  }
+  let status: ReturnType<ContentStateClient["getStatus"]> | null = null;
+  try {
+    status = state?.getStatus() ?? null;
+  } catch (cause) {
+    error ??= fixtureErrorCode(cause);
+  }
+  if (!state) error ??= "E_STATE_CLIENT_ABSENT";
+  return { status, error };
+}
+
+async function runWorkerCapabilityCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  handles: WorkerCapabilityHandles,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (command === "worker-capability-retain") {
+    const workspace = await nexus.create(WorkspaceToken);
+    const callback = await workspace.acceptCallback(async () => "callback-ok");
+    handles.retained = await workspace.createCapability();
+    await reporter.result(
+      JSON.stringify({ capability: await handles.retained.ping(), callback }),
+    );
+    return true;
+  }
+  if (command === "worker-capability-invoke") {
+    if (!handles.retained)
+      throw new Error("worker capability was not retained");
+    try {
+      await reporter.result(
+        JSON.stringify({ capability: await handles.retained.ping() }),
+      );
+    } catch (error) {
+      await reporter.terminalResult(JSON.stringify(errorResult(error)));
+    }
+    return true;
+  }
+  if (command === "worker-capability-fresh") {
+    const workspace = await nexus.create(WorkspaceToken, {
+      callTimeout: 30_000,
+    });
+    const callback = await workspace.acceptCallback(
+      async () => "callback-fresh",
+    );
+    handles.fresh = await workspace.createCapability();
+    await reporter.terminalResult(
+      JSON.stringify({
+        capability: await handles.fresh.ping(),
+        callback,
+        summary: await workspace.summary(),
+      }),
+    );
+    return true;
+  }
+  if (command === "worker-capability-fresh-release") {
+    if (!handles.fresh) throw new Error("fresh capability was not acquired");
+    const released = nexus.safeRelease(handles.fresh);
+    await reporter.result(
+      JSON.stringify(
+        released.isErr() ? errorResult(released.error) : { released: true },
+      ),
+    );
+    return true;
+  }
+  if (command !== "worker-capability-fresh-invoke") return false;
+  if (!handles.fresh) throw new Error("fresh capability was not acquired");
+  try {
+    await reporter.result(
+      JSON.stringify({ capability: await handles.fresh.ping() }),
+    );
+  } catch (error) {
+    await reporter.terminalResult(JSON.stringify(errorResult(error)));
+  }
+  return true;
+}
 
 async function runTargetedCommand(
   command: (typeof scenarioCommands)[number],
@@ -715,23 +871,7 @@ async function runTargetedCommand(
       senderSessionId,
       command,
     });
-  switch (command) {
-    case "select-start":
-    case "provider-cardinality":
-    case "create-frame":
-    case "create-document":
-    case "create-concurrent":
-    case "multicast-create":
-    case "multicast-select":
-    case "reference-callback":
-    case "capability-retain":
-    case "multicast-rebind":
-    case "multicast-unavailable":
-    case "identity-select-beta":
-      return invoke();
-    default:
-      return undefined;
-  }
+  return isPreRouteCommand(command) ? invoke() : undefined;
 }
 
 function parentOrigin(referrer: string): string | undefined {

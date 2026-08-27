@@ -1,5 +1,13 @@
 import { Token } from "@nexus-js/core";
 
+export interface FixtureAppMeta {
+  readonly fixture: boolean;
+  readonly sessionId: string;
+  readonly runId?: string;
+  readonly label?: string;
+  readonly declaredFrameId?: number;
+}
+
 export interface WorkspaceService {
   summary(): Promise<WorkspaceSummary>;
   increment(): Promise<number>;
@@ -89,8 +97,19 @@ export interface ReferenceResult {
 export interface CapabilityResult extends IdentityResult, ReferenceResult {}
 
 export interface MulticastIdentitiesResult {
-  readonly identities: readonly DocumentIdentity[];
+  readonly identities: readonly MulticastIdentityResult[];
 }
+
+export type MulticastIdentityResult =
+  | { readonly status: "fulfilled"; readonly value: DocumentIdentity }
+  | {
+      readonly status: "rejected";
+      readonly reason: {
+        readonly message: string;
+        readonly code?: string;
+        readonly name?: string;
+      };
+    };
 
 export interface MulticastFailureResult {
   readonly results: readonly MulticastFailureEntry[];

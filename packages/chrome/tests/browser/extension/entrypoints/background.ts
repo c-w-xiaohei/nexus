@@ -5,12 +5,18 @@ import {
   type ChromeAdapterModel,
   usingBackgroundScript,
 } from "@nexus-js/chrome";
+import type {
+  Allified,
+  Asyncified,
+  ConnectionAuthContext,
+  ConnectionWhere,
+} from "@nexus-js/core";
 import { createNexusStore } from "@nexus-js/core/state";
 import {
   relayService,
   type RelayServiceCallContext,
 } from "@nexus-js/core/relay";
-import { eventKey } from "../../protocol";
+import { eventKey, type BridgeEvent } from "../../protocol";
 import { defineBackground } from "wxt/utils/define-background";
 import {
   DocumentToolToken,
@@ -19,6 +25,9 @@ import {
   FixtureAdminToken,
   RelayAdminToken,
   TargetedContentAdminToken,
+  type DocumentReference,
+  type DocumentToolService,
+  type FixtureAppMeta,
   type RelayAdminResponse,
   type FixtureError,
   WorkspaceToken,
@@ -42,69 +51,186 @@ import { isPreRouteCommand, type PreRouteCommand } from "../shared/scenario";
 
 const passiveSelectTimeoutMs = 1_000;
 
+type FixtureChromeModel = ChromeAdapterModel<FixtureAppMeta>;
+type FixtureChromeTarget = FixtureChromeModel["connectionTarget"];
+type FixtureWhere = ConnectionWhere<FixtureChromeModel>;
+type FixtureContext = Parameters<FixtureWhere>[0];
+type DocumentToolProxy = Asyncified<DocumentToolService>;
+type DocumentToolMulticast = Allified<DocumentToolService>;
+type ValidatedContentSender = Readonly<{
+  tabId: number;
+  frameId: number;
+  documentId?: string;
+  senderUrl: string;
+}>;
+
+function createContentRegistry() {
+  const facts = new Map<string, ContentFact>();
+
+  const snapshot = (fact: ContentFact): ContentFact => ({ ...fact });
+  const target = (fact: ContentFact): FixtureChromeTarget =>
+    fact.documentId
+      ? chromeTarget.contentDocument({
+          tabId: fact.tabId,
+          documentId: fact.documentId,
+        })
+      : chromeTarget.contentFrame({
+          tabId: fact.tabId,
+          frameId: fact.frameId,
+        });
+
+  return {
+    register(
+      runId: string,
+      content: ContentIdentity,
+      sender: ValidatedContentSender,
+    ): void {
+      facts.set(content.label, {
+        ...content,
+        runId,
+        tabId: sender.tabId,
+        frameId: sender.frameId,
+        documentId: sender.documentId,
+        senderUrl: sender.senderUrl,
+      });
+    },
+
+    isRegisteredSender(
+      runId: string,
+      senderSessionId: string,
+      sender: ValidatedContentSender,
+    ): boolean {
+      return [...facts.values()].some(
+        (fact) =>
+          fact.runId === runId &&
+          fact.tabId === sender.tabId &&
+          fact.frameId === sender.frameId &&
+          fact.documentId !== undefined &&
+          sender.documentId !== undefined &&
+          fact.documentId === sender.documentId &&
+          fact.sessionId === senderSessionId &&
+          fact.senderUrl === sender.senderUrl,
+      );
+    },
+
+    get(label: string): ContentFact | undefined {
+      const fact = facts.get(label);
+      return fact ? snapshot(fact) : undefined;
+    },
+
+    currentMain(runId: string | undefined): ContentFact | undefined {
+      const fact = facts.get("main");
+      if (
+        !fact ||
+        fact.runId !== runId ||
+        fact.frameId !== 0 ||
+        !fact.documentId
+      )
+        return undefined;
+      return snapshot(fact);
+    },
+
+    frameTarget(label: string): FixtureChromeTarget | undefined {
+      const fact = facts.get(label);
+      return fact
+        ? chromeTarget.contentFrame({
+            tabId: fact.tabId,
+            frameId: fact.frameId,
+          })
+        : undefined;
+    },
+
+    exactTarget(label: string): FixtureChromeTarget | undefined {
+      const fact = facts.get(label);
+      return fact ? target(fact) : undefined;
+    },
+
+    targets(labels?: readonly string[]): readonly FixtureChromeTarget[] {
+      return [...facts.values()]
+        .filter((fact) => !labels || labels.includes(fact.label))
+        .map(target);
+    },
+
+    evictNavigation(tabId: number, frameId: number): ContentFact[] {
+      return evict((fact) => fact.tabId === tabId && fact.frameId === frameId);
+    },
+
+    evictDisconnect(
+      tabId: number | undefined,
+      frameId: number | undefined,
+      documentId: string | undefined,
+    ): ContentFact[] {
+      return evict(
+        (fact) =>
+          fact.tabId === tabId &&
+          fact.frameId === frameId &&
+          fact.documentId === documentId,
+      );
+    },
+  };
+
+  function evict(predicate: (fact: ContentFact) => boolean): ContentFact[] {
+    const removed: ContentFact[] = [];
+    for (const [label, fact] of facts) {
+      if (!predicate(fact)) continue;
+      facts.delete(label);
+      removed.push(snapshot(fact));
+    }
+    return removed;
+  }
+}
+
 export default defineBackground(() => {
   const identity = backgroundIdentity();
-  let activeRunId: string | undefined;
-  configureFixtureLogger(identity, () => activeRunId);
-  let counter = 0;
-  let workspaceInvocationCount = 0;
-  let setting = "compact";
-  let generation = 1;
-  let nonce = crypto.randomUUID();
-  let denyCalls = false;
-  let relayPolicyMode: "allow" | "deny" = "allow";
-  let reporter: ReturnType<typeof createReporter> | undefined;
-  let activation: Promise<void> | undefined;
-  let resolveOffscreenReady: ((sessionId: string) => void) | undefined;
-  let offscreenReady = new Promise<string>((resolve) => {
-    resolveOffscreenReady = resolve;
-  });
-  let offscreenCreate: Promise<string> | undefined;
-  let activeOffscreenSessionId: string | undefined;
-  let observedContentPorts = 0;
-  let relayTarget: ContentFact | undefined;
-  let retainedTool: any;
-  let retainedReference: any;
-  let retainedMulticast: any;
-  let retainedMulticastTargets:
-    | ReturnType<typeof registeredTargets>
-    | undefined;
-  const contentRegistry = new Map<string, ContentFact>();
-  const isRegisteredContentSender = (
-    sender: chrome.runtime.MessageSender,
-    runId: string,
-    senderSessionId: string,
-  ): boolean => {
-    if (!isContentSender(sender, runId)) return false;
-    const senderUrl = normalizedSenderUrl(sender);
-    if (!senderUrl) return false;
-    return [...contentRegistry.values()].some(
-      (fact) =>
-        fact.runId === runId &&
-        fact.tabId === sender.tab?.id &&
-        fact.frameId === sender.frameId &&
-        fact.documentId !== undefined &&
-        sender.documentId !== undefined &&
-        fact.documentId === sender.documentId &&
-        fact.sessionId === senderSessionId &&
-        fact.senderUrl === senderUrl,
-    );
+  const runState = (() => {
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    return {
+      activeRunId: undefined as string | undefined,
+      counter: 0,
+      workspaceInvocationCount: 0,
+      setting: "compact",
+      generation: 1,
+      nonce: crypto.randomUUID(),
+      denyCalls: false,
+      reporter: undefined as ReturnType<typeof createReporter> | undefined,
+      activation: undefined as Promise<void> | undefined,
+      observedContentPorts: 0,
+      ready,
+      resolveReady,
+    };
+  })();
+  configureFixtureLogger(identity, () => runState.activeRunId);
+  const offscreenState = {
+    resolveReady: undefined as ((sessionId: string) => void) | undefined,
+    ready: undefined as Promise<string> | undefined,
+    create: undefined as Promise<string> | undefined,
+    activeSessionId: undefined as string | undefined,
   };
-  let retiredBetaSessionId: string | undefined;
-  let resolveBetaReplacement: (() => void) | undefined;
-  let betaReplacement = new Promise<void>((resolve) => {
-    resolveBetaReplacement = resolve;
+  offscreenState.ready = new Promise<string>((resolve) => {
+    offscreenState.resolveReady = resolve;
   });
-  let resolveRunReady: (() => void) | undefined;
-  const runReady = new Promise<void>((resolve) => {
-    resolveRunReady = resolve;
+  const relayState = {
+    policyMode: "allow" as "allow" | "deny",
+    target: undefined as ContentFact | undefined,
+    retiredBetaSessionId: undefined as string | undefined,
+    resolveBetaReplacement: undefined as (() => void) | undefined,
+    betaReplacement: undefined as Promise<void> | undefined,
+  };
+  relayState.betaReplacement = new Promise<void>((resolve) => {
+    relayState.resolveBetaReplacement = resolve;
   });
+  const retained = {
+    tool: undefined as DocumentToolProxy | undefined,
+    reference: undefined as DocumentReference | undefined,
+    multicast: undefined as DocumentToolMulticast | undefined,
+    multicastTargets: undefined as readonly FixtureChromeTarget[] | undefined,
+  };
+  const contentRegistry = createContentRegistry();
 
-  const nexus = usingBackgroundScript<{
-    fixture: boolean;
-    sessionId: string;
-    runId?: string;
-  }>({
+  const nexus = usingBackgroundScript<FixtureAppMeta>({
     app: {
       fixture: true,
       sessionId: identity.sessionId,
@@ -112,7 +238,10 @@ export default defineBackground(() => {
   });
   nexus.configure({
     policy: {
-      canConnect: ({ remoteIdentity, connection }: any) => {
+      canConnect: ({
+        remoteIdentity,
+        connection,
+      }: ConnectionAuthContext<FixtureChromeModel>) => {
         const declared = remoteIdentity.app.declaredFrameId;
         return (
           declared === undefined || declared === connection.observed.frameId
@@ -126,9 +255,9 @@ export default defineBackground(() => {
     WorkspaceToken,
     {
       summary: async () => {
-        await runReady;
-        const invocationCount = ++workspaceInvocationCount;
-        await reporter?.result(
+        await runState.ready;
+        const invocationCount = ++runState.workspaceInvocationCount;
+        await runState.reporter?.result(
           JSON.stringify({
             type: "workspace-invocation",
             operation: "summary",
@@ -136,51 +265,56 @@ export default defineBackground(() => {
           }),
         );
         return {
-          counter,
-          setting,
-          generation,
-          nonce,
+          counter: runState.counter,
+          setting: runState.setting,
+          generation: runState.generation,
+          nonce: runState.nonce,
           sessionId: identity.sessionId,
         };
       },
       increment: async () => {
-        await runReady;
-        return ++counter;
+        await runState.ready;
+        return ++runState.counter;
       },
       setting: async () => {
-        await runReady;
-        return setting;
+        await runState.ready;
+        return runState.setting;
       },
       setSetting: async (value) => {
-        await runReady;
-        setting = value;
+        await runState.ready;
+        runState.setting = value;
         await chrome.storage.local.set({ [`${fixturePrefix}setting`]: value });
-        return setting;
+        return runState.setting;
       },
       pending: async () => {
-        await runReady;
-        await reporter?.barrier("pending-started");
+        await runState.ready;
+        await runState.reporter?.barrier("pending-started");
         return new Promise<string>(() => {});
       },
       worker: async () => {
-        await runReady;
-        return { generation, nonce, sessionId: identity.sessionId };
+        await runState.ready;
+        return {
+          generation: runState.generation,
+          nonce: runState.nonce,
+          sessionId: identity.sessionId,
+        };
       },
       createCapability: async () =>
         nexus.ref({
-          ping: async () => `capability:${identity.sessionId}:${nonce}`,
+          ping: async () =>
+            `capability:${identity.sessionId}:${runState.nonce}`,
         }),
       acceptCallback: async (callback) => callback(),
     },
     {
       policy: {
         canCall: async () => {
-          if (!denyCalls) return true;
-          await reporter?.result(
+          if (!runState.denyCalls) return true;
+          await runState.reporter?.result(
             JSON.stringify({
               type: "policy-denied",
               code: "E_AUTH_CALL_DENIED",
-              counter,
+              counter: runState.counter,
             }),
           );
           return false;
@@ -190,9 +324,9 @@ export default defineBackground(() => {
   );
   nexus.provide(FixtureAdminToken, {
     setCallPolicy: async (nextDenyCalls) => {
-      await runReady;
-      denyCalls = nextDenyCalls;
-      return { denyCalls, counter };
+      await runState.ready;
+      runState.denyCalls = nextDenyCalls;
+      return { denyCalls: runState.denyCalls, counter: runState.counter };
     },
     multicastBoundInvoke: () => invokeBoundMulticast(),
     multicastFail: () => failBoundMulticast(),
@@ -218,7 +352,7 @@ export default defineBackground(() => {
   void nexus.ready().then(async () => {
     const stored = await chrome.storage.local.get(`${fixturePrefix}setting`);
     if (typeof stored[`${fixturePrefix}setting`] === "string") {
-      setting = stored[`${fixturePrefix}setting`] as string;
+      runState.setting = stored[`${fixturePrefix}setting`] as string;
     }
     const durableRun = await chrome.storage.local.get(activeRunKey);
     const runId = durableRun[activeRunKey];
@@ -245,7 +379,10 @@ export default defineBackground(() => {
         }
         void ensureRun(message.runId)
           .then(() => {
-            registerContent(message.runId, message.content, _sender);
+            const sender = normalizedContentSender(_sender);
+            if (message.content && sender) {
+              registerContent(message.runId, message.content, sender);
+            }
           })
           .then(() => sendResponse({ ok: true }))
           .catch((error) => sendResponse(errorResult(error)));
@@ -256,18 +393,22 @@ export default defineBackground(() => {
           sendResponse({ ok: false, code: "E_FIXTURE_CONTROL_REJECTED" });
           return;
         }
-        registerContent(message.runId, message, _sender);
+        const sender = normalizedContentSender(_sender);
+        if (sender) registerContent(message.runId, message, sender);
         sendResponse({ ok: true });
         return;
       }
       // Target-routing scenarios must begin before a Nexus route exists, so a
       // public admin proxy would change the behavior they are measuring.
       if (message.kind === "fixture-command") {
+        const sender = normalizedContentSender(_sender);
         if (
-          !isRegisteredContentSender(
-            _sender,
+          !isContentSender(_sender, message.runId) ||
+          !sender ||
+          !contentRegistry.isRegisteredSender(
             message.runId,
             message.senderSessionId,
+            sender,
           )
         ) {
           sendResponse({ ok: false, code: "E_FIXTURE_CONTROL_REJECTED" });
@@ -281,72 +422,39 @@ export default defineBackground(() => {
       if (message.kind === "ui-ready") {
         if (
           message.participant !== "offscreen" ||
-          message.runId !== activeRunId ||
+          message.runId !== runState.activeRunId ||
           !isOffscreenSender(_sender, message.runId)
         ) {
           void recordOffscreenBoundary(message, _sender, "rejected-run");
           sendResponse({ ok: false });
           return;
         }
-        void recordOffscreenBoundary(message, _sender, "accepted");
-        activeOffscreenSessionId = message.sessionId;
-        resolveOffscreenReady?.(message.sessionId);
-        sendResponse({ ok: true });
+        acceptOffscreenReady(message, _sender, sendResponse);
         return;
       }
       if (message.kind === "offscreen-init") {
         if (
           !isOffscreenSender(_sender, message.runId) ||
-          message.runId !== activeRunId
+          message.runId !== runState.activeRunId
         ) {
           void recordOffscreenBoundary(message, _sender, "rejected-sender");
           sendResponse({ ok: false });
           return;
         }
-        void chrome.storage.session
-          .setAccessLevel({
-            accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
-          })
-          .then(() => {
-            void recordOffscreenBoundary(message, _sender, "accepted");
-            sendResponse({ ok: true });
-          })
-          .catch((error) => {
-            void recordOffscreenBoundary(
-              message,
-              _sender,
-              "response-error",
-              error,
-            );
-            sendResponse({ ok: false });
-          });
+        void initializeOffscreenMessage(message, _sender, sendResponse);
         return true;
       }
       if (message.kind === "offscreen-diagnostic") {
         if (
-          !isOffscreenSender(_sender, activeRunId) ||
+          !isOffscreenSender(_sender, runState.activeRunId) ||
           !validateOffscreenEvent(message.event) ||
-          message.event.runId !== activeRunId
+          message.event.runId !== runState.activeRunId
         ) {
           void recordOffscreenBoundary(message, _sender, "rejected-diagnostic");
           sendResponse({ ok: false });
           return;
         }
-        void chrome.storage.session
-          .set({ [eventKey(message.event)]: message.event })
-          .then(() => {
-            void recordOffscreenBoundary(message, _sender, "persisted");
-            sendResponse({ ok: true });
-          })
-          .catch((error) => {
-            void recordOffscreenBoundary(
-              message,
-              _sender,
-              "persist-error",
-              error,
-            );
-            sendResponse({ ok: false });
-          });
+        void persistOffscreenDiagnostic(message, _sender, sendResponse);
         return true;
       }
     },
@@ -354,260 +462,334 @@ export default defineBackground(() => {
 
   chrome.webNavigation.onCommitted.addListener((details) => {
     const runId = new URL(details.url).searchParams.get("runId");
-    if (!runId || runId !== activeRunId) return;
-    void reporter?.barrier("navigation-committed");
-    for (const [label, fact] of contentRegistry) {
-      if (fact.tabId === details.tabId && fact.frameId === details.frameId) {
-        contentRegistry.delete(label);
-        if (label === "beta") {
-          retiredBetaSessionId = fact.sessionId;
-          betaReplacement = new Promise<void>((resolve) => {
-            resolveBetaReplacement = resolve;
-          });
-        }
-        void reporter?.barrier(`${label}-left-snapshot`);
+    if (!runId || runId !== runState.activeRunId) return;
+    void runState.reporter?.barrier("navigation-committed");
+    for (const fact of contentRegistry.evictNavigation(
+      details.tabId,
+      details.frameId,
+    )) {
+      if (fact.label === "beta") {
+        relayState.retiredBetaSessionId = fact.sessionId;
+        relayState.betaReplacement = new Promise<void>((resolve) => {
+          relayState.resolveBetaReplacement = resolve;
+        });
       }
+      void runState.reporter?.barrier(`${fact.label}-left-snapshot`);
     }
   });
 
   chrome.runtime.onConnect.addListener((port) => {
     if (!port.sender?.url?.includes("runId=")) return;
-    observedContentPorts += 1;
+    runState.observedContentPorts += 1;
     const { tab, frameId, documentId } = port.sender;
     port.onDisconnect.addListener(() => {
-      for (const [label, fact] of contentRegistry) {
-        if (
-          fact.tabId === tab?.id &&
-          fact.frameId === frameId &&
-          fact.documentId === documentId
-        ) {
-          contentRegistry.delete(label);
-          void reporter?.barrier(`${label}-left-snapshot`);
-        }
+      for (const fact of contentRegistry.evictDisconnect(
+        tab?.id,
+        frameId,
+        documentId,
+      )) {
+        void runState.reporter?.barrier(`${fact.label}-left-snapshot`);
       }
     });
   });
 
   async function activateRun(runId: string): Promise<void> {
-    if (activeRunId === runId) return;
+    if (runState.activeRunId === runId) return;
     if (!(await initializeBackgroundRun(runId))) return;
     await chrome.storage.session.setAccessLevel({
       accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
     });
-    activeRunId = runId;
-    workspaceInvocationCount = 0;
-    relayPolicyMode = "allow";
-    reporter = createReporter({ ...identity, runId });
+    runState.activeRunId = runId;
+    runState.workspaceInvocationCount = 0;
+    relayState.policyMode = "allow";
+    runState.reporter = createReporter({ ...identity, runId });
     await nexus.updateIdentity({
       app: { fixture: true, sessionId: identity.sessionId, runId },
     });
-    resolveRunReady?.();
-    resolveRunReady = undefined;
-    await reporter.barrier("background-ready");
-    await reporter.barrier("worker generation/wake");
+    runState.resolveReady();
+    await runState.reporter.barrier("background-ready");
+    await runState.reporter.barrier("worker generation/wake");
   }
 
   function ensureRun(runId: string): Promise<void> {
-    if (activeRunId === runId) return Promise.resolve();
-    activation ??= activateRun(runId).finally(() => {
-      activation = undefined;
+    if (runState.activeRunId === runId) return Promise.resolve();
+    runState.activation ??= activateRun(runId).finally(() => {
+      runState.activation = undefined;
     });
-    return activation;
+    return runState.activation;
   }
 
   async function ensureOffscreen(): Promise<string> {
-    if (offscreenCreate) {
-      return await offscreenCreate;
+    if (offscreenState.create) {
+      return await offscreenState.create;
     }
     if (await chrome.offscreen.hasDocument()) {
-      if (activeOffscreenSessionId) {
-        return activeOffscreenSessionId;
+      if (offscreenState.activeSessionId) {
+        return offscreenState.activeSessionId;
       }
       await chrome.offscreen.closeDocument();
     }
-    offscreenCreate = (async () => {
-      await runReady;
-      await reporter?.barrier("offscreen-create-started");
-      activeOffscreenSessionId = undefined;
-      offscreenReady = new Promise<string>((resolve) => {
-        resolveOffscreenReady = resolve;
+    offscreenState.create = (async () => {
+      await runState.ready;
+      await runState.reporter?.barrier("offscreen-create-started");
+      offscreenState.activeSessionId = undefined;
+      offscreenState.ready = new Promise<string>((resolve) => {
+        offscreenState.resolveReady = resolve;
       });
       await chrome.offscreen.createDocument({
-        url: `offscreen.html?runId=${activeRunId}`,
+        url: `offscreen.html?runId=${runState.activeRunId}`,
         reasons: [chrome.offscreen.Reason.DOM_SCRAPING],
         justification: "Fixture export provider lifecycle",
       });
-      const sessionId = await offscreenReady;
-      await reporter?.barrier("offscreen-ready");
+      const sessionId = await offscreenState.ready;
+      await runState.reporter?.barrier("offscreen-ready");
       return sessionId;
     })().catch((error) => {
-      offscreenCreate = undefined;
+      offscreenState.create = undefined;
       throw error;
     });
-    return await offscreenCreate;
+    return await offscreenState.create;
   }
 
   async function runPreRouteCommand(
     command: PreRouteCommand,
     sender: chrome.runtime.MessageSender,
   ): Promise<Record<string, unknown>> {
-    await runReady;
+    await runState.ready;
     try {
-      if (command === "select-start") {
-        await reporter?.barrier("select-started");
-        const started = performance.now();
-        const selected = await nexus.safeSelect(DocumentToolToken, {
-          wait: { timeout: passiveSelectTimeoutMs },
-        });
-        const settled = performance.now();
-        await reporter?.barrier(
-          selected.isErr() ? "select-pending-no-route" : "select-resolved",
-        );
-        return selected.isErr()
-          ? {
-              ...errorResult(selected.error),
-              waitTimeoutMs: passiveSelectTimeoutMs,
-              started,
-              settled,
-            }
-          : { identity: await selected.value.identity() };
-      }
-      if (command === "provider-cardinality") {
-        const providers = await nexus.safeSelectMulticast(DocumentToolToken, {
-          expects: "all",
-        });
-        if (providers.isErr()) return errorResult(providers.error);
-        const identities = await providers.value.identity();
-        if (identities.length === 0) return { code: "E_SERVICE_NO_MATCH" };
-        await reporter?.barrier(
-          `selection-${identities.length === 0 ? "zero" : identities.length === 1 ? "one" : "two"}-ready`,
-        );
-        return { count: identities.length, identities };
-      }
       const target = senderContentTarget(sender);
-      if (command === "create-frame" || command === "create-document") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const exactTarget =
-          command === "create-document" ? senderDocumentTarget(sender) : target;
-        if (!exactTarget) return { code: "E_DOCUMENT_TARGET_UNAVAILABLE" };
-        await reporter?.barrier("route-absent");
-        const created = await nexus.safeCreate(DocumentToolToken, {
-          target: exactTarget,
-        });
-        return created.isErr()
-          ? errorResult(created.error)
-          : { target: exactTarget, identity: await created.value.identity() };
-      }
-      if (command === "create-concurrent") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const beforePorts = observedContentPorts;
-        const [first, second] = await Promise.all([
-          nexus.safeCreate(DocumentToolToken, { target }),
-          nexus.safeCreate(DocumentToolToken, { target }),
-        ]);
-        const route = await nexus.safeCreate(DocumentRouteToken, { target });
-        return {
-          first: first.isErr()
-            ? errorResult(first.error)
-            : await first.value.identity(),
-          second: second.isErr()
-            ? errorResult(second.error)
-            : await second.value.identity(),
-          acceptedRoute: route.isErr()
-            ? errorResult(route.error)
-            : { ...(await route.value.facts()) },
-          observedPortDelta: observedContentPorts - beforePorts,
-        };
-      }
-      if (command === "pre-ready-port-close") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const created = await nexus.safeCreate(DocumentToolToken, { target });
-        return created.isErr()
-          ? errorResult(created.error)
-          : { code: "E_FIXTURE_UNEXPECTED_PROXY" };
-      }
+      if (command === "select-start") return selectWithoutRoute();
+      if (command === "provider-cardinality")
+        return selectProviderCardinality();
+      if (command === "create-frame" || command === "create-document")
+        return createSenderTarget(command, sender, target);
+      if (command === "create-concurrent") return createConcurrent(target);
+      if (command === "pre-ready-port-close") return probePreReadyClose(target);
       if (command === "multicast-select") return bindMulticast();
-      if (command === "multicast-create") {
-        const targets = registeredTargets(["alpha", "beta"]);
-        if (targets.length < 2) return { code: "E_TARGET_UNAVAILABLE" };
-        const routes = await Promise.all(
-          targets.map((target) =>
-            nexus.safeCreate(DocumentToolToken, { target }),
-          ),
-        );
-        const failed = routes.find((route) => route.isErr());
-        if (failed?.isErr()) return errorResult(failed.error);
-        const multicast = await nexus.safeCreateMulticast(DocumentToolToken, {
-          targets,
-          expects: "all",
-        });
-        if (multicast.isErr()) return errorResult(multicast.error);
-        retainedMulticast = multicast.value;
-        await reporter?.barrier("multicast-all-acquired");
-        retainedMulticastTargets = targets;
-        await reporter?.barrier("multicast-targets-retained");
-        return { identities: await multicast.value.identity() };
-      }
+      if (command === "multicast-create") return createMulticast();
       if (command === "multicast-rebind") return createExactMulticast();
-      if (command === "multicast-unavailable") {
-        if (!retainedMulticastTargets) return { code: "E_TARGET_UNAVAILABLE" };
-        const multicast = await nexus.safeCreateMulticast(DocumentToolToken, {
-          targets: retainedMulticastTargets,
-          expects: "all",
-          timeout: 1_000,
-        });
-        await reporter?.barrier("multicast-unavailable-ready");
-        return multicast.isErr()
-          ? errorResult(multicast.error)
-          : { code: "E_FIXTURE_UNEXPECTED_MULTICAST_SUCCESS" };
-      }
-      if (command === "identity-select-beta") {
-        const beta = contentRegistry.get("beta");
-        if (!beta) return { code: "E_SERVICE_NO_MATCH" };
-        const target = beta.documentId
-          ? chromeTarget.contentDocument({
-              tabId: beta.tabId,
-              documentId: beta.documentId,
-            })
-          : chromeTarget.contentFrame({
-              tabId: beta.tabId,
-              frameId: beta.frameId,
-            });
-        const selected = await nexus.safeCreate(DocumentToolToken, {
-          target,
-          where: (context: any) =>
-            context.app.label === "beta" &&
-            context.app.sessionId === beta.sessionId,
-        });
-        if (selected.isErr()) return errorResult(selected.error);
-        await reporter?.barrier("beta-selected-fresh");
-        return { identity: await selected.value.identity() };
-      }
-      if (command === "reference-callback") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const tool = await nexus.safeCreate(DocumentToolToken, { target });
-        if (tool.isErr()) return errorResult(tool.error);
-        const callback = await tool.value.acceptCallback(
-          async () => "callback-ok",
-        );
-        await reporter?.barrier("callback-invoked");
-        return { callback };
-      }
-      if (command === "capability-retain") {
-        if (!target) return { code: "E_TARGET_UNAVAILABLE" };
-        const tool = await nexus.safeCreate(DocumentToolToken, { target });
-        if (tool.isErr()) return errorResult(tool.error);
-        retainedTool = tool.value;
-        retainedReference = await retainedTool.createReference();
-        await reporter?.barrier("alpha-reference-created");
-        return {
-          identity: await retainedTool.identity(),
-          reference: await retainedReference.label(),
-        };
-      }
+      if (command === "multicast-unavailable")
+        return createUnavailableMulticast();
+      if (command === "identity-select-beta") return selectFreshBeta();
+      if (command === "reference-callback") return invokeCallback(target);
+      if (command === "capability-retain") return retainCapability(target);
       return { code: "E_FIXTURE_COMMAND_UNSUPPORTED" };
     } catch (error) {
       return errorResult(error);
+    }
+  }
+
+  async function selectWithoutRoute(): Promise<Record<string, unknown>> {
+    await runState.reporter?.barrier("select-started");
+    const started = performance.now();
+    const selected = await nexus.safeSelect(DocumentToolToken, {
+      wait: { timeout: passiveSelectTimeoutMs },
+    });
+    const settled = performance.now();
+    await runState.reporter?.barrier(
+      selected.isErr() ? "select-pending-no-route" : "select-resolved",
+    );
+    return selected.isErr()
+      ? {
+          ...errorResult(selected.error),
+          waitTimeoutMs: passiveSelectTimeoutMs,
+          started,
+          settled,
+        }
+      : { identity: await selected.value.identity() };
+  }
+
+  async function selectProviderCardinality(): Promise<Record<string, unknown>> {
+    const providers = await nexus.safeSelectMulticast(DocumentToolToken, {
+      expects: "all",
+    });
+    if (providers.isErr()) return errorResult(providers.error);
+    const identities = await providers.value.identity();
+    await runState.reporter?.barrier(
+      `selection-${
+        identities.length === 0
+          ? "zero"
+          : identities.length === 1
+            ? "one"
+            : "two"
+      }-ready`,
+    );
+    if (identities.length === 0) return { code: "E_SERVICE_NO_MATCH" };
+    return { count: identities.length, identities };
+  }
+
+  async function createSenderTarget(
+    command: "create-frame" | "create-document",
+    sender: chrome.runtime.MessageSender,
+    target: FixtureChromeTarget | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const exactTarget =
+      command === "create-document" ? senderDocumentTarget(sender) : target;
+    if (!exactTarget) return { code: "E_DOCUMENT_TARGET_UNAVAILABLE" };
+    await runState.reporter?.barrier("route-absent");
+    const created = await nexus.safeCreate(DocumentToolToken, {
+      target: exactTarget,
+    });
+    return created.isErr()
+      ? errorResult(created.error)
+      : { target: exactTarget, identity: await created.value.identity() };
+  }
+
+  async function createConcurrent(
+    target: FixtureChromeTarget | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const beforePorts = runState.observedContentPorts;
+    const [first, second] = await Promise.all([
+      nexus.safeCreate(DocumentToolToken, { target }),
+      nexus.safeCreate(DocumentToolToken, { target }),
+    ]);
+    const route = await nexus.safeCreate(DocumentRouteToken, { target });
+    return {
+      first: first.isErr()
+        ? errorResult(first.error)
+        : await first.value.identity(),
+      second: second.isErr()
+        ? errorResult(second.error)
+        : await second.value.identity(),
+      acceptedRoute: route.isErr()
+        ? errorResult(route.error)
+        : { ...(await route.value.facts()) },
+      observedPortDelta: runState.observedContentPorts - beforePorts,
+    };
+  }
+
+  async function probePreReadyClose(
+    target: FixtureChromeTarget | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const created = await nexus.safeCreate(DocumentToolToken, { target });
+    return created.isErr()
+      ? errorResult(created.error)
+      : { code: "E_FIXTURE_UNEXPECTED_PROXY" };
+  }
+
+  async function createMulticast(): Promise<Record<string, unknown>> {
+    const targets = contentRegistry.targets(["alpha", "beta"]);
+    if (targets.length < 2) return { code: "E_TARGET_UNAVAILABLE" };
+    const routes = await Promise.all(
+      targets.map((target) => nexus.safeCreate(DocumentToolToken, { target })),
+    );
+    const failed = routes.find((route) => route.isErr());
+    if (failed?.isErr()) return errorResult(failed.error);
+    const multicast = await nexus.safeCreateMulticast(DocumentToolToken, {
+      targets,
+      expects: "all",
+    });
+    if (multicast.isErr()) return errorResult(multicast.error);
+    retained.multicast = multicast.value;
+    await runState.reporter?.barrier("multicast-all-acquired");
+    retained.multicastTargets = targets;
+    await runState.reporter?.barrier("multicast-targets-retained");
+    return { identities: await multicast.value.identity() };
+  }
+
+  async function createUnavailableMulticast(): Promise<
+    Record<string, unknown>
+  > {
+    if (!retained.multicastTargets) return { code: "E_TARGET_UNAVAILABLE" };
+    const multicast = await nexus.safeCreateMulticast(DocumentToolToken, {
+      targets: retained.multicastTargets,
+      expects: "all",
+      timeout: 1_000,
+    });
+    await runState.reporter?.barrier("multicast-unavailable-ready");
+    return multicast.isErr()
+      ? errorResult(multicast.error)
+      : { code: "E_FIXTURE_UNEXPECTED_MULTICAST_SUCCESS" };
+  }
+
+  async function selectFreshBeta(): Promise<Record<string, unknown>> {
+    const beta = contentRegistry.get("beta");
+    const target = contentRegistry.exactTarget("beta");
+    if (!beta) return { code: "E_SERVICE_NO_MATCH" };
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const selected = await nexus.safeCreate(DocumentToolToken, {
+      target,
+      where: (context: FixtureContext) =>
+        context.app.label === "beta" &&
+        context.app.sessionId === beta.sessionId,
+    });
+    if (selected.isErr()) return errorResult(selected.error);
+    await runState.reporter?.barrier("beta-selected-fresh");
+    return { identity: await selected.value.identity() };
+  }
+
+  async function invokeCallback(
+    target: FixtureChromeTarget | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const tool = await nexus.safeCreate(DocumentToolToken, { target });
+    if (tool.isErr()) return errorResult(tool.error);
+    const callback = await tool.value.acceptCallback(async () => "callback-ok");
+    await runState.reporter?.barrier("callback-invoked");
+    return { callback };
+  }
+
+  async function retainCapability(
+    target: FixtureChromeTarget | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const tool = await nexus.safeCreate(DocumentToolToken, { target });
+    if (tool.isErr()) return errorResult(tool.error);
+    retained.tool = tool.value;
+    retained.reference = await retained.tool.createReference();
+    await runState.reporter?.barrier("alpha-reference-created");
+    return {
+      identity: await retained.tool.identity(),
+      reference: await retained.reference.label(),
+    };
+  }
+
+  function acceptOffscreenReady(
+    message: Extract<Control, { kind: "ui-ready" }>,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: unknown) => void,
+  ): void {
+    void recordOffscreenBoundary(message, sender, "accepted");
+    offscreenState.activeSessionId = message.sessionId;
+    offscreenState.resolveReady?.(message.sessionId);
+    sendResponse({ ok: true });
+  }
+
+  async function initializeOffscreenMessage(
+    message: Extract<Control, { kind: "offscreen-init" }>,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: unknown) => void,
+  ): Promise<void> {
+    try {
+      await chrome.storage.session.setAccessLevel({
+        accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
+      });
+      void recordOffscreenBoundary(message, sender, "accepted");
+      sendResponse({ ok: true });
+    } catch (error) {
+      void recordOffscreenBoundary(message, sender, "response-error", error);
+      sendResponse({ ok: false });
+    }
+  }
+
+  async function persistOffscreenDiagnostic(
+    message: Extract<Control, { kind: "offscreen-diagnostic" }>,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: unknown) => void,
+  ): Promise<void> {
+    const event = message.event;
+    try {
+      await chrome.storage.session.set({
+        [eventKey(event)]: event,
+      });
+      void recordOffscreenBoundary(message, sender, "persisted");
+      sendResponse({ ok: true });
+    } catch (error) {
+      void recordOffscreenBoundary(message, sender, "persist-error", error);
+      sendResponse({ ok: false });
     }
   }
 
@@ -618,61 +800,51 @@ export default defineBackground(() => {
   }
 
   async function holdContent(label: string): Promise<FixtureError> {
-    const fact = contentRegistry.get(label);
-    if (!fact) return { code: "E_TARGET_UNAVAILABLE" };
+    const target = contentRegistry.frameTarget(label);
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
     const tool = await nexus.safeCreate(DocumentToolToken, {
-      target: chromeTarget.contentFrame({
-        tabId: fact.tabId,
-        frameId: fact.frameId,
-      }),
+      target,
     });
     if (tool.isErr()) return errorResult(tool.error);
-    await reporter?.barrier("hold-call-started");
+    await runState.reporter?.barrier("hold-call-started");
     try {
       await tool.value.hold();
       return { code: "E_FIXTURE_UNEXPECTED_HOLD_SUCCESS" };
     } catch (error) {
-      await reporter?.barrier("hold-terminal-error");
+      await runState.reporter?.barrier("hold-terminal-error");
       return errorResult(error);
     }
   }
 
   async function identityConstraint(): Promise<FixtureError> {
     const alpha = contentRegistry.get("alpha");
-    if (!alpha) return { code: "E_TARGET_UNAVAILABLE" };
+    const target = contentRegistry.exactTarget("alpha");
+    if (!alpha || !target) return { code: "E_TARGET_UNAVAILABLE" };
     const constrained = await nexus.safeCreate(DocumentToolToken, {
-      target: alpha.documentId
-        ? chromeTarget.contentDocument({
-            tabId: alpha.tabId,
-            documentId: alpha.documentId,
-          })
-        : chromeTarget.contentFrame({
-            tabId: alpha.tabId,
-            frameId: alpha.frameId,
-          }),
-      where: (context: any) => context.app.label === "beta",
+      target,
+      where: (context: FixtureContext) => context.app.label === "beta",
     });
     if (constrained.isErr()) {
-      await reporter?.barrier("alpha-constraint-failed");
+      await runState.reporter?.barrier("alpha-constraint-failed");
       return errorResult(constrained.error);
     }
     return { code: "E_FIXTURE_UNEXPECTED_RETARGET" };
   }
 
   async function invokeBoundMulticast() {
-    if (!retainedMulticast) return { code: "E_FIXTURE_MULTICAST_ABSENT" };
+    if (!retained.multicast) return { code: "E_FIXTURE_MULTICAST_ABSENT" };
     try {
-      return { identities: await retainedMulticast.identity() };
+      return { identities: await retained.multicast.identity() };
     } catch (error) {
       return errorResult(error);
     }
   }
 
   async function failBoundMulticast() {
-    if (!retainedMulticast) return { code: "E_FIXTURE_MULTICAST_ABSENT" };
+    if (!retained.multicast) return { code: "E_FIXTURE_MULTICAST_ABSENT" };
     try {
-      const results = await retainedMulticast.fail();
-      await reporter?.barrier("multicast-remote-rejection-ready");
+      const results = await retained.multicast.fail();
+      await runState.reporter?.barrier("multicast-remote-rejection-ready");
       return { results };
     } catch (error) {
       return errorResult(error);
@@ -680,12 +852,12 @@ export default defineBackground(() => {
   }
 
   async function invokeCapability() {
-    if (!retainedTool || !retainedReference)
+    if (!retained.tool || !retained.reference)
       return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
     try {
       return {
-        identity: await retainedTool.identity(),
-        reference: await retainedReference.label(),
+        identity: await retained.tool.identity(),
+        reference: await retained.reference.label(),
       };
     } catch (error) {
       return errorResult(error);
@@ -693,41 +865,41 @@ export default defineBackground(() => {
   }
 
   async function invokeCapabilityProxy() {
-    if (!retainedTool) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
+    if (!retained.tool) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
     try {
-      return { identity: await retainedTool.identity() };
+      return { identity: await retained.tool.identity() };
     } catch (error) {
       return errorResult(error);
     }
   }
 
   async function invokeCapabilityReference() {
-    if (!retainedReference) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
+    if (!retained.reference) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
     try {
-      return { reference: await retainedReference.label() };
+      return { reference: await retained.reference.label() };
     } catch (error) {
       return errorResult(error);
     }
   }
 
   async function releaseCapabilityReference(): Promise<FixtureError> {
-    if (!retainedReference) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
-    const released = nexus.safeRelease(retainedReference);
+    if (!retained.reference) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
+    const released = nexus.safeRelease(retained.reference);
     if (released.isErr()) return errorResult(released.error);
-    await reporter?.barrier("reference-released");
+    await runState.reporter?.barrier("reference-released");
     try {
-      await retainedReference.label();
+      await retained.reference.label();
       return { code: "E_FIXTURE_UNEXPECTED_RESOURCE_SUCCESS" };
     } catch (error) {
-      await reporter?.barrier("reference-terminal-error");
+      await runState.reporter?.barrier("reference-terminal-error");
       return errorResult(error);
     }
   }
 
   async function invokePinnedIdentity() {
-    if (!retainedTool) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
+    if (!retained.tool) return { code: "E_FIXTURE_CAPABILITY_ABSENT" };
     try {
-      return { identity: await retainedTool.identity() };
+      return { identity: await retained.tool.identity() };
     } catch (error) {
       return errorResult(error);
     }
@@ -740,9 +912,9 @@ export default defineBackground(() => {
 
   async function closeOffscreen() {
     await chrome.offscreen.closeDocument();
-    resolveOffscreenReady = undefined;
-    offscreenCreate = undefined;
-    activeOffscreenSessionId = undefined;
+    offscreenState.resolveReady = undefined;
+    offscreenState.create = undefined;
+    offscreenState.activeSessionId = undefined;
     return { requested: true } as const;
   }
 
@@ -750,12 +922,12 @@ export default defineBackground(() => {
     operation: "register" | "refresh" | "policy",
     mode?: "allow" | "deny",
   ): Promise<RelayAdminResponse> {
-    await runReady;
+    await runState.ready;
     if (operation === "policy") {
       if (!mode)
         return { result: errorResultCode("E_FIXTURE_CONTROL_REJECTED") };
       const policyMode = mode;
-      relayPolicyMode = policyMode;
+      relayState.policyMode = policyMode;
       return {
         result: {
           ok: true,
@@ -765,66 +937,22 @@ export default defineBackground(() => {
         },
       };
     }
-    const current = currentMainFact();
-    if (!current) return { result: errorResultCode("E_TARGET_UNAVAILABLE") };
+    const current = contentRegistry.currentMain(runState.activeRunId);
+    if (!current || !current.documentId)
+      return { result: errorResultCode("E_TARGET_UNAVAILABLE") };
     if (
       operation === "refresh" &&
-      relayTarget &&
-      relayTarget.documentId === current.documentId
+      relayState.target &&
+      relayState.target.documentId === current.documentId
     ) {
       return { result: errorResultCode("E_TARGET_UNCHANGED") };
     }
-    relayTarget = current;
+    relayState.target = current;
     const target = chromeTarget.contentDocument({
       tabId: current.tabId,
-      documentId: current.documentId!,
+      documentId: current.documentId,
     });
-    nexus.provide(
-      relayService(DocumentRelayToken, {
-        forwardThrough: nexus,
-        forwardTarget: target,
-        payload: { mode: "serializable" },
-        policy: {
-          canCall: async (
-            context: RelayServiceCallContext<ChromeAdapterModel>,
-          ) => {
-            const originContext = context.origin?.context;
-            const originSessionId = context.origin?.app?.sessionId ?? null;
-            const allowedOrigin =
-              originContext === "popup" ||
-              originContext === "workspace" ||
-              originContext === "fixture-workspace";
-            const decision =
-              relayPolicyMode === "allow" && allowedOrigin ? "allow" : "deny";
-            const connection =
-              context.connection?.observed ?? context.connection;
-            await reporter?.result(
-              JSON.stringify({
-                type: "relay-policy-observation",
-                decision,
-                originContext:
-                  originContext === "fixture-workspace"
-                    ? "workspace"
-                    : (originContext ?? null),
-                originSessionId,
-                relayContext: normalizeString(context.relay?.context),
-                relaySessionId: normalizeString(context.relay?.app?.sessionId),
-                connectionTabId: normalizeNumber(connection?.tabId),
-                connectionFrameId: normalizeNumber(connection?.frameId),
-                connectionDocumentId: normalizeString(connection?.documentId),
-                tokenId: context.tokenId,
-                operation: context.operation,
-                path: context.path,
-                ...(decision === "deny"
-                  ? { code: "E_RELAY_POLICY_DENIED" }
-                  : {}),
-              }),
-            );
-            return decision === "allow";
-          },
-        },
-      }),
-    );
+    installRelayProvider(target);
     return {
       result: {
         ok: true,
@@ -838,16 +966,50 @@ export default defineBackground(() => {
     };
   }
 
-  function currentMainFact(): ContentFact | undefined {
-    const fact = contentRegistry.get("main");
-    if (
-      !fact ||
-      fact.runId !== activeRunId ||
-      fact.frameId !== 0 ||
-      !fact.documentId
-    )
-      return undefined;
-    return fact;
+  function installRelayProvider(target: FixtureChromeTarget): void {
+    nexus.provide(
+      relayService(DocumentRelayToken, {
+        forwardThrough: nexus,
+        forwardTarget: target,
+        payload: { mode: "serializable" },
+        policy: { canCall: (context) => evaluateRelayCall(context) },
+      }),
+    );
+  }
+
+  async function evaluateRelayCall(
+    context: RelayServiceCallContext<FixtureChromeModel>,
+  ): Promise<boolean> {
+    const originContext = context.origin?.context;
+    const originSessionId = context.origin?.app?.sessionId ?? null;
+    const allowedOrigin =
+      originContext === "popup" ||
+      originContext === "workspace" ||
+      originContext === "fixture-workspace";
+    const decision =
+      relayState.policyMode === "allow" && allowedOrigin ? "allow" : "deny";
+    const connection = context.connection?.observed ?? context.connection;
+    await runState.reporter?.result(
+      JSON.stringify({
+        type: "relay-policy-observation",
+        decision,
+        originContext:
+          originContext === "fixture-workspace"
+            ? "workspace"
+            : (originContext ?? null),
+        originSessionId,
+        relayContext: normalizeString(context.relay?.context),
+        relaySessionId: normalizeString(context.relay?.app?.sessionId),
+        connectionTabId: normalizeNumber(connection?.tabId),
+        connectionFrameId: normalizeNumber(connection?.frameId),
+        connectionDocumentId: normalizeString(connection?.documentId),
+        tokenId: context.tokenId,
+        operation: context.operation,
+        path: context.path,
+        ...(decision === "deny" ? { code: "E_RELAY_POLICY_DENIED" } : {}),
+      }),
+    );
+    return decision === "allow";
   }
 
   async function bindMulticast() {
@@ -855,19 +1017,19 @@ export default defineBackground(() => {
       expects: "all",
     });
     if (selected.isErr()) return errorResult(selected.error);
-    retainedMulticast = selected.value;
-    await reporter?.barrier("multicast-snapshot-bound");
-    return { identities: await retainedMulticast.identity() };
+    retained.multicast = selected.value;
+    await runState.reporter?.barrier("multicast-snapshot-bound");
+    return { identities: await retained.multicast.identity() };
   }
 
   async function createExactMulticast(): Promise<Record<string, unknown>> {
-    if (retiredBetaSessionId) {
+    if (relayState.retiredBetaSessionId) {
       const beta = contentRegistry.get("beta");
-      if (!beta || beta.sessionId === retiredBetaSessionId) {
-        await betaReplacement;
+      if (!beta || beta.sessionId === relayState.retiredBetaSessionId) {
+        await relayState.betaReplacement;
       }
     }
-    const targets = registeredTargets(["alpha", "beta"]);
+    const targets = contentRegistry.targets(["alpha", "beta"]);
     if (targets.length < 2) return { code: "E_TARGET_UNAVAILABLE" };
     const routes = await Promise.all(
       targets.map((target) => nexus.safeCreate(DocumentToolToken, { target })),
@@ -879,54 +1041,25 @@ export default defineBackground(() => {
       expects: "all",
     });
     if (multicast.isErr()) return errorResult(multicast.error);
-    retainedMulticast = multicast.value;
-    await reporter?.barrier("multicast-snapshot-bound");
-    return { identities: await retainedMulticast.identity() };
+    retained.multicast = multicast.value;
+    await runState.reporter?.barrier("multicast-snapshot-bound");
+    return { identities: await retained.multicast.identity() };
   }
 
   function registerContent(
     runId: string,
-    content: ContentIdentity | undefined,
-    sender: chrome.runtime.MessageSender,
+    content: ContentIdentity,
+    sender: ValidatedContentSender,
   ): void {
-    if (
-      !content ||
-      sender.tab?.id === undefined ||
-      sender.frameId === undefined
-    )
-      return;
-    contentRegistry.set(content.label, {
-      ...content,
-      runId,
-      tabId: sender.tab.id,
-      frameId: sender.frameId,
-      documentId: sender.documentId,
-      senderUrl: normalizedSenderUrl(sender)!,
-    });
+    contentRegistry.register(runId, content, sender);
     if (
       content.label === "beta" &&
-      content.sessionId !== retiredBetaSessionId
+      content.sessionId !== relayState.retiredBetaSessionId
     ) {
-      resolveBetaReplacement?.();
-      resolveBetaReplacement = undefined;
-      void reporter?.barrier("beta-replacement-registered");
+      relayState.resolveBetaReplacement?.();
+      relayState.resolveBetaReplacement = undefined;
+      void runState.reporter?.barrier("beta-replacement-registered");
     }
-  }
-
-  function registeredTargets(labels?: readonly string[]) {
-    return [...contentRegistry.values()]
-      .filter((fact) => !labels || labels.includes(fact.label))
-      .map((fact) =>
-        fact.documentId
-          ? chromeTarget.contentDocument({
-              tabId: fact.tabId,
-              documentId: fact.documentId,
-            })
-          : chromeTarget.contentFrame({
-              tabId: fact.tabId,
-              frameId: fact.frameId,
-            }),
-      );
   }
 
   async function recordOffscreenBoundary(
@@ -1020,7 +1153,7 @@ type Control =
       readonly runId: string;
       readonly sessionId: string;
     }
-  | { readonly kind: "offscreen-diagnostic"; readonly event: unknown };
+  | { readonly kind: "offscreen-diagnostic"; readonly event: BridgeEvent };
 
 function isControl(value: unknown): value is Control {
   if (!value || typeof value !== "object") return false;
@@ -1247,6 +1380,26 @@ function normalizedSenderUrl(
   sender: chrome.runtime.MessageSender,
 ): string | undefined {
   return senderUrl(sender)?.href;
+}
+
+function normalizedContentSender(
+  sender: chrome.runtime.MessageSender,
+): ValidatedContentSender | undefined {
+  if (
+    sender.tab?.id === undefined ||
+    sender.frameId === undefined ||
+    !isContentSender(sender, senderUrl(sender)?.searchParams.get("runId") ?? "")
+  )
+    return undefined;
+  const senderUrlValue = normalizedSenderUrl(sender);
+  return senderUrlValue
+    ? {
+        tabId: sender.tab.id,
+        frameId: sender.frameId,
+        documentId: sender.documentId,
+        senderUrl: senderUrlValue,
+      }
+    : undefined;
 }
 
 function sanitizeBoundaryRunId(value: unknown): string {
