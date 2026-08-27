@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Page research workspace fixture</title>
+  </head>
+  <body>
+    <main>
+      <output id="bridge-status">loading</output>
+      <iframe id="alpha" src="/child.html?frame=alpha"></iframe>
+      <iframe
+        id="beta"
+        src="http://127.0.0.1:4174/child.html?frame=beta"
+      ></iframe>
+    </main>
+    <script type="module" src="/host.ts"></script>
+  </body>
+</html>

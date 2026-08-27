@@ -187,6 +187,31 @@ describe("Nexus service acquisition API", () => {
     await expect(survivor).resolves.toMatchObject({ value: undefined });
   });
 
+  it("rejects zero-target and non-plain multicast inputs before resolution or proxy creation", async () => {
+    const manager = {
+      safeResolveConnections: vi.fn(),
+      getReadyTargetConnections: vi.fn(),
+      subscribeAvailabilityChanged: vi.fn(),
+    };
+    const createServiceProxy = vi.fn();
+    const nexus = readyNexus(manager, createServiceProxy);
+    const token = new Token<object>("service");
+
+    for (const options of [
+      { targets: [] },
+      { targets: [new Date()] },
+      { targets: [{ context: "host" }], extra: true },
+    ]) {
+      await expect(
+        nexus.safeCreateMulticast(token, options as never),
+      ).resolves.toMatchObject({ error: { code: "E_USAGE_INVALID" } });
+    }
+    expect(manager.safeResolveConnections).not.toHaveBeenCalled();
+    expect(manager.getReadyTargetConnections).not.toHaveBeenCalled();
+    expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
+    expect(createServiceProxy).not.toHaveBeenCalled();
+  });
+
   it("times out and aborts create after bootstrap while target connection is pending", async () => {
     vi.useFakeTimers();
     try {
@@ -463,6 +488,53 @@ describe("Nexus service acquisition API", () => {
       expect(manager.subscribeAvailabilityChanged).toHaveBeenCalledOnce();
       expect(unsubscribe).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("binds a target resolved before its deadline and gives the earlier-registered deadline priority at the same time", async () => {
+    vi.useFakeTimers();
+    try {
+      const token = new Token<object>("service");
+      const provider = {
+        connectionId: "provider",
+        isReady: () => true,
+        remoteProviders: new Set([token.id]),
+      };
+      for (const [elapsed, expected] of [
+        [9, { value: {} }],
+        [10, { error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" } }],
+        [11, { error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" } }],
+      ] as const) {
+        const pending = deferred<ReturnType<typeof ok<any>>>();
+        const manager = {
+          safeResolveConnections: vi.fn(() => pending.promise),
+          getReadyTargetConnections: vi.fn(() => [provider]),
+          subscribeAvailabilityChanged: vi.fn(),
+        };
+        const createServiceProxy = vi.fn(() => ({}));
+        const acquisition = readyNexus(
+          manager,
+          createServiceProxy,
+        ).safeCreateMulticast(token, {
+          targets: [{ context: "host" }],
+          timeout: 10,
+        });
+
+        // safeCreateMulticast registers its deadline before this resolution
+        // callback. Equal-time callbacks therefore deterministically time out.
+        setTimeout(() => pending.resolve(ok([provider])), elapsed);
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(11);
+        await expect(acquisition).resolves.toMatchObject(expected);
+        expect(manager.safeResolveConnections).toHaveBeenCalledOnce();
+        expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
+        if (elapsed < 10) {
+          expect(createServiceProxy).toHaveBeenCalledOnce();
+        } else expect(createServiceProxy).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      }
     } finally {
       vi.useRealTimers();
     }

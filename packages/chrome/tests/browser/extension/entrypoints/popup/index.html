@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus fixture popup</title>
+  </head>
+  <body>
+    <main>
+      <output data-status>loading</output><output data-result></output
+      ><button data-command="state-ui-action">Increment shared State</button
+      ><button data-command="relay-local-call">Relay local call</button
+      ><button data-command="relay-call">Relay call</button
+      ><button data-command="relay-register">Relay register</button
+      ><button data-command="relay-policy-mode" data-mode="allow">
+        Relay policy allow</button
+      ><button data-command="relay-policy-mode" data-mode="deny">
+        Relay policy deny</button
+      ><button data-command="relay-refresh">Relay refresh</button
+      ><button data-command="relay-old-call">Relay old retained call</button
+      ><button data-command="relay-fresh-call">Relay fresh handle call</button
+      ><button data-command="state-client-cleanup">
+        Clean up State client
+      </button>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

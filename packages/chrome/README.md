@@ -198,6 +198,29 @@ Do not use the mock to validate Chrome adapter behavior. It does not exercise Ch
 
 Use Chrome adapter tests or extension E2E tests for those platform behaviors.
 
+## Chrome E2E Testing
+
+Contributors need a local dependency install and the Playwright-bundled Chromium
+browser:
+
+```bash
+pnpm install
+pnpm --filter @nexus-js/chrome exec playwright install --with-deps chromium
+```
+
+Run the primary browser lanes with:
+
+```bash
+pnpm --filter @nexus-js/chrome test:browser
+pnpm --filter @nexus-js/chrome test:browser:worker:p0
+```
+
+For the full worker suite, use
+`pnpm --filter @nexus-js/chrome test:browser:worker` when needed. The scripts
+build the WXT fixture and run Playwright with persistent Chromium and a fresh
+profile for each test case. This is contributor-only test infrastructure and
+does not change published package behavior or public APIs.
+
 ### New Context Support
 
 ```typescript
