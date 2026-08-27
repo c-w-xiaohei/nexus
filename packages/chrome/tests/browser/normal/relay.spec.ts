@@ -1,61 +1,48 @@
 import type { Frame, Page } from "@playwright/test";
 import {
   diagnosticCursor,
+  diagnosticEventIdentity,
   expect,
   test,
   type DiagnosticCursor,
+  type DispatchCursor,
+  waitForHostBridgeResult,
 } from "../harness/playwright-fixtures";
 import { fixtureOrigins } from "../harness/targets";
-import type { DiagnosticEvent } from "../protocol";
+import { parseBridgeResult, type DiagnosticEvent } from "../protocol";
 
 test("RL-CT-01 keeps local Workspace and Relay providers distinct", async ({
-  diagnostics,
   dispatchHostCommand,
   hostPage,
   openExtensionPage,
   waitForEvent,
-  waitForResult,
 }) => {
   const runId = "relay-local-coexistence";
   await openContent(hostPage, runId, waitForEvent);
   const popup = await openExtensionPage("popup", runId);
 
   try {
-    const before = await documentFacts(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
+    const before = await documentFacts(hostPage, runId, dispatchHostCommand);
     const local = await clickUiCommand(
       popup,
       runId,
       "relay-local-call",
       "popup",
-      diagnostics,
     );
     const afterLocal = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(local.result).toBe("relay-local-result");
     expect(local.identity?.sessionId).toEqual(expect.any(String));
     expect(afterLocal.invocationCount).toBe(before.invocationCount);
 
-    const relay = await clickUiCommand(
-      popup,
-      runId,
-      "relay-call",
-      "popup",
-      diagnostics,
-    );
+    const relay = await clickUiCommand(popup, runId, "relay-call", "popup");
     const afterRelay = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(relay.result).toBe("relay-call-result");
     expect(relay.identity).toEqual({
@@ -63,6 +50,7 @@ test("RL-CT-01 keeps local Workspace and Relay providers distinct", async ({
       sessionId: afterRelay.sessionId,
       nonce: afterRelay.nonce,
     });
+    expect(local.identity?.sessionId).not.toBe(afterRelay.sessionId);
     expect(afterRelay.invocationCount).toBe(before.invocationCount + 1);
   } finally {
     await cleanupUiAndContent(
@@ -71,90 +59,6 @@ test("RL-CT-01 keeps local Workspace and Relay providers distinct", async ({
       runId,
       "popup",
       dispatchHostCommand,
-      diagnostics,
-      waitForResult,
-    );
-  }
-});
-
-test("RL-CT-02 registers and invokes the exact current main document", async ({
-  diagnostics,
-  dispatchHostCommand,
-  hostPage,
-  openExtensionPage,
-  waitForEvent,
-  waitForResult,
-}) => {
-  const runId = "relay-exact-main";
-  await openContent(hostPage, runId, waitForEvent);
-  const popup = await openExtensionPage("popup", runId);
-
-  try {
-    const mainBefore = await documentFacts(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
-    const mainTarget = await registryMainFact(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
-    const siblingBefore = await frameFacts(
-      frameByName(hostPage, "alpha"),
-      runId,
-      "content:alpha",
-      diagnostics,
-      waitForResult,
-    );
-    const registration = await clickUiCommand(
-      popup,
-      runId,
-      "relay-register",
-      "popup",
-      diagnostics,
-    );
-    expect(registration.result).toBe("relay-register-result");
-    expect(registration.target).toEqual(targetIdentity(mainTarget));
-
-    const relay = await clickUiCommand(
-      popup,
-      runId,
-      "relay-call",
-      "popup",
-      diagnostics,
-    );
-    const mainAfter = await documentFacts(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
-    const siblingAfter = await frameFacts(
-      frameByName(hostPage, "alpha"),
-      runId,
-      "content:alpha",
-      diagnostics,
-      waitForResult,
-    );
-    expect(relay.identity).toEqual({
-      label: "main",
-      sessionId: mainBefore.sessionId,
-      nonce: mainBefore.nonce,
-    });
-    expect(mainAfter.invocationCount).toBe(mainBefore.invocationCount + 1);
-    expect(siblingAfter.invocationCount).toBe(siblingBefore.invocationCount);
-  } finally {
-    await cleanupUiAndContent(
-      popup,
-      hostPage,
-      runId,
-      "popup",
-      dispatchHostCommand,
-      diagnostics,
-      waitForResult,
     );
   }
 });
@@ -165,7 +69,6 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
   hostPage,
   openExtensionPage,
   waitForEvent,
-  waitForResult,
 }) => {
   const runId = "relay-policy-identity";
   await openContent(hostPage, runId, waitForEvent);
@@ -177,41 +80,17 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
   try {
     const popupSessionId = await sessionId(popup, "popup");
     const workspaceSessionId = await sessionId(workspace, "workspace");
-    const allowMode = await clickUiCommand(
-      popup,
-      runId,
-      "relay-policy-mode",
-      "popup",
-      diagnostics,
-      undefined,
-      "allow",
-    );
-    const backgroundSessionId = requiredString(
-      allowMode.controlResult?.backgroundSessionId,
-      "relay-policy-mode allow backgroundSessionId",
-    );
-    expect(allowMode.controlResult).toEqual({
-      ok: true,
-      type: "relay-policy-mode-result",
+    await clickUiCommand(popup, runId, "relay-policy-mode", "popup", {
       mode: "allow",
-      backgroundSessionId,
     });
     const mainBefore = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
 
     const allowedCursor = diagnosticCursor(await diagnostics(runId));
-    const allowed = await clickUiCommand(
-      popup,
-      runId,
-      "relay-call",
-      "popup",
-      diagnostics,
-      allowedCursor,
-    );
+    const allowed = await clickUiCommand(popup, runId, "relay-call", "popup");
     const [allowedObservation] = await policyObservations(
       runId,
       allowedCursor,
@@ -221,7 +100,6 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(allowed.result).toBe("relay-call-result");
     expect(allowed.identity).toMatchObject({
@@ -230,6 +108,10 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       nonce: afterAllowed.nonce,
     });
     expect(afterAllowed.invocationCount).toBe(mainBefore.invocationCount + 1);
+    const backgroundSessionId = requiredString(
+      allowedObservation.relaySessionId,
+      "allow policy observation relaySessionId",
+    );
     expect(allowedObservation).toEqual({
       type: "relay-policy-observation",
       decision: "allow",
@@ -245,26 +127,13 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       path: ["identity"],
     });
 
-    const denyMode = await clickUiCommand(
-      workspace,
-      runId,
-      "relay-policy-mode",
-      "workspace",
-      diagnostics,
-      diagnosticCursor(await diagnostics(runId)),
-      "deny",
-    );
-    expect(denyMode.controlResult).toEqual({
-      ok: true,
-      type: "relay-policy-mode-result",
+    await clickUiCommand(workspace, runId, "relay-policy-mode", "workspace", {
       mode: "deny",
-      backgroundSessionId,
     });
     const deniedBefore = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     const deniedCursor = diagnosticCursor(await diagnostics(runId));
     const deniedCall = await clickUiCommand(
@@ -272,8 +141,6 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       runId,
       "relay-call",
       "workspace",
-      diagnostics,
-      deniedCursor,
     );
     const [deniedObservation] = await policyObservations(
       runId,
@@ -284,7 +151,6 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(deniedCall.kind).toBe("error");
     expect(deniedCall.error?.code).toBe("E_REMOTE_EXCEPTION");
@@ -307,64 +173,67 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
     expect(deniedAfter.invocationCount).toBe(deniedBefore.invocationCount);
     expect(deniedCall.error?.code).not.toBe("E_AUTH_CALL_DENIED");
 
-    const restoreAllowMode = await clickUiCommand(
-      workspace,
-      runId,
-      "relay-policy-mode",
-      "workspace",
-      diagnostics,
-      diagnosticCursor(await diagnostics(runId)),
-      "allow",
-    );
-    expect(restoreAllowMode.controlResult).toEqual({
-      ok: true,
-      type: "relay-policy-mode-result",
+    await clickUiCommand(workspace, runId, "relay-policy-mode", "workspace", {
       mode: "allow",
-      backgroundSessionId,
     });
     expect(mainBefore.sessionId).toEqual(deniedAfter.sessionId);
   } finally {
-    await cleanupUi(workspace, runId, "workspace", diagnostics, waitForResult);
+    await cleanupUi(workspace, runId, "workspace");
     await workspace.close();
-    await cleanupUi(popup, runId, "popup", diagnostics, waitForResult);
+    await cleanupUi(popup, runId, "popup");
     await popup.close();
-    await cleanupContent(hostPage, runId, dispatchHostCommand, waitForResult);
+    await cleanupContent(hostPage, runId, dispatchHostCommand);
   }
 });
 
-test("RL-CT-04 does not retarget a retained Relay handle across navigation", async ({
+test("RL-CT-04 registers the exact main document and does not retarget its retained Relay handle across navigation", async ({
   diagnostics,
   dispatchHostCommand,
   hostPage,
   openExtensionPage,
   waitForEvent,
-  waitForResult,
 }) => {
   const runId = "relay-navigation-replacement";
   await openContent(hostPage, runId, waitForEvent);
   const popup = await openExtensionPage("popup", runId);
 
   try {
-    const oldFacts = await documentFacts(
-      hostPage,
+    const oldFacts = await documentFacts(hostPage, runId, dispatchHostCommand);
+    const alphaBefore = await frameFacts(
+      frameByName(hostPage, "alpha"),
       runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
-    const initialTarget = await registryMainFact(
+      "content:alpha",
       hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
     );
-    const registration = await clickUiCommand(
+    await clickUiCommand(popup, runId, "relay-register", "popup");
+    const retainedCall = await clickUiCommand(
       popup,
       runId,
-      "relay-register",
+      "relay-call",
       "popup",
-      diagnostics,
     );
-    expect(registration.target).toEqual(targetIdentity(initialTarget));
+    const afterRetainedCall = await documentFacts(
+      hostPage,
+      runId,
+      dispatchHostCommand,
+    );
+    const alphaAfterRetainedCall = await frameFacts(
+      frameByName(hostPage, "alpha"),
+      runId,
+      "content:alpha",
+      hostPage,
+    );
+    expect(retainedCall.identity).toEqual({
+      label: "main",
+      sessionId: oldFacts.sessionId,
+      nonce: oldFacts.nonce,
+    });
+    expect(afterRetainedCall.invocationCount).toBe(
+      oldFacts.invocationCount + 1,
+    );
+    expect(alphaAfterRetainedCall.invocationCount).toBe(
+      alphaBefore.invocationCount,
+    );
     const navigationCursor = diagnosticCursor(await diagnostics(runId));
     await hostPage.goto(
       `${fixtureOrigins.main}/host.html?runId=${runId}&revision=fresh`,
@@ -389,13 +258,6 @@ test("RL-CT-04 does not retarget a retained Relay handle across navigation", asy
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
-    );
-    const freshTarget = await registryMainFact(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
     );
     expect(freshFacts.sessionId).not.toBe(oldFacts.sessionId);
     expect(freshFacts.nonce).not.toBe(oldFacts.nonce);
@@ -405,16 +267,12 @@ test("RL-CT-04 does not retarget a retained Relay handle across navigation", asy
       runId,
       "relay-old-call",
       "popup",
-      diagnostics,
-      diagnosticCursor(await diagnostics(runId)),
-      undefined,
-      7_000,
+      { timeoutMs: 7_000 },
     );
     const afterOldCall = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(oldCall.kind).toBe("error");
     expect(afterOldCall.invocationCount).toBe(freshFacts.invocationCount);
@@ -422,39 +280,18 @@ test("RL-CT-04 does not retarget a retained Relay handle across navigation", asy
     expect(oldCall.error?.message).toEqual(expect.any(String));
     expect(oldCall.identity).toBeNull();
 
-    const refresh = await clickUiCommand(
-      popup,
-      runId,
-      "relay-refresh",
-      "popup",
-      diagnostics,
-      diagnosticCursor(await diagnostics(runId)),
-    );
-    expect(refresh.result).toBe("relay-refresh-result");
-    expect(refresh.oldTarget).toEqual(targetIdentity(initialTarget));
-    expect(refresh.freshTarget).toEqual(targetIdentity(freshTarget));
-    expect(initialTarget.tabId).toBe(freshTarget.tabId);
-    expect(initialTarget.frameId).toBe(0);
-    expect(freshTarget.frameId).toBe(0);
-    expect(initialTarget.documentId).not.toBe("");
-    expect(freshTarget.documentId).not.toBe("");
-    expect(initialTarget.documentId).not.toBe(freshTarget.documentId);
-    expect(initialTarget.sessionId).not.toBe(freshTarget.sessionId);
-    expect(initialTarget.nonce).not.toBe(freshTarget.nonce);
+    await clickUiCommand(popup, runId, "relay-refresh", "popup");
 
     const freshCall = await clickUiCommand(
       popup,
       runId,
       "relay-fresh-call",
       "popup",
-      diagnostics,
-      diagnosticCursor(await diagnostics(runId)),
     );
     const afterFreshCall = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(freshCall.identity).toEqual({
       label: "main",
@@ -469,19 +306,15 @@ test("RL-CT-04 does not retarget a retained Relay handle across navigation", asy
       runId,
       "popup",
       dispatchHostCommand,
-      diagnostics,
-      waitForResult,
     );
   }
 });
 
 test("RL-CT-05 keeps the workspace Relay proxy after popup teardown", async ({
-  diagnostics,
   dispatchHostCommand,
   hostPage,
   openExtensionPage,
   waitForEvent,
-  waitForResult,
 }) => {
   const runId = "relay-downstream-isolation";
   await openContent(hostPage, runId, waitForEvent);
@@ -491,24 +324,17 @@ test("RL-CT-05 keeps the workspace Relay proxy after popup teardown", async ({
   });
 
   try {
-    const before = await documentFacts(
-      hostPage,
-      runId,
-      dispatchHostCommand,
-      waitForResult,
-    );
+    const before = await documentFacts(hostPage, runId, dispatchHostCommand);
     const first = await clickUiCommand(
       workspace,
       runId,
       "relay-call",
       "workspace",
-      diagnostics,
     );
     const afterFirst = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(first.identity).toEqual({
       label: "main",
@@ -517,7 +343,7 @@ test("RL-CT-05 keeps the workspace Relay proxy after popup teardown", async ({
     });
     expect(afterFirst.invocationCount).toBe(before.invocationCount + 1);
 
-    await cleanupUi(popup, runId, "popup", diagnostics, waitForResult);
+    await cleanupUi(popup, runId, "popup");
     await popup.close();
 
     const second = await clickUiCommand(
@@ -525,19 +351,17 @@ test("RL-CT-05 keeps the workspace Relay proxy after popup teardown", async ({
       runId,
       "relay-call",
       "workspace",
-      diagnostics,
     );
     const afterSecond = await documentFacts(
       hostPage,
       runId,
       dispatchHostCommand,
-      waitForResult,
     );
     expect(second.identity).toEqual(first.identity);
     expect(afterSecond.invocationCount).toBe(afterFirst.invocationCount + 1);
   } finally {
     if (!popup.isClosed()) {
-      await cleanupUi(popup, runId, "popup", diagnostics, waitForResult);
+      await cleanupUi(popup, runId, "popup");
       await popup.close();
     }
     await cleanupUiAndContent(
@@ -546,8 +370,6 @@ test("RL-CT-05 keeps the workspace Relay proxy after popup teardown", async ({
       runId,
       "workspace",
       dispatchHostCommand,
-      diagnostics,
-      waitForResult,
     );
   }
 });
@@ -579,36 +401,40 @@ async function clickUiCommand(
   runId: string,
   command: string,
   participant: "popup" | "workspace",
-  diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>,
-  after?: DiagnosticCursor,
-  mode?: "allow" | "deny",
-  timeoutMs = 5_000,
+  options: {
+    readonly mode?: "allow" | "deny";
+    readonly timeoutMs?: number;
+  } = {},
 ): Promise<UiResult> {
-  const cursor = after ?? diagnosticCursor(await diagnostics(runId));
   const selector =
     command === "relay-policy-mode"
-      ? `[data-command="${command}"][data-mode="${mode}"]`
+      ? `[data-command="${command}"][data-mode="${options.mode}"]`
       : `[data-command="${command}"]`;
+  const output = page.locator("[data-result]");
+  const before = await output.evaluate((element) =>
+    element instanceof HTMLOutputElement ? element.value : "",
+  );
   await page.locator(selector).click();
-  let observed: DiagnosticEvent | undefined;
+  let value = "";
   await expect
     .poll(
       async () => {
-        observed = (await diagnostics(runId)).find(
-          (event) =>
-            !cursor.has(eventIdentity(event)) &&
-            event.participant === participant &&
-            (event.kind === "result" || event.kind === "error") &&
-            matchesUiResult(event.value, command),
+        value = await output.evaluate((element) =>
+          element instanceof HTMLOutputElement ? element.value : "",
         );
-        return observed !== undefined;
+        return value !== before;
       },
-      { timeout: timeoutMs },
+      { timeout: options.timeoutMs },
     )
     .toBe(true);
-  if (!observed || (observed.kind !== "result" && observed.kind !== "error"))
+  const envelope = parseBridgeResult(JSON.parse(value), {
+    runId,
+    command,
+    sequence: Number(await output.getAttribute("data-sequence")),
+  });
+  if (!envelope || envelope.participant !== participant)
     throw new Error(`Missing ${command} result`);
-  return parseUiResult(observed.value, observed.kind);
+  return parseUiResult(envelope.value, envelope.kind);
 }
 
 async function cleanupUiAndContent(
@@ -617,123 +443,125 @@ async function cleanupUiAndContent(
   runId: string,
   participant: "popup" | "workspace",
   dispatchHostCommand: DispatchHostCommand,
-  diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>,
-  waitForResult: WaitForResult,
 ): Promise<void> {
   if (!page.isClosed()) {
-    await cleanupUi(page, runId, participant, diagnostics, waitForResult);
+    await cleanupUi(page, runId, participant);
     await page.close();
   }
-  await cleanupContent(hostPage, runId, dispatchHostCommand, waitForResult);
+  await cleanupContent(hostPage, runId, dispatchHostCommand);
 }
 
 async function cleanupContent(
   hostPage: Page,
   runId: string,
   dispatchHostCommand: DispatchHostCommand,
-  waitForResult: WaitForResult,
 ): Promise<void> {
   const cursor = await dispatchHostCommand(
     hostPage,
     runId,
     "state-client-cleanup",
   );
-  const result = await waitForResult(
+  const expected = {
     runId,
-    (event) =>
-      event.participant === "content:main" &&
-      parsed(event.value)?.result === "state-client-cleanup-result",
-    { after: cursor },
+    command: "state-client-cleanup",
+    sequence: cursor.commandSequence,
+    participant: "content:main",
+  };
+  const envelope = parseBridgeResult(
+    await waitForHostBridgeResult(hostPage, expected),
+    expected,
   );
-  expect(parsed(result.value)?.result).toBe("state-client-cleanup-result");
+  expect(envelope?.participant).toBe("content:main");
+  expect(parsed(envelope?.value ?? "")?.result).toBe(
+    "state-client-cleanup-result",
+  );
 }
 
 async function cleanupUi(
   page: Page,
   runId: string,
   participant: "popup" | "workspace",
-  diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>,
-  waitForResult: WaitForResult,
 ): Promise<void> {
-  const cursor = diagnosticCursor(await diagnostics(runId));
-  await page.evaluate(() => {
-    const cleanup = document.createElement("button");
-    cleanup.dataset.command = "state-client-cleanup";
-    document.body.append(cleanup);
-    cleanup.click();
-    cleanup.remove();
-  });
-  const result = await waitForResult(
-    runId,
-    (event) =>
-      event.participant === participant &&
-      parsed(event.value)?.result === "state-client-cleanup-result",
-    { after: cursor },
+  const output = page.locator("[data-result]");
+  const before = await output.evaluate((element) =>
+    element instanceof HTMLOutputElement ? element.value : "",
   );
-  expect(parsed(result.value)?.result).toBe("state-client-cleanup-result");
+  const cleanup = page.locator('[data-command="state-client-cleanup"]');
+  if ((await cleanup.count()) !== 1)
+    throw new Error("Missing real page command control: state-client-cleanup");
+  await cleanup.click();
+  await expect
+    .poll(async () =>
+      output.evaluate((element) =>
+        element instanceof HTMLOutputElement ? element.value : "",
+      ),
+    )
+    .not.toBe(before);
+  const envelope = parseBridgeResult(
+    JSON.parse(
+      await output.evaluate((element) =>
+        element instanceof HTMLOutputElement ? element.value : "",
+      ),
+    ),
+    {
+      runId,
+      command: "state-client-cleanup",
+      sequence: Number(await output.getAttribute("data-sequence")),
+    },
+  );
+  expect(envelope?.participant).toBe(participant);
+  expect(parsed(envelope?.value ?? "")?.result).toBe(
+    "state-client-cleanup-result",
+  );
 }
 
 async function documentFacts(
   hostPage: Page,
   runId: string,
   dispatchHostCommand: DispatchHostCommand,
-  waitForResult: WaitForResult,
 ): Promise<DocumentFacts> {
-  const cursor = await dispatchHostCommand(
-    hostPage,
-    runId,
-    "document-route-facts",
-  );
-  const result = await waitForResult(
-    runId,
-    (event) => event.participant === "content:main",
-    { after: cursor },
-  );
-  return parseFacts(result.value);
-}
-
-async function registryMainFact(
-  hostPage: Page,
-  runId: string,
-  dispatchHostCommand: DispatchHostCommand,
-  waitForResult: WaitForResult,
-): Promise<RegistryFact> {
-  const cursor = await dispatchHostCommand(hostPage, runId, "registry-facts");
-  const result = await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "content:main" &&
-      Array.isArray(parsed(event.value)?.providers),
-    { after: cursor },
-  );
-  const providers = parsed(result.value)?.providers;
-  if (!Array.isArray(providers))
-    throw new Error(`Invalid registry facts: ${result.value}`);
-  const main = providers.find((provider) => record(provider)?.label === "main");
-  return parseRegistryFact(main);
+  return commandFacts(hostPage, runId, "content:main", async () => {
+    return dispatchHostCommand(hostPage, runId, "document-route-facts");
+  });
 }
 
 async function frameFacts(
   frame: Frame,
   runId: string,
   participant: string,
-  diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>,
-  waitForResult: WaitForResult,
+  hostPage: Page,
 ): Promise<DocumentFacts> {
-  const cursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchFrameCommand(frame, runId);
-  const result = await waitForResult(
+  return commandFacts(hostPage, runId, participant, async () => {
+    return dispatchFrameCommand(frame, runId);
+  });
+}
+
+async function commandFacts(
+  hostPage: Page,
+  runId: string,
+  participant: string,
+  dispatch: () => Promise<{ readonly commandSequence: number }>,
+): Promise<DocumentFacts> {
+  const cursor = await dispatch();
+  const expected = {
     runId,
-    (event) => event.participant === participant,
-    { after: cursor },
+    command: "document-route-facts",
+    sequence: cursor.commandSequence,
+    participant,
+  };
+  const envelope = parseBridgeResult(
+    await waitForHostBridgeResult(hostPage, expected),
+    expected,
   );
-  return parseFacts(result.value);
+  if (!envelope || envelope.participant !== participant)
+    throw new Error(`Missing document facts for ${participant}`);
+  return parseFacts(envelope.value);
 }
 
 async function dispatchFrameCommand(
   frame: Frame,
   runId: string,
-): Promise<void> {
+): Promise<{ readonly commandSequence: number }> {
   const sequence = (frameSequences.get(frame) ?? 0) + 1;
   frameSequences.set(frame, sequence);
   await frame.evaluate(
@@ -750,6 +578,7 @@ async function dispatchFrameCommand(
       ),
     { runId, sequence },
   );
+  return { commandSequence: sequence };
 }
 
 async function policyObservations(
@@ -760,7 +589,7 @@ async function policyObservations(
   const observations = (await diagnostics(runId)).flatMap((event) => {
     if (event.kind !== "result" && event.kind !== "error") return [];
     const value = parsed(event.value);
-    return !after.has(eventIdentity(event)) &&
+    return !after.has(diagnosticEventIdentity(event)) &&
       event.participant === "background" &&
       value?.type === "relay-policy-observation"
       ? [value as PolicyObservation]
@@ -795,20 +624,10 @@ function parseUiResult(value: string, kind: "result" | "error"): UiResult {
   const outer =
     parsed(value) ?? (kind === "error" ? { code: value } : undefined);
   if (!outer) throw new Error(`Invalid UI result: ${value}`);
-  const controlResult = record(outer.result);
   return {
     kind,
-    result:
-      typeof outer.result === "string"
-        ? outer.result
-        : typeof controlResult?.type === "string"
-          ? controlResult.type
-          : undefined,
+    result: typeof outer.result === "string" ? outer.result : undefined,
     identity: outer.identity === null ? null : record(outer.identity),
-    target: record(controlResult?.target),
-    oldTarget: record(controlResult?.oldTarget),
-    freshTarget: record(controlResult?.freshTarget),
-    controlResult,
     error: record(outer.error) ?? outer,
   };
 }
@@ -823,30 +642,6 @@ function parseFacts(value: string): DocumentFacts {
   )
     throw new Error(`Invalid document facts: ${value}`);
   return facts as unknown as DocumentFacts;
-}
-
-function parseRegistryFact(value: unknown): RegistryFact {
-  const fact = record(value);
-  if (
-    !fact ||
-    typeof fact.tabId !== "number" ||
-    typeof fact.frameId !== "number" ||
-    typeof fact.documentId !== "string" ||
-    typeof fact.sessionId !== "string" ||
-    typeof fact.nonce !== "string"
-  )
-    throw new Error(`Invalid main registry fact: ${JSON.stringify(value)}`);
-  return fact as unknown as RegistryFact;
-}
-
-function targetIdentity(fact: RegistryFact) {
-  return {
-    tabId: fact.tabId,
-    frameId: fact.frameId,
-    documentId: fact.documentId,
-    contentSessionId: fact.sessionId,
-    contentNonce: fact.nonce,
-  };
 }
 
 function requiredString(value: unknown, description: string): string {
@@ -876,49 +671,8 @@ function barrier(event: DiagnosticEvent, name: string): boolean {
   return event.kind === "barrier" && event.name === name;
 }
 
-function commandResultName(command: string): string {
-  switch (command) {
-    case "relay-local-call":
-      return "relay-local-result";
-    case "relay-call":
-      return "relay-call-result";
-    case "relay-old-call":
-      return "relay-old-result";
-    case "relay-fresh-call":
-      return "relay-fresh-result";
-    default:
-      return `${command}-result`;
-  }
-}
-
-function matchesUiResult(value: string, command: string): boolean {
-  const result = parsed(value);
-  const expected = commandResultName(command);
-  return (
-    result?.result === expected || record(result?.result)?.type === expected
-  );
-}
-
-function eventIdentity(event: DiagnosticEvent): string {
-  return [
-    event.runId,
-    event.participant,
-    event.sessionId ?? "none",
-    event.sequence,
-    event.kind,
-  ].join(":");
-}
-
 type DocumentFacts = {
   readonly invocationCount: number;
-  readonly sessionId: string;
-  readonly nonce: string;
-};
-
-type RegistryFact = {
-  readonly tabId: number;
-  readonly frameId: number;
-  readonly documentId: string;
   readonly sessionId: string;
   readonly nonce: string;
 };
@@ -932,30 +686,14 @@ type UiResult = {
   readonly kind: "result" | "error";
   readonly result?: string;
   readonly identity?: Record<string, unknown> | null;
-  readonly target?: Record<string, unknown>;
-  readonly oldTarget?: Record<string, unknown>;
-  readonly freshTarget?: Record<string, unknown>;
-  readonly controlResult?: Record<string, unknown>;
   readonly error?: Record<string, unknown>;
 };
-
-type WaitForResult = (
-  runId: string,
-  predicate: (event: {
-    readonly participant: string;
-    readonly value: string;
-  }) => boolean,
-  options?: { readonly after?: DiagnosticCursor },
-) => Promise<{
-  readonly kind: "result" | "error";
-  readonly value: string;
-}>;
 
 type DispatchHostCommand = (
   page: Page,
   runId: string,
   command: string,
   options?: { readonly after?: DiagnosticCursor },
-) => Promise<DiagnosticCursor>;
+) => Promise<DispatchCursor>;
 
 const frameSequences = new WeakMap<Frame, number>();

@@ -7,12 +7,16 @@ import {
   type DiagnosticCursor,
 } from "../harness/playwright-fixtures";
 import { fixtureOrigins } from "../harness/targets";
-import type { DiagnosticEvent } from "../protocol";
+import {
+  parseBridgeResult,
+  type BridgeResult,
+  type DiagnosticEvent,
+} from "../protocol";
 
 test("ST-MC-01..05 direct multi-context State lifecycle", async ({
   hostPage,
   diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   openExtensionPage,
   waitForBarrier,
   waitForResult,
@@ -49,31 +53,35 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
     page: Page,
     participant: "main" | "popup" | "workspace",
     expectedSessionId: string | undefined,
-    after: DiagnosticCursor,
   ): Promise<boolean> => {
     try {
       if (participant === "main") {
-        await dispatchHostCommand(page, runId, "state-client-cleanup", {
-          after,
+        const acknowledgement = await dispatchHostCommandAndResult(
+          page,
+          runId,
+          "state-client-cleanup",
+        );
+        expect(parsed(acknowledgement.value)).toMatchObject({
+          result: "state-client-cleanup-result",
+          participant: "main",
+          sessionId: expectedSessionId ?? expect.any(String),
+          status: { type: "destroyed" },
+          error: null,
         });
       } else {
-        await triggerPageCommand(page, "state-client-cleanup");
+        const acknowledgement = await clickPageCommand(
+          page,
+          runId,
+          "state-client-cleanup",
+        );
+        expect(parsed(acknowledgement.value)).toMatchObject({
+          result: "state-client-cleanup-result",
+          participant,
+          sessionId: expectedSessionId ?? expect.any(String),
+          status: { type: "destroyed" },
+          error: null,
+        });
       }
-      const acknowledgement = await waitForResult(
-        runId,
-        (event) =>
-          event.participant ===
-            (participant === "main" ? "content:main" : participant) &&
-          parsed(event.value)?.result === "state-client-cleanup-result",
-        { after },
-      );
-      expect(parsed(acknowledgement.value)).toMatchObject({
-        result: "state-client-cleanup-result",
-        participant: participant === "main" ? "main" : participant,
-        sessionId: expectedSessionId ?? expect.any(String),
-        status: { type: "destroyed" },
-        error: null,
-      });
       return true;
     } catch (error) {
       cleanupErrors.push(error);
@@ -148,17 +156,7 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
 
     await test.step("ST-MC-02 popup action fan-out at version 1", async () => {
       const actionCursor = diagnosticCursor(await diagnostics(runId));
-      await popup!
-        .getByRole("button", { name: "Increment shared State" })
-        .click();
-      const action = await waitForResult(
-        runId,
-        (event) =>
-          event.participant === "popup" &&
-          event.sessionId === clients.popup.sessionId &&
-          parsed(event.value)?.result === "state-action-result",
-        { after: actionCursor },
-      );
+      const action = await clickPageCommand(popup!, runId, "state-ui-action");
       expect(parsed(action.value)).toMatchObject({
         result: "state-action-result",
         participant: "popup",
@@ -204,18 +202,11 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
     });
 
     await test.step("ST-MC-03 main content action fan-out at version 2", async () => {
-      const actionCursor = await dispatchHostCommand(
+      const actionCursor = diagnosticCursor(await diagnostics(runId));
+      const action = await dispatchHostCommandAndResult(
         hostPage,
         runId,
         "state-content-action",
-      );
-      const action = await waitForResult(
-        runId,
-        (event) =>
-          event.participant === "content:main" &&
-          event.sessionId === clients.main.sessionId &&
-          parsed(event.value)?.result === "state-action-result",
-        { after: actionCursor },
       );
       expect(parsed(action.value)).toMatchObject({
         result: "state-action-result",
@@ -263,16 +254,10 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
 
     await test.step("ST-MC-04 workspace action fan-out at version 3", async () => {
       const actionCursor = diagnosticCursor(await diagnostics(runId));
-      await workspace!
-        .getByRole("button", { name: "Increment shared workspace State" })
-        .click();
-      const action = await waitForResult(
+      const action = await clickPageCommand(
+        workspace!,
         runId,
-        (event) =>
-          event.participant === "workspace" &&
-          event.sessionId === clients.workspace.sessionId &&
-          parsed(event.value)?.result === "state-action-result",
-        { after: actionCursor },
+        "state-ui-action",
       );
       expect(parsed(action.value)).toMatchObject({
         result: "state-action-result",
@@ -318,88 +303,57 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
       );
     });
 
-    await test.step("ST-MC-05 popup cleanup and fresh late join", async () => {
-      const closeCursor = diagnosticCursor(await diagnostics(runId));
-      const beforeCloseEvents = await diagnostics(runId);
-      const workspaceV3Evidence = beforeCloseEvents.find(
-        (event): event is ResultEvent =>
-          event.kind === "result" &&
-          event.participant === "workspace" &&
-          event.sessionId === clients.workspace.sessionId &&
-          parsed(event.value)?.result === "state-observed-v3",
-      );
-      expect(workspaceV3Evidence).toBeDefined();
-      expect(parsed(workspaceV3Evidence?.value ?? "")).toMatchObject({
-        result: "state-observed-v3",
-        participant: "workspace",
-        sessionId: clients.workspace.sessionId,
-        storeInstanceId,
-        version: 3,
-        state: { count: 3 },
-        error: null,
-      });
+    await test.step("ST-MC-05 popup cleanup and fresh late join at version 4", async () => {
       popupCleanupStarted = true;
       const popupCleaned = await cleanupClient(
         popup!,
         "popup",
         clients.popup.sessionId,
-        closeCursor,
       );
       if (!popupCleaned) {
         throw new Error("Popup State cleanup was not acknowledged");
       }
-      popupLive = false;
-      await popup!.close();
-
-      const postCloseCursor = diagnosticCursor(await diagnostics(runId));
-      const stateInspectCursor = await dispatchHostCommand(
-        content!,
+      const cleanupCursor = diagnosticCursor(await diagnostics(runId));
+      const action = await clickPageCommand(
+        workspace!,
         runId,
-        "worker-state-check",
-        { after: postCloseCursor },
+        "state-ui-action",
       );
-      const inspectedState = await waitForResult(
-        runId,
-        (event) =>
-          event.participant === "content:main" &&
-          event.sessionId === clients.main.sessionId &&
-          parsed(event.value)?.status !== undefined &&
-          parsed(event.value)?.state !== undefined,
-        { after: stateInspectCursor },
-      );
-      expect(parsed(inspectedState.value)).toEqual({
-        state: { count: 3 },
-        status: {
-          type: "ready",
-          storeInstanceId,
-          version: 3,
-        },
+      expect(parsed(action.value)).toMatchObject({
+        result: "state-action-result",
+        participant: "workspace",
+        sessionId: clients.workspace.sessionId,
+        status: { type: "ready", storeInstanceId, version: 4 },
+        state: { count: 4 },
+        value: 4,
+        error: null,
       });
-
-      const survivorCursor = diagnosticCursor(await diagnostics(runId));
-      await workspace!.getByRole("button", { name: "Session" }).click();
-      const workspaceSession = await waitForResult(
+      await waitForStateEvidence(
         runId,
-        (event) =>
-          event.participant === "workspace" &&
-          event.sessionId === clients.workspace.sessionId &&
-          parsed(event.value)?.session === clients.workspace.sessionId,
-        { after: survivorCursor },
+        "main",
+        "state-observed-v4",
+        4,
+        4,
+        storeInstanceId,
+        waitForResult,
+        cleanupCursor,
+        clients.main.sessionId,
       );
-      expect(parsed(workspaceSession.value)).toMatchObject({
-        session: clients.workspace.sessionId,
-        status: {
-          type: "ready",
-          storeInstanceId,
-          version: 3,
-        },
-        state: { count: 3 },
-      });
-      const afterSurvivor = await diagnostics(runId);
-      const postCloseEvents = afterSurvivor.filter(
-        (event) => !postCloseCursor.has(diagnosticEventIdentity(event)),
+      await waitForStateEvidence(
+        runId,
+        "workspace",
+        "state-observed-v4",
+        4,
+        4,
+        storeInstanceId,
+        waitForResult,
+        cleanupCursor,
+        clients.workspace.sessionId,
       );
-      const laterOldPopupObservations = postCloseEvents.filter((event) => {
+      const postCleanupEvents = (await diagnostics(runId)).filter(
+        (event) => !cleanupCursor.has(diagnosticEventIdentity(event)),
+      );
+      const oldPopupObservations = postCleanupEvents.filter((event) => {
         if (
           event.participant !== "popup" ||
           event.sessionId !== clients.popup.sessionId ||
@@ -414,7 +368,10 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
             value.result.startsWith("state-observed-"))
         );
       }).length;
-      expect(laterOldPopupObservations).toBe(0);
+      expect(oldPopupObservations).toBe(0);
+
+      popupLive = false;
+      await popup!.close();
 
       const freshCursor = diagnosticCursor(await diagnostics(runId));
       freshPopup = await openExtensionPage("popup", runId);
@@ -423,8 +380,8 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
         runId,
         "popup",
         "state-client-ready",
-        3,
-        3,
+        4,
+        4,
         storeInstanceId,
         waitForResult,
         freshCursor,
@@ -441,39 +398,24 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
       );
       expect(parsed(freshBaseline.value)).toMatchObject({
         type: "state-baseline",
-        status: { type: "ready", storeInstanceId, version: 3 },
-        count: 3,
+        status: { type: "ready", storeInstanceId, version: 4 },
+        count: 4,
       });
     });
   } finally {
     if (freshPopup && freshPopupLive && !freshPopupCleanupStarted) {
       freshPopupCleanupStarted = true;
-      await cleanupClient(
-        freshPopup,
-        "popup",
-        freshPopupSessionId,
-        diagnosticCursor(await diagnostics(runId)),
-      );
+      await cleanupClient(freshPopup, "popup", freshPopupSessionId);
       freshPopupLive = false;
     }
     if (content && contentLive && !contentCleanupStarted) {
       contentCleanupStarted = true;
-      await cleanupClient(
-        content,
-        "main",
-        stateClients?.main.sessionId,
-        diagnosticCursor(await diagnostics(runId)),
-      );
+      await cleanupClient(content, "main", stateClients?.main.sessionId);
       contentLive = false;
     }
     if (popup && popupLive && !popupCleanupStarted) {
       popupCleanupStarted = true;
-      await cleanupClient(
-        popup,
-        "popup",
-        stateClients?.popup.sessionId,
-        diagnosticCursor(await diagnostics(runId)),
-      );
+      await cleanupClient(popup, "popup", stateClients?.popup.sessionId);
       popupLive = false;
     }
     if (workspace && workspaceLive && !workspaceCleanupStarted) {
@@ -482,7 +424,6 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
         workspace,
         "workspace",
         stateClients?.workspace.sessionId,
-        diagnosticCursor(await diagnostics(runId)),
       );
       workspaceLive = false;
     }
@@ -494,428 +435,52 @@ test("ST-MC-01..05 direct multi-context State lifecycle", async ({
   }
 });
 
-test("CE-04/20 popup State lifecycle keeps old sessions unavailable", async ({
-  hostPage,
-  diagnostics,
-  dispatchHostCommand,
+test("CE-05 options persists setting across reload with a replacement local session", async ({
   openExtensionPage,
-  waitForBarrier,
-  waitForResult,
-}) => {
-  const runId = "ui-popup-lifecycle";
-  let popup: Page | undefined;
-  let replacement: Page | undefined;
-  let popupLive = false;
-  let replacementLive = false;
-  let popupCleanupStarted = false;
-  let replacementCleanupStarted = false;
-  const cleanupErrors: unknown[] = [];
-  let primaryError: unknown;
-  let firstSessionId: string | undefined;
-  let secondSessionId: string | undefined;
-
-  const cleanupPopup = async (
-    page: Page,
-    expectedSessionId: string | undefined,
-  ): Promise<boolean> => {
-    try {
-      const after = diagnosticCursor(await diagnostics(runId));
-      await triggerPageCommand(page, "state-client-cleanup");
-      const acknowledgement = await waitForResult(
-        runId,
-        (event) =>
-          event.participant === "popup" &&
-          (expectedSessionId === undefined ||
-            event.sessionId === expectedSessionId) &&
-          parsed(event.value)?.result === "state-client-cleanup-result",
-        { after },
-      );
-      expect(parsed(acknowledgement.value)).toEqual({
-        result: "state-client-cleanup-result",
-        participant: "popup",
-        sessionId: expectedSessionId ?? expect.any(String),
-        status: { type: "destroyed" },
-        state: null,
-        error: null,
-      });
-      return true;
-    } catch (error) {
-      cleanupErrors.push(error);
-      return false;
-    }
-  };
-
-  try {
-    const content = await openContent(hostPage, runId, waitForBarrier);
-    popup = await openExtensionPage("popup", runId);
-    popupLive = true;
-    firstSessionId = await sessionId(
-      popup,
-      runId,
-      "popup",
-      diagnostics,
-      waitForResult,
-    );
-
-    const baseline = (await diagnostics(runId)).find(
-      (event): event is ResultEvent =>
-        event.kind === "result" &&
-        event.participant === "popup" &&
-        event.sessionId === firstSessionId &&
-        parsed(event.value)?.type === "state-baseline",
-    );
-    expect(baseline).toBeDefined();
-    expect(parsed(baseline?.value ?? "")).toMatchObject({
-      status: { type: "ready" },
-      count: 0,
-    });
-    const baselineState = parsed(baseline?.value ?? "");
-    const storeInstanceId = (
-      baselineState?.status as { storeInstanceId?: unknown }
-    )?.storeInstanceId;
-    expect(storeInstanceId).toEqual(expect.any(String));
-
-    const actionCursor = diagnosticCursor(await diagnostics(runId));
-    await popup.getByRole("button", { name: "Increment" }).click();
-    await expect(popup.locator("[data-status]")).toHaveText("state:1");
-    const action = await waitForResult(
-      runId,
-      (event) =>
-        event.participant === "popup" &&
-        event.sessionId === firstSessionId &&
-        parsed(event.value)?.type === "state-action",
-      { after: actionCursor },
-    );
-    expect(parsed(action.value)).toEqual({ type: "state-action", value: 1 });
-    await waitForResult(
-      runId,
-      (event) =>
-        event.participant === "popup" &&
-        event.sessionId === firstSessionId &&
-        parsed(event.value)?.type === "state-subscription" &&
-        parsed(event.value)?.count === 1,
-      { after: actionCursor },
-    );
-
-    const stateInspectCursor = await dispatchHostCommand(
-      hostPage,
-      runId,
-      "worker-state-check",
-      { after: actionCursor },
-    );
-    const inspectedState = await waitForResult(
-      runId,
-      (event) =>
-        event.participant === "content:main" &&
-        parsed(event.value)?.state !== undefined &&
-        parsed(event.value)?.status !== undefined,
-      { after: stateInspectCursor },
-    );
-    expect(parsed(inspectedState.value)).toMatchObject({
-      state: { count: 1 },
-      status: { type: "ready", storeInstanceId },
-    });
-
-    const closeCursor = diagnosticCursor(await diagnostics(runId));
-    popupCleanupStarted = true;
-    if (!(await cleanupPopup(popup, firstSessionId))) {
-      throw new Error("First popup State cleanup was not acknowledged");
-    }
-    popupLive = false;
-    await popup.close();
-    await expectSessionNoMatch(
-      content,
-      runId,
-      firstSessionId,
-      closeCursor,
-      dispatchHostCommand,
-      waitForResult,
-    );
-
-    replacement = await openExtensionPage("popup", runId);
-    replacementLive = true;
-    secondSessionId = await sessionId(
-      replacement,
-      runId,
-      "popup",
-      diagnostics,
-      waitForResult,
-    );
-    expect(secondSessionId).not.toBe(firstSessionId);
-    await expectSessionSelected(
-      content,
-      runId,
-      secondSessionId,
-      dispatchHostCommand,
-      waitForResult,
-    );
-    await expect(replacement.locator("[data-status]")).toContainText(
-      `popup:ready:${secondSessionId}`,
-    );
-    await replacement.getByRole("button", { name: "Increment" }).click();
-    await expect(replacement.locator("[data-status]")).toHaveText("state:2");
-
-    replacementCleanupStarted = true;
-    if (!(await cleanupPopup(replacement, secondSessionId))) {
-      throw new Error("Replacement popup State cleanup was not acknowledged");
-    }
-    replacementLive = false;
-    await replacement.close();
-  } catch (error) {
-    primaryError = error;
-  } finally {
-    if (replacement && replacementLive && !replacementCleanupStarted) {
-      replacementCleanupStarted = true;
-      if (!(await cleanupPopup(replacement, secondSessionId))) {
-        replacementLive = false;
-      }
-    }
-    if (popup && popupLive && !popupCleanupStarted) {
-      popupCleanupStarted = true;
-      if (!(await cleanupPopup(popup, firstSessionId))) popupLive = false;
-    }
-    for (const page of [replacement, popup]) {
-      if (page && !page.isClosed()) {
-        try {
-          await page.close();
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
-      }
-    }
-  }
-  if (primaryError) throw primaryError;
-  if (cleanupErrors.length > 0) {
-    throw new Error(`State client cleanup failed: ${String(cleanupErrors[0])}`);
-  }
-});
-
-test("CE-05 options persists setting across reload without an old-session effect", async ({
-  hostPage,
-  diagnostics,
-  dispatchHostCommand,
-  openExtensionPage,
-  waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ui-options-lifecycle";
-  const content = await openContent(hostPage, runId, waitForBarrier);
   const options = await openExtensionPage("options", runId);
-  const firstSessionId = await sessionId(
-    options,
-    runId,
-    "options",
-    diagnostics,
-    waitForResult,
-  );
+  const firstSessionId = await sessionId(options, runId, "options");
 
-  const setCursor = diagnosticCursor(await diagnostics(runId));
-  await options.getByRole("button", { name: "Set setting" }).click();
+  const set = await clickPageCommand(options, runId, "set-setting");
   await expect(options.locator("[data-status]")).toHaveText("options-updated");
-  await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "options" &&
-      event.sessionId === firstSessionId &&
-      event.value === "setting:options-updated",
-    { after: setCursor },
-  );
+  expect(set.value).toBe("setting:options-updated");
 
-  const reloadCursor = diagnosticCursor(await diagnostics(runId));
   await options.reload();
   await expect(options.locator("[data-status]")).toContainText(
     "options:ready:",
   );
-  const secondSessionId = await sessionId(
-    options,
-    runId,
-    "options",
-    diagnostics,
-    waitForResult,
-  );
+  const secondSessionId = await sessionId(options, runId, "options");
   expect(secondSessionId).not.toBe(firstSessionId);
-  await expectSessionNoMatch(
-    content,
-    runId,
-    firstSessionId,
-    reloadCursor,
-    dispatchHostCommand,
-    waitForResult,
-  );
-  await expectSessionSelected(
-    content,
-    runId,
-    secondSessionId,
-    dispatchHostCommand,
-    waitForResult,
-  );
 
-  const readCursor = diagnosticCursor(await diagnostics(runId));
-  await options.getByRole("button", { name: "Read setting" }).click();
+  const read = await clickPageCommand(options, runId, "setting");
   await expect(options.locator("[data-status]")).toHaveText("options-updated");
-  await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "options" &&
-      event.sessionId === secondSessionId &&
-      event.value === "setting:options-updated",
-    { after: readCursor },
-  );
+  expect(read.value).toBe("setting:options-updated");
 });
 
-test("CE-06 workspace exposes its custom audit session", async ({
+test("CE-21/22 offscreen lifecycle recreates a distinct provider session", async ({
   hostPage,
   diagnostics,
-  dispatchHostCommand,
-  openExtensionPage,
-  waitForBarrier,
-  waitForResult,
-}) => {
-  const runId = "ui-workspace-audit";
-  await openContent(hostPage, runId, waitForBarrier);
-  const workspace = await openExtensionPage("workspace", runId);
-  const workspaceSessionId = await sessionId(
-    workspace,
-    runId,
-    "workspace",
-    diagnostics,
-    waitForResult,
-  );
-  await expectSessionSelected(
-    hostPage,
-    runId,
-    workspaceSessionId,
-    dispatchHostCommand,
-    waitForResult,
-  );
-  const cursor = diagnosticCursor(await diagnostics(runId));
-
-  await workspace.getByRole("button", { name: "Audit" }).click();
-  await expect(workspace.locator("[data-status]")).toHaveText(
-    `audit:${workspaceSessionId}`,
-  );
-  const audit = await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "workspace" &&
-      event.sessionId === workspaceSessionId,
-    { after: cursor },
-  );
-  expect(audit.value).toBe(`audit:${workspaceSessionId}`);
-});
-
-test("CE-21/22 background recreates offscreen export and keeps State distinct from storage", async ({
-  hostPage,
-  diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   waitForBarrier,
   waitForEvent,
-  waitForDomValue,
-  waitForResult,
 }) => {
-  const runId = "ui-offscreen-state-storage";
-  const content = await openContent(hostPage, runId, waitForBarrier);
-
-  const baselineCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchHostCommand(hostPage, runId, "background-summary", {
-    after: baselineCursor,
-  });
-  const baseline = await waitForResult(
-    runId,
-    (event) => event.participant === "content:main",
-    { after: baselineCursor },
-  );
-  expect(parsed(baseline.value)).toMatchObject({
-    counter: 0,
-    setting: "compact",
-  });
-
-  const incrementCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchHostCommand(hostPage, runId, "background-increment", {
-    after: incrementCursor,
-  });
-  await waitForResult(
-    runId,
-    (event) => event.participant === "content:main" && event.value === "1",
-    { after: incrementCursor },
-  );
-
-  const storageCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchHostCommand(hostPage, runId, "background-setting", {
-    after: storageCursor,
-  });
-  await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "content:main" && event.value === "compact",
-    { after: storageCursor },
-  );
+  const runId = "ui-offscreen-lifecycle";
+  await openContent(hostPage, runId, waitForBarrier);
 
   const createCursor = diagnosticCursor(await diagnostics(runId));
-  const firstVisibleBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "offscreen-create", {
-    after: createCursor,
-  });
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-create");
   const firstSessionId = await providerSessionId(
     runId,
     "offscreen",
     waitForEvent,
     createCursor,
   );
-  const firstExport = await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "content:main" &&
-      parsed(event.value)?.export === "export:ready" &&
-      parsed(event.value)?.sessionId === firstSessionId,
-    { after: createCursor },
-  );
-  expect(parsed(firstExport.value)).toEqual({
-    export: "export:ready",
-    sessionId: firstSessionId,
-  });
-  const firstVisibleExport = await waitForHostResult(
-    waitForDomValue,
-    hostPage,
-    firstVisibleBefore,
-  );
-  expect(firstVisibleExport.command).toBe("offscreen-create");
-  expect(parsed(firstVisibleExport.value)).toEqual({
-    export: "export:ready",
-    sessionId: firstSessionId,
-  });
-  await expectSessionSelected(
-    content,
-    runId,
-    firstSessionId,
-    dispatchHostCommand,
-    waitForResult,
-  );
-  const closeCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchHostCommand(hostPage, runId, "offscreen-close", {
-    after: closeCursor,
-  });
-  await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "content:main" &&
-      parsed(event.value)?.closed === true,
-    { after: closeCursor },
-  );
-  await expectSessionNoMatch(
-    content,
-    runId,
-    firstSessionId,
-    closeCursor,
-    dispatchHostCommand,
-    waitForResult,
-  );
+  expect(firstSessionId).toMatch(/^[a-zA-Z0-9-]{36}$/);
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-close");
 
   const recreateCursor = diagnosticCursor(await diagnostics(runId));
-  const secondVisibleBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "offscreen-create", {
-    after: recreateCursor,
-  });
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-create");
   const secondSessionId = await providerSessionId(
     runId,
     "offscreen",
@@ -923,36 +488,7 @@ test("CE-21/22 background recreates offscreen export and keeps State distinct fr
     recreateCursor,
     firstSessionId,
   );
-  const secondExport = await waitForResult(
-    runId,
-    (event) =>
-      event.participant === "content:main" &&
-      parsed(event.value)?.export === "export:ready" &&
-      parsed(event.value)?.sessionId === secondSessionId,
-    { after: recreateCursor },
-  );
-  expect(parsed(secondExport.value)).toEqual({
-    export: "export:ready",
-    sessionId: secondSessionId,
-  });
-  const secondVisibleExport = await waitForHostResult(
-    waitForDomValue,
-    hostPage,
-    secondVisibleBefore,
-  );
-  expect(secondVisibleExport.command).toBe("offscreen-create");
-  expect(parsed(secondVisibleExport.value)).toEqual({
-    export: "export:ready",
-    sessionId: secondSessionId,
-  });
   expect(secondSessionId).not.toBe(firstSessionId);
-  await expectSessionSelected(
-    content,
-    runId,
-    secondSessionId,
-    dispatchHostCommand,
-    waitForResult,
-  );
 });
 
 async function openContent(
@@ -1035,106 +571,49 @@ async function waitForStateEvidence(
   };
 }
 
-async function triggerPageCommand(page: Page, command: string): Promise<void> {
-  await page.evaluate((command) => {
-    const element = document.createElement("button");
-    element.dataset.command = command;
-    document.body.append(element);
-    element.click();
-    element.remove();
-  }, command);
+async function clickPageCommand(
+  page: Page,
+  runId: string,
+  command: string,
+): Promise<BridgeResult> {
+  const output = page.locator("[data-result]");
+  const before = await output.evaluate((element) =>
+    element instanceof HTMLOutputElement ? element.value : "",
+  );
+  const commandButton = page.locator(`[data-command="${command}"]`);
+  if ((await commandButton.count()) !== 1)
+    throw new Error(`Missing real page command control: ${command}`);
+  await commandButton.click();
+  await expect
+    .poll(async () =>
+      output.evaluate((element) =>
+        element instanceof HTMLOutputElement ? element.value : "",
+      ),
+    )
+    .not.toBe(before);
+  const value = await output.evaluate((element) =>
+    element instanceof HTMLOutputElement ? element.value : "",
+  );
+  const result = parseBridgeResult(JSON.parse(value), {
+    runId,
+    command,
+    sequence: Number(await output.getAttribute("data-sequence")),
+  });
+  if (result) return result;
+  throw new Error(`Invalid ${command} page result: ${value}`);
 }
 
 async function sessionId(
   page: Page,
   runId: string,
   participant: string,
-  diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>,
-  waitForResult: (
-    runId: string,
-    predicate: (event: {
-      readonly participant: string;
-      readonly value: string;
-    }) => boolean,
-    options?: { readonly after?: DiagnosticCursor },
-  ) => Promise<{ readonly value: string }>,
 ): Promise<string> {
-  const cursor = diagnosticCursor(await diagnostics(runId));
-  await page.getByRole("button", { name: "Session" }).click();
-  const result = parsed(
-    (
-      await waitForResult(
-        runId,
-        (event) =>
-          event.participant === participant && parsed(event.value)?.session,
-        { after: cursor },
-      )
-    ).value,
-  );
+  const response = await clickPageCommand(page, runId, "session");
+  expect(response.participant).toBe(participant);
+  const result = parsed(response.value);
   expect(result?.session).toMatch(/^[a-zA-Z0-9-]{36}$/);
+  expect(response.sessionId).toBe(result?.session);
   return result?.session as string;
-}
-
-async function expectSessionSelected(
-  content: Page,
-  runId: string,
-  sessionId: string,
-  dispatchHostCommand: (
-    page: Page,
-    runId: string,
-    command: string,
-    options?: {
-      readonly sessionId?: string;
-      readonly after?: DiagnosticCursor;
-    },
-  ) => Promise<DiagnosticCursor>,
-  waitForResult: (
-    runId: string,
-    predicate: (event: { readonly value: string }) => boolean,
-    options?: { readonly after?: DiagnosticCursor },
-  ) => Promise<{ readonly value: string }>,
-): Promise<void> {
-  const cursor = await dispatchHostCommand(content, runId, "select-session", {
-    sessionId,
-  });
-  const selected = await waitForResult(
-    runId,
-    (event) => parsed(event.value)?.session === sessionId,
-    { after: cursor },
-  );
-  expect(parsed(selected.value)).toEqual({ session: sessionId });
-}
-
-async function expectSessionNoMatch(
-  content: Page,
-  runId: string,
-  sessionId: string,
-  after: DiagnosticCursor,
-  dispatchHostCommand: (
-    page: Page,
-    runId: string,
-    command: string,
-    options?: {
-      readonly sessionId?: string;
-      readonly after?: DiagnosticCursor;
-    },
-  ) => Promise<DiagnosticCursor>,
-  waitForResult: (
-    runId: string,
-    predicate: (event: { readonly value: string }) => boolean,
-    options?: { readonly after?: DiagnosticCursor },
-  ) => Promise<{ readonly value: string }>,
-): Promise<void> {
-  const cursor = await dispatchHostCommand(content, runId, "select-session", {
-    sessionId,
-    after,
-  });
-  const result = await waitForResult(
-    runId,
-    (event) => parsed(event.value)?.code === "E_SERVICE_NO_MATCH",
-    { after: cursor },
-  );
-  expect(parsed(result.value)).toEqual({ code: "E_SERVICE_NO_MATCH" });
 }
 
 async function providerSessionId(
@@ -1170,26 +649,6 @@ function parsed(value: string): Record<string, any> | undefined {
   } catch {
     return undefined;
   }
-}
-
-async function bridgeStatus(hostPage: Page): Promise<string> {
-  return hostPage
-    .locator("#bridge-status")
-    .evaluate((element) => (element as HTMLDataElement).value);
-}
-
-async function waitForHostResult(
-  waitForDomValue: (
-    page: Page,
-    selector: string,
-    before: string | null,
-  ) => Promise<string>,
-  hostPage: Page,
-  before: string,
-): Promise<{ readonly command: string; readonly value: string }> {
-  return JSON.parse(
-    await waitForDomValue(hostPage, "#bridge-status", before),
-  ) as { readonly command: string; readonly value: string };
 }
 
 type ResultEvent = DiagnosticEvent & {

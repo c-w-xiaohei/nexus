@@ -3,9 +3,14 @@ import {
   expect,
   type BrowserContext,
   type Page,
+  type TestInfo,
 } from "@playwright/test";
 import { rm, writeFile } from "node:fs/promises";
-import type { DiagnosticEvent } from "../protocol";
+import {
+  parseBridgeResult,
+  type BridgeResult,
+  type DiagnosticEvent,
+} from "../protocol";
 import { sanitizeFixtureText } from "../extension/shared/runtime";
 import {
   BarrierTimeoutError,
@@ -19,7 +24,21 @@ type ResultEvent = DiagnosticEvent & {
   readonly kind: "result";
   readonly value: string;
 };
+export type BridgeResultExpectation = {
+  readonly runId: string;
+  readonly command: string;
+  readonly sequence: number;
+  readonly participant: string;
+  readonly sessionId?: string;
+};
+export type BridgeResultWaitOptions = {
+  readonly valueMatches?: (value: string) => boolean;
+};
+const commandSequences = new WeakMap<Page, number>();
 export type DiagnosticCursor = ReadonlySet<string>;
+export type DispatchCursor = DiagnosticCursor & {
+  readonly commandSequence: number;
+};
 type Fixture = {
   readonly launch: ExtensionLaunch;
   readonly extensionId: string;
@@ -44,7 +63,17 @@ type Fixture = {
       readonly sessionId?: string;
       readonly after?: DiagnosticCursor;
     },
-  ) => Promise<DiagnosticCursor>;
+  ) => Promise<DispatchCursor>;
+  readonly dispatchHostCommandAndResult: (
+    page: Page,
+    runId: string,
+    command: string,
+    options?: {
+      readonly sessionId?: string;
+      readonly expectedParticipant?: string;
+      readonly expectedSessionId?: string;
+    },
+  ) => Promise<BridgeResult>;
   readonly waitForDomValue: (
     page: Page,
     selector: string,
@@ -60,10 +89,6 @@ type Fixture = {
     predicate: (event: ResultEvent) => boolean,
     options?: { readonly after?: DiagnosticCursor },
   ) => Promise<ResultEvent>;
-  readonly fixtureStorage: () => Promise<{
-    readonly session: Readonly<Record<string, unknown>>;
-    readonly local: Readonly<Record<string, unknown>>;
-  }>;
 };
 
 export const test = base.extend<Fixture>({
@@ -201,67 +226,63 @@ export const test = base.extend<Fixture>({
       return page;
     }),
   dispatchHostCommand: async ({ diagnostics }, use) => {
-    const sequences = new WeakMap<Page, number>();
     await use(async (page, runId, command, options = {}) => {
       assertRunId(runId);
       const cursor =
         options.after ?? selectDispatchCursor(await diagnostics(runId));
-      const sequence = (sequences.get(page) ?? 0) + 1;
-      sequences.set(page, sequence);
-      await page.evaluate(
-        ({ runId, command, sequence, sessionId }) =>
-          window.dispatchEvent(
-            new CustomEvent("nexus-e2e-command", {
-              detail: {
-                kind: "command",
-                runId,
-                command,
-                sequence,
-                ...(sessionId === undefined ? {} : { sessionId }),
-              },
-            }),
-          ),
-        { runId, command, sequence, sessionId: options.sessionId },
+      const commandSequence = await dispatchBridgeCommand(
+        page,
+        runId,
+        command,
+        options.sessionId,
       );
-      return cursor;
+      return Object.assign(new Set(cursor), { commandSequence });
     });
   },
-  waitForDomValue: async ({}, use) =>
-    use(async (page, selector, before) => {
-      let value = before;
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        value = await page
-          .locator(selector)
-          .evaluate((element) =>
-            element instanceof HTMLDataElement
-              ? element.value
-              : (element.textContent ?? ""),
-          );
-        if (value !== before) return value;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      throw new BarrierTimeoutError("DOM result", [before ?? "", value ?? ""]);
+  dispatchHostCommandAndResult: async ({}, use) =>
+    use(async (page, runId, command, options = {}) => {
+      assertRunId(runId);
+      const sequence = await dispatchBridgeCommand(
+        page,
+        runId,
+        command,
+        options.sessionId,
+      );
+      const expected = {
+        runId,
+        command,
+        sequence,
+        participant: options.expectedParticipant ?? "content:main",
+        ...(options.expectedSessionId === undefined
+          ? {}
+          : { sessionId: options.expectedSessionId }),
+      };
+      const value = await waitForHostBridgeResult(page, expected);
+      const result = parseBridgeResult(value, expected);
+      if (result) return result;
+      throw new Error(`Invalid DOM command result: ${value}`);
     }),
+  waitForDomValue: async ({}, use) =>
+    use((page, selector, before) =>
+      waitForChangedDomValue(page, selector, before),
+    ),
   waitForEvent: async ({ diagnostics }, use) =>
     use(async (runId, predicate, options = {}) => {
       assertRunId(runId);
       const count = options.count ?? 1;
-      let events: readonly DiagnosticEvent[] = [];
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        events = await diagnostics(runId);
-        const matches = events.filter(
-          (event) =>
-            !options.after?.has(diagnosticEventIdentity(event)) &&
-            predicate(event),
-        );
-        if (matches.length >= count) return matches;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      const result = await pollUntil(
+        async () =>
+          (await diagnostics(runId)).filter(
+            (event) =>
+              !options.after?.has(diagnosticEventIdentity(event)) &&
+              predicate(event),
+          ),
+        (events) => events.length >= count,
+      );
+      if (result.matched) return result.value;
       throw new BarrierTimeoutError(
         "diagnostic event",
-        events.map((event) => JSON.stringify(event)),
+        result.value.map((event) => JSON.stringify(event)),
       );
     }),
   waitForResult: async ({ waitForEvent }, use) =>
@@ -271,12 +292,8 @@ export const test = base.extend<Fixture>({
         (event) => isResultEvent(event) && predicate(event),
         options,
       );
-      return events.find(
-        (event) => isResultEvent(event) && predicate(event),
-      ) as ResultEvent;
+      return events[0] as ResultEvent;
     }),
-  fixtureStorage: async ({ launch }, use) =>
-    use(async () => readFixtureStorage(launch.context)),
 });
 
 async function collectFailureArtifacts({
@@ -288,7 +305,7 @@ async function collectFailureArtifacts({
   cleanupErrors,
 }: {
   readonly launch: ExtensionLaunch;
-  readonly testInfo: Parameters<typeof base>[0] extends never ? never : any;
+  readonly testInfo: TestInfo;
   readonly pages: ReadonlySet<Page>;
   readonly consoleLines: readonly string[];
   readonly pageErrors: readonly string[];
@@ -348,7 +365,7 @@ async function collectFailureArtifacts({
 }
 
 async function writeAndAttachTextArtifact(
-  testInfo: Parameters<typeof base>[0] extends never ? never : any,
+  testInfo: TestInfo,
   errors: string[],
   name: string,
   body: string,
@@ -365,37 +382,19 @@ async function readDiagnostics(
   for (const page of [...context.pages()].reverse()) {
     if (!page.url().startsWith("chrome-extension://")) continue;
     try {
-      return await readStorage(page);
+      return await readDiagnosticStorage(page);
     } catch (error) {
       if (!isUnavailableCleanupTarget(error)) throw error;
     }
   }
   for (const worker of [...context.serviceWorkers()].reverse()) {
     try {
-      return await worker.evaluate(async () => {
-        const stored = await chrome.storage.session.get();
-        return Object.entries(stored)
-          .filter(
-            ([key]) => key.startsWith("nexus-e2e:") && key.includes(":event:"),
-          )
-          .map(([, value]) => value as DiagnosticEvent);
-      });
+      return await readDiagnosticStorage(worker);
     } catch (error) {
       if (!isUnavailableCleanupTarget(error)) throw error;
     }
   }
   return [];
-}
-
-async function readStorage(page: Page): Promise<DiagnosticEvent[]> {
-  return page.evaluate(async () => {
-    const stored = await chrome.storage.session.get();
-    return Object.entries(stored)
-      .filter(
-        ([key]) => key.startsWith("nexus-e2e:") && key.includes(":event:"),
-      )
-      .map(([, value]) => value as DiagnosticEvent);
-  });
 }
 
 async function diagnosticNdjson(context: BrowserContext): Promise<string> {
@@ -413,7 +412,7 @@ async function clearFixtureStorage(
   for (const page of [...context.pages()].reverse()) {
     if (!page.url().startsWith("chrome-extension://")) continue;
     try {
-      await clearStorageInPage(page);
+      await clearStorage(page);
       return;
     } catch (error) {
       if (!isUnavailableCleanupTarget(error)) throw error;
@@ -421,18 +420,7 @@ async function clearFixtureStorage(
   }
   for (const worker of [...context.serviceWorkers()].reverse()) {
     try {
-      await withinCleanupTimeout(
-        worker.evaluate(async () => {
-          const session = await chrome.storage.session.get();
-          await chrome.storage.session.remove(
-            Object.keys(session).filter((key) => key.startsWith("nexus-e2e:")),
-          );
-          const local = await chrome.storage.local.get();
-          await chrome.storage.local.remove(
-            Object.keys(local).filter((key) => key.startsWith("nexus-e2e:")),
-          );
-        }),
-      );
+      await clearStorage(worker);
       return;
     } catch (error) {
       if (!isUnavailableCleanupTarget(error)) throw error;
@@ -446,10 +434,12 @@ async function clearFixtureStorage(
           waitUntil: "commit",
         }),
       );
-      await clearStorageInPage(page);
+      await clearStorage(page);
       return;
     } catch (error) {
-      throw new Error(`popup cleanup fallback failed: ${formatError(error)}`);
+      throw new Error(
+        `popup cleanup fallback failed: ${sanitizeArtifactError(error)}`,
+      );
     } finally {
       await withinCleanupTimeout(page.close()).catch(() => undefined);
     }
@@ -459,17 +449,34 @@ async function clearFixtureStorage(
   );
 }
 
-async function clearStorageInPage(page: Page): Promise<void> {
+type ExtensionExecutionTarget =
+  | Page
+  | ReturnType<BrowserContext["serviceWorkers"]>[number];
+
+async function readDiagnosticStorage(
+  target: ExtensionExecutionTarget,
+): Promise<DiagnosticEvent[]> {
+  return target.evaluate(async () => {
+    const stored = await chrome.storage.session.get();
+    return Object.entries(stored)
+      .filter(
+        ([key]) => key.startsWith("nexus-e2e:") && key.includes(":event:"),
+      )
+      .map(([, value]) => value as DiagnosticEvent);
+  });
+}
+
+async function clearStorage(target: ExtensionExecutionTarget): Promise<void> {
   await withinCleanupTimeout(
-    page.evaluate(async () => {
-      const session = await chrome.storage.session.get();
-      await chrome.storage.session.remove(
-        Object.keys(session).filter((key) => key.startsWith("nexus-e2e:")),
-      );
-      const local = await chrome.storage.local.get();
-      await chrome.storage.local.remove(
-        Object.keys(local).filter((key) => key.startsWith("nexus-e2e:")),
-      );
+    target.evaluate(async () => {
+      const clearArea = async (area: chrome.storage.StorageArea) => {
+        const stored = await area.get();
+        await area.remove(
+          Object.keys(stored).filter((key) => key.startsWith("nexus-e2e:")),
+        );
+      };
+      await clearArea(chrome.storage.session);
+      await clearArea(chrome.storage.local);
     }),
   );
 }
@@ -493,9 +500,10 @@ function isUnavailableCleanupTarget(error: unknown): boolean {
 async function attempt(
   errors: string[],
   operation: () => Promise<void>,
+  bounded = true,
 ): Promise<void> {
   try {
-    await withinCleanupTimeout(operation());
+    await (bounded ? withinCleanupTimeout(operation()) : operation());
   } catch (error) {
     errors.push(sanitizeArtifactError(error));
   }
@@ -510,27 +518,10 @@ async function cleanupStage(
 ): Promise<void> {
   const started = performance.now();
   const before = errors.length;
-  await (bounded
-    ? attempt(errors, operation)
-    : attemptWithoutTimeout(errors, operation));
+  await attempt(errors, operation, bounded);
   stages.push(
     `${name} ${Math.round(performance.now() - started)}ms ${errors.length === before ? "ok" : "failed"}`,
   );
-}
-
-async function attemptWithoutTimeout(
-  errors: string[],
-  operation: () => Promise<void>,
-): Promise<void> {
-  try {
-    await operation();
-  } catch (error) {
-    errors.push(sanitizeArtifactError(error));
-  }
-}
-
-function formatError(error: unknown): string {
-  return sanitizeArtifactError(error);
 }
 
 export function sanitizeArtifactText(value: string): string {
@@ -566,6 +557,125 @@ async function withinCleanupTimeout<T>(operation: Promise<T>): Promise<T> {
 
 export { expect };
 
+export function bridgeResultKey(result: {
+  readonly runId: string;
+  readonly command: string;
+  readonly sequence: number;
+  readonly participant: string;
+  readonly sessionId: string;
+}): string {
+  return JSON.stringify([
+    result.runId,
+    result.command,
+    result.sequence,
+    result.participant,
+    result.sessionId,
+  ]);
+}
+
+export function takeCorrelatedBridgeResult(
+  results: Record<string, unknown>,
+  expected: BridgeResultExpectation,
+  options: BridgeResultWaitOptions = {},
+): unknown {
+  for (const [key, values] of Object.entries(results)) {
+    if (!Array.isArray(values)) continue;
+    for (const [index, value] of values.entries()) {
+      const result = parseBridgeResult(value, expected);
+      if (
+        result &&
+        result.participant === expected.participant &&
+        (expected.sessionId === undefined ||
+          result.sessionId === expected.sessionId) &&
+        (options.valueMatches?.(result.value) ?? true)
+      ) {
+        values.splice(index, 1);
+        if (values.length === 0) delete results[key];
+        return result;
+      }
+    }
+  }
+  return null;
+}
+
+export async function waitForHostBridgeResult(
+  page: Page,
+  expected: BridgeResultExpectation,
+  options: BridgeResultWaitOptions = {},
+): Promise<unknown> {
+  const result = await pollUntil(
+    () =>
+      page.evaluate((expected) => {
+        const bridge = window as typeof window & {
+          __nexusE2eResults?: Record<string, unknown[]>;
+        };
+        const results = bridge.__nexusE2eResults;
+        if (!results) return [];
+        const candidates: Array<{
+          readonly index: number;
+          readonly key: string;
+          readonly value: unknown;
+        }> = [];
+        for (const [key, values] of Object.entries(results)) {
+          if (!Array.isArray(values)) continue;
+          for (const [index, value] of values.entries()) {
+            if (
+              value &&
+              typeof value === "object" &&
+              (value as Record<string, unknown>).runId === expected.runId &&
+              (value as Record<string, unknown>).command === expected.command &&
+              (value as Record<string, unknown>).sequence ===
+                expected.sequence &&
+              (value as Record<string, unknown>).participant ===
+                expected.participant &&
+              (expected.sessionId === undefined ||
+                (value as Record<string, unknown>).sessionId ===
+                  expected.sessionId)
+            ) {
+              candidates.push({ index, key, value });
+            }
+          }
+        }
+        return candidates;
+      }, expected),
+    (candidates) =>
+      candidates.some(
+        (candidate) =>
+          !options.valueMatches ||
+          options.valueMatches(
+            (candidate.value as { readonly value: string }).value,
+          ),
+      ),
+  );
+  if (result.matched) {
+    const candidates = result.value ?? [];
+    const candidate = candidates.find(
+      (candidate) =>
+        !options.valueMatches ||
+        options.valueMatches(
+          (candidate.value as { readonly value: string }).value,
+        ),
+    ) as {
+      readonly index: number;
+      readonly key: string;
+      readonly value: unknown;
+    };
+    return page.evaluate(({ index, key }) => {
+      const bridge = window as typeof window & {
+        __nexusE2eResults?: Record<string, unknown[]>;
+      };
+      const values = bridge.__nexusE2eResults?.[key];
+      if (!values) return null;
+      const [value] = values.splice(index, 1);
+      if (values.length === 0) delete bridge.__nexusE2eResults![key];
+      return value ?? null;
+    }, candidate);
+  }
+  throw new BarrierTimeoutError("correlated DOM result", [
+    JSON.stringify(expected),
+  ]);
+}
+
 function assertRunId(runId: string): void {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) {
     throw new Error(`Invalid fixture runId: ${runId}`);
@@ -574,6 +684,72 @@ function assertRunId(runId: string): void {
 
 function isResultEvent(event: DiagnosticEvent): event is ResultEvent {
   return event.kind === "result";
+}
+
+async function pollUntil<T>(
+  read: () => Promise<T>,
+  matches: (value: T) => boolean,
+): Promise<{ readonly value: T; readonly matched: boolean }> {
+  const deadline = Date.now() + 5_000;
+  let value: T | undefined;
+  while (Date.now() < deadline) {
+    value = await read();
+    if (matches(value)) return { value, matched: true };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return { value: value as T, matched: false };
+}
+
+async function dispatchBridgeCommand(
+  page: Page,
+  runId: string,
+  command: string,
+  sessionId?: string,
+): Promise<number> {
+  const sequence = (commandSequences.get(page) ?? 0) + 1;
+  commandSequences.set(page, sequence);
+  await page.evaluate(
+    ({ runId, command, sequence, sessionId }) =>
+      window.dispatchEvent(
+        new CustomEvent("nexus-e2e-command", {
+          detail: {
+            kind: "command",
+            runId,
+            command,
+            sequence,
+            ...(sessionId === undefined ? {} : { sessionId }),
+          },
+        }),
+      ),
+    { runId, command, sequence, sessionId },
+  );
+  return sequence;
+}
+
+async function readDomValue(page: Page, selector: string): Promise<string> {
+  return page
+    .locator(selector)
+    .evaluate((element) =>
+      element instanceof HTMLDataElement || element instanceof HTMLOutputElement
+        ? element.value
+        : (element.textContent ?? ""),
+    );
+}
+
+async function waitForChangedDomValue(
+  page: Page,
+  selector: string,
+  before: string | null,
+): Promise<string> {
+  const result = await pollUntil(
+    () => readDomValue(page, selector),
+    (value) => value !== before,
+  );
+  if (result.matched) return result.value;
+  throw new BarrierTimeoutError("DOM result", [
+    before ?? "",
+    result.value ?? before ?? "",
+  ]);
 }
 
 export function diagnosticEventIdentity(event: DiagnosticEvent): string {
@@ -609,30 +785,4 @@ async function readRunDiagnostics(
   );
   Diagnostics.validate(events);
   return Diagnostics.sort(events);
-}
-
-async function readFixtureStorage(context: BrowserContext): Promise<{
-  readonly session: Readonly<Record<string, unknown>>;
-  readonly local: Readonly<Record<string, unknown>>;
-}> {
-  for (const page of [...context.pages()].reverse()) {
-    if (!page.url().startsWith("chrome-extension://")) continue;
-    try {
-      return await page.evaluate(async () => {
-        const pick = (values: Record<string, unknown>) =>
-          Object.fromEntries(
-            Object.entries(values).filter(([key]) =>
-              key.startsWith("nexus-e2e:"),
-            ),
-          );
-        return {
-          session: pick(await chrome.storage.session.get()),
-          local: pick(await chrome.storage.local.get()),
-        };
-      });
-    } catch (error) {
-      if (!isDeadTarget(error)) throw error;
-    }
-  }
-  throw new Error("No live extension page is available for fixture storage");
 }

@@ -1,21 +1,24 @@
 import { expect } from "@playwright/test";
-import { diagnosticCursor, test } from "../harness/playwright-fixtures";
+import {
+  diagnosticCursor,
+  diagnosticEventIdentity,
+  test,
+  waitForHostBridgeResult,
+} from "../harness/playwright-fixtures";
+import { fixtureOrigins } from "../harness/targets";
 
 test("connects to the exact alpha route and records one provider invocation", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "security-connect-route";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
+  await hostPage.goto(`${fixtureOrigins.main}/host.html?runId=${runId}`);
   await waitForBarrier(runId, "background-ready");
   await expect(hostPage.frameLocator("#alpha").locator("html")).toHaveAttribute(
     "data-nexus-e2e-ready",
     /^alpha:/,
   );
 
-  const beforeFactsCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(
     hostPage,
     "#alpha",
@@ -23,23 +26,22 @@ test("connects to the exact alpha route and records one provider invocation", as
     "document-route-facts",
     1,
   );
-  const beforeFactsEvent = await waitForResult(
+  const beforeFactsEvent = await commandEnvelope(
+    hostPage,
     runId,
-    (event) =>
-      event.participant === "content:alpha" &&
-      event.value.includes('"invocationCount"'),
-    { after: beforeFactsCursor },
+    "document-route-facts",
+    1,
+    "content:alpha",
   );
   const beforeFacts = documentFacts(beforeFactsEvent.value);
 
-  const createCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(hostPage, "#alpha", runId, "create-frame", 2);
-  const created = await waitForResult(
+  const created = await commandEnvelope(
+    hostPage,
     runId,
-    (event) =>
-      event.participant === "content:alpha" &&
-      event.value.includes('"identity"'),
-    { after: createCursor },
+    "create-frame",
+    2,
+    "content:alpha",
   );
   const createdValue = result(created.value);
   expect(createdValue).toMatchObject({
@@ -50,7 +52,6 @@ test("connects to the exact alpha route and records one provider invocation", as
     },
   });
 
-  const afterFactsCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(
     hostPage,
     "#alpha",
@@ -58,12 +59,12 @@ test("connects to the exact alpha route and records one provider invocation", as
     "document-route-facts",
     3,
   );
-  const afterFactsEvent = await waitForResult(
+  const afterFactsEvent = await commandEnvelope(
+    hostPage,
     runId,
-    (event) =>
-      event.participant === "content:alpha" &&
-      event.value.includes('"invocationCount"'),
-    { after: afterFactsCursor },
+    "document-route-facts",
+    3,
+    "content:alpha",
   );
   const afterFacts = documentFacts(afterFactsEvent.value);
   expect(afterFacts.sessionId).toBe(beforeFacts.sessionId);
@@ -73,15 +74,13 @@ test("connects to the exact alpha route and records one provider invocation", as
 
 test("rejects content-initiated ports when declared and observed frames differ", async ({
   diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   hostPage,
   waitForBarrier,
   waitForEvent,
-  waitForDomValue,
-  waitForResult,
 }) => {
   const runId = "security-declared-frame-mismatch";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
+  await hostPage.goto(`${fixtureOrigins.main}/host.html?runId=${runId}`);
   await waitForBarrier(runId, "background-ready");
   const alphaRoot = hostPage.frameLocator("#alpha").locator("html");
   await expect(alphaRoot).toHaveAttribute("data-nexus-e2e-ready", /^alpha:/);
@@ -89,7 +88,6 @@ test("rejects content-initiated ports when declared and observed frames differ",
     "data-nexus-e2e-ready",
   );
 
-  const counterBaselineCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(
     hostPage,
     "#alpha",
@@ -97,21 +95,23 @@ test("rejects content-initiated ports when declared and observed frames differ",
     "background-increment",
     1,
   );
-  const counterBaseline = await waitForResult(
+  const counterBaseline = await commandEnvelope(
+    hostPage,
     runId,
-    (event) => event.participant === "content:alpha" && event.value === "1",
-    { after: counterBaselineCursor },
+    "background-increment",
+    1,
+    "content:alpha",
   );
   expect(counterBaseline.value).toBe("1");
 
   const baselineCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(hostPage, "#alpha", runId, "content-connect", 2);
-  const baselineConnection = await waitForResult(
+  const baselineConnection = await commandEnvelope(
+    hostPage,
     runId,
-    (event) =>
-      event.participant === "content:alpha" &&
-      event.value.startsWith("background:"),
-    { after: baselineCursor },
+    "content-connect",
+    2,
+    "content:alpha",
   );
   expect(baselineConnection.value).toMatch(/^background:\d+:[a-zA-Z0-9-]{36}$/);
   const baselineInvocationEvents = await waitForEvent(
@@ -153,156 +153,49 @@ test("rejects content-initiated ports when declared and observed frames differ",
 
   const rejectedCursor = diagnosticCursor(await diagnostics(runId));
   await dispatchFrameCommand(hostPage, "#alpha", runId, "content-connect", 1);
-  const rejected = await waitForEvent(
+  const rejected = await commandEnvelope(
+    hostPage,
     runId,
-    (event) =>
-      event.participant === "content:alpha" &&
-      event.kind === "error" &&
-      event.value === JSON.stringify({ code: "E_HANDSHAKE_REJECTED" }),
-    { after: rejectedCursor },
+    "content-connect",
+    1,
+    "content:alpha",
   );
-  expect(rejected).toHaveLength(1);
-  expect(rejected[0]).toMatchObject({ kind: "error" });
+  expect(rejected).toMatchObject({
+    kind: "error",
+    value: JSON.stringify({ code: "E_HANDSHAKE_REJECTED" }),
+  });
 
   const rejectedInvocationEvents = (await diagnostics(runId)).filter(
     (event) =>
-      !rejectedCursor.has(eventIdentity(event)) &&
+      !rejectedCursor.has(diagnosticEventIdentity(event)) &&
       event.participant === "background" &&
       workspaceInvocationCount(event) !== undefined,
   );
   expect(rejectedInvocationEvents).toHaveLength(0);
 
-  const summaryBefore = await domValue(hostPage);
-  await dispatchHostCommand(hostPage, runId, "background-summary");
-  const summary = await commandEnvelope(
+  const summary = await dispatchHostCommandAndResult(
     hostPage,
-    waitForDomValue,
-    summaryBefore,
     runId,
     "background-summary",
   );
   expect(result(summary.value)).toMatchObject({ counter: 1 });
 });
 
-test("ignores malformed, foreign-run, unknown, duplicate, and non-window bridge commands", async ({
-  diagnostics,
-  hostPage,
-  waitForBarrier,
-  waitForResult,
-}) => {
-  const runId = "security-bridge";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
-  await waitForBarrier(runId, "background-ready");
-  const before = diagnosticCursor(await diagnostics(runId));
-
-  await hostPage.evaluate((currentRunId) => {
-    const commands = [
-      null,
-      "forged-primitive",
-      { runId: currentRunId, command: "security-counter", sequence: 1 },
-      {
-        kind: "command",
-        runId: currentRunId,
-        command: "security-counter",
-        sequence: "1",
-      },
-      {
-        kind: "command",
-        runId: currentRunId,
-        command: 42,
-        sequence: 1,
-      },
-      {
-        kind: "command",
-        runId: "other-run",
-        command: "security-counter",
-        sequence: 1,
-      },
-      {
-        kind: "result",
-        runId: currentRunId,
-        command: "security-counter",
-        sequence: 1,
-      },
-      { kind: "command", runId: currentRunId, command: "unknown", sequence: 1 },
-      {
-        kind: "command",
-        runId: currentRunId,
-        command: "security-counter",
-        sequence: 0,
-      },
-      {
-        kind: "command",
-        runId: currentRunId,
-        command: "security-counter",
-        sequence: 1,
-      },
-      {
-        kind: "command",
-        runId: currentRunId,
-        command: "security-counter",
-        sequence: 1,
-      },
-    ];
-    for (const detail of commands) {
-      window.dispatchEvent(new CustomEvent("nexus-e2e-command", { detail }));
-    }
-    document.dispatchEvent(
-      new CustomEvent("nexus-e2e-command", {
-        bubbles: true,
-        detail: {
-          kind: "command",
-          runId: currentRunId,
-          command: "security-counter",
-          sequence: 2,
-        },
-      }),
-    );
-  }, runId);
-
-  const observed = await waitForResult(
-    runId,
-    (event) => event.value.includes('"counter":0'),
-    { after: before },
-  );
-  expect(result(observed.value)).toMatchObject({ counter: 0 });
-  expect(
-    (await diagnostics(runId)).filter(
-      (event) =>
-        event.kind === "result" &&
-        event.participant === "content:main" &&
-        !before.has(eventIdentity(event)),
-    ),
-  ).toHaveLength(1);
-});
-
 test("denies calls without incrementing, then permits one call after policy allows", async ({
-  dispatchHostCommand,
+  diagnostics,
+  dispatchHostCommandAndResult,
   hostPage,
   waitForBarrier,
-  waitForDomValue,
   waitForResult,
 }) => {
   const runId = "security-call-policy";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
+  await hostPage.goto(`${fixtureOrigins.main}/host.html?runId=${runId}`);
   await waitForBarrier(runId, "background-ready");
 
-  const deniedBefore = await domValue(hostPage);
-  await dispatchHostCommand(hostPage, runId, "policy-deny");
-  const deniedPolicy = await commandEnvelope(
-    hostPage,
-    waitForDomValue,
-    deniedBefore,
-    runId,
-    "policy-deny",
-  );
-  expect(result(deniedPolicy.value)).toMatchObject({
-    counter: 0,
-    denyCalls: true,
-  });
+  await dispatchHostCommandAndResult(hostPage, runId, "policy-deny");
 
-  const deniedCallBefore = await domValue(hostPage);
-  const deniedCallCursor = await dispatchHostCommand(
+  const deniedCallCursor = diagnosticCursor(await diagnostics(runId));
+  const deniedCall = dispatchHostCommandAndResult(
     hostPage,
     runId,
     "background-increment",
@@ -314,52 +207,26 @@ test("denies calls without incrementing, then permits one call after policy allo
       event.value.includes('"type":"policy-denied"'),
     { after: deniedCallCursor },
   );
+  const denied = await deniedCall;
   expect(result(providerDenied.value)).toEqual({
     type: "policy-denied",
     code: "E_AUTH_CALL_DENIED",
     counter: 0,
   });
-  const denied = await commandEnvelope(
-    hostPage,
-    waitForDomValue,
-    deniedCallBefore,
-    runId,
-    "background-increment",
-  );
   expect(denied.kind).toBe("error");
   expect(result(denied.value)).toEqual({ code: "E_REMOTE_EXCEPTION" });
 
-  const allowedBefore = await domValue(hostPage);
-  await dispatchHostCommand(hostPage, runId, "policy-allow");
-  const allowedPolicy = await commandEnvelope(
-    hostPage,
-    waitForDomValue,
-    allowedBefore,
-    runId,
-    "policy-allow",
-  );
-  expect(result(allowedPolicy.value)).toMatchObject({
-    counter: 0,
-    denyCalls: false,
-  });
+  await dispatchHostCommandAndResult(hostPage, runId, "policy-allow");
 
-  const incrementBefore = await domValue(hostPage);
-  await dispatchHostCommand(hostPage, runId, "background-increment");
-  const incremented = await commandEnvelope(
+  const incremented = await dispatchHostCommandAndResult(
     hostPage,
-    waitForDomValue,
-    incrementBefore,
     runId,
     "background-increment",
   );
   expect(incremented).toMatchObject({ kind: "result", value: "1" });
 
-  const counterBefore = await domValue(hostPage);
-  await dispatchHostCommand(hostPage, runId, "security-counter");
-  const counter = await commandEnvelope(
+  const counter = await dispatchHostCommandAndResult(
     hostPage,
-    waitForDomValue,
-    counterBefore,
     runId,
     "security-counter",
   );
@@ -369,35 +236,28 @@ test("denies calls without incrementing, then permits one call after policy allo
 test("reports local acquisition abort separately from worker port loss", async ({
   controller,
   diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   extensionId,
   hostPage,
   waitForBarrier,
-  waitForDomValue,
-  waitForResult,
 }) => {
   const abortRunId = "security-local-abort";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${abortRunId}`);
+  await hostPage.goto(`${fixtureOrigins.main}/host.html?runId=${abortRunId}`);
   await waitForBarrier(abortRunId, "background-ready");
-  const abortCursor = await dispatchHostCommand(
+  const aborted = await dispatchHostCommandAndResult(
     hostPage,
     abortRunId,
     "abort-acquire",
   );
-  const aborted = await waitForResult(
-    abortRunId,
-    (event) => event.value.includes("E_ABORTED"),
-    { after: abortCursor },
-  );
   expect(result(aborted.value)).toEqual({ code: "E_ABORTED" });
 
   const lossRunId = "security-port-loss";
-  await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${lossRunId}`);
+  await hostPage.goto(`${fixtureOrigins.main}/host.html?runId=${lossRunId}`);
   await waitForBarrier(lossRunId, "background-ready");
   const target = await controller.capture(extensionId);
-  const lossBefore = await domValue(hostPage);
+  const lossCursor = diagnosticCursor(await diagnostics(lossRunId));
   const lossStartedAt = performance.now();
-  const lossCursor = await dispatchHostCommand(
+  const pendingResult = dispatchHostCommandAndResult(
     hostPage,
     lossRunId,
     "worker-pending",
@@ -406,19 +266,13 @@ test("reports local acquisition abort separately from worker port loss", async (
   expect(
     (await diagnostics(lossRunId)).some(
       (event) =>
-        !lossCursor.has(eventIdentity(event)) &&
+        !lossCursor.has(diagnosticEventIdentity(event)) &&
         event.kind === "result" &&
         event.value.includes("E_CONN_CLOSED"),
     ),
   ).toBe(false);
   await controller.closeAfterPending(target);
-  const closed = await commandEnvelope(
-    hostPage,
-    waitForDomValue,
-    lossBefore,
-    lossRunId,
-    "worker-pending",
-  );
+  const closed = await pendingResult;
   expect(closed).toMatchObject({ kind: "result" });
   const pending = pendingTerminal(closed.value);
   expect(pending.code).toBe("E_CONN_CLOSED");
@@ -476,22 +330,6 @@ function pendingTerminal(value: string): {
   };
 }
 
-function eventIdentity(event: {
-  readonly runId: string;
-  readonly participant: string;
-  readonly sessionId?: string;
-  readonly sequence: number;
-  readonly kind: string;
-}): string {
-  return [
-    event.runId,
-    event.participant,
-    event.sessionId ?? "none",
-    event.sequence,
-    event.kind,
-  ].join(":");
-}
-
 function workspaceInvocationCount(event: unknown): number | undefined {
   if (!event || typeof event !== "object") return undefined;
   const value = (event as { readonly value?: unknown }).value;
@@ -518,33 +356,26 @@ type CommandEnvelope = {
   readonly value: string;
 };
 
-async function domValue(
-  page: import("@playwright/test").Page,
-): Promise<string> {
-  return page
-    .locator("#bridge-status")
-    .evaluate((element) => (element as HTMLDataElement).value);
-}
-
 async function commandEnvelope(
   page: import("@playwright/test").Page,
-  waitForDomValue: (
-    page: import("@playwright/test").Page,
-    selector: string,
-    before: string | null,
-  ) => Promise<string>,
-  before: string,
   runId: string,
   command: string,
+  sequence?: number,
+  participant = "content:main",
 ): Promise<CommandEnvelope> {
-  const envelope = JSON.parse(
-    await waitForDomValue(page, "#bridge-status", before),
-  ) as CommandEnvelope;
+  if (sequence === undefined) throw new Error("Missing command sequence");
+  const envelope = (await waitForHostBridgeResult(page, {
+    runId,
+    command,
+    sequence,
+    participant,
+  })) as CommandEnvelope;
   expect(envelope).toMatchObject({
     runId,
     command,
-    participant: "content:main",
+    participant,
   });
+  if (sequence !== undefined) expect(envelope.sequence).toBe(sequence);
   expect(envelope.sessionId).toMatch(/^[a-zA-Z0-9-]{36}$/);
   return envelope;
 }

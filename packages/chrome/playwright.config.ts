@@ -12,14 +12,29 @@ export default defineConfig({
   },
   webServer: hostServers,
   projects: [
-    { name: "foundation-normal", testMatch: /contract\/.*\.spec\.ts/ },
-    { name: "worker-gate", testMatch: /worker\/worker-target-close\.spec\.ts/ },
-    { name: "normal", testMatch: /normal\/.*\.spec\.ts/ },
-    { name: "worker", testMatch: /worker\/.*\.spec\.ts/ },
+    {
+      name: "foundation-normal",
+      testMatch: /contract\/.*\.spec\.ts/,
+    },
+    {
+      name: "worker-gate",
+      testMatch: /worker\/termination\.spec\.ts/,
+      grep: /@worker-gate/,
+    },
+    {
+      name: "normal",
+      testMatch: /normal\/.*\.spec\.ts/,
+    },
+    {
+      name: "worker",
+      testMatch: /worker\/.*\.spec\.ts/,
+      grepInvert: /@worker-gate/,
+    },
     {
       name: "worker-p0",
       testMatch: /worker\/.*\.spec\.ts/,
       grep: /@worker-p0/,
+      grepInvert: /@worker-gate/,
     },
   ],
 });

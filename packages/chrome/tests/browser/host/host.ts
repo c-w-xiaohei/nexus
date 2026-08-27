@@ -1,7 +1,30 @@
+export {};
+
 const runId = new URLSearchParams(location.search).get("runId");
 const bridgeStatus = document.querySelector<HTMLDataElement>("#bridge-status");
-let sequence = 0;
-let lastResultSequence = 0;
+
+type BridgeResult = {
+  readonly kind: "result" | "error";
+  readonly runId: string;
+  readonly command: string;
+  readonly sequence: number;
+  readonly participant: string;
+  readonly sessionId: string;
+  readonly value: string;
+};
+const maxResultKeys = 256;
+const maxResultsPerKey = 8;
+
+declare global {
+  interface Window {
+    __nexusE2eResults?: Record<string, BridgeResult[]>;
+  }
+}
+
+window.__nexusE2eResults ??= Object.create(null) as Record<
+  string,
+  BridgeResult[]
+>;
 
 for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
   const url = new URL(frame.src);
@@ -9,30 +32,40 @@ for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
   frame.src = url.href;
 }
 
-document.addEventListener("click", (event) => {
-  const command = (event.target as HTMLElement | null)?.dataset.command;
-  if (!command || !runId) return;
-  window.dispatchEvent(
-    new CustomEvent("nexus-e2e-command", {
-      detail: { kind: "command", runId, command, sequence: ++sequence },
-    }),
-  );
-  if (bridgeStatus) bridgeStatus.value = `sent:${command}`;
+window.addEventListener("nexus-e2e-result", (event) => {
+  writeBridgeResult(event instanceof CustomEvent ? event.detail : undefined);
 });
 
-window.addEventListener("nexus-e2e-result", (event) => {
-  if (
-    !(event instanceof CustomEvent) ||
-    event.target !== window ||
-    !bridgeStatus ||
-    !isBridgeResult(event.detail, runId) ||
-    event.detail.sequence <= lastResultSequence
-  )
-    return;
-  lastResultSequence = event.detail.sequence;
-  bridgeStatus.value = JSON.stringify(event.detail);
-  bridgeStatus.dataset.sequence = String(event.detail.sequence);
+window.addEventListener("message", (event) => {
+  if (!isCurrentFrameMessage(event, runId)) return;
+  window.dispatchEvent(
+    new CustomEvent("nexus-e2e-result", { detail: event.data }),
+  );
 });
+
+function writeBridgeResult(value: unknown): void {
+  if (!isBridgeResult(value, runId)) return;
+  const results = window.__nexusE2eResults!;
+  const key = bridgeResultKey(value);
+  const entries = (results[key] ??= []);
+  entries.push(value);
+  if (entries.length > maxResultsPerKey) entries.shift();
+  const keys = Object.keys(results);
+  if (keys.length > maxResultKeys) delete results[keys[0]];
+  if (!bridgeStatus) return;
+  bridgeStatus.value = JSON.stringify(value);
+  bridgeStatus.dataset.sequence = String(value.sequence);
+}
+
+function bridgeResultKey(result: BridgeResult): string {
+  return JSON.stringify([
+    result.runId,
+    result.command,
+    result.sequence,
+    result.participant,
+    result.sessionId,
+  ]);
+}
 
 function isBridgeResult(
   value: unknown,
@@ -59,4 +92,23 @@ function isBridgeResult(
     Number.isSafeInteger(result.sequence) &&
     result.sequence > 0
   );
+}
+
+function isCurrentFrameMessage(
+  event: MessageEvent<unknown>,
+  expectedRunId: string | null,
+): boolean {
+  if (!isBridgeResult(event.data, expectedRunId)) return false;
+  for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
+    const origin = new URL(frame.src, location.href).origin;
+    const label = new URL(frame.src, location.href).searchParams.get("frame");
+    if (
+      event.origin === origin &&
+      event.source === frame.contentWindow &&
+      event.data.participant === `content:${label ?? "main"}`
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

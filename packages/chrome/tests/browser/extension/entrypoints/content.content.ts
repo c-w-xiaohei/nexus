@@ -5,6 +5,8 @@ import {
   DocumentToolToken,
   DocumentRelayToken,
   DocumentRouteToken,
+  FixtureAdminToken,
+  TargetedContentAdminToken,
   WorkspaceToken,
   type WorkspaceService,
 } from "../shared/contracts";
@@ -36,26 +38,7 @@ export default defineContentScript({
     if (!maybeIdentity) return;
     const identity = maybeIdentity;
     configureFixtureLogger(identity, identity.runId);
-    let activeCommand:
-      | { readonly command: string; readonly sequence: number }
-      | undefined;
-    const reporter = createReporter(identity, (event) => {
-      if (!activeCommand || (event.kind !== "result" && event.kind !== "error"))
-        return;
-      window.dispatchEvent(
-        new CustomEvent("nexus-e2e-result", {
-          detail: {
-            kind: event.kind,
-            runId: identity.runId,
-            command: activeCommand.command,
-            sequence: activeCommand.sequence,
-            participant: identity.participant,
-            sessionId: identity.sessionId,
-            value: event.value,
-          },
-        }),
-      );
-    });
+    const reporter = createReporter(identity);
     const autoInitiate = searchParams.get("auto-initiate") === "true";
     const nonce = crypto.randomUUID();
     const declaredFrameId = searchParams.get("declared-frame");
@@ -223,33 +206,52 @@ export default defineContentScript({
       lastSequence = command.sequence;
       const scenarioCommand =
         command.command as (typeof scenarioCommands)[number];
-      const sessionId = bridgeSessionId(event.detail);
-      if (event.detail && "sessionId" in event.detail && !sessionId) return;
       commandQueue = commandQueue.then(async () => {
-        activeCommand = {
+        const context = {
           command: scenarioCommand,
           sequence: command.sequence,
         };
-        try {
-          await runCommand(scenarioCommand, sessionId);
-        } finally {
-          activeCommand = undefined;
-        }
+        const commandReporter = {
+          ...reporter,
+          ...reporter.commandReporter((event) => {
+            if (event.kind !== "result" && event.kind !== "error") return;
+            const result = {
+              kind: event.kind,
+              runId: identity.runId,
+              command: context.command,
+              sequence: context.sequence,
+              participant: identity.participant,
+              sessionId: identity.sessionId,
+              value: event.value,
+            };
+            if (window.top === window) {
+              window.dispatchEvent(
+                new CustomEvent("nexus-e2e-result", { detail: result }),
+              );
+              return;
+            }
+            const origin = parentOrigin(document.referrer);
+            if (origin) window.parent.postMessage(result, origin);
+          }),
+        };
+        await runCommand(scenarioCommand, commandReporter);
       });
     });
 
-    async function connectBackground(): Promise<void> {
+    async function connectBackground(
+      commandReporter = reporter,
+    ): Promise<void> {
       await reporter.barrier("content-connect");
       const workspace = await nexus.create(WorkspaceToken);
       const summary = await workspace.summary();
-      await reporter.result(
+      await commandReporter.result(
         `background:${summary.generation}:${summary.nonce}`,
       );
     }
 
     async function runCommand(
       command: (typeof scenarioCommands)[number],
-      selectedSessionId?: string,
+      reporter: ReturnType<typeof createReporter>,
     ): Promise<void> {
       try {
         if (command === "state-content-action") {
@@ -298,15 +300,12 @@ export default defineContentScript({
           );
           return;
         }
-        if (command === "content-connect") return await connectBackground();
+        if (command === "content-connect")
+          return await connectBackground(reporter);
         if (command === "provider-first-select") {
-          await connectBackground();
-          const result = await chrome.runtime.sendMessage({
-            kind: "fixture-command",
-            runId: identity.runId,
-            senderSessionId: identity.sessionId,
-            command,
-          });
+          await connectBackground(reporter);
+          const admin = await nexus.create(TargetedContentAdminToken);
+          const result = await admin.providerFirstSelect();
           await reporter.result(JSON.stringify(result));
           return;
         }
@@ -345,18 +344,56 @@ export default defineContentScript({
           return;
         }
         if (command === "content-hold") {
-          const result = await chrome.runtime.sendMessage({
-            kind: "fixture-command",
-            runId: identity.runId,
-            senderSessionId: identity.sessionId,
-            command,
-          });
+          const admin = await nexus.create(TargetedContentAdminToken);
+          const result = await admin.contentHold(label);
           await reporter.result(JSON.stringify(result));
+          return;
+        }
+        if (
+          command === "multicast-bound-invoke" ||
+          command === "multicast-fail" ||
+          command === "capability-invoke" ||
+          command === "capability-proxy-invoke" ||
+          command === "capability-reference-invoke" ||
+          command === "capability-release" ||
+          command === "identity-pinned" ||
+          command === "offscreen-create" ||
+          command === "offscreen-close"
+        ) {
+          const admin = await nexus.create(FixtureAdminToken);
+          const result =
+            command === "multicast-bound-invoke"
+              ? await admin.multicastBoundInvoke()
+              : command === "multicast-fail"
+                ? await admin.multicastFail()
+                : command === "capability-invoke"
+                  ? await admin.capabilityInvoke()
+                  : command === "capability-proxy-invoke"
+                    ? await admin.capabilityProxyInvoke()
+                    : command === "capability-reference-invoke"
+                      ? await admin.capabilityReferenceInvoke()
+                      : command === "capability-release"
+                        ? await admin.capabilityRelease()
+                        : command === "identity-pinned"
+                          ? await admin.identityPinned()
+                          : command === "offscreen-create"
+                            ? await admin.createOffscreen()
+                            : await admin.closeOffscreen();
+          await reporter.result(JSON.stringify(result));
+          return;
+        }
+        if (command === "identity-constraint") {
+          const admin = await nexus.create(TargetedContentAdminToken);
+          await reporter.result(
+            JSON.stringify(await admin.identityConstraint()),
+          );
           return;
         }
         if (command === "pre-ready-port-close") {
           preReadyArmed = true;
           await reporter.barrier("pre-ready-armed");
+          // This must create the first native route while the content listener
+          // is armed, before an admin Nexus proxy can establish one.
           const result = await chrome.runtime.sendMessage({
             kind: "fixture-command",
             runId: identity.runId,
@@ -515,19 +552,6 @@ export default defineContentScript({
           );
           return;
         }
-        if (command === "worker-state-check") {
-          const state = await connectNexusStore(
-            nexus,
-            workspaceStateDefinition,
-          );
-          await reporter.result(
-            JSON.stringify({
-              state: state.getState(),
-              status: state.getStatus(),
-            }),
-          );
-          return;
-        }
         if (command === "worker-storage-write") {
           const workspace = await nexus.create(WorkspaceToken);
           const value = await workspace.setSetting("worker-durable");
@@ -612,18 +636,8 @@ export default defineContentScript({
         }
         if (command === "policy-deny" || command === "policy-allow") {
           const denyCalls = command === "policy-deny";
-          const result = await chrome.runtime.sendMessage({
-            kind: "policy",
-            runId: identity.runId,
-            senderSessionId: identity.sessionId,
-            denyCalls,
-          });
-          if (!isControlResponse(result)) {
-            await reporter.error(
-              JSON.stringify({ code: "E_FIXTURE_PROTOCOL_RESPONSE_INVALID" }),
-            );
-            return;
-          }
+          const admin = await nexus.create(FixtureAdminToken);
+          const result = await admin.setCallPolicy(denyCalls);
           await reporter.result(JSON.stringify(result));
           return;
         }
@@ -651,22 +665,12 @@ export default defineContentScript({
           await reporter.result(JSON.stringify(await workspace.summary()));
           return;
         }
-        if (isBackgroundCommand(command)) {
-          const result = await chrome.runtime.sendMessage({
-            kind: "fixture-command",
-            runId: identity.runId,
-            senderSessionId: identity.sessionId,
-            command,
-            ...(selectedSessionId === undefined
-              ? {}
-              : { sessionId: selectedSessionId }),
-          });
-          if (!isJsonSafeRecord(result)) {
-            await reporter.error(
-              JSON.stringify({ code: "E_FIXTURE_PROTOCOL_RESPONSE_INVALID" }),
-            );
-            return;
-          }
+        const result = await runTargetedCommand(
+          command,
+          identity.runId,
+          identity.sessionId,
+        );
+        if (result) {
           await reporter.result(JSON.stringify(result));
           return;
         }
@@ -697,95 +701,54 @@ export default defineContentScript({
   },
 });
 
-function isBackgroundCommand(
+async function runTargetedCommand(
   command: (typeof scenarioCommands)[number],
-): boolean {
-  return [
-    "select-start",
-    "provider-cardinality",
-    "create-frame",
-    "create-document",
-    "create-concurrent",
-    "multicast-create",
-    "multicast-select",
-    "reference-callback",
-    "capability-retain",
-    "capability-invoke",
-    "capability-release",
-    "identity-pinned",
-    "multicast-bound-invoke",
-    "multicast-rebind",
-    "multicast-fail",
-    "multicast-unavailable",
-    "registry-facts",
-    "identity-select-beta",
-    "identity-constraint",
-    "offscreen-create",
-    "offscreen-close",
-    "policy-deny",
-    "policy-allow",
-    "abort-acquire",
-    "security-counter",
-    "content-hold",
-    "select-session",
-    "worker-proxy-retain",
-    "worker-proxy-invoke",
-    "worker-proxy-fresh",
-    "worker-state-retain",
-    "worker-state-write",
-    "worker-state-status",
-    "worker-state-fresh",
-    "worker-state-cleanup",
-    "worker-storage-write",
-    "worker-storage-read",
-    "worker-capability-retain",
-    "worker-capability-invoke",
-    "worker-capability-fresh",
-    "worker-capability-fresh-release",
-    "worker-capability-fresh-invoke",
-    "worker-state-check",
-    "capability-proxy-invoke",
-    "capability-reference-invoke",
-    "pre-ready-port-close",
-  ].includes(command);
+  runId: string,
+  senderSessionId: string,
+): Promise<Record<string, unknown> | undefined> {
+  // These operations intentionally test routing before this content context
+  // has a Nexus route; acquiring the admin proxy would create that route.
+  const invoke = () =>
+    chrome.runtime.sendMessage({
+      kind: "fixture-command",
+      runId,
+      senderSessionId,
+      command,
+    });
+  switch (command) {
+    case "select-start":
+    case "provider-cardinality":
+    case "create-frame":
+    case "create-document":
+    case "create-concurrent":
+    case "multicast-create":
+    case "multicast-select":
+    case "reference-callback":
+    case "capability-retain":
+    case "multicast-rebind":
+    case "multicast-unavailable":
+    case "identity-select-beta":
+      return invoke();
+    default:
+      return undefined;
+  }
 }
 
-function bridgeSessionId(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || !("sessionId" in value))
-    return undefined;
-  const sessionId = value.sessionId;
-  return typeof sessionId === "string" && /^[a-zA-Z0-9-]{36}$/.test(sessionId)
-    ? sessionId
-    : undefined;
+function parentOrigin(referrer: string): string | undefined {
+  try {
+    const origin = new URL(referrer).origin;
+    return origin === "http://127.0.0.1:4173" ||
+      origin === "http://127.0.0.1:4174"
+      ? origin
+      : undefined;
+  } catch {
+    // Same-origin frames can omit referrer under browser privacy policy.
+    return location.origin === "http://127.0.0.1:4173"
+      ? location.origin
+      : undefined;
+  }
 }
 
 function errorResult(error: unknown): Record<string, string> {
   return { code: fixtureErrorCode(error) };
-}
-
-function isJsonSafeRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype &&
-    Object.values(value).every((item) => isJsonSafeValue(item, new Set()))
-  );
-}
-
-function isJsonSafeValue(value: unknown, seen: Set<object>): boolean {
-  if (value === null) return true;
-  if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object") return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  if (Array.isArray(value))
-    return value.every((item) => isJsonSafeValue(item, seen));
-  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
-  return Object.values(value).every((item) => isJsonSafeValue(item, seen));
-}
-
-function isControlResponse(value: unknown): value is Record<string, unknown> {
-  return isJsonSafeRecord(value) && typeof value.ok === "boolean";
 }

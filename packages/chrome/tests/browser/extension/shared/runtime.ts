@@ -1,6 +1,5 @@
 /// <reference types="chrome" />
 
-import type { NexusInstance } from "@nexus-js/core";
 import { configureNexusLogger, LogLevel } from "@nexus-js/core";
 import { eventKey, type BridgeEvent } from "../../protocol";
 
@@ -71,18 +70,18 @@ export function configureFixtureLogger(
       try {
         const record = {
           timestamp: new Date().toISOString(),
-          realm: normalizeLoggerString(identity.participant),
-          processSessionId: normalizeLoggerString(identity.sessionId),
+          realm: sanitizeFixtureText(identity.participant),
+          processSessionId: sanitizeFixtureText(identity.sessionId),
           runId:
-            normalizeLoggerString(
+            sanitizeFixtureText(
               typeof runId === "function" ? runId() || "" : runId || "",
             ) || null,
           level: {
             numeric: level,
             name: LogLevel[level] ?? String(level),
           },
-          scope: normalizeLoggerString(scope),
-          message: normalizeLoggerString(message),
+          scope: sanitizeFixtureText(scope),
+          message: sanitizeFixtureText(message),
           args: normalizeLoggerArgs(args),
         };
         console.log(`${fixtureLoggerPrefix}${JSON.stringify(record)}`);
@@ -91,10 +90,10 @@ export function configureFixtureLogger(
           console.log(
             `${fixtureLoggerPrefix}${JSON.stringify({
               timestamp: new Date().toISOString(),
-              realm: normalizeLoggerString(identity.participant),
-              processSessionId: normalizeLoggerString(identity.sessionId),
+              realm: sanitizeFixtureText(identity.participant),
+              processSessionId: sanitizeFixtureText(identity.sessionId),
               runId:
-                normalizeLoggerString(
+                sanitizeFixtureText(
                   typeof runId === "function" ? runId() || "" : runId || "",
                 ) || null,
               level: {
@@ -127,7 +126,7 @@ function normalizeLoggerValue(
   seen: WeakSet<object>,
 ): unknown {
   if (value === null) return null;
-  if (typeof value === "string") return normalizeLoggerString(value);
+  if (typeof value === "string") return sanitizeFixtureText(value);
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "undefined") return "[undefined]";
   if (typeof value === "bigint")
@@ -139,13 +138,13 @@ function normalizeLoggerValue(
   if (depth >= maxLoggerDepth) return "[max-depth]";
   if (value instanceof Error) {
     return {
-      name: normalizeLoggerString(value.name),
-      message: normalizeLoggerString(value.message),
-      stack: normalizeLoggerString(value.stack ?? ""),
+      name: sanitizeFixtureText(value.name),
+      message: sanitizeFixtureText(value.message),
+      stack: sanitizeFixtureText(value.stack ?? ""),
     };
   }
   if (value instanceof Date) return value.toISOString();
-  if (typeof value !== "object") return normalizeLoggerString(String(value));
+  if (typeof value !== "object") return sanitizeFixtureText(String(value));
   if (seen.has(value)) return "[circular]";
   seen.add(value);
   if (Array.isArray(value)) {
@@ -213,31 +212,6 @@ export function sanitizeFixtureText(value: string): string {
   return sanitized.length > maxLoggerStringLength
     ? `${sanitized.slice(0, maxLoggerStringLength)}...[truncated]`
     : sanitized;
-}
-
-function normalizeLoggerString(value: string): string {
-  return sanitizeFixtureText(value);
-}
-
-export function validatePolicyControl(value: unknown): value is {
-  readonly kind: "policy";
-  readonly runId: string;
-  readonly senderSessionId: string;
-  readonly denyCalls: boolean;
-} {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  return (
-    keys.length === 4 &&
-    keys.every((key) =>
-      ["kind", "runId", "senderSessionId", "denyCalls"].includes(key),
-    ) &&
-    record.kind === "policy" &&
-    isFixtureRunId(record.runId) &&
-    isFixtureSessionId(record.senderSessionId) &&
-    typeof record.denyCalls === "boolean"
-  );
 }
 
 export function validateOffscreenEvent(value: unknown): value is BridgeEvent {
@@ -322,7 +296,6 @@ export function sanitizeFixtureError(error: unknown): string {
 
 export async function initializeBackgroundRun(runId: string): Promise<boolean> {
   if (!isFixtureRunId(runId)) return false;
-  await chrome.storage.session.set({ [activeRunKey]: runId });
   await chrome.storage.local.set({ [activeRunKey]: runId });
   return true;
 }
@@ -407,38 +380,45 @@ export function createReporter(
     state.writes = write.catch(() => undefined);
     await write;
   };
-  const terminal = async (kind: "result" | "error", value: string) => {
+  const terminal = async (
+    kind: "result" | "error",
+    value: string,
+    onCommandEvent?: (event: BridgeEvent) => void,
+  ) => {
     const event = createEvent(
       kind,
       kind === "error" ? sanitizeFixtureText(value) : value,
     );
-    // The page-world DOM oracle must survive service-worker storage loss.
-    onEvent?.(event);
+    // Terminal worker evidence is durable, while its active caller still needs
+    // the correlated DOM reply.
+    onCommandEvent?.(event);
     const write = persist(event);
     void write.catch(() => undefined);
+  };
+  const command = async (
+    kind: "result" | "error",
+    value: string,
+    onCommandEvent?: (event: BridgeEvent) => void,
+  ): Promise<void> => {
+    const event = createEvent(
+      kind,
+      kind === "error" ? sanitizeFixtureText(value) : value,
+    );
+    // Direct command replies cross the realm through the command bridge, not
+    // diagnostic storage. Independent events continue through report().
+    onCommandEvent?.(event);
   };
   return {
     barrier: (name: string) => report("barrier", name),
     // Result callers emit controlled JSON-safe fixture values; do not rewrite them.
     result: (value: string) => report("result", value),
     error: (value: string) => report("error", value),
+    commandReporter: (onCommandEvent: (event: BridgeEvent) => void) => ({
+      result: (value: string) => command("result", value, onCommandEvent),
+      error: (value: string) => command("error", value, onCommandEvent),
+      terminalResult: (value: string) =>
+        terminal("result", value, onCommandEvent),
+    }),
     terminalResult: (value: string) => terminal("result", value),
-    terminalError: (value: string) => terminal("error", value),
   };
-}
-
-export function resultText(result: {
-  isErr(): boolean;
-  error?: Error;
-}): string {
-  return result.isErr() ? fixtureErrorCode(result.error) : "ok";
-}
-
-export async function publishSession(
-  nexus: NexusInstance,
-  token: Parameters<NexusInstance["provide"]>[0],
-  sessionId: string,
-): Promise<void> {
-  nexus.provide(token as never, { session: async () => sessionId } as never);
-  await nexus.ready();
 }

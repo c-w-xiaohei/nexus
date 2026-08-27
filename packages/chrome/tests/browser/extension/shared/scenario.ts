@@ -17,7 +17,6 @@ export const scenarioCommands = [
   "content-hold",
   "select-start",
   "provider-cardinality",
-  "select-session",
   "create-frame",
   "create-document",
   "create-concurrent",
@@ -32,7 +31,6 @@ export const scenarioCommands = [
   "multicast-rebind",
   "multicast-fail",
   "multicast-unavailable",
-  "registry-facts",
   "identity-select-beta",
   "identity-constraint",
   "identity-update",
@@ -58,7 +56,6 @@ export const scenarioCommands = [
   "worker-capability-fresh",
   "worker-capability-fresh-release",
   "worker-capability-fresh-invoke",
-  "worker-state-check",
   "provider-first-select",
   "capability-proxy-invoke",
   "capability-reference-invoke",
@@ -67,6 +64,29 @@ export const scenarioCommands = [
 ] as const;
 
 export type ScenarioCommand = (typeof scenarioCommands)[number];
+
+export const preRouteCommands = [
+  "select-start",
+  "provider-cardinality",
+  "create-frame",
+  "create-document",
+  "create-concurrent",
+  "pre-ready-port-close",
+  "multicast-create",
+  "multicast-select",
+  "multicast-rebind",
+  "multicast-unavailable",
+  "identity-select-beta",
+  "reference-callback",
+  "capability-retain",
+] as const;
+
+export type PreRouteCommand = (typeof preRouteCommands)[number];
+
+export const isPreRouteCommand = (
+  command: string,
+): command is PreRouteCommand =>
+  (preRouteCommands as readonly string[]).includes(command);
 
 export const isScenarioCommand = (
   command: string,

@@ -1,9 +1,5 @@
 import { usingOffscreenDocument } from "@nexus-js/chrome";
-import {
-  ExportToken,
-  SessionToken,
-  WorkspaceToken,
-} from "../../shared/contracts";
+import { SessionToken, WorkspaceToken } from "../../shared/contracts";
 import {
   createReporter,
   isFixtureRunId,
@@ -54,7 +50,6 @@ async function bootstrap(): Promise<void> {
     nexus.provide(SessionToken, {
       session: async () => offscreenIdentity.sessionId,
     });
-    nexus.provide(ExportToken, { exportWorkspace: async () => "export:ready" });
     await nexus.ready();
     // UIClientEndpoint publishes static providers over this public background route.
     await nexus.create(WorkspaceToken);

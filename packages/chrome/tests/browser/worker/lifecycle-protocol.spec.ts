@@ -1,15 +1,12 @@
-import { expect, type Page } from "@playwright/test";
-import { diagnosticCursor, test } from "../harness/playwright-fixtures";
+import { expect } from "@playwright/test";
+import { test } from "../harness/playwright-fixtures";
 
 test("CW-03 @worker-p0 loses old volatile State while durable worker storage survives", async ({
   controller,
-  diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   extensionId,
   hostPage,
   waitForBarrier,
-  waitForDomValue,
-  waitForResult,
 }) => {
   const runId = "cw03-worker-state";
   let retainedCreated = false;
@@ -22,106 +19,97 @@ test("CW-03 @worker-p0 loses old volatile State while durable worker storage sur
     await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
     await waitForBarrier(runId, "background-ready");
 
-    const retainedCursor = await dispatchHostCommand(
-      hostPage,
-      runId,
-      "worker-state-retain",
-    );
     const retained = result(
-      await waitForResult(runId, hasKey("state"), { after: retainedCursor }),
+      await dispatchHostCommandAndResult(
+        hostPage,
+        runId,
+        "worker-state-retain",
+      ),
     );
     retainedCreated = true;
     const oldStoreInstanceId = storeInstanceId(retained.status);
 
-    const writeCursor = await dispatchHostCommand(
-      hostPage,
-      runId,
-      "worker-state-write",
-    );
     expect(
       result(
-        await waitForResult(runId, hasKey("value"), { after: writeCursor }),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "worker-state-write",
+        ),
       ),
     ).toMatchObject({
       value: 1,
       status: { type: "ready" },
     });
 
-    const storageWriteCursor = await dispatchHostCommand(
-      hostPage,
-      runId,
-      "worker-storage-write",
-    );
     expect(
       result(
-        await waitForResult(runId, () => true, { after: storageWriteCursor }),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "worker-storage-write",
+        ),
       ),
     ).toEqual({ durable: "worker-durable" });
 
-    const oldSummaryCursor = await dispatchHostCommand(
-      hostPage,
-      runId,
-      "background-summary",
-    );
     const oldSummary = summary(
       result(
-        await waitForResult(runId, hasKey("sessionId"), {
-          after: oldSummaryCursor,
-        }),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "background-summary",
+        ),
       ),
     );
 
     const previous = await controller.capture(extensionId);
-    const pendingBefore = await bridgeStatus(hostPage);
-    await dispatchHostCommand(hostPage, runId, "worker-pending");
+    const pendingResult = dispatchHostCommandAndResult(
+      hostPage,
+      runId,
+      "worker-pending",
+    );
     await waitForBarrier(runId, "pending-started");
-    const preCloseCursor = diagnosticCursor(await diagnostics(runId));
     await controller.closeAfterPending(previous);
 
-    const pending = await waitForHostResult(
-      waitForDomValue,
-      hostPage,
-      pendingBefore,
-    );
-    expect(pending.command).toBe("worker-pending");
+    const pending = await pendingResult;
     expect(pendingTerminal(result(pending)).code).toBe("E_CONN_CLOSED");
 
-    const oldStatusBefore = await bridgeStatus(hostPage);
-    await dispatchHostCommand(hostPage, runId, "worker-state-status", {
-      after: preCloseCursor,
-    });
     expect(
       result(
-        await waitForHostResult(waitForDomValue, hostPage, oldStatusBefore),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "worker-state-status",
+        ),
       ),
     ).toMatchObject({ type: "disconnected" });
 
-    const freshBefore = await bridgeStatus(hostPage);
-    await dispatchHostCommand(hostPage, runId, "worker-state-fresh", {
-      after: preCloseCursor,
-    });
     const fresh = result(
-      await waitForHostResult(waitForDomValue, hostPage, freshBefore),
+      await dispatchHostCommandAndResult(hostPage, runId, "worker-state-fresh"),
     );
     freshCreated = true;
     expect(fresh.state).toEqual({ count: 0 });
     expect(storeInstanceId(fresh.status)).not.toBe(oldStoreInstanceId);
 
-    const freshSummaryBefore = await bridgeStatus(hostPage);
-    await dispatchHostCommand(hostPage, runId, "background-summary");
     const freshSummary = summary(
       result(
-        await waitForHostResult(waitForDomValue, hostPage, freshSummaryBefore),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "background-summary",
+        ),
       ),
     );
     expect(freshSummary.sessionId).not.toBe(oldSummary.sessionId);
     expect(freshSummary.nonce).not.toBe(oldSummary.nonce);
 
-    const storageReadBefore = await bridgeStatus(hostPage);
-    await dispatchHostCommand(hostPage, runId, "worker-storage-read");
     expect(
       result(
-        await waitForHostResult(waitForDomValue, hostPage, storageReadBefore),
+        await dispatchHostCommandAndResult(
+          hostPage,
+          runId,
+          "worker-storage-read",
+        ),
       ),
     ).toEqual({ durable: "worker-durable" });
   } catch (error) {
@@ -130,10 +118,12 @@ test("CW-03 @worker-p0 loses old volatile State while durable worker storage sur
     if ((retainedCreated || freshCreated) && !cleanupStarted) {
       cleanupStarted = true;
       try {
-        const cleanupBefore = await bridgeStatus(hostPage);
-        await dispatchHostCommand(hostPage, runId, "worker-state-cleanup");
         const cleanup = result(
-          await waitForHostResult(waitForDomValue, hostPage, cleanupBefore),
+          await dispatchHostCommandAndResult(
+            hostPage,
+            runId,
+            "worker-state-cleanup",
+          ),
         );
         expect(cleanup).toEqual({
           result: "worker-state-cleanup-result",
@@ -157,56 +147,55 @@ test("CW-03 @worker-p0 loses old volatile State while durable worker storage sur
 
 test("CW-05 reacquires and releases fresh worker resource and callback capabilities", async ({
   controller,
-  diagnostics,
-  dispatchHostCommand,
+  dispatchHostCommandAndResult,
   extensionId,
   hostPage,
   waitForBarrier,
-  waitForDomValue,
 }) => {
   const runId = "cw05-worker-capability";
   await hostPage.goto(`http://127.0.0.1:4173/host.html?runId=${runId}`);
   await waitForBarrier(runId, "background-ready");
 
-  const retainedBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-capability-retain");
   const retained = result(
-    await waitForHostResult(waitForDomValue, hostPage, retainedBefore),
+    await dispatchHostCommandAndResult(
+      hostPage,
+      runId,
+      "worker-capability-retain",
+    ),
   );
   expect(retained.callback).toBe("callback-ok");
   const oldCapability = capability(retained.capability);
 
   const previous = await controller.capture(extensionId);
-  const pendingBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-pending");
+  const pendingResult = dispatchHostCommandAndResult(
+    hostPage,
+    runId,
+    "worker-pending",
+  );
   await waitForBarrier(runId, "pending-started");
-  const preCloseCursor = diagnosticCursor(await diagnostics(runId));
   await controller.closeAfterPending(previous);
 
-  const pending = await waitForHostResult(
-    waitForDomValue,
-    hostPage,
-    pendingBefore,
-  );
-  expect(pending.command).toBe("worker-pending");
+  const pending = await pendingResult;
   expect(pendingTerminal(result(pending)).code).toBe("E_CONN_CLOSED");
 
-  const oldBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-capability-invoke", {
-    after: preCloseCursor,
-  });
   expect(
-    result(await waitForHostResult(waitForDomValue, hostPage, oldBefore)),
+    result(
+      await dispatchHostCommandAndResult(
+        hostPage,
+        runId,
+        "worker-capability-invoke",
+      ),
+    ),
   ).toEqual({
     code: "E_CONN_CLOSED",
   });
 
-  const freshBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-capability-fresh", {
-    after: preCloseCursor,
-  });
   const fresh = result(
-    await waitForHostResult(waitForDomValue, hostPage, freshBefore),
+    await dispatchHostCommandAndResult(
+      hostPage,
+      runId,
+      "worker-capability-fresh",
+    ),
   );
   expect(fresh.callback).toBe("callback-fresh");
   const freshCapability = capability(fresh.capability);
@@ -217,16 +206,24 @@ test("CW-05 reacquires and releases fresh worker resource and callback capabilit
   expect(freshSummary.sessionId).not.toBe(oldCapability.sessionId);
   expect(freshSummary.nonce).not.toBe(oldCapability.nonce);
 
-  const releaseBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-capability-fresh-release");
   expect(
-    result(await waitForHostResult(waitForDomValue, hostPage, releaseBefore)),
+    result(
+      await dispatchHostCommandAndResult(
+        hostPage,
+        runId,
+        "worker-capability-fresh-release",
+      ),
+    ),
   ).toEqual({ released: true });
 
-  const terminalBefore = await bridgeStatus(hostPage);
-  await dispatchHostCommand(hostPage, runId, "worker-capability-fresh-invoke");
   expect(
-    result(await waitForHostResult(waitForDomValue, hostPage, terminalBefore)),
+    result(
+      await dispatchHostCommandAndResult(
+        hostPage,
+        runId,
+        "worker-capability-fresh-invoke",
+      ),
+    ),
   ).toEqual({ code: "E_RESOURCE_ACCESS_DENIED" });
 });
 
@@ -295,30 +292,4 @@ function pendingTerminal(value: unknown): {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function hasKey(key: string): (event: { readonly value: string }) => boolean {
-  return (event) => key in result(event);
-}
-
-async function bridgeStatus(hostPage: Page): Promise<string> {
-  return hostPage
-    .locator("#bridge-status")
-    .evaluate((element) => (element as HTMLDataElement).value);
-}
-
-async function waitForHostResult(
-  waitForDomValue: (
-    page: Page,
-    selector: string,
-    before: string | null,
-  ) => Promise<string>,
-  hostPage: Page,
-  before: string,
-): Promise<{ readonly command: string; readonly value: string }> {
-  const value = await waitForDomValue(hostPage, "#bridge-status", before);
-  return JSON.parse(value) as {
-    readonly command: string;
-    readonly value: string;
-  };
 }

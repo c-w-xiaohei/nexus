@@ -6,7 +6,7 @@
   </head>
   <body>
     <main>
-      <output data-status>loading</output
+      <output data-status>loading</output><output data-result></output
       ><button data-command="state-ui-action">
         Increment shared workspace State</button
       ><button data-command="relay-call">Relay call</button
@@ -16,8 +16,9 @@
       ><button data-command="relay-policy-mode" data-mode="deny">
         Relay policy deny</button
       ><button data-command="relay-refresh">Relay refresh</button
-      ><button data-command="audit">Audit</button
-      ><button data-command="session">Session</button>
+      ><button data-command="state-client-cleanup">
+        Clean up State client
+      </button>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>

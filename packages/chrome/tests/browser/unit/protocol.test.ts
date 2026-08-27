@@ -4,6 +4,7 @@ import {
   DiagnosticEvent,
   eventKey,
   parseBridgeCommand,
+  parseBridgeResult,
 } from "../protocol";
 import { Diagnostics } from "../harness/diagnostics";
 
@@ -46,6 +47,44 @@ describe("browser fixture protocol", () => {
     });
 
     expect(first).not.toBe(second);
+  });
+
+  it("requires optional participant and session correlation", () => {
+    const result = {
+      kind: "result",
+      runId: "run-1",
+      command: "probe",
+      sequence: 1,
+      participant: "content:alpha",
+      sessionId: "session-alpha",
+      value: "ok",
+    } as const;
+
+    expect(
+      parseBridgeResult(result, {
+        runId: "run-1",
+        command: "probe",
+        sequence: 1,
+        participant: "content:alpha",
+        sessionId: "session-alpha",
+      }),
+    ).toEqual(result);
+    expect(
+      parseBridgeResult(result, {
+        runId: "run-1",
+        command: "probe",
+        sequence: 1,
+        participant: "content:beta",
+      }),
+    ).toBeUndefined();
+    expect(
+      parseBridgeResult(result, {
+        runId: "run-1",
+        command: "probe",
+        sequence: 1,
+        sessionId: "session-beta",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects duplicate participant session sequences", () => {

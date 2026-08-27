@@ -49,13 +49,97 @@ export interface SessionService {
   session(): Promise<string>;
 }
 
-export interface ExportService {
-  exportWorkspace(): Promise<string>;
+export interface FixtureAdminService {
+  setCallPolicy(denyCalls: boolean): Promise<PolicyState>;
+  multicastBoundInvoke(): Promise<MulticastIdentitiesResult | FixtureError>;
+  multicastFail(): Promise<MulticastFailureResult | FixtureError>;
+  capabilityInvoke(): Promise<CapabilityResult | FixtureError>;
+  capabilityProxyInvoke(): Promise<IdentityResult | FixtureError>;
+  capabilityReferenceInvoke(): Promise<ReferenceResult | FixtureError>;
+  capabilityRelease(): Promise<FixtureError>;
+  identityPinned(): Promise<IdentityResult | FixtureError>;
+  createOffscreen(): Promise<OffscreenRequestAcknowledgement>;
+  closeOffscreen(): Promise<OffscreenRequestAcknowledgement>;
 }
 
-export interface AuditService {
-  audit(): Promise<string>;
+export interface RelayAdminService {
+  registerCurrentDocument(): Promise<RelayAdminResponse>;
+  refreshCurrentDocument(): Promise<RelayAdminResponse>;
+  setPolicyMode(mode: "allow" | "deny"): Promise<RelayAdminResponse>;
 }
+
+export interface TargetedContentAdminService {
+  providerFirstSelect(): Promise<IdentityResult | FixtureError>;
+  contentHold(label: string): Promise<FixtureError>;
+  identityConstraint(): Promise<FixtureError>;
+}
+
+export interface FixtureError extends Record<string, unknown> {
+  readonly code: string;
+}
+
+export interface IdentityResult {
+  readonly identity: DocumentIdentity;
+}
+
+export interface ReferenceResult {
+  readonly reference: string;
+}
+
+export interface CapabilityResult extends IdentityResult, ReferenceResult {}
+
+export interface MulticastIdentitiesResult {
+  readonly identities: readonly DocumentIdentity[];
+}
+
+export interface MulticastFailureResult {
+  readonly results: readonly MulticastFailureEntry[];
+}
+
+export type MulticastFailureEntry =
+  | { readonly status: "fulfilled"; readonly value: never }
+  | {
+      readonly status: "rejected";
+      readonly reason: {
+        readonly message: string;
+        readonly code?: string;
+        readonly name?: string;
+      };
+    };
+
+export interface PolicyState {
+  readonly denyCalls: boolean;
+  readonly counter: number;
+}
+
+/** Acknowledge a lifecycle request without leaking its runtime-only result. */
+export interface OffscreenRequestAcknowledgement {
+  readonly requested: true;
+}
+
+export interface RelayAdminResponse {
+  readonly result: RelayAdminResult;
+}
+
+export type RelayAdminResult =
+  | {
+      readonly ok: true;
+      readonly type: "relay-register-result" | "relay-refresh-result";
+      readonly relayTokenId: "nexus-e2e:document-relay";
+      readonly backgroundSessionId: string;
+    }
+  | {
+      readonly ok: true;
+      readonly type: "relay-policy-mode-result";
+      readonly mode: "allow" | "deny";
+      readonly backgroundSessionId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly type: "fixture-error";
+      readonly code: string;
+      readonly message: null;
+    };
 
 export interface WorkspaceSummary {
   readonly counter: number;
@@ -90,5 +174,12 @@ export const DocumentRouteToken = new Token<DocumentRouteService>(
   "nexus-e2e:document-route",
 );
 export const SessionToken = new Token<SessionService>("nexus-e2e:session");
-export const ExportToken = new Token<ExportService>("nexus-e2e:export");
-export const AuditToken = new Token<AuditService>("nexus-e2e:audit");
+export const FixtureAdminToken = new Token<FixtureAdminService>(
+  "nexus-e2e:fixture-admin",
+);
+export const RelayAdminToken = new Token<RelayAdminService>(
+  "nexus-e2e:relay-admin",
+);
+export const TargetedContentAdminToken = new Token<TargetedContentAdminService>(
+  "nexus-e2e:targeted-content-admin",
+);

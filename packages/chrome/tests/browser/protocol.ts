@@ -5,6 +5,16 @@ export type BridgeCommand = {
   readonly sequence: number;
 };
 
+export type BridgeResult = {
+  readonly kind: "result" | "error";
+  readonly runId: string;
+  readonly command: string;
+  readonly sequence: number;
+  readonly participant: string;
+  readonly sessionId: string;
+  readonly value: string;
+};
+
 export type BridgeEvent =
   | {
       readonly kind: "barrier";
@@ -46,6 +56,30 @@ export const parseBridgeCommand = (
     command: value.command,
     sequence: value.sequence,
   };
+};
+
+export const parseBridgeResult = (
+  value: unknown,
+  expected: Pick<BridgeResult, "runId" | "command" | "sequence"> &
+    Partial<Pick<BridgeResult, "participant" | "sessionId">>,
+): BridgeResult | undefined => {
+  if (!isRecord(value)) return undefined;
+  if (
+    (value.kind !== "result" && value.kind !== "error") ||
+    value.runId !== expected.runId ||
+    value.command !== expected.command ||
+    value.sequence !== expected.sequence ||
+    (expected.participant !== undefined &&
+      value.participant !== expected.participant) ||
+    (expected.sessionId !== undefined &&
+      value.sessionId !== expected.sessionId) ||
+    typeof value.participant !== "string" ||
+    typeof value.sessionId !== "string" ||
+    typeof value.value !== "string"
+  ) {
+    return undefined;
+  }
+  return value as BridgeResult;
 };
 
 export const eventKey = (event: DiagnosticEvent): string =>

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BarrierTimeoutError, waitForBarrier } from "../harness/barriers";
 import { Diagnostics } from "../harness/diagnostics";
 import {
+  bridgeResultKey,
+  takeCorrelatedBridgeResult,
   diagnosticCursor,
   diagnosticEventIdentity,
   selectDispatchCursor,
@@ -13,8 +15,8 @@ import {
 import {
   sanitizeFixtureText,
   validateOffscreenEvent,
-  validatePolicyControl,
 } from "../extension/shared/runtime";
+import { parseBridgeResult } from "../protocol";
 
 describe("browser fixture harness", () => {
   const originalCI = process.env.CI;
@@ -171,38 +173,79 @@ describe("browser fixture harness", () => {
     expect(selectDispatchCursor([older, newer], lifecycle)).toBe(lifecycle);
   });
 
-  it("accepts only the exact fixture policy control shape", () => {
-    const senderSessionId = "123e4567-e89b-12d3-a456-426614174000";
+  it("parses only correlated command results from a calling realm DOM output", () => {
+    const result = parseBridgeResult(
+      {
+        kind: "result",
+        runId: "run",
+        command: "create-frame",
+        sequence: 4,
+        participant: "content:alpha",
+        sessionId: "123e4567-e89b-12d3-a456-426614174000",
+        value: '{"identity":{"label":"alpha"}}',
+      },
+      { runId: "run", command: "create-frame", sequence: 4 },
+    );
+
+    expect(result).toMatchObject({ participant: "content:alpha" });
     expect(
-      validatePolicyControl({
-        kind: "policy",
-        runId: "run_1",
-        senderSessionId,
-        denyCalls: true,
+      parseBridgeResult(
+        { ...result!, sequence: 5 },
+        { runId: "run", command: "create-frame", sequence: 4 },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("takes the exact result when concurrent results arrive out of order", () => {
+    const alpha = {
+      kind: "result" as const,
+      runId: "run",
+      command: "create-frame",
+      sequence: 2,
+      participant: "content:alpha",
+      sessionId: "alpha-session",
+      value: "alpha",
+    };
+    const beta = { ...alpha, participant: "content:beta", value: "beta" };
+    const intermediate = { ...alpha, value: "background:1:nonce" };
+    const results = {
+      [bridgeResultKey(beta)]: [beta],
+      [bridgeResultKey(alpha)]: [intermediate, alpha],
+    };
+
+    expect(
+      takeCorrelatedBridgeResult(results, {
+        runId: "run",
+        command: "create-frame",
+        sequence: 2,
+        participant: "content:beta",
       }),
-    ).toBe(true);
-    for (const value of [
-      { kind: "policy", runId: "run_1" },
-      { kind: "policy", runId: "run_1", senderSessionId: "missing" },
-      {
-        kind: "policy",
-        runId: "run_1",
-        senderSessionId: "not-a-uuid",
-        denyCalls: true,
-      },
-      {
-        kind: "policy",
-        runId: "run_1",
-        senderSessionId,
-        denyCalls: true,
-        extra: 1,
-      },
-      { kind: "policy", runId: "run_1", denyCalls: "true" },
-      { kind: "policy", runId: "run.1", denyCalls: true },
-      { kind: "wrong", runId: "run_1", denyCalls: true },
-    ]) {
-      expect(validatePolicyControl(value)).toBe(false);
-    }
+    ).toEqual(beta);
+    expect(results).toEqual({
+      [bridgeResultKey(alpha)]: [intermediate, alpha],
+    });
+    expect(
+      takeCorrelatedBridgeResult(
+        results,
+        {
+          runId: "run",
+          command: "create-frame",
+          sequence: 2,
+          participant: "content:alpha",
+        },
+        { valueMatches: (value) => value === "alpha" },
+      ),
+    ).toEqual(alpha);
+    expect(results).toEqual({ [bridgeResultKey(alpha)]: [intermediate] });
+    expect(
+      takeCorrelatedBridgeResult(results, {
+        runId: "run",
+        command: "create-frame",
+        sequence: 2,
+        participant: "content:alpha",
+      }),
+    ).toEqual(intermediate);
+    expect(results).toEqual({});
   });
 
   it("validates offscreen events without accepting malformed or extra fields", () => {

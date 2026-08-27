@@ -1,18 +1,15 @@
 import type { Frame, Page } from "@playwright/test";
 import {
-  diagnosticCursor,
   expect,
   test,
-  type DiagnosticCursor,
+  waitForHostBridgeResult,
 } from "../harness/playwright-fixtures";
 import { fixtureOrigins } from "../harness/targets";
-import type { DiagnosticEvent } from "../protocol";
+import { parseBridgeResult } from "../protocol";
 
 test("CE-13 closes retained alpha capabilities on navigation while beta remains available", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ce13-navigation";
   await openFixture(hostPage, runId, waitForBarrier);
@@ -20,12 +17,10 @@ test("CE-13 closes retained alpha capabilities on navigation while beta remains 
   const beta = frameByName(hostPage, "beta");
 
   const retained = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "capability-retain",
     participant: "content:alpha",
-    waitForResult,
   });
   const retainedAlphaIdentity = nestedIdentity(retained);
   expect(retainedAlphaIdentity).toMatchObject({ label: "alpha" });
@@ -41,48 +36,34 @@ test("CE-13 closes retained alpha capabilities on navigation while beta remains 
   await waitForBarrier(runId, "provider-live", 4);
   await waitForBarrier(runId, "hold-terminal-error");
 
-  const proxyCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchToFrame(beta, runId, "capability-proxy-invoke");
-  const proxyResult = (
-    await waitForResult(
-      runId,
-      (event) =>
-        event.participant === "content:beta" &&
-        parsed(event.value)?.code === "E_CONN_CLOSED",
-      { after: proxyCursor },
-    )
-  ).value;
+  const proxyResult = await commandAndResult({
+    frame: beta,
+    runId,
+    command: "capability-proxy-invoke",
+    participant: "content:beta",
+  });
   expect(parsed(proxyResult)).toEqual({ code: "E_CONN_CLOSED" });
 
-  const referenceCursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchToFrame(beta, runId, "capability-reference-invoke");
-  const referenceResult = (
-    await waitForResult(
-      runId,
-      (event) =>
-        event.participant === "content:beta" &&
-        parsed(event.value)?.code === "E_CONN_CLOSED",
-      { after: referenceCursor },
-    )
-  ).value;
+  const referenceResult = await commandAndResult({
+    frame: beta,
+    runId,
+    command: "capability-reference-invoke",
+    participant: "content:beta",
+  });
   expect(parsed(referenceResult)).toEqual({ code: "E_CONN_CLOSED" });
 
   const betaIdentity = await commandAndResult({
-    diagnostics,
     frame: beta,
     runId,
     command: "content-identity",
     participant: "content:beta",
-    waitForResult,
   });
   expect(parsed(betaIdentity)).toMatchObject({ label: "beta" });
   const freshAlpha = await commandAndResult({
-    diagnostics,
     frame: frameByName(hostPage, "alpha"),
     runId,
     command: "content-identity",
     participant: "content:alpha",
-    waitForResult,
   });
   const freshAlphaIdentity = identity(freshAlpha);
   expect(freshAlphaIdentity).toMatchObject({ label: "alpha" });
@@ -92,10 +73,8 @@ test("CE-13 closes retained alpha capabilities on navigation while beta remains 
 });
 
 test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ce14-multicast";
   await openFixture(hostPage, runId, waitForBarrier);
@@ -103,71 +82,57 @@ test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves
   const beta = frameByName(hostPage, "beta");
 
   const zero = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "provider-cardinality",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(zero)).toEqual({ code: "E_SERVICE_NO_MATCH" });
 
   await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "capability-retain",
     participant: "content:alpha",
-    waitForResult,
   });
   const one = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "provider-cardinality",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(one)?.count).toBe(1);
   await waitForBarrier(runId, "selection-one-ready");
 
   await commandAndResult({
-    diagnostics,
     frame: beta,
     runId,
     command: "capability-retain",
     participant: "content:beta",
-    waitForResult,
   });
   const originalBeta = nestedIdentity(
     await commandAndResult({
-      diagnostics,
       frame: beta,
       runId,
       command: "capability-invoke",
       participant: "content:beta",
-      waitForResult,
     }),
   );
   expect(originalBeta).toMatchObject({ label: "beta" });
   const two = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "provider-cardinality",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(two)?.count).toBe(2);
   await waitForBarrier(runId, "selection-two-ready");
 
   const bound = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-select",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(bound)?.identities).toHaveLength(2);
   await waitForBarrier(runId, "multicast-snapshot-bound");
@@ -177,23 +142,19 @@ test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves
   );
   await waitForBarrier(runId, "beta-left-snapshot");
   const closed = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-bound-invoke",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(closed)).toEqual({ code: "E_CONN_CLOSED" });
 
   await waitForBarrier(runId, "provider-live", 4);
   const rebound = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-rebind",
     participant: "content:alpha",
-    waitForResult,
   });
   const reboundIdentities = fulfilledIdentities(rebound);
   expect(reboundIdentities).toHaveLength(2);
@@ -209,10 +170,8 @@ test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves
 });
 
 test("CE-15 distinguishes remote multicast rejection from unavailable all-target acquisition", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ce15-create-multicast";
   await openFixture(hostPage, runId, waitForBarrier);
@@ -223,22 +182,18 @@ test("CE-15 distinguishes remote multicast rejection from unavailable all-target
     [beta, "content:beta"],
   ] as const) {
     await commandAndResult({
-      diagnostics,
       frame,
       runId,
       command: "capability-retain",
       participant,
-      waitForResult,
     });
   }
 
   const acquired = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-create",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(
     fulfilledIdentities(acquired)
@@ -246,71 +201,65 @@ test("CE-15 distinguishes remote multicast rejection from unavailable all-target
       .sort(),
   ).toEqual(["alpha", "beta"]);
   await waitForBarrier(runId, "multicast-all-acquired");
+  await waitForBarrier(runId, "multicast-targets-retained");
 
   const rejected = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-fail",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(JSON.stringify(parsed(rejected)?.results)).toContain(
     "fixture remote failure",
   );
   await waitForBarrier(runId, "multicast-remote-rejection-ready");
 
+  await beta.goto(
+    `${fixtureOrigins.child}/child.html?frame=beta&runId=${runId}`,
+  );
+  await waitForBarrier(runId, "beta-left-snapshot");
+
   const unavailable = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "multicast-unavailable",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(unavailable)).toEqual({ code: "E_HANDSHAKE_FAILED" });
   await waitForBarrier(runId, "multicast-unavailable-ready");
 });
 
 test("CE-16 invokes callbacks and makes released references terminal", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ce16-resources";
   await openFixture(hostPage, runId, waitForBarrier);
   const alpha = frameByName(hostPage, "alpha");
 
   const callback = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "reference-callback",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(callback)).toEqual({ callback: "callback-ok" });
   await waitForBarrier(runId, "callback-invoked");
 
   const retained = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "capability-retain",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(retained)?.reference).toMatch(/^alpha:/);
   await waitForBarrier(runId, "alpha-reference-created");
 
   const released = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "capability-release",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(released)).toEqual({ code: "E_RESOURCE_ACCESS_DENIED" });
   await waitForBarrier(runId, "reference-released");
@@ -318,10 +267,8 @@ test("CE-16 invokes callbacks and makes released references terminal", async ({
 });
 
 test("CE-19 keeps raw alpha proxy pinned while fresh selection finds beta", async ({
-  diagnostics,
   hostPage,
   waitForBarrier,
-  waitForResult,
 }) => {
   const runId = "ce19-identity";
   await openFixture(hostPage, runId, waitForBarrier);
@@ -329,12 +276,10 @@ test("CE-19 keeps raw alpha proxy pinned while fresh selection finds beta", asyn
   const beta = frameByName(hostPage, "beta");
 
   const retained = await commandAndResult({
-    diagnostics,
     frame: alpha,
     runId,
     command: "capability-retain",
     participant: "content:alpha",
-    waitForResult,
   });
   expect(parsed(retained)).toMatchObject({ identity: { label: "alpha" } });
 
@@ -342,33 +287,27 @@ test("CE-19 keeps raw alpha proxy pinned while fresh selection finds beta", asyn
   await waitForBarrier(runId, "identity update");
 
   const pinned = await commandAndResult({
-    diagnostics,
     frame: beta,
     runId,
     command: "identity-pinned",
     participant: "content:beta",
-    waitForResult,
   });
   expect(parsed(pinned)).toMatchObject({ identity: { label: "alpha" } });
 
   const selected = await commandAndResult({
-    diagnostics,
     frame: beta,
     runId,
     command: "identity-select-beta",
     participant: "content:beta",
-    waitForResult,
   });
   expect(parsed(selected)).toMatchObject({ identity: { label: "beta" } });
   await waitForBarrier(runId, "beta-selected-fresh");
 
   const constrained = await commandAndResult({
-    diagnostics,
     frame: beta,
     runId,
     command: "identity-constraint",
     participant: "content:beta",
-    waitForResult,
   });
   expect(parsed(constrained)).toEqual({ code: "E_TARGET_CONSTRAINT_FAILED" });
   await waitForBarrier(runId, "alpha-constraint-failed");
@@ -391,44 +330,37 @@ async function openFixture(
 }
 
 async function commandAndResult({
-  diagnostics,
   frame,
   runId,
   command,
   participant,
-  waitForResult,
 }: {
-  readonly diagnostics: (runId: string) => Promise<readonly DiagnosticEvent[]>;
   readonly frame: Frame;
   readonly runId: string;
   readonly command: string;
   readonly participant: string;
-  readonly waitForResult: (
-    runId: string,
-    predicate: (event: {
-      readonly participant: string;
-      readonly value: string;
-    }) => boolean,
-    options?: { readonly after?: DiagnosticCursor },
-  ) => Promise<{ readonly value: string }>;
 }): Promise<string> {
-  const cursor = diagnosticCursor(await diagnostics(runId));
-  await dispatchToFrame(frame, runId, command);
-  return (
-    await waitForResult(
+  const hostPage = frame.page();
+  const sequence = await dispatchToFrame(frame, runId, command);
+  const result = parseBridgeResult(
+    await waitForHostBridgeResult(hostPage, {
       runId,
-      (event) =>
-        event.participant === participant && event.value.startsWith("{"),
-      { after: cursor },
-    )
-  ).value;
+      command,
+      sequence,
+      participant,
+    }),
+    { runId, command, sequence },
+  );
+  if (!result || result.participant !== participant)
+    throw new Error(`Missing ${command} DOM result`);
+  return result.value;
 }
 
 async function dispatchToFrame(
   frame: Frame,
   runId: string,
   command: string,
-): Promise<void> {
+): Promise<number> {
   const sequence = (frameSequences.get(frame) ?? 0) + 1;
   frameSequences.set(frame, sequence);
   await frame.evaluate(
@@ -440,6 +372,7 @@ async function dispatchToFrame(
       ),
     { command, runId, sequence },
   );
+  return sequence;
 }
 
 function frameByName(page: Page, name: string): Frame {

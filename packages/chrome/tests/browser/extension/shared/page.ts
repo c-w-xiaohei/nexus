@@ -1,10 +1,9 @@
 import type { NexusInstance } from "@nexus-js/core";
 import { connectNexusStore, type RemoteStore } from "@nexus-js/core/state";
 import {
-  AuditToken,
   DocumentRelayToken,
   DocumentToolToken,
-  ExportToken,
+  RelayAdminToken,
   SessionToken,
   WorkspaceToken,
   type DocumentRelayService,
@@ -14,7 +13,6 @@ import {
   fixtureErrorCode,
   fixtureIdentity,
   hasStateClientFlag,
-  publishSession,
   sanitizeFixtureError,
   sendRunInit,
 } from "./runtime";
@@ -32,16 +30,13 @@ export async function startPage(
 ): Promise<void> {
   const identity = fixtureIdentity(participant, window.location, sessionId);
   if (!identity) return;
+  const resultOutput =
+    document.querySelector<HTMLOutputElement>("[data-result]") ??
+    document.body.appendChild(document.createElement("output"));
+  resultOutput.dataset.result = "";
   const reporter = createReporter(identity);
-  nexus.provide(SessionToken, { session: async () => identity.sessionId });
-  if (capability === "workspace") {
-    nexus.provide(AuditToken, {
-      audit: async () => `audit:${identity.sessionId}`,
-    });
-  }
-  if (capability === "offscreen") {
-    nexus.provide(ExportToken, { exportWorkspace: async () => "export:ready" });
-  }
+  const sessionProvider = { session: async () => identity.sessionId };
+  nexus.provide(SessionToken, sessionProvider);
   if (capability === "offscreen") {
     void nexus.ready();
   } else {
@@ -64,7 +59,11 @@ export async function startPage(
   }
   // Offscreen is selected by the background after its ready acknowledgement.
   if (capability !== "offscreen") {
-    await nexus.create(WorkspaceToken);
+    const workspace = await nexus.create(WorkspaceToken);
+    if (capability === "popup") {
+      // This lifecycle probe records which replacement worker the popup reached.
+      await reporter.result(JSON.stringify(await workspace.summary()));
+    }
   }
   const state =
     capability === "popup" ||
@@ -81,12 +80,9 @@ export async function startPage(
   };
   let unsubscribe: (() => void) | undefined;
   if (capability === "popup" || capability === "workspace") {
-    const registration = await chrome.runtime.sendMessage({
-      kind: "relay-register",
-      runId: identity.runId,
-      senderSessionId: identity.sessionId,
-    });
-    if (registration?.result?.ok) {
+    const relayAdmin = await nexus.create(RelayAdminToken);
+    const registration = await relayAdmin.registerCurrentDocument();
+    if (registration.result.ok) {
       const selected = await nexus.safeCreate(DocumentRelayToken);
       if (!selected.isErr()) handles.relay = selected.value;
     }
@@ -155,6 +151,8 @@ export async function startPage(
 
   const status = document.querySelector("[data-status]");
   if (status) status.textContent = `${participant}:ready:${identity.sessionId}`;
+  let nextCommandSequence = 0;
+  let commandQueue = Promise.resolve();
   document.addEventListener("click", (event) => {
     const element = event.target as HTMLElement | null;
     const command = element?.dataset.command;
@@ -162,34 +160,40 @@ export async function startPage(
     let mode: "allow" | "deny" | undefined;
     if (command === "relay-policy-mode") {
       const requestedMode = element?.dataset.mode;
-      if (requestedMode !== "allow" && requestedMode !== "deny") {
-        void reporter.result(
-          JSON.stringify({
-            result: "relay-policy-mode-result",
-            participant,
-            sessionId: identity.sessionId,
-            status: "error",
-            state: null,
-            error: "E_FIXTURE_CONTROL_REJECTED",
-          }),
-        );
-        return;
+      if (requestedMode === "allow" || requestedMode === "deny") {
+        mode = requestedMode;
       }
-      mode = requestedMode;
     }
-    void runPageCommand(
-      command,
-      mode,
-      nexus,
-      reporter,
-      status,
-      identity.sessionId,
-      identity.runId,
-      state,
-      handles,
-      capability,
-      unsubscribe,
-    );
+    const context = { command, sequence: ++nextCommandSequence };
+    commandQueue = commandQueue.then(async () => {
+      const commandReporter = reporter.commandReporter((event) => {
+        if (event.kind !== "result" && event.kind !== "error") return;
+        resultOutput.value = JSON.stringify({
+          kind: event.kind,
+          runId: identity.runId,
+          command: context.command,
+          sequence: context.sequence,
+          participant,
+          sessionId: identity.sessionId,
+          value: event.value,
+        });
+        resultOutput.dataset.sequence = String(context.sequence);
+      });
+      await runPageCommand(
+        context.command,
+        mode,
+        nexus,
+        commandReporter,
+        status,
+        identity.sessionId,
+        identity.runId,
+        sessionProvider,
+        state,
+        handles,
+        capability,
+        unsubscribe,
+      );
+    });
   });
 }
 
@@ -197,10 +201,14 @@ async function runPageCommand(
   command: string,
   mode: "allow" | "deny" | undefined,
   nexus: NexusInstance<any>,
-  reporter: ReturnType<typeof createReporter>,
+  reporter: {
+    readonly result: (value: string) => Promise<void>;
+    readonly error: (value: string) => Promise<void>;
+  },
   status: Element | null,
   sessionId: string,
   runId: string,
+  sessionProvider: { readonly session: () => Promise<string> },
   state: RemoteStore<WorkspaceState, WorkspaceStateActions> | undefined,
   handles: {
     relay: DocumentRelayService | undefined;
@@ -210,11 +218,10 @@ async function runPageCommand(
   unsubscribe: (() => void) | undefined,
 ): Promise<void> {
   try {
-    if (command === "state-ui-action" || command === "increment") {
+    if (command === "state-ui-action") {
       if (state) {
         const value = await state.actions.increment();
         status && (status.textContent = `state:${value}`);
-        await reporter.result(JSON.stringify({ type: "state-action", value }));
         await reporter.result(
           JSON.stringify({
             result: "state-action-result",
@@ -381,27 +388,14 @@ async function runPageCommand(
         );
         return;
       }
-      const message =
+      const relayAdmin = await nexus.create(RelayAdminToken);
+      const response =
         command === "relay-register"
-          ? ({
-              kind: "relay-register",
-              runId,
-              senderSessionId: sessionId,
-            } as const)
+          ? await relayAdmin.registerCurrentDocument()
           : command === "relay-refresh"
-            ? ({
-                kind: "relay-refresh",
-                runId,
-                senderSessionId: sessionId,
-              } as const)
-            : {
-                kind: "relay-policy-mode",
-                runId,
-                senderSessionId: sessionId,
-                mode,
-              };
-      const response = await chrome.runtime.sendMessage(message);
-      if (command === "relay-register" && response?.result?.ok) {
+            ? await relayAdmin.refreshCurrentDocument()
+            : await relayAdmin.setPolicyMode(mode!);
+      if (command === "relay-register" && response.result.ok) {
         if (handles.relay) {
           const released = nexus.safeRelease(handles.relay);
           handles.relay = undefined;
@@ -453,11 +447,7 @@ async function runPageCommand(
       return;
     }
     if (command === "session") {
-      const result = await chrome.runtime.sendMessage({
-        kind: "ui-session",
-        runId,
-        sessionId,
-      });
+      const result = { session: await sessionProvider.session() };
       await reporter.result(
         JSON.stringify(
           state
@@ -467,29 +457,7 @@ async function runPageCommand(
       );
       return;
     }
-    if (command === "export") {
-      const exportService = await nexus.safeSelect(ExportToken);
-      const value = exportService.isErr()
-        ? "export:no-match"
-        : await exportService.value.exportWorkspace();
-      status && (status.textContent = value);
-      await reporter.result(value);
-      return;
-    }
-    if (command === "audit") {
-      const audit = await chrome.runtime.sendMessage({
-        kind: "ui-audit",
-        runId,
-        sessionId,
-      });
-      const value =
-        typeof audit.audit === "string" ? audit.audit : JSON.stringify(audit);
-      status && (status.textContent = value);
-      await reporter.result(value);
-    }
   } catch (error) {
     await reporter.error(sanitizeFixtureError(error));
   }
 }
-
-export { publishSession, SessionToken, DocumentToolToken };
