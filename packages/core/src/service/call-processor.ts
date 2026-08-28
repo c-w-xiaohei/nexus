@@ -230,12 +230,10 @@ export namespace CallProcessor {
         return Promise.resolve(err(connectionIdsResult.error));
       }
       const sentConnectionIds = connectionIdsResult.value;
-      if (sentConnectionIds.length === 0 && !("connectionId" in finalTarget)) {
-        return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
-      }
       if (
-        "connectionIds" in finalTarget &&
-        sentConnectionIds.length !== finalTarget.connectionIds.length
+        ("connectionId" in finalTarget && sentConnectionIds.length !== 1) ||
+        ("connectionIds" in finalTarget &&
+          sentConnectionIds.length !== finalTarget.connectionIds.length)
       ) {
         return Promise.resolve(
           err(
@@ -245,6 +243,9 @@ export namespace CallProcessor {
             ),
           ),
         );
+      }
+      if (sentConnectionIds.length === 0) {
+        return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
       }
       const messageId = deps.nextMessageId();
       const timeout = options.timeout ?? options.proxyOptions?.timeout ?? 5000;

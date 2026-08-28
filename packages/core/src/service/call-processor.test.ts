@@ -29,22 +29,36 @@ describe("CallProcessor", () => {
   });
 
   describe("Error Handling", () => {
-    it("should throw disconnected error if sendMessage finds no connections for a specific connectionId", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok([]));
+    it("rejects unavailable bound targets before dispatch side effects", async () => {
+      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
+      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
+      const timerSpy = vi.spyOn(globalThis, "setTimeout");
 
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { connectionId: "closed-conn-id" },
-        resourceId: "service",
-        path: ["method"],
-      };
+      for (const [target, readyConnectionIds] of [
+        [{ connectionId: "closed" }, []],
+        [{ connectionIds: ["conn-1", "closed"] }, ["conn-1"]],
+        [{ connectionIds: ["closed-1", "closed-2"] }, []],
+      ] as const) {
+        vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
+          ok([...readyConnectionIds]),
+        );
 
-      const result = await processorState.safeProcess(options);
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
+        const result = await processorState.safeProcess({
+          type: "APPLY",
+          target,
+          resourceId: "service",
+          path: ["method"],
+          args: [() => {}],
+          strategy: "all",
+        });
+
         expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
       }
+
+      expect(registerSpy).not.toHaveBeenCalled();
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      expect(sanitizeSpy).not.toHaveBeenCalled();
+      expect(timerSpy).not.toHaveBeenCalled();
     });
 
     it("should return an empty result for a broadcast that finds no connections", async () => {
@@ -202,24 +216,6 @@ describe("CallProcessor", () => {
 
       expect(sanitizeSpy).toHaveBeenCalledWith(["arg"], "conn-1");
       expect(sanitizeSpy).toHaveBeenCalledWith(["arg"], "conn-2");
-    });
-
-    it("fails a bound multicast when any acquired session is closed", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok(["conn-1"]));
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { connectionIds: ["conn-1", "conn-2"] },
-        resourceId: "service",
-        path: ["method"],
-        args: [],
-        strategy: "all",
-      });
-
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
-      }
     });
 
     it("should call PayloadProcessor.safeSanitize for APPLY calls", async () => {
