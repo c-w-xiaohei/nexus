@@ -14,12 +14,7 @@ export class ChromePort implements IPort {
   }
 
   postMessage(data: any): void {
-    try {
-      this.port.postMessage(data);
-    } catch (error) {
-      // Port might be disconnected
-      console.warn("ChromePort: Failed to send message", error);
-    }
+    this.port.postMessage(data);
   }
 
   onMessage(handler: (data: any) => void): void {
