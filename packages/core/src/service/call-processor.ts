@@ -283,12 +283,6 @@ export namespace CallProcessor {
 
       if (registerResult.isErr())
         return Promise.resolve(err(registerResult.error));
-      const dispatchMessages: NexusMessage[] = [];
-      const releaseDispatchResources = (): void => {
-        for (const message of dispatchMessages) {
-          deps.payloadProcessor.releaseSanitizedResources(message);
-        }
-      };
       for (const connectionId of sentConnectionIds) {
         const messageResult = buildMessage(
           options,
@@ -296,17 +290,15 @@ export namespace CallProcessor {
           messageId,
         );
         if (messageResult.isErr()) {
-          releaseDispatchResources();
           deps.pendingCallManager.fail(messageId, messageResult.error);
           return Promise.resolve(err(messageResult.error));
         }
-        dispatchMessages.push(messageResult.value);
         const sendResult = deps.sendMessage(
           { connectionId },
           messageResult.value,
         );
         if (sendResult.isErr()) {
-          releaseDispatchResources();
+          deps.payloadProcessor.releaseSanitizedResources(messageResult.value);
           deps.pendingCallManager.fail(messageId, sendResult.error);
           return Promise.resolve(err(sendResult.error));
         }

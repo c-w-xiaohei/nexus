@@ -103,7 +103,7 @@ describe("CallProcessor", () => {
   });
 
   describe("Message Building and Sending", () => {
-    it("releases every dispatch-created resource and terminates pending when a later multicast send fails", async () => {
+    it("preserves resources accepted before a later multicast send fails", async () => {
       vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
         ok(["conn-1", "conn-2", "conn-3"]),
       );
@@ -129,10 +129,11 @@ describe("CallProcessor", () => {
           return pendingPromise;
         });
       const failSpy = vi.spyOn(deps.pendingCallManager, "fail");
-      vi.mocked(deps.sendMessage)
-        .mockReturnValueOnce(ok(["conn-1"]))
-        .mockReturnValueOnce(ok(["conn-2"]))
-        .mockReturnValueOnce(err(new Error("conn-3 send failed")));
+      vi.mocked(deps.sendMessage).mockImplementation((target) =>
+        "connectionId" in target && target.connectionId === "conn-3"
+          ? err(new Error("conn-3 send failed"))
+          : ok("connectionId" in target ? [target.connectionId] : []),
+      );
 
       const result = await processorState.safeProcess({
         type: "APPLY",
@@ -146,15 +147,21 @@ describe("CallProcessor", () => {
       expect(registerSpy).toHaveBeenCalledBefore(deps.sendMessage as never);
       expect(failSpy).toHaveBeenCalledWith(1, expect.any(Error));
       expect(result.isErr()).toBe(true);
-      expect(resourceManager.countLocalResources()).toBe(1);
+      expect(resourceManager.countLocalResources()).toBe(3);
       expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
+      expect(
+        resourceManager.listLocalResourceIdsByOwner("conn-1"),
+      ).toHaveLength(1);
+      expect(
+        resourceManager.listLocalResourceIdsByOwner("conn-2"),
+      ).toHaveLength(1);
       await expect(pendingPromise).rejects.toThrow("conn-3 send failed");
       deps.pendingCallManager.handleResponse(1, "late", null, "conn-1");
       deps.pendingCallManager.onDisconnect("conn-2");
-      expect(resourceManager.countLocalResources()).toBe(1);
+      expect(resourceManager.countLocalResources()).toBe(3);
     });
 
-    it("releases earlier dispatch-created resources when a later multicast sanitize fails", async () => {
+    it("preserves resources accepted before a later multicast sanitize fails", async () => {
       vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
         ok(["conn-1", "conn-2", "conn-3"]),
       );
@@ -178,7 +185,9 @@ describe("CallProcessor", () => {
             ? err(new Error("conn-3 sanitize failed"))
             : sanitize(args, connectionId),
       );
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+      vi.mocked(deps.sendMessage).mockImplementation((target) =>
+        ok("connectionId" in target ? [target.connectionId] : []),
+      );
 
       const result = await processorState.safeProcess({
         type: "APPLY",
@@ -191,8 +200,18 @@ describe("CallProcessor", () => {
 
       expect(result.isErr()).toBe(true);
       expect(deps.sendMessage).toHaveBeenCalledTimes(2);
-      expect(resourceManager.countLocalResources()).toBe(1);
+      expect(deps.sendMessage).toHaveBeenCalledWith(
+        { connectionId: "conn-2" },
+        expect.anything(),
+      );
+      expect(resourceManager.countLocalResources()).toBe(3);
       expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
+      expect(
+        resourceManager.listLocalResourceIdsByOwner("conn-1"),
+      ).toHaveLength(1);
+      expect(
+        resourceManager.listLocalResourceIdsByOwner("conn-2"),
+      ).toHaveLength(1);
     });
 
     it("sanitizes a multicast payload separately for every bound session", async () => {
