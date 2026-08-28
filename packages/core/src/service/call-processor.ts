@@ -302,6 +302,18 @@ export namespace CallProcessor {
           deps.pendingCallManager.fail(messageId, sendResult.error);
           return Promise.resolve(err(sendResult.error));
         }
+        if (
+          sendResult.value.length !== 1 ||
+          sendResult.value[0] !== connectionId
+        ) {
+          const sendError = new Error.Disconnected(
+            `Call failed. The connection "${connectionId}" was closed or is no longer available.`,
+            { context: { connectionId, path: options.path } },
+          );
+          deps.payloadProcessor.releaseSanitizedResources(messageResult.value);
+          deps.pendingCallManager.fail(messageId, sendError);
+          return Promise.resolve(err(sendError));
+        }
       }
       const sentCount = sentConnectionIds.length;
       logger.debug(

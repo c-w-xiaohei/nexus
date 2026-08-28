@@ -214,6 +214,43 @@ describe("CallProcessor", () => {
       ).toHaveLength(1);
     });
 
+    it("fails and cleans up when a resolved connection does not accept a message", async () => {
+      const resourceManager = ResourceManager.create();
+      const existingResourceId = resourceManager.registerLocalResource(
+        {},
+        "existing-conn",
+        0,
+      );
+      deps.payloadProcessor = PayloadProcessor.create(
+        resourceManager,
+        {} as any,
+      );
+      processorState = CallProcessor.create(deps);
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const failSpy = vi.spyOn(deps.pendingCallManager, "fail");
+      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
+
+      const result = await processorState.safeProcess({
+        type: "APPLY",
+        target: { connectionId: "conn-1" },
+        resourceId: "service",
+        path: ["method"],
+        args: [() => {}],
+      });
+
+      expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
+      expect(failSpy).toHaveBeenCalledWith(
+        1,
+        expect.any(CallProcessor.Error.Disconnected),
+      );
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      expect(deps.pendingCallManager.canHandleResponse(1, "conn-1")).toBe(
+        false,
+      );
+      expect(resourceManager.countLocalResources()).toBe(1);
+      expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
+    });
+
     it("sanitizes a multicast payload separately for every bound session", async () => {
       vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
         ok(["conn-1", "conn-2"]),
