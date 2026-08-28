@@ -121,6 +121,35 @@ describe("Engine", () => {
     expect(onDisconnect).toHaveBeenCalledWith(hostConnectionId);
   });
 
+  it("continues disconnect cleanup after an exposed service hook throws", () => {
+    const throwingHook = vi.fn(() => {
+      throw new Error("service disconnect failure");
+    });
+    const laterHook = vi.fn();
+    (hostEngine as any).resourceManager.registerExposedService(
+      "throwingDisconnectService",
+      { [SERVICE_ON_DISCONNECT]: throwingHook },
+    );
+    (hostEngine as any).resourceManager.registerExposedService(
+      "laterDisconnectService",
+      { [SERVICE_ON_DISCONNECT]: laterHook },
+    );
+    const resourceManagerSpy = vi.spyOn(
+      (hostEngine as any).resourceManager,
+      "cleanupConnection",
+    );
+    const pendingCallManagerSpy = vi.spyOn(
+      (hostEngine as any).pendingCallManager,
+      "onDisconnect",
+    );
+
+    expect(() => hostEngine.onDisconnect(hostConnectionId)).not.toThrow();
+    expect(throwingHook).toHaveBeenCalledWith(hostConnectionId);
+    expect(laterHook).toHaveBeenCalledWith(hostConnectionId);
+    expect(resourceManagerSpy).toHaveBeenCalledWith(hostConnectionId);
+    expect(pendingCallManagerSpy).toHaveBeenCalledWith(hostConnectionId);
+  });
+
   it("evaluates identity staleness with immutable connection metadata", () => {
     const where = vi.fn(
       (identity: { id: string }, connection: { from: string }) =>

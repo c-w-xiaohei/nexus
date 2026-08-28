@@ -405,7 +405,11 @@ export class Engine<M extends AdapterModel> {
           service,
           SERVICE_ON_DISCONNECT,
         ) as ((connectionId: string) => void) | undefined;
-        onDisconnect?.(connectionId);
+        try {
+          onDisconnect?.(connectionId);
+        } catch (error) {
+          this.logger.error("Exposed service disconnect hook failed.", error);
+        }
       }
     }
 
