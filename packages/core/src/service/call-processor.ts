@@ -247,6 +247,22 @@ export namespace CallProcessor {
       if (sentConnectionIds.length === 0) {
         return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
       }
+      if (strategy === "one" && sentConnectionIds.length > 1) {
+        return Promise.resolve(
+          err(
+            new Error.Targeting(
+              `Expected to send to exactly one target for a call with strategy 'one', but sent to ${sentConnectionIds.length}.`,
+              {
+                context: {
+                  expected: 1,
+                  received: sentConnectionIds.length,
+                  path: options.path,
+                },
+              },
+            ),
+          ),
+        );
+      }
       const messageId = deps.nextMessageId();
       const timeout = options.timeout ?? options.proxyOptions?.timeout ?? 5000;
       const isBroadcast = !("connectionId" in finalTarget);
@@ -323,23 +339,6 @@ export namespace CallProcessor {
           finalTarget,
         );
         return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
-      }
-
-      if (strategy === "one" && sentCount !== 1) {
-        return Promise.resolve(
-          err(
-            new Error.Targeting(
-              `Expected to send to exactly one target for a call with strategy 'one', but sent to ${sentCount}.`,
-              {
-                context: {
-                  expected: 1,
-                  received: sentCount,
-                  path: options.path,
-                },
-              },
-            ),
-          ),
-        );
       }
 
       if (strategy === "first" || strategy === "one") {

@@ -258,25 +258,51 @@ describe("CallProcessor", () => {
       expect(sanitizeSpy).toHaveBeenCalledWith(["new-value"], "conn-1");
     });
 
-    it("should throw if strategy is 'one' and more than one connection is found", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1", "conn-2"]));
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2"]),
-      );
+    it("returns an empty strategy-one broadcast result before dispatch side effects", async () => {
+      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok([]));
+      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
+      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
+      const timerSpy = vi.spyOn(globalThis, "setTimeout");
 
-      const options: DispatchCallOptions = {
+      const result = await processorState.safeProcess({
         type: "APPLY",
         target: { where: () => true },
         resourceId: "service",
         path: ["method"],
+        args: ["arg"],
         strategy: "one",
-      };
+      });
 
-      const result = await processorState.safeProcess(options);
+      expect(result).toEqual(ok(undefined));
+      expect(registerSpy).not.toHaveBeenCalled();
+      expect(sanitizeSpy).not.toHaveBeenCalled();
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      expect(timerSpy).not.toHaveBeenCalled();
+    });
+
+    it("rejects strategy-one multicasts before dispatch side effects", async () => {
+      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
+        ok(["conn-1", "conn-2"]),
+      );
+      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
+      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
+
+      const result = await processorState.safeProcess({
+        type: "APPLY",
+        target: { where: () => true },
+        resourceId: "service",
+        path: ["method"],
+        args: ["arg"],
+        strategy: "one",
+      });
+
       expect(result.isErr()).toBe(true);
       if (result.isErr()) {
         expect(result.error).toBeInstanceOf(CallProcessor.Error.Targeting);
       }
+      expect(registerSpy).not.toHaveBeenCalled();
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      expect(sanitizeSpy).not.toHaveBeenCalled();
     });
   });
 
