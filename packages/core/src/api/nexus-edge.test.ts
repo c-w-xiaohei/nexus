@@ -106,6 +106,59 @@ describe("Nexus service acquisition API", () => {
     expect(nexus.safeRelease({})).toMatchObject({ value: undefined });
   });
 
+  it("returns release capability failures as total safe errors", () => {
+    const nexus = new Nexus();
+    const symbol = Symbol.for("nexus.proxy.release");
+    const getterError = new Error("getter failed");
+    const callbackError = new Error("callback failed");
+    const getterProxy = {
+      get [symbol](): never {
+        throw getterError;
+      },
+    };
+    const callbackProxy = {
+      [symbol](): never {
+        throw callbackError;
+      },
+    };
+
+    expect(nexus.safeRelease(getterProxy).error).toBe(getterError);
+    expect(() => nexus.release(getterProxy)).toThrow(getterError);
+    expect(nexus.safeRelease(callbackProxy).error).toBe(callbackError);
+    expect(() => nexus.release(callbackProxy)).toThrow(callbackError);
+
+    for (const [thrown, message] of [
+      ["failure", "failure"],
+      [Object.create(null), "Unknown error"],
+    ]) {
+      const proxy = {
+        [symbol](): never {
+          throw thrown;
+        },
+      };
+      expect(nexus.safeRelease(proxy).error).toMatchObject({ message });
+      expect(() => nexus.release(proxy)).toThrow(message);
+    }
+
+    let hostile!: object;
+    hostile = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          if (key === symbol) throw hostile;
+        },
+        getPrototypeOf: () => {
+          throw new Error("prototype failed");
+        },
+      },
+    );
+    expect(nexus.safeRelease(hostile).error).toMatchObject({
+      message: "Unknown error",
+    });
+    expect(() => nexus.release(hostile)).toThrow("Unknown error");
+    expect("safeRelease" in Nexus).toBe(false);
+  });
+
   it("does not expose recipient IDs from all or stream settlements", async () => {
     const { PendingCallManager } =
       await import("../service/pending-call-manager");

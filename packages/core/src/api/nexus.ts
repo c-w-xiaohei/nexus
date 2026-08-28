@@ -668,13 +668,20 @@ export class Nexus<
     unwrapResultOrThrow(this.safeRelease(proxy));
   }
   public safeRelease(proxy: object): Result<void, Error> {
-    if ((typeof proxy === "object" && proxy) || typeof proxy === "function") {
-      const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
-        RELEASE_PROXY_SYMBOL
-      ];
-      if (typeof release === "function") release();
-    }
-    return ok(undefined);
+    return Result.try({
+      try: () => {
+        if (
+          (typeof proxy === "object" && proxy) ||
+          typeof proxy === "function"
+        ) {
+          const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
+            RELEASE_PROXY_SYMBOL
+          ];
+          if (typeof release === "function") release();
+        }
+      },
+      catch: asReleaseError,
+    });
   }
 
   private scheduleInitialization(): void {
@@ -946,6 +953,18 @@ const waitForAvailabilityAndRescan = <M extends AdapterModel>(
 };
 const asError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
+const asReleaseError = (value: unknown): Error => {
+  try {
+    if (value instanceof Error) return value;
+  } catch {
+    return new Error("Unknown error");
+  }
+  try {
+    return new Error(String(value));
+  } catch {
+    return new Error("Unknown error");
+  }
+};
 const provides = (
   connection: { remoteProviders?: ReadonlySet<string> },
   tokenId: string,
