@@ -431,15 +431,19 @@ export class Engine<M extends AdapterModel> {
     const staleEntries: TargetStaleSubscription<M>[] = [];
 
     for (const entry of Array.from(listeners)) {
-      if (
-        shouldMarkTargetStale({
-          staleTarget: entry.staleTarget,
-          newIdentity,
-          oldIdentity,
-          connectionMeta,
-        })
-      ) {
-        staleEntries.push(entry);
+      try {
+        if (
+          shouldMarkTargetStale({
+            staleTarget: entry.staleTarget,
+            newIdentity,
+            oldIdentity,
+            connectionMeta,
+          })
+        ) {
+          staleEntries.push(entry);
+        }
+      } catch (error) {
+        this.logger.error("Stale target predicate failed.", error);
       }
     }
 

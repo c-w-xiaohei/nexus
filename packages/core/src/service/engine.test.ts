@@ -184,6 +184,52 @@ describe("Engine", () => {
     );
   });
 
+  it("continues stale target evaluation after a predicate throws", () => {
+    const throwingWhere = vi.fn(() => {
+      throw new Error("stale target predicate failure");
+    });
+    const matchingWhere = vi.fn(
+      (identity: { id: string }) => identity.id === "host",
+    );
+    const throwingProxy = clientEngine.createServiceProxy<any>("testService", {
+      target: { connectionId: clientConnectionId },
+      staleTarget: { where: throwingWhere },
+    });
+    const matchingProxy = clientEngine.createServiceProxy<any>("testService", {
+      target: { connectionId: clientConnectionId },
+      staleTarget: { where: matchingWhere },
+    });
+    const throwingCallback = vi.fn();
+    const matchingCallback = vi.fn();
+    throwingProxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](
+      throwingCallback,
+    );
+    matchingProxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](
+      matchingCallback,
+    );
+
+    expect(() =>
+      clientEngine.onConnectionTargetStale(
+        clientConnectionId,
+        { id: "replacement" },
+        { id: "host" },
+        {},
+      ),
+    ).not.toThrow();
+    expect(throwingCallback).not.toHaveBeenCalled();
+    expect(matchingCallback).toHaveBeenCalledOnce();
+
+    clientEngine.onConnectionTargetStale(
+      clientConnectionId,
+      { id: "replacement" },
+      { id: "host" },
+      {},
+    );
+
+    expect(throwingWhere).toHaveBeenCalledTimes(2);
+    expect(matchingCallback).toHaveBeenCalledOnce();
+  });
+
   // The other tests about connection resolution and pending call registration
   // are now moved to call-processor.test.ts because they test the logic
   // that is no longer in the Engine.
