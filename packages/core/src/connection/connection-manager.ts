@@ -29,6 +29,7 @@ type ConnectionManagerErrorCode =
   | "E_HANDSHAKE_FAILED"
   | "E_AUTH_CONNECT_DENIED"
   | "E_CONNECTION_CONSTRAINT_FAILED"
+  | "E_CONN_CLOSED"
   | "E_USAGE_INVALID"
   | "E_ENDPOINT_CAPABILITY_MISMATCH"
   | "E_PROTOCOL_INCOMPATIBLE"
@@ -1113,15 +1114,30 @@ function routeMessage<M extends AdapterModel>(
   const sentConnectionIds: string[] = [];
   logger.debug(`Routing message #${message.id ?? "N/A"} to target:`, target);
 
-  const recordSendError = (error: unknown, connectionId: string) =>
-    connectionManagerErrorFromUnknown(error, {
-      message: `Failed to send message #${message.id ?? "N/A"} to connection ${connectionId}`,
-      context: {
-        connectionId,
-        messageType: message.type,
-        messageId: message.id,
-      },
+  const recordSendError = (
+    error: unknown,
+    connection: LogicalConnection<M>,
+  ) => {
+    const context = {
+      connectionId: connection.connectionId,
+      messageType: message.type,
+      messageId: message.id,
+    };
+    const failureMessage = `Failed to send message #${message.id ?? "N/A"} to connection ${connection.connectionId}`;
+
+    if (!connection.isReady()) {
+      return new ConnectionManagerOperationFailedError(
+        failureMessage,
+        { cause: error, context },
+        "E_CONN_CLOSED",
+      );
+    }
+
+    return connectionManagerErrorFromUnknown(error, {
+      message: failureMessage,
+      context,
     });
+  };
 
   if ("connectionId" in target) {
     const connection = connections.get(target.connectionId);
@@ -1130,7 +1146,7 @@ function routeMessage<M extends AdapterModel>(
       if (sendResult.isOk()) {
         sentConnectionIds.push(target.connectionId);
       } else {
-        return err(recordSendError(sendResult.error, target.connectionId));
+        return err(recordSendError(sendResult.error, connection));
       }
     }
     return ok(sentConnectionIds);
@@ -1142,7 +1158,7 @@ function routeMessage<M extends AdapterModel>(
       if (!connection?.isReady()) continue;
       const sendResult = connection.sendMessage(message);
       if (sendResult.isErr()) {
-        return err(recordSendError(sendResult.error, connectionId));
+        return err(recordSendError(sendResult.error, connection));
       }
       sentConnectionIds.push(connectionId);
     }
@@ -1162,7 +1178,7 @@ function routeMessage<M extends AdapterModel>(
         if (sendResult.isOk()) {
           sentConnectionIds.push(connectionId);
         } else {
-          return err(recordSendError(sendResult.error, connectionId));
+          return err(recordSendError(sendResult.error, connection));
         }
       }
     }
@@ -1183,7 +1199,7 @@ function routeMessage<M extends AdapterModel>(
       if (sendResult.isOk()) {
         sentConnectionIds.push(connection.connectionId);
       } else {
-        return err(recordSendError(sendResult.error, connection.connectionId));
+        return err(recordSendError(sendResult.error, connection));
       }
     }
   }
