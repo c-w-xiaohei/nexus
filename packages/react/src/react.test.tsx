@@ -1,4 +1,4 @@
-import React from "react";
+import React, { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { Nexus, type AdapterModel, type NexusInstance } from "@nexus-js/core";
@@ -28,6 +28,10 @@ interface FakeRemoteStore<TState extends object> extends RemoteStore<
 > {
   [key: symbol]: unknown;
   staleMarkerCalls: number;
+  statusSubscriptionCalls: number;
+  statusUnsubscriptionCalls: number;
+  stateSubscriptionCalls: number;
+  stateUnsubscriptionCalls: number;
   pushState(nextState: TState): void;
   setStatus(nextStatus: RemoteStoreStatus): void;
 }
@@ -54,11 +58,28 @@ const createFakeRemoteStore = (
   let state = initialState;
   let status = initialStatus;
   const listeners = new Set<(snapshot: CounterState) => void>();
+  const statusListeners = new Set<() => void>();
   let staleMarkerCalls = 0;
+  let statusSubscriptionCalls = 0;
+  let statusUnsubscriptionCalls = 0;
+  let stateSubscriptionCalls = 0;
+  let stateUnsubscriptionCalls = 0;
 
   return {
     get staleMarkerCalls() {
       return staleMarkerCalls;
+    },
+    get statusSubscriptionCalls() {
+      return statusSubscriptionCalls;
+    },
+    get statusUnsubscriptionCalls() {
+      return statusUnsubscriptionCalls;
+    },
+    get stateSubscriptionCalls() {
+      return stateSubscriptionCalls;
+    },
+    get stateUnsubscriptionCalls() {
+      return stateUnsubscriptionCalls;
     },
     actions: {
       async increment(by: number) {
@@ -75,9 +96,19 @@ const createFakeRemoteStore = (
     getStatus() {
       return status;
     },
+    subscribeStatus(listener) {
+      statusSubscriptionCalls += 1;
+      statusListeners.add(listener);
+      return () => {
+        statusUnsubscriptionCalls += 1;
+        statusListeners.delete(listener);
+      };
+    },
     subscribe(listener) {
+      stateSubscriptionCalls += 1;
       listeners.add(listener);
       return () => {
+        stateUnsubscriptionCalls += 1;
         listeners.delete(listener);
       };
     },
@@ -93,6 +124,9 @@ const createFakeRemoteStore = (
     },
     setStatus(nextStatus) {
       status = nextStatus;
+      for (const listener of statusListeners) {
+        listener();
+      }
     },
     [markStaleSymbol]() {
       staleMarkerCalls += 1;
@@ -1440,6 +1474,149 @@ describe("react adapter", () => {
     await waitFor(() => {
       expect(result.current.status.type).toBe("disconnected");
     });
+    expect(remote.statusSubscriptionCalls).toBe(1);
+  });
+
+  it("uses a store status subscription without creating the polling timer", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:push", version: 0 },
+    );
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+
+    expect(remote.statusSubscriptionCalls).toBe(1);
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 25);
+    setIntervalSpy.mockRestore();
+  });
+
+  it("cleans up the status subscription on unmount", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:status-unmount", version: 0 },
+    );
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+    unmount();
+
+    expect(remote.statusSubscriptionCalls).toBe(1);
+    expect(remote.statusUnsubscriptionCalls).toBe(1);
+  });
+
+  it("cleans up the old status subscription when the store switches", async () => {
+    clearConnectSpy();
+    const firstStore = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:status-old", version: 0 },
+    );
+    const secondStore = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:status-new", version: 1 },
+    );
+    connectSpy
+      .mockResolvedValueOnce(firstStore)
+      .mockResolvedValueOnce(secondStore);
+
+    const { result, rerender } = renderHook(
+      ({ timeout }) =>
+        useRemoteStore(definition, { target: { context: "bg" }, timeout }),
+      {
+        initialProps: { timeout: 1 },
+        wrapper: createWrapper(createTestNexus()),
+      },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(firstStore));
+    rerender({ timeout: 2 });
+    await waitFor(() => expect(result.current.store).toBe(secondStore));
+
+    expect(firstStore.statusSubscriptionCalls).toBe(1);
+    expect(firstStore.statusUnsubscriptionCalls).toBe(1);
+  });
+
+  it("balances status subscriptions across the StrictMode lifecycle probe", async () => {
+    clearConnectSpy();
+    const nexus = createTestNexus();
+    const stores: FakeRemoteStore<CounterState>[] = [];
+    connectSpy.mockImplementation(() => {
+      const store = createFakeRemoteStore(
+        { count: stores.length },
+        {
+          type: "ready",
+          storeInstanceId: `instance:status-strict:${stores.length}`,
+          version: stores.length,
+        },
+      );
+      stores.push(store);
+      return Promise.resolve(store);
+    });
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      {
+        wrapper: ({ children }) => (
+          <StrictMode>
+            <NexusProvider nexus={nexus}>{children}</NexusProvider>
+          </StrictMode>
+        ),
+      },
+    );
+
+    await waitFor(() => expect(result.current.store).not.toBeNull());
+    unmount();
+
+    expect(stores.length).toBeGreaterThan(0);
+    expect(
+      stores.every(
+        (store) =>
+          store.statusSubscriptionCalls === store.statusUnsubscriptionCalls,
+      ),
+    ).toBe(true);
+  });
+
+  it("retains status polling for a legacy store without subscribeStatus", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:legacy", version: 0 },
+    );
+    delete remote.subscribeStatus;
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25);
+    expect(remote.stateSubscriptionCalls).toBe(1);
+    const clearIntervalCallsBeforeUnmount = clearIntervalSpy.mock.calls.length;
+    unmount();
+    expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(
+      clearIntervalCallsBeforeUnmount,
+    );
+    expect(remote.stateUnsubscriptionCalls).toBe(1);
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 
   it("target change after disconnected state marks adapter stale immediately", async () => {

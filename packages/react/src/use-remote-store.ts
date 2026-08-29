@@ -71,7 +71,30 @@ const getLastKnownVersion = (status: RemoteStoreStatus): number | null => {
 const sameStatus = (
   left: RemoteStoreStatus,
   right: RemoteStoreStatus,
-): boolean => JSON.stringify(left) === JSON.stringify(right);
+): boolean => {
+  switch (left.type) {
+    case "ready":
+      return (
+        right.type === "ready" &&
+        left.storeInstanceId === right.storeInstanceId &&
+        left.version === right.version
+      );
+    case "disconnected":
+      return (
+        right.type === "disconnected" &&
+        left.lastKnownVersion === right.lastKnownVersion &&
+        left.cause === right.cause
+      );
+    case "stale":
+      return (
+        right.type === "stale" &&
+        left.lastKnownVersion === right.lastKnownVersion &&
+        left.reason === right.reason
+      );
+    default:
+      return left.type === right.type;
+  }
+};
 
 const markStoreStale = (target: RemoteStore<any, any>): void => {
   const marker = (target as unknown as Record<symbol, unknown>)[
@@ -288,17 +311,16 @@ export const useRemoteStoreWithNexus = <
 
     publishStatusIfNeeded();
 
-    const statusPoll = setInterval(() => {
-      publishStatusIfNeeded();
-    }, 25);
+    if (store.subscribeStatus) {
+      return store.subscribeStatus(publishStatusIfNeeded);
+    }
 
-    const unsubscribe = store.subscribe(() => {
-      publishStatusIfNeeded();
-    });
+    const statusPoll = setInterval(publishStatusIfNeeded, 25);
+    const unsubscribeState = store.subscribe(publishStatusIfNeeded);
 
     return () => {
       clearInterval(statusPoll);
-      unsubscribe();
+      unsubscribeState();
     };
   }, [store]);
 

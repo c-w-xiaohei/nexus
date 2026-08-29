@@ -68,18 +68,21 @@ Use `ChromeNexus.useNexus()`, `ChromeNexus.useRemoteStore()`, and `ChromeNexus.c
 Recommended React pattern for shared remote stores. Declare the store connection once near the subtree that needs it, then consume selector, actions, status, or the raw remote result from children.
 
 ```tsx
-import { createRemoteStoreScope } from "@nexus-js/react";
-import { chromeTarget } from "@nexus-js/chrome";
+import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
+import { usingBackgroundScript, chromeTarget } from "@nexus-js/chrome";
 import { counterStore } from "./counter-store";
 
 const CounterScope = createRemoteStoreScope(counterStore);
+const chromeNexus = usingBackgroundScript();
 
 function CounterPanel() {
   return (
-    <CounterScope.Provider options={{ target: chromeTarget.background() }}>
-      <CounterButton />
-      <CounterStatus />
-    </CounterScope.Provider>
+    <NexusProvider nexus={chromeNexus}>
+      <CounterScope.Provider options={{ target: chromeTarget.background() }}>
+        <CounterButton />
+        <CounterStatus />
+      </CounterScope.Provider>
+    </NexusProvider>
   );
 }
 
