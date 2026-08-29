@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CallProcessor } from "../../src/service/call-processor";
+import { NexusDisconnectedError } from "../../src/errors/call-errors";
 import { NexusResourceError } from "../../src/errors/resource-errors";
 import {
   type AppUserMeta,
@@ -149,7 +149,7 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const freshProcessorProxy = await freshApi.getTimelineProcessor();
 
     await expect(oldProcessorProxy.process()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
     await expect(freshProcessorProxy.process()).resolves.toMatchObject({
       issueId: "CS1",

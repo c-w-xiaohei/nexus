@@ -128,4 +128,10 @@ Raw core handles are lifecycle-scoped.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Recreate proxies and pass fresh refs after session replacement.
 
+For an existing exact root unicast proxy, static Core status observation is
+separate from targeting. `Nexus.getProxyStatus(proxy)` reports the local
+session, and `Nexus.subscribeProxyStatus(proxy, listener)` asks the observer to
+re-read on future change. It never discovers a provider or reconnects; acquire
+a fresh proxy with the application's chosen target when replacement is wanted.
+
 Nexus Relay does not change these raw-handle rules. Downstream callers still target the adjacent relay provider with ordinary `nexus.create(...)`; the relay provider separately uses `forwardThrough` and `forwardTarget` for its upstream call.

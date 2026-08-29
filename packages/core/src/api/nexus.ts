@@ -19,6 +19,13 @@ import type {
 } from "@/types/adapter-model";
 import { REF_WRAPPER_SYMBOL, type RefWrapper } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import {
+  getProxyStatus,
+  inspectProxy,
+  subscribeProxyStatus,
+  type ProxyDebugSnapshot,
+  type ProxyStatus,
+} from "../service/proxy-lifecycle.js";
 import { Result } from "better-result";
 import { toSerializedError } from "@/utils/error";
 const { err, ok } = Result;
@@ -73,6 +80,44 @@ const unwrapResultPromiseOrThrow = async <T>(
 export class Nexus<
   M extends AdapterModel = AdapterModel,
 > implements NexusInstance<M> {
+  /**
+   * Returns the cached status of an exact ordinary unicast root proxy.
+   *
+   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
+   */
+  public static getProxyStatus(proxy: object): ProxyStatus {
+    return getProxyStatus(proxy);
+  }
+
+  /**
+   * Subscribes to future status changes of an exact ordinary unicast root.
+   * The listener receives no payload; call `getProxyStatus` to read the update.
+   *
+   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
+   */
+  public static subscribeProxyStatus(
+    proxy: object,
+    listener: () => void,
+  ): () => void {
+    return subscribeProxyStatus(proxy, listener);
+  }
+
+  /**
+   * Returns cached diagnostics for an exact ordinary unicast root proxy.
+   *
+   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
+   */
+  public static inspectProxy(proxy: object): ProxyDebugSnapshot {
+    return inspectProxy(proxy);
+  }
+
+  public static release(proxy: object): void {
+    unwrapResultOrThrow(Nexus.safeRelease(proxy));
+  }
+
+  public static safeRelease(proxy: object): Result<void, Error> {
+    return safeReleaseProxyCapability(proxy);
+  }
   private readonly decoratorRegistry = new InstanceDecoratorRegistry();
   private config: NexusConfig<M> = {};
   private engine: Engine<M> | null = null;
@@ -668,20 +713,7 @@ export class Nexus<
     unwrapResultOrThrow(this.safeRelease(proxy));
   }
   public safeRelease(proxy: object): Result<void, Error> {
-    return Result.try({
-      try: () => {
-        if (
-          (typeof proxy === "object" && proxy) ||
-          typeof proxy === "function"
-        ) {
-          const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
-            RELEASE_PROXY_SYMBOL
-          ];
-          if (typeof release === "function") release();
-        }
-      },
-      catch: asReleaseError,
-    });
+    return safeReleaseProxyCapability(proxy);
   }
 
   private scheduleInitialization(): void {
@@ -779,6 +811,18 @@ export class Nexus<
 
 const isPlainObject = (value: unknown): value is object =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+const safeReleaseProxyCapability = (proxy: object): Result<void, Error> =>
+  Result.try({
+    try: () => {
+      if ((typeof proxy === "object" && proxy) || typeof proxy === "function") {
+        const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
+          RELEASE_PROXY_SYMBOL
+        ];
+        if (typeof release === "function") release();
+      }
+    },
+    catch: asReleaseError,
+  });
 const isProvider = <M extends AdapterModel>(
   value: unknown,
 ): value is ServiceProvider<object, M> =>

@@ -95,37 +95,84 @@ describe("Nexus service acquisition API", () => {
     await ready;
   });
 
-  it("returns safe ref and release results without throwing", () => {
+  it("releases public capabilities equivalently through static and instance APIs", () => {
+    const nexus = new Nexus();
+    const release = vi.fn();
+    const proxy = { [Symbol.for("nexus.proxy.release")]: release };
+
+    expect(Nexus.safeRelease).toBeTypeOf("function");
+    expect(Nexus.release).toBeTypeOf("function");
+    expect(Nexus.safeRelease(proxy)).toMatchObject({ value: undefined });
+    expect(Nexus.release(proxy)).toBeUndefined();
+    expect(nexus.safeRelease(proxy)).toMatchObject({ value: undefined });
+    expect(nexus.release(proxy)).toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(4);
+
+    for (const releaseProxy of [null, {}] as const) {
+      expect(Nexus.safeRelease(releaseProxy as never)).toMatchObject({
+        value: undefined,
+      });
+      expect(nexus.safeRelease(releaseProxy as never)).toMatchObject({
+        value: undefined,
+      });
+    }
+  });
+
+  it("preserves safeRef usage errors alongside release APIs", () => {
     const nexus = new Nexus();
     expect(nexus.safeRef(null as never)).toMatchObject({
       error: { code: "E_USAGE_INVALID" },
     });
-    expect(nexus.safeRelease(null as never)).toMatchObject({
-      value: undefined,
-    });
-    expect(nexus.safeRelease({})).toMatchObject({ value: undefined });
   });
 
-  it("returns release capability failures as total safe errors", () => {
+  it("preserves release capability errors through static and instance APIs", () => {
     const nexus = new Nexus();
     const symbol = Symbol.for("nexus.proxy.release");
     const getterError = new Error("getter failed");
     const callbackError = new Error("callback failed");
-    const getterProxy = {
-      get [symbol](): never {
-        throw getterError;
+    const cases = [
+      {
+        error: getterError,
+        proxy: {
+          get [symbol](): never {
+            throw getterError;
+          },
+        },
       },
-    };
-    const callbackProxy = {
-      [symbol](): never {
-        throw callbackError;
+      {
+        error: callbackError,
+        proxy: {
+          [symbol](): never {
+            throw callbackError;
+          },
+        },
       },
-    };
+    ];
+    for (const { error, proxy } of cases) {
+      expect(Nexus.safeRelease(proxy).error).toBe(error);
+      expect(nexus.safeRelease(proxy).error).toBe(error);
+      const staticThrown = (() => {
+        try {
+          Nexus.release(proxy);
+        } catch (caught) {
+          return caught;
+        }
+      })();
+      const instanceThrown = (() => {
+        try {
+          nexus.release(proxy);
+        } catch (caught) {
+          return caught;
+        }
+      })();
+      expect(staticThrown).toBe(error);
+      expect(instanceThrown).toBe(error);
+    }
+  });
 
-    expect(nexus.safeRelease(getterProxy).error).toBe(getterError);
-    expect(() => nexus.release(getterProxy)).toThrow(getterError);
-    expect(nexus.safeRelease(callbackProxy).error).toBe(callbackError);
-    expect(() => nexus.release(callbackProxy)).toThrow(callbackError);
+  it("keeps safe release total for hostile non-Error throws", () => {
+    const nexus = new Nexus();
+    const symbol = Symbol.for("nexus.proxy.release");
 
     for (const [thrown, message] of [
       ["failure", "failure"],
@@ -137,7 +184,6 @@ describe("Nexus service acquisition API", () => {
         },
       };
       expect(nexus.safeRelease(proxy).error).toMatchObject({ message });
-      expect(() => nexus.release(proxy)).toThrow(message);
     }
 
     let hostile!: object;
@@ -155,8 +201,6 @@ describe("Nexus service acquisition API", () => {
     expect(nexus.safeRelease(hostile).error).toMatchObject({
       message: "Unknown error",
     });
-    expect(() => nexus.release(hostile)).toThrow("Unknown error");
-    expect("safeRelease" in Nexus).toBe(false);
   });
 
   it("does not expose recipient IDs from all or stream settlements", async () => {

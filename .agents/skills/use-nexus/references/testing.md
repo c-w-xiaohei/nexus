@@ -37,6 +37,12 @@ When React components share one remote Nexus State store across a subtree, prefe
 
 For React remote-store replacement, test `reconnectKey` changes, the stable `reconnect()` function reference, disposal of an older pending acquisition after a newer request, and scope sharing of both the store and reconnect command. Cover same-target continuity after a failed replacement with `disconnected` status/error separately from cross-target handoff, where selectors immediately use fallback until the new target is ready.
 
+For passed-proxy status UI, a unit test may mock the static
+`Nexus.getProxyStatus` / `Nexus.subscribeProxyStatus` pair. This can prove UI
+subscription and selector behavior, not a real proxy lifecycle. Use a Core and
+adapter integration test for actual stale/disconnect ordering and terminal
+status; `createMockNexus()` cannot prove real lifecycle behavior.
+
 ## Assertions
 
 Use call records for application-level assertions:

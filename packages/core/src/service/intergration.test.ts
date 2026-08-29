@@ -6,6 +6,7 @@ import { createL3Endpoints } from "@/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { CallProcessor } from "./call-processor";
+import { NexusDisconnectedError } from "@/errors/call-errors";
 
 // ===========================================================================
 // Test-Specific Types (as requested, co-located with the test)
@@ -271,9 +272,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
     connection.close();
 
     // Assert that the pending promise is rejected with a specific message.
-    await expect(pendingPromise).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
-    );
+    await expect(pendingPromise).rejects.toBeInstanceOf(NexusDisconnectedError);
   });
 
   it("should reject when calling a proxy bound to a closed connection", async () => {
@@ -295,9 +294,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
     const resultPromise = serviceProxy.getTasks();
 
     // The call should fail because the target connection is no longer valid.
-    await expect(resultPromise).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
-    );
+    await expect(resultPromise).rejects.toBeInstanceOf(NexusDisconnectedError);
   });
 
   it("should clean up resources when a connection is terminated", async () => {

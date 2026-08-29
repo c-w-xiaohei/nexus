@@ -7,6 +7,7 @@ import { PayloadProcessor } from "./payload/payload-processor";
 import type { MessageTarget } from "@/connection/types";
 import type { NexusMessage } from "@/types/message";
 import { Logger } from "@/logger";
+import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
@@ -321,30 +322,6 @@ export namespace CallProcessor {
         sentConnectionIds,
       );
 
-      if (sentCount === 0) {
-        if ("connectionId" in finalTarget && finalTarget.connectionId) {
-          return Promise.resolve(
-            err(
-              new Error.Disconnected(
-                `Call failed. The connection "${finalTarget.connectionId}" was closed or is no longer available.`,
-                {
-                  context: {
-                    connectionId: finalTarget.connectionId,
-                    path: options.path,
-                  },
-                },
-              ),
-            ),
-          );
-        }
-
-        logger.debug(
-          `Message #${messageId} found no matching connections for its target. Returning empty result for strategy '${strategy}'.`,
-          finalTarget,
-        );
-        return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
-      }
-
       if (strategy === "first" || strategy === "one") {
         logger.debug(
           `Adapting result for message #${messageId} with strategy '${strategy}'`,
@@ -366,7 +343,9 @@ export namespace CallProcessor {
       options: DispatchCallOptions,
     ): Promise<Result<any, globalThis.Error>> => {
       const strategy = options.strategy ?? "first";
-      return safeExecuteDispatch(options, strategy);
+      return safeExecuteDispatch(options, strategy).then((result) =>
+        result.isErr() ? err(toCallError(result.error)) : result,
+      );
     };
 
     return { safeProcess };
@@ -374,17 +353,22 @@ export namespace CallProcessor {
 }
 
 function toCallError(error: unknown): globalThis.Error {
+  if (error instanceof NexusDisconnectedError) {
+    return error;
+  }
+
   if (
     error instanceof globalThis.Error &&
     "code" in error &&
     error.code === "E_CONN_CLOSED"
   ) {
-    return new CallProcessor.Error.Disconnected(error.message, {
-      context:
-        "context" in error
-          ? (error.context as Record<string, unknown> | undefined)
-          : undefined,
-    });
+    return new NexusDisconnectedError(
+      error.message,
+      "E_CONN_CLOSED",
+      "context" in error
+        ? (error.context as Record<string, unknown> | undefined)
+        : undefined,
+    );
   }
 
   return error instanceof globalThis.Error

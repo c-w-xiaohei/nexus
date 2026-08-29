@@ -87,6 +87,22 @@ An exact target is actionable: Nexus first reuses a matching ready session and o
 
 `create()` returns a proxy bound to the session acquired for that call. `ref()` transfers a connection-scoped capability; the materialized remote capability is likewise bound to that session. Disconnect, reload, daemon restart, and replacement invalidate old handles. Higher-level application code may observe lifecycle signals and create replacements, but the raw handle never silently retargets or retries.
 
+For ordinary unicast service proxies, use the static `Nexus.getProxyStatus()` /
+`Nexus.subscribeProxyStatus()` pair to observe the local session without
+coupling the observer to its creator. See [service proxy lifecycle](proxy-lifecycle.md)
+for exact applicability, future-only subscription, diagnostics, and explicit
+replacement rules.
+
+`Nexus.release(value)` and `Nexus.safeRelease(value)` release remote resource
+capabilities without requiring the creating Nexus instance. They do not control
+service proxy lifecycle: ordinary service proxies are not releasable, and
+release never reconnects or replaces a session-bound handle.
+
+When a local proxy call is closed by the current Core copy, it rejects with
+`NexusDisconnectedError`. Use `instanceof` only within that installed copy. For
+serialized, cross-context, or duplicate-copy handling, branch on the stable
+`E_CONN_CLOSED` code instead.
+
 ## Configuration And Providers
 
 Configure each runtime before demand operations such as `create()` or `ref()`:
@@ -139,5 +155,6 @@ Name instances after the local graph they own, not after a remote destination. R
 - [Identity and connection metadata](identity-and-metadata.md)
 - [Platforms and adapters](platforms.md)
 - [Authorization and policy](auth-and-policy.md)
+- [Service proxy lifecycle](proxy-lifecycle.md)
 - [Nexus Relay](relay.md)
 - [Nexus State](state/README.md)

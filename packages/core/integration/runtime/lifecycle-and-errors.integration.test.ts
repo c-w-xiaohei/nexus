@@ -10,6 +10,7 @@ import { Token } from "../../src/api/token";
 import type { IEndpoint, IPort } from "../../src/transport";
 import { LogicalConnection } from "../../src/connection/logical-connection";
 import { CallProcessor } from "../../src/service/call-processor";
+import { NexusDisconnectedError } from "../../src/index";
 import { NexusMessageType } from "../../src/types/message";
 
 import {
@@ -88,7 +89,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     });
 
     await expect(bgApi.getSettings()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
   });
 
@@ -192,6 +193,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
       const call = api.getSettings();
       await expect(call).rejects.toMatchObject({ code: "E_CONN_CLOSED" });
+      await expect(call).rejects.toBeInstanceOf(NexusDisconnectedError);
       expect((popup as any).connectionManager.connections.size).toBe(0);
       expect(messageId).toBeDefined();
       expect(pendingCallManager.canHandleResponse(messageId!, "conn-1")).toBe(
@@ -225,7 +227,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     oldConnection!.close();
 
     await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
 
     const freshApi = await world.background.nexus.create(
@@ -237,7 +239,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
     await expect(freshApi.getTitle()).resolves.toContain("CS1");
     await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
   });
 

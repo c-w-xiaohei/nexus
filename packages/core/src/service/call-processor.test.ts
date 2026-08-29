@@ -5,6 +5,7 @@ import type { DispatchCallOptions } from "./engine";
 import { PendingCallManager } from "./pending-call-manager";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { ResourceManager } from "./resource-manager";
+import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
@@ -29,6 +30,23 @@ describe("CallProcessor", () => {
   });
 
   describe("Error Handling", () => {
+    it("preserves an existing NexusDisconnectedError at the safe boundary", async () => {
+      const existing = new NexusDisconnectedError(
+        "Connection closed",
+        "E_CONN_CLOSED",
+      );
+      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(err(existing));
+
+      const result = await processorState.safeProcess({
+        type: "GET",
+        target: { connectionId: "conn-1" },
+        resourceId: "service",
+        path: ["prop"],
+      });
+
+      expect(result.error).toBe(existing);
+    });
+
     it("rejects unavailable bound targets before dispatch side effects", async () => {
       const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
       const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
@@ -52,7 +70,7 @@ describe("CallProcessor", () => {
           strategy: "all",
         });
 
-        expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
+        expect(result.error).toBeInstanceOf(NexusDisconnectedError);
       }
 
       expect(registerSpy).not.toHaveBeenCalled();
@@ -238,7 +256,7 @@ describe("CallProcessor", () => {
         args: [() => {}],
       });
 
-      expect(result.error).toBeInstanceOf(CallProcessor.Error.Disconnected);
+      expect(result.error).toBeInstanceOf(NexusDisconnectedError);
       expect(failSpy).toHaveBeenCalledWith(
         1,
         expect.any(CallProcessor.Error.Disconnected),
@@ -420,6 +438,31 @@ describe("CallProcessor", () => {
   });
 
   describe("Result Adaptation", () => {
+    it.each(["one", "first", "all"] as const)(
+      "normalizes a local disconnection to NexusDisconnectedError for strategy %s",
+      async (strategy) => {
+        vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
+
+        const resultPromise = processorState.safeProcess({
+          type: "GET",
+          target: { connectionId: "conn-1" },
+          resourceId: "service",
+          path: ["prop"],
+          strategy,
+        });
+        deps.pendingCallManager.onDisconnect("conn-1");
+
+        const result = await resultPromise;
+        expect(result.isErr()).toBe(true);
+        if (result.isErr()) {
+          expect(result.error).toBeInstanceOf(NexusDisconnectedError);
+          expect(result.error).toMatchObject({
+            code: "E_CONN_CLOSED",
+            context: { connectionId: "conn-1", messageId: 1 },
+          });
+        }
+      },
+    );
     it("should adapt result for 'first' strategy on success", async () => {
       const settlement = [{ status: "fulfilled", value: "success" }];
       vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));

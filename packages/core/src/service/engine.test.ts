@@ -3,7 +3,8 @@ import { Engine } from "./engine";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
-import { NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL } from "@/types/symbols";
+import { Nexus } from "@/api/nexus";
+import { NexusDisconnectedError, NexusUsageError } from "@/errors";
 
 // A mock service to be registered on the host engine for tests.
 const mockTestService = {
@@ -160,7 +161,6 @@ describe("Engine", () => {
       staleTarget: { where },
     });
 
-    proxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](() => undefined);
     clientEngine.onConnectionTargetStale(
       clientConnectionId,
       { id: "replacement" },
@@ -182,6 +182,32 @@ describe("Engine", () => {
         from: "transport",
       },
     );
+    expect(Nexus.getProxyStatus(proxy)).toEqual({
+      type: "active",
+      selection: "stale",
+    });
+  });
+
+  it("exposes status and constrained diagnostics only for exact unicast roots", () => {
+    const proxy = clientEngine.createServiceProxy<any>("testService", {
+      target: { connectionId: clientConnectionId },
+    });
+    const current = Nexus.getProxyStatus(proxy);
+
+    expect(Nexus.getProxyStatus(proxy)).toBe(current);
+    expect(Nexus.inspectProxy(proxy)).toEqual({
+      tokenId: "testService",
+      connectionId: clientConnectionId,
+      status: { type: "active", selection: "current" },
+    });
+    expect(() => Nexus.getProxyStatus(proxy.method)).toThrow(NexusUsageError);
+    expect(() => Nexus.inspectProxy({})).toThrow(NexusUsageError);
+
+    clientEngine.onDisconnect(clientConnectionId);
+    expect(Nexus.getProxyStatus(proxy)).toMatchObject({
+      type: "disconnected",
+      error: expect.any(NexusDisconnectedError),
+    });
   });
 
   it("continues stale target evaluation after a predicate throws", () => {
@@ -199,14 +225,10 @@ describe("Engine", () => {
       target: { connectionId: clientConnectionId },
       staleTarget: { where: matchingWhere },
     });
-    const throwingCallback = vi.fn();
-    const matchingCallback = vi.fn();
-    throwingProxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](
-      throwingCallback,
-    );
-    matchingProxy[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL](
-      matchingCallback,
-    );
+    const throwingListener = vi.fn();
+    const matchingListener = vi.fn();
+    Nexus.subscribeProxyStatus(throwingProxy, throwingListener);
+    Nexus.subscribeProxyStatus(matchingProxy, matchingListener);
 
     expect(() =>
       clientEngine.onConnectionTargetStale(
@@ -216,8 +238,8 @@ describe("Engine", () => {
         {},
       ),
     ).not.toThrow();
-    expect(throwingCallback).not.toHaveBeenCalled();
-    expect(matchingCallback).toHaveBeenCalledOnce();
+    expect(throwingListener).not.toHaveBeenCalled();
+    expect(matchingListener).toHaveBeenCalledOnce();
 
     clientEngine.onConnectionTargetStale(
       clientConnectionId,
@@ -227,7 +249,7 @@ describe("Engine", () => {
     );
 
     expect(throwingWhere).toHaveBeenCalledTimes(2);
-    expect(matchingCallback).toHaveBeenCalledOnce();
+    expect(matchingListener).toHaveBeenCalledOnce();
   });
 
   // The other tests about connection resolution and pending call registration
