@@ -112,6 +112,11 @@ export interface RemoteStore<
   getState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
+  /**
+   * Observes future status invalidations. Unsubscribing prevents future calls,
+   * and an observer error does not prevent other observers from running.
+   */
+  subscribeStatus?(listener: () => void): () => void;
   destroy(): void;
   readonly actions: RemoteActions<TActions>;
 }

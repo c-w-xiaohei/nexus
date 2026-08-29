@@ -103,6 +103,7 @@ export class RemoteStoreEntity<
   private handshakeCompleted = false;
   private terminal = false;
   private readonly transportCleanupCallbacks = new Set<() => void>();
+  private readonly statusListeners = new Set<() => void>();
 
   constructor(
     private readonly service: NexusStoreServiceContract<TState, TActions>,
@@ -149,6 +150,17 @@ export class RemoteStoreEntity<
     return this.status;
   }
 
+  public subscribeStatus(listener: () => void): () => void {
+    if (this.status.type === "destroyed") {
+      return () => undefined;
+    }
+
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
   public getTerminalError():
     | NexusStoreProtocolError
     | NexusStoreDisconnectedError
@@ -161,11 +173,11 @@ export class RemoteStoreEntity<
       return;
     }
 
-    this.status = { type: "destroyed" };
     this.terminal = true;
     this.terminalActionError = createDisconnectedError(
       "Remote store is destroyed.",
     );
+    this.setStatus({ type: "destroyed" });
     this.rejectAllVersionWaiters(this.terminalActionError);
 
     if (!this.unsubscribeRequested && this.subscriptionId) {
@@ -176,6 +188,7 @@ export class RemoteStoreEntity<
     this.runTransportCleanup();
 
     this.mirror.destroy();
+    this.statusListeners.clear();
   }
 
   public setDisconnectSubscriptionCleanup(cleanup: () => void): void {
@@ -192,16 +205,16 @@ export class RemoteStoreEntity<
       return;
     }
 
-    this.status = {
-      type: "stale",
-      lastKnownVersion: this.version,
-      reason: "target-changed",
-    };
     this.terminal = true;
     const staleError = createDisconnectedError(
       "Remote store target changed and this handle is now stale.",
     );
     this.terminalActionError = staleError;
+    this.setStatus({
+      type: "stale",
+      lastKnownVersion: this.version,
+      reason: "target-changed",
+    });
     this.rejectAllVersionWaiters(staleError);
     this.tryUnsubscribeBestEffort();
 
@@ -306,11 +319,6 @@ export class RemoteStoreEntity<
       "target-changed",
     ]);
     if (staleReasons.has(envelope.reason)) {
-      this.status = {
-        type: "stale",
-        lastKnownVersion: envelope.lastKnownVersion,
-        reason: envelope.reason,
-      };
       this.terminal = true;
       const staleError = createDisconnectedError(
         `Remote store became terminal (${envelope.reason}).`,
@@ -318,6 +326,11 @@ export class RemoteStoreEntity<
       );
       this.terminalActionError = staleError;
       this.version = envelope.lastKnownVersion;
+      this.setStatus({
+        type: "stale",
+        lastKnownVersion: envelope.lastKnownVersion,
+        reason: envelope.reason,
+      });
       this.rejectAllVersionWaiters(staleError);
       this.tryUnsubscribeBestEffort();
       this.runTransportCleanup();
@@ -328,14 +341,14 @@ export class RemoteStoreEntity<
       `Remote store became terminal (${envelope.reason}).`,
       envelope.error,
     );
-    this.status = {
-      type: "disconnected",
-      lastKnownVersion: envelope.lastKnownVersion,
-      cause: disconnected,
-    };
     this.terminal = true;
     this.terminalActionError = disconnected;
     this.version = envelope.lastKnownVersion;
+    this.setStatus({
+      type: "disconnected",
+      lastKnownVersion: envelope.lastKnownVersion,
+      cause: disconnected,
+    });
     this.rejectAllVersionWaiters(disconnected);
     this.tryUnsubscribeBestEffort();
     this.runTransportCleanup();
@@ -465,8 +478,8 @@ export class RemoteStoreEntity<
       storeInstanceId: event.storeInstanceId,
       version: nextVersion,
     };
-
     this.mirror.applySnapshot(event.state);
+    this.notifyStatusListeners();
     this.resolveVersionWaiters();
   }
 
@@ -475,13 +488,13 @@ export class RemoteStoreEntity<
       return;
     }
 
-    this.status = {
+    this.terminal = true;
+    this.terminalActionError = error;
+    this.setStatus({
       type: "disconnected",
       lastKnownVersion: this.version,
       cause: error,
-    };
-    this.terminal = true;
-    this.terminalActionError = error;
+    });
     this.rejectAllVersionWaiters(error);
     this.tryUnsubscribeBestEffort();
 
@@ -493,13 +506,13 @@ export class RemoteStoreEntity<
       return;
     }
 
-    this.status = {
+    this.terminal = true;
+    this.terminalActionError = error;
+    this.setStatus({
       type: "disconnected",
       lastKnownVersion: this.version,
       cause: error,
-    };
-    this.terminal = true;
-    this.terminalActionError = error;
+    });
     this.rejectAllVersionWaiters(error);
     this.tryUnsubscribeBestEffort();
 
@@ -593,6 +606,29 @@ export class RemoteStoreEntity<
 
     this.unsubscribeRequested = true;
     void this.service.unsubscribe(this.subscriptionId).catch(() => undefined);
+  }
+
+  private setStatus(status: RemoteStoreStatus): void {
+    this.status = status;
+    this.notifyStatusListeners();
+  }
+
+  private notifyStatusListeners(): void {
+    const notifiedStatus = this.status;
+    for (const listener of Array.from(this.statusListeners)) {
+      if (this.status !== notifiedStatus) {
+        return;
+      }
+      if (!this.statusListeners.has(listener)) {
+        continue;
+      }
+
+      try {
+        listener();
+      } catch {
+        // Status observers cannot interfere with store lifecycle cleanup.
+      }
+    }
   }
 
   private safeParseSyncEnvelope(event: unknown): Result<
