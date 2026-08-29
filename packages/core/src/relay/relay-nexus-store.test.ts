@@ -285,9 +285,7 @@ describe("relayNexusStore", () => {
               version: 1,
               state: { count: 0 },
             })),
-            {
-              [Symbol.for("unused")]: true,
-            },
+            { [Symbol.for("unused")]: true },
           ),
           unsubscribe: vi.fn(async () => undefined),
           dispatch: vi.fn(async () => dispatchGate.promise),
