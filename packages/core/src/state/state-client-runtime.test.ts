@@ -1033,6 +1033,47 @@ describe("state client runtime and connect APIs", () => {
     expect(remote.getStatus().type).toBe("destroyed");
   });
 
+  it("disposes a remote store through using with one best-effort unsubscribe", async () => {
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-using-dispose",
+        subscriptionId: "sub-using-dispose",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 1,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = await connectNexusStore(
+      { create: async () => service } as any,
+      defineNexusStore({
+        token: new Token("state:counter:using-dispose"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { context: "background" } },
+    );
+
+    {
+      using handle = remote;
+      expect(handle.getStatus().type).toBe("ready");
+    }
+
+    remote[Symbol.dispose]();
+    expect(remote.getStatus()).toEqual({ type: "destroyed" });
+    await vi.waitFor(() => {
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("terminal stale/disconnected transitions stop serving future snapshots without explicit mirror destroy", async () => {
     let onSync!: (event: {
       type: "snapshot";

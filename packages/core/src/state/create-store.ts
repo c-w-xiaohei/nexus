@@ -32,11 +32,12 @@ export type NexusStoreStatus =
 export interface NexusStoreHandle<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-> {
+> extends Disposable {
   getState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): NexusStoreStatus;
   destroy(): void;
+  [Symbol.dispose](): void;
   readonly actions: RemoteActions<TActions>;
 }
 
@@ -153,6 +154,9 @@ export const createNexusStore = <
 
       destroyed = true;
       host.destroy();
+    },
+    [Symbol.dispose]() {
+      this.destroy();
     },
     actions,
   };

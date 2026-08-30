@@ -108,7 +108,7 @@ export type RemoteStoreStatus =
 export interface RemoteStore<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-> {
+> extends Disposable {
   getState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
@@ -118,6 +118,7 @@ export interface RemoteStore<
    */
   subscribeStatus?(listener: () => void): () => void;
   destroy(): void;
+  [Symbol.dispose](): void;
   readonly actions: RemoteActions<TActions>;
 }
 

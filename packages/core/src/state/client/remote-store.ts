@@ -191,6 +191,10 @@ export class RemoteStoreEntity<
     this.statusListeners.clear();
   }
 
+  public [Symbol.dispose](): void {
+    this.destroy();
+  }
+
   public setDisconnectSubscriptionCleanup(cleanup: () => void): void {
     this.transportCleanupCallbacks.add(cleanup);
   }

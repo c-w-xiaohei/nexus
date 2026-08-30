@@ -150,6 +150,25 @@ describe("createNexusStore", () => {
     );
   });
 
+  it("disposes the local authoritative store through using idempotently", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+    const listener = vi.fn();
+
+    {
+      using handle = store;
+      handle.subscribe(listener);
+      await handle.actions.increment(1);
+      expect(listener).toHaveBeenCalledTimes(1);
+    }
+
+    store[Symbol.dispose]();
+    expect(store.getStatus()).toEqual({ type: "destroyed" });
+    await expect(store.actions.increment(1)).rejects.toThrow(
+      "Nexus State host is destroyed",
+    );
+  });
+
   it("rejects an async local action that resolves after destroy without committing", async () => {
     const started = deferred<void>();
     const gate = deferred<void>();

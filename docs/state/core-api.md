@@ -132,6 +132,7 @@ Primary capabilities:
 - `subscribe(listener)`
 - `getStatus()`
 - `destroy()`
+- `[Symbol.dispose]()` through JavaScript `using`
 - `actions.*`
 
 `RemoteStore` is connection/session-scoped by design. Treat `disconnected`, `stale`, and `destroyed` as explicit lifecycle boundaries that require replacement, not in-place healing.
@@ -139,7 +140,7 @@ Primary capabilities:
 ### Example
 
 ```ts
-const remote = await connectNexusStore(nexus, counterStore, options);
+using remote = await connectNexusStore(nexus, counterStore, options);
 
 const stop = remote.subscribe((state) => {
   console.log(state.count);
@@ -150,8 +151,11 @@ await remote.actions.increment(1);
 console.log(remote.getStatus());
 
 stop();
-remote.destroy();
 ```
+
+`using` delegates to the same synchronous, idempotent terminal transition as
+`destroy()`. It starts the existing best-effort remote unsubscribe but does not
+add an acknowledgement or asynchronous cleanup guarantee.
 
 ## `safeInvokeStoreAction()`
 

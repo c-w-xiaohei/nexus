@@ -116,6 +116,9 @@ const createFakeRemoteStore = (
       status = { type: "destroyed" };
       listeners.clear();
     },
+    [Symbol.dispose]() {
+      this.destroy();
+    },
     pushState(nextState) {
       state = nextState;
       for (const listener of listeners) {
