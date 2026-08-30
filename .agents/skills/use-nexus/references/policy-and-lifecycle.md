@@ -37,7 +37,7 @@ Raw core handles are lifecycle-scoped.
 - `nexus.ref(...)` creates capabilities tied to the original connection scope after crossing the transport boundary.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Recreate proxies and pass fresh refs after session replacement.
-- For an exact same-Core ordinary unicast root, `Nexus.getProxyStatus(proxy)` is a current immutable read and `Nexus.subscribeProxyStatus(proxy, listener)` is payload-free future invalidation. Subscribe then re-read when an initial decision is race-sensitive.
+- For an exact same-Core ordinary unicast root, `Nexus.getProxyStatus(proxy)` is a current immutable read and `Nexus.subscribeProxyStatus(proxy, listener)` synchronously sends that current snapshot after registration, then each future transition.
 - `active/stale` does not make a proxy unusable; `disconnected` is terminal for its local session. Neither status selects a replacement or authorizes recovery.
 - `Nexus.inspectProxy(proxy)` is a diagnostic-only snapshot. Its connection ID is opaque and runtime-local; do not use it as a routing input or behavior oracle.
 - `Nexus.release` and `nexus.release` are resource-only operations. Service proxies are not releasable, and legacy invalid release behavior is permissive rather than a validation contract.

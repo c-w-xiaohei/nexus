@@ -238,8 +238,8 @@ describe("Engine", () => {
         {},
       ),
     ).not.toThrow();
-    expect(throwingListener).not.toHaveBeenCalled();
-    expect(matchingListener).toHaveBeenCalledOnce();
+    expect(throwingListener).toHaveBeenCalledOnce();
+    expect(matchingListener).toHaveBeenCalledTimes(2);
 
     clientEngine.onConnectionTargetStale(
       clientConnectionId,
@@ -249,7 +249,7 @@ describe("Engine", () => {
     );
 
     expect(throwingWhere).toHaveBeenCalledTimes(2);
-    expect(matchingListener).toHaveBeenCalledOnce();
+    expect(matchingListener).toHaveBeenCalledTimes(2);
   });
 
   // The other tests about connection resolution and pending call registration

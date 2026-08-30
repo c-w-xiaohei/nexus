@@ -90,8 +90,8 @@ An exact target is actionable: Nexus first reuses a matching ready session and o
 For ordinary unicast service proxies, use the static `Nexus.getProxyStatus()` /
 `Nexus.subscribeProxyStatus()` pair to observe the local session without
 coupling the observer to its creator. See [service proxy lifecycle](proxy-lifecycle.md)
-for exact applicability, future-only subscription, diagnostics, and explicit
-replacement rules.
+for exact applicability, current-plus-future subscription, diagnostics, and
+explicit replacement rules.
 
 `Nexus.release(value)` and `Nexus.safeRelease(value)` release remote resource
 capabilities without requiring the creating Nexus instance. They do not control

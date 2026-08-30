@@ -61,8 +61,8 @@ describe("public proxy lifecycle acquisition parity", () => {
         identity.context === "background" && identity.version === "1.0.0",
     });
     const statuses: string[] = [];
-    Nexus.subscribeProxyStatus(root, () => {
-      statuses.push(Nexus.getProxyStatus(root).type);
+    Nexus.subscribeProxyStatus(root, (status) => {
+      statuses.push(status.type);
     });
 
     await world.background.nexus.updateIdentity({ version: "2.0.0" });
@@ -71,7 +71,7 @@ describe("public proxy lifecycle acquisition parity", () => {
         type: "active",
         selection: "stale",
       });
-      expect(statuses).toEqual(["active"]);
+      expect(statuses).toEqual(["active", "active"]);
     });
 
     const connection = findLogicalConnection(
@@ -84,7 +84,7 @@ describe("public proxy lifecycle acquisition parity", () => {
     expect(Nexus.getProxyStatus(root)).toMatchObject({
       type: "disconnected",
     });
-    expect(statuses).toEqual(["active", "disconnected"]);
+    expect(statuses).toEqual(["active", "active", "disconnected"]);
   });
 
   it("rejects descendants, multicast roots, resource-like values, and plain values", async () => {

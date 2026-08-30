@@ -90,14 +90,15 @@ export class Nexus<
   }
 
   /**
-   * Subscribes to future status changes of an exact ordinary unicast root.
-   * The listener receives no payload; call `getProxyStatus` to read the update.
+   * Subscribes to status snapshots of an exact ordinary unicast root.
+   * The listener synchronously receives the current snapshot, then each distinct
+   * future snapshot.
    *
    * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
    */
   public static subscribeProxyStatus(
     proxy: object,
-    listener: () => void,
+    listener: (status: ProxyStatus) => void,
   ): () => void {
     return subscribeProxyStatus(proxy, listener);
   }

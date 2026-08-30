@@ -29,7 +29,7 @@ const lifecycleDetails = Symbol("nexus.proxy.lifecycle.details");
 type ProxyLifecycleDetails = {
   owner: object;
   snapshot: ProxyDebugSnapshot;
-  listeners: Set<{ notify: () => void }>;
+  listeners: Set<{ notify: (status: ProxyStatus) => void }>;
 };
 
 const requireDetails = (proxy: object): ProxyLifecycleDetails => {
@@ -88,7 +88,7 @@ export const installProxyLifecycle = (
         continue;
       }
       try {
-        listener.notify();
+        listener.notify(status);
       } catch (error) {
         console.error("Nexus: proxy lifecycle listener failed.", error);
       }
@@ -130,14 +130,24 @@ export const getProxyStatus = (proxy: object): ProxyStatus =>
 
 export const subscribeProxyStatus = (
   proxy: object,
-  listener: () => void,
+  listener: (status: ProxyStatus) => void,
 ): (() => void) => {
   const details = requireDetails(proxy);
   if (details.snapshot.status.type === "disconnected") {
+    try {
+      listener(details.snapshot.status);
+    } catch (error) {
+      console.error("Nexus: proxy lifecycle listener failed.", error);
+    }
     return noop;
   }
   const subscription = { notify: listener };
   details.listeners.add(subscription);
+  try {
+    listener(details.snapshot.status);
+  } catch (error) {
+    console.error("Nexus: proxy lifecycle listener failed.", error);
+  }
   return () => details.listeners.delete(subscription);
 };
 

@@ -75,6 +75,26 @@ describe("proxy lifecycle", () => {
     expect(getProxyStatus(proxy).type).toBe("disconnected");
   });
 
+  it("delivers the current snapshot synchronously without missing a nested transition", () => {
+    const proxy = {};
+    const lifecycle = installLifecycle(proxy);
+    const statuses: ReturnType<typeof getProxyStatus>[] = [];
+
+    subscribeProxyStatus(proxy, (status) => {
+      statuses.push(status);
+      if (status.type === "active" && status.selection === "current") {
+        lifecycle.stale();
+      }
+    });
+
+    expect(statuses).toEqual([
+      { type: "active", selection: "current" },
+      { type: "active", selection: "stale" },
+    ]);
+    expect(statuses[1]).toBe(getProxyStatus(proxy));
+    expect(statuses[0]).not.toBe(statuses[1]);
+  });
+
   it("freezes status snapshots and debug projections without cross-root corruption", () => {
     const first = {};
     const second = {};
@@ -133,7 +153,7 @@ describe("proxy lifecycle", () => {
     expect(getProxyStatus(second)).toBe(current);
   });
 
-  it("notifies future listeners while respecting removal and nested transitions", () => {
+  it("notifies listeners while respecting removal and nested transitions", () => {
     const proxy = {};
     const lifecycle = installLifecycle(proxy);
     const calls: string[] = [];
@@ -141,29 +161,44 @@ describe("proxy lifecycle", () => {
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
     let stopRemoved = (): void => undefined;
-    const stopFirst = subscribeProxyStatus(proxy, () => {
+    let stopFirst = (): void => undefined;
+    stopFirst = subscribeProxyStatus(proxy, (status) => {
+      if (status.type === "active" && status.selection === "current") return;
       calls.push("first");
       stopFirst();
       stopRemoved();
       subscribeProxyStatus(proxy, () => calls.push("nested"));
       lifecycle.disconnect();
     });
-    subscribeProxyStatus(proxy, () => {
+    subscribeProxyStatus(proxy, (status) => {
+      if (status.type === "active" && status.selection === "current") return;
       calls.push("throw");
       throw new Error("observer");
     });
-    stopRemoved = subscribeProxyStatus(proxy, () => calls.push("removed"));
-    subscribeProxyStatus(proxy, () => calls.push("last"));
+    stopRemoved = subscribeProxyStatus(proxy, (status) => {
+      if (status.type === "disconnected" || status.selection !== "current") {
+        calls.push("removed");
+      }
+    });
+    subscribeProxyStatus(proxy, (status) => {
+      if (status.type === "disconnected" || status.selection !== "current") {
+        calls.push("last");
+      }
+    });
 
     lifecycle.stale();
-    expect(calls).toEqual(["first", "throw", "last", "nested"]);
+    expect(calls).toEqual(["first", "nested", "throw", "last", "nested"]);
     expect(logger).toHaveBeenCalledOnce();
 
     lifecycle.disconnect();
-    expect(calls).toEqual(["first", "throw", "last", "nested"]);
+    expect(calls).toEqual(["first", "nested", "throw", "last", "nested"]);
     const late = vi.fn();
-    expect(subscribeProxyStatus(proxy, late)).toBeTypeOf("function");
-    expect(late).not.toHaveBeenCalled();
+    const stopLate = subscribeProxyStatus(proxy, late);
+    expect(stopLate).toBeTypeOf("function");
+    expect(late).toHaveBeenCalledWith(getProxyStatus(proxy));
+    stopLate();
+    stopLate();
+    expect(late).toHaveBeenCalledOnce();
     logger.mockRestore();
   });
 
@@ -174,18 +209,20 @@ describe("proxy lifecycle", () => {
     let stopListener = (): void => undefined;
     let stopFirst = (): void => undefined;
 
-    stopFirst = subscribeProxyStatus(proxy, () => {
+    stopFirst = subscribeProxyStatus(proxy, (status) => {
+      if (status.type === "active" && status.selection === "current") return;
       stopFirst();
       stopListener();
       stopListener = subscribeProxyStatus(proxy, listener);
     });
     stopListener = subscribeProxyStatus(proxy, listener);
+    listener.mockClear();
 
     lifecycle.stale();
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledOnce();
 
     lifecycle.disconnect();
-    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("rejects inherited, forged, getter-backed, and descendant values", () => {

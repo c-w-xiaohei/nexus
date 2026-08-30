@@ -26,25 +26,19 @@ means the selection predicate captured during acquisition no longer matches;
 the proxy remains callable. `disconnected` is terminal for that exact local
 session. None of these states identifies a replacement target or provider.
 
-The getter returns an immutable cached snapshot. Subscription is future-only:
-registration never calls the listener, sends no payload, and does not replay a
-past transition. A notification means "read again." For an initial decision
-that must account for a transition already committed before subscription, read,
-subscribe, then read again:
+The getter returns an immutable cached snapshot. Subscription registers first,
+then synchronously sends the current snapshot and each future transition:
 
 ```ts
-let status = Nexus.getProxyStatus(orders);
-const stop = Nexus.subscribeProxyStatus(orders, () => {
-  status = Nexus.getProxyStatus(orders);
+const stop = Nexus.subscribeProxyStatus(orders, (status) => {
   if (status.type === "disconnected") cancelLocalWork(status.error);
 });
-status = Nexus.getProxyStatus(orders);
 
 // `stop()` removes only this observer. It does not release or reconnect.
 ```
 
 After disconnection, the terminal snapshot remains readable. A later
-subscription has no future transition to receive and returns an inert cleanup.
+subscription synchronously receives it and returns an inert cleanup.
 
 ## Replacement Is Application Policy
 
