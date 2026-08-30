@@ -78,6 +78,30 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     });
   });
 
+  it("releases an explicitly marked remote resource through using", async () => {
+    const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
+    const initialResourceCount = cs1ResourceManager.countLocalResources();
+    const csApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { context: "content-script", issueId: "CS1" },
+      },
+    );
+
+    {
+      using processorProxy = await csApi.getTimelineProcessor();
+      await expect(processorProxy.process()).resolves.toMatchObject({
+        issueId: "CS1",
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(cs1ResourceManager.countLocalResources()).toBe(
+        initialResourceCount,
+      );
+    });
+  });
+
   it("should treat released remote resource proxies as terminal capabilities", async () => {
     const csApi = await world.background.nexus.create(
       ContentScriptServiceToken,

@@ -2,16 +2,42 @@ import { expectTypeOf } from "vitest";
 import {
   type AdapterModel,
   type Allified,
+  type Asyncified,
   Nexus,
   type Streamified,
   Token,
   type NexusInstance,
+  type RefWrapper,
   serviceProvider,
 } from "@/index";
 
 interface PingService {
   ping(): string;
 }
+
+interface OwnedProcessor {
+  process(): string;
+}
+
+interface ResourceService {
+  getProcessor(): Promise<RefWrapper<OwnedProcessor>>;
+  getPlainObject(): Promise<{ value: string }>;
+}
+
+const ResourceToken = new Token<ResourceService>("test:resource");
+declare const resourceNexus: NexusInstance;
+const resourceService = await resourceNexus.create(ResourceToken);
+const processor = await resourceService.getProcessor();
+expectTypeOf(processor).toMatchTypeOf<
+  Asyncified<OwnedProcessor> & Disposable
+>();
+processor[Symbol.dispose]();
+
+const plainObject = await resourceService.getPlainObject();
+// @ts-expect-error ordinary object returns are not disposable resources.
+plainObject[Symbol.dispose]();
+// @ts-expect-error service roots are not disposable resources.
+resourceService[Symbol.dispose]();
 
 declare const allSettlement: Awaited<
   ReturnType<Allified<PingService>["ping"]>

@@ -49,6 +49,7 @@ type ChainableProxyConfig = {
   thenableFromPathLength: number;
   hasSetter?: boolean;
   onRelease?: () => void;
+  exposesDispose?: boolean;
   buildCallOptions: {
     (type: "GET", path: (string | number)[]): DispatchCallOptions;
     (
@@ -158,6 +159,10 @@ export class ProxyFactory<_M extends AdapterModel> {
                   "Nexus: A service proxy cannot be released. This function is for resource proxies only.",
                 ))
             );
+          }
+
+          if (prop === Symbol.dispose && config.exposesDispose) {
+            return config.onRelease;
           }
 
           if (
@@ -312,6 +317,7 @@ export class ProxyFactory<_M extends AdapterModel> {
       thenableFromPathLength: 1,
       hasSetter: true,
       onRelease: release,
+      exposesDispose: true,
       buildCallOptions: (
         type: "GET" | "SET" | "APPLY",
         path: (string | number)[],

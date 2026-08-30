@@ -98,6 +98,12 @@ capabilities without requiring the creating Nexus instance. They do not control
 service proxy lifecycle: ordinary service proxies are not releasable, and
 release never reconnects or replaces a session-bound handle.
 
+An explicitly typed `RefWrapper<T>` service result becomes a disposable remote
+resource proxy. The receiver owns that lease and can release it with JavaScript
+`using`; scope exit performs the same idempotent, fire-and-forget release as
+`Nexus.release(value)`. Connection teardown and garbage collection remain
+fallback cleanup rather than the normal deterministic path.
+
 When a local proxy call is closed by the current Core copy, it rejects with
 `NexusDisconnectedError`. Use `instanceof` only within that installed copy. For
 serialized, cross-context, or duplicate-copy handling, branch on the stable

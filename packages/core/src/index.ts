@@ -53,6 +53,7 @@ export type {
   RuntimeCreateTokenParam,
   TokenService,
 } from "./api/types"; // Nexus 实例和代理相关类型
+export type { RefWrapper } from "./types/ref-wrapper";
 export type {
   ProxyDebugSnapshot,
   ProxyStatus,

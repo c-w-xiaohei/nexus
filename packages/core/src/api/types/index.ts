@@ -26,9 +26,13 @@ export type ValidCreateOptions<O> =
   Exclude<keyof O, keyof CreateOptions<AdapterModel>> extends never ? O : never;
 
 type Unwrapped<T> = T extends Promise<infer U> ? U : T;
+type AsyncifiedReturn<T> =
+  Unwrapped<T> extends RefWrapper<infer U>
+    ? Asyncified<U> & Disposable
+    : Unwrapped<T>;
 export type Asyncified<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (...args: A) => Promise<Unwrapped<R>>
+    ? (...args: A) => Promise<AsyncifiedReturn<R>>
     : Promise<Unwrapped<T[K]>>;
 };
 export type NexusPromiseSettledResult<T> =
