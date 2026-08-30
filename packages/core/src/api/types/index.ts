@@ -25,15 +25,16 @@ export type RuntimeCreateTokenParam<T extends object, M extends AdapterModel> =
 export type ValidCreateOptions<O> =
   Exclude<keyof O, keyof CreateOptions<AdapterModel>> extends never ? O : never;
 
-type Unwrapped<T> = T extends Promise<infer U> ? U : T;
-type AsyncifiedReturn<T> =
-  Unwrapped<T> extends RefWrapper<infer U>
-    ? Asyncified<U> & Disposable
-    : Unwrapped<T>;
+type AsyncifiedResult<T> =
+  T extends Promise<infer U>
+    ? AsyncifiedResult<U>
+    : T extends RefWrapper<infer U>
+      ? Asyncified<U> & Disposable
+      : T;
 export type Asyncified<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (...args: A) => Promise<AsyncifiedReturn<R>>
-    : Promise<Unwrapped<T[K]>>;
+    ? (...args: A) => Promise<AsyncifiedResult<R>>
+    : Promise<AsyncifiedResult<T[K]>>;
 };
 export type NexusPromiseSettledResult<T> =
   | { status: "fulfilled"; value: T }
@@ -43,15 +44,17 @@ export type NexusPromiseSettledResult<T> =
     };
 export type Allified<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (...args: A) => Promise<NexusPromiseSettledResult<Unwrapped<R>>[]>
-    : Promise<NexusPromiseSettledResult<Unwrapped<T[K]>>[]>;
+    ? (...args: A) => Promise<NexusPromiseSettledResult<AsyncifiedResult<R>>[]>
+    : Promise<NexusPromiseSettledResult<AsyncifiedResult<T[K]>>[]>;
 };
 export type Streamified<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
     ? (
         ...args: A
-      ) => Promise<AsyncIterable<NexusPromiseSettledResult<Unwrapped<R>>>>
-    : Promise<AsyncIterable<NexusPromiseSettledResult<Unwrapped<T[K]>>>>;
+      ) => Promise<
+        AsyncIterable<NexusPromiseSettledResult<AsyncifiedResult<R>>>
+      >
+    : Promise<AsyncIterable<NexusPromiseSettledResult<AsyncifiedResult<T[K]>>>>;
 };
 
 export interface NexusInstance<M extends AdapterModel = AdapterModel> {

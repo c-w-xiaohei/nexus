@@ -20,7 +20,9 @@ interface OwnedProcessor {
 }
 
 interface ResourceService {
+  processor: RefWrapper<OwnedProcessor>;
   getProcessor(): Promise<RefWrapper<OwnedProcessor>>;
+  getOptionalProcessor(): Promise<RefWrapper<OwnedProcessor> | null>;
   getPlainObject(): Promise<{ value: string }>;
 }
 
@@ -32,6 +34,20 @@ expectTypeOf(processor).toMatchTypeOf<
   Asyncified<OwnedProcessor> & Disposable
 >();
 processor[Symbol.dispose]();
+
+const propertyProcessor = await resourceService.processor;
+expectTypeOf(propertyProcessor).toMatchTypeOf<
+  Asyncified<OwnedProcessor> & Disposable
+>();
+propertyProcessor[Symbol.dispose]();
+
+const optionalProcessor = await resourceService.getOptionalProcessor();
+if (optionalProcessor !== null) {
+  expectTypeOf(optionalProcessor).toMatchTypeOf<
+    Asyncified<OwnedProcessor> & Disposable
+  >();
+  optionalProcessor[Symbol.dispose]();
+}
 
 const plainObject = await resourceService.getPlainObject();
 // @ts-expect-error ordinary object returns are not disposable resources.
@@ -52,6 +68,32 @@ declare const streamSettlement: Awaited<
   : never;
 // @ts-expect-error multicast settlements intentionally do not expose recipient IDs.
 void streamSettlement.from;
+
+declare const allResourceSettlement: Awaited<
+  ReturnType<Allified<ResourceService>["getProcessor"]>
+>[number];
+if (allResourceSettlement.status === "fulfilled") {
+  expectTypeOf(allResourceSettlement.value).toMatchTypeOf<
+    Asyncified<OwnedProcessor> & Disposable
+  >();
+  allResourceSettlement.value[Symbol.dispose]();
+}
+
+declare const streamResourceSettlement: Awaited<
+  ReturnType<Streamified<ResourceService>["getProcessor"]>
+> extends AsyncIterable<infer T>
+  ? T
+  : never;
+if (streamResourceSettlement.status === "fulfilled") {
+  expectTypeOf(streamResourceSettlement.value).toMatchTypeOf<
+    Asyncified<OwnedProcessor> & Disposable
+  >();
+  streamResourceSettlement.value[Symbol.dispose]();
+}
+
+declare const allResourceService: Allified<ResourceService>;
+// @ts-expect-error multicast roots are borrowed and not disposable.
+allResourceService[Symbol.dispose]();
 
 type ChromeContextMeta =
   | { runtime: "background" }

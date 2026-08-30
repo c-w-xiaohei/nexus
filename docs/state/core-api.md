@@ -69,6 +69,15 @@ console.log(store.getState());
 
 Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
+`store` is a local `NexusStoreHandle` and supports JavaScript `using`:
+
+```ts
+using store = createNexusStore(counterStore).store;
+```
+
+On scope exit, `using` delegates to the same synchronous, idempotent
+`destroy()` transition.
+
 ## `connectNexusStore()`
 
 Connects to a remote Nexus State store and returns a `RemoteStore`.
