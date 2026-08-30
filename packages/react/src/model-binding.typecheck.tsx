@@ -4,6 +4,7 @@ import {
   type AdapterModel,
   type ConnectionMetaOf,
   type ContextMetaOf,
+  type ProxyStatus,
 } from "@nexus-js/core";
 import {
   defineNexusStore,
@@ -12,6 +13,7 @@ import {
 import { createNexusScope } from "./create-nexus-scope.js";
 import { NexusProvider } from "./provider.js";
 import { useNexus } from "./use-nexus.js";
+import { useProxyStatus } from "./use-proxy-status.js";
 
 interface ChromeModel extends AdapterModel {
   contextMeta: { context: "chrome" };
@@ -55,6 +57,17 @@ const ChromeScope = createNexusScope<ChromeModel>();
 const IframeScope = createNexusScope<IframeModel>();
 const chromeNexus = new Nexus<ChromeModel>();
 const iframeNexus = new Nexus<IframeModel>();
+const lifecycleProxy = {};
+type ActiveProxyStatus = Extract<ProxyStatus, { type: "active" }>;
+
+const fullProxyStatusSelector = (status: ProxyStatus) => status.type;
+useProxyStatus(lifecycleProxy, fullProxyStatusSelector);
+
+useProxyStatus(
+  lifecycleProxy,
+  // @ts-expect-error A selector must handle both active and disconnected states.
+  (status: ActiveProxyStatus) => status.selection,
+);
 
 const ChromeApp = () => {
   ChromeScope.useNexus().safeCreate(chromeStore.token);

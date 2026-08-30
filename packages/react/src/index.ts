@@ -19,3 +19,4 @@ export {
   useStoreSelector,
   type UseStoreSelectorOptions,
 } from "./use-store-selector.js";
+export { useProxyStatus } from "./use-proxy-status.js";

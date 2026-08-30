@@ -10,6 +10,7 @@ import {
   createRemoteStoreScope,
   NexusProvider,
   useNexus,
+  useProxyStatus,
   useRemoteStore,
   useStoreSelector,
 } from "@nexus-js/react";
@@ -115,6 +116,38 @@ function CounterStatus() {
 Scope hooks fail fast outside `RemoteStoreScope.Provider`. The scope provider still depends on `NexusProvider` because it delegates to `useRemoteStore()` internally.
 
 The provider owns one shared acquisition for its subtree. Its `options` accept `reconnectKey`, and every `CounterScope.useRemoteStore()` consumer receives the same stable `reconnect` command. The scope does not add a registry, retry manager, replay policy, or action fallback. `useActions()` returns `null` until the underlying remote store exists, so callers keep explicit control over disabled UI, recovery, and replay decisions.
+
+## `useProxyStatus()`
+
+Observe the lifecycle of an already-acquired exact ordinary unicast root proxy.
+This hook needs no `NexusProvider` and does not acquire, release, reconnect, or
+replace the proxy.
+
+```tsx
+import { useProxyStatus } from "@nexus-js/react";
+
+function OrderStatus({ orders }: { orders: object | null }) {
+  const status = useProxyStatus(orders);
+  return <span>{status?.type ?? "unavailable"}</span>;
+}
+```
+
+Pass a selector to subscribe a component to a derived value. React compares
+the selected snapshot with `Object.is`.
+
+```tsx
+const connected = useProxyStatus(orders, (status) => status.type === "active");
+```
+
+Only `null` and `undefined` mean no proxy and return `null`. Other invalid
+values are passed to Core validation and throw its original `NexusUsageError`.
+The proxy remains session-bound: this hook only observes it; application code
+owns any explicit replacement acquisition.
+
+During server rendering the hook returns `null` without reading Core. Hydration
+starts from that same `null` snapshot, then reads and observes the client proxy.
+Supplying a proxy on the client requires `@nexus-js/core` >= 1.1.0; the React
+package otherwise remains compatible with Core >= 1.0.0 for its existing APIs.
 
 ## `useRemoteStore()`
 
