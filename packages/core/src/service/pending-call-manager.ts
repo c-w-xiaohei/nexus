@@ -9,6 +9,9 @@ class AsyncIteratorController<T> {
   private pullQueue: ((result: IteratorResult<T>) => void)[] = [];
   private pushQueue: IteratorResult<T>[] = [];
   private isFinished = false;
+  private hasReturned = false;
+
+  constructor(private readonly onReturn?: () => void) {}
 
   public push(value: T) {
     if (this.isFinished) {
@@ -25,11 +28,14 @@ class AsyncIteratorController<T> {
     this.pushQueue.push(result);
   }
 
-  public end() {
+  public end(discardQueuedResults = false) {
     if (this.isFinished) {
       return;
     }
     this.isFinished = true;
+    if (discardQueuedResults) {
+      this.pushQueue = [];
+    }
     const result: IteratorResult<T> = { done: true, value: undefined };
     this.pullQueue.forEach((resolve) => resolve(result));
     this.pullQueue = [];
@@ -50,6 +56,14 @@ class AsyncIteratorController<T> {
         return new Promise((resolve) => {
           this.pullQueue.push(resolve);
         });
+      },
+      return: (): Promise<IteratorResult<T>> => {
+        this.end(true);
+        if (!this.hasReturned) {
+          this.hasReturned = true;
+          this.onReturn?.();
+        }
+        return Promise.resolve({ done: true, value: undefined });
       },
       [Symbol.asyncIterator]() {
         return this;
@@ -388,7 +402,11 @@ export namespace PendingCallManager {
       );
 
       if (strategy === "stream") {
-        const controller = new AsyncIteratorController<any>();
+        const controller = new AsyncIteratorController<any>(() => {
+          // Iterator cancellation is local only; the remote invocation may continue.
+          clearTimeout(timeoutHandle);
+          finalizeCall(messageId);
+        });
         const timeoutHandle = setTimeout(() => {
           handleResponse(messageId, null, null, undefined, true);
         }, timeout);

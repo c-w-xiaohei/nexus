@@ -63,6 +63,9 @@ const captures = await backgroundNexus.selectMulticast(CaptureToken, {
 
 `createMulticast` instead takes a non-empty `targets` array of exact Chrome targets, acquires every target, and fails the whole operation if one target fails. Both operations support `expects: "all"` (default) or `expects: "stream"`; calls settle as `{ status, value }` or `{ status, reason }` without connection IDs or `from` metadata. Connection IDs are not acquisition inputs, selection keys, or routing targets. `selectMulticast` never connects, has no `wait`, and an empty provider snapshot is valid. Acquisition `timeout`/`signal` cover `create` and `createMulticast`; `callTimeout` covers later proxy calls. Unknown option keys and incompatible provider-catalog protocols are structured errors.
 
+Breaking from an `expects: "stream"` async iteration cancels Nexus's local
+pending wait and timeout. It does not cancel methods already executing remotely.
+
 The background context does not automatically find an active tab or inject a content script. Application code performs that workflow and passes the resulting tab/frame/document target to Nexus. A content script helper supplies `chromeTarget.background()` as endpoint `defaultTarget`, so `nexus.create(Token)` is valid when the Token has no default.
 
 Chrome's `tabId`, `frameId`, and `documentId` are target-side platform addressing inputs, not content endpoint identity. Observed sender facts belong to Chrome's `ChromeConnectionMeta`. Private selected-route implementation state is not a public metadata contract.
