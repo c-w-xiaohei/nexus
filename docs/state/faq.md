@@ -20,41 +20,30 @@ Also, `await action()` gives you a stronger guarantee than "remote call returned
 
 ## Why does a target change create stale handles instead of auto-rebinding?
 
-Because Nexus handles are intentionally explicit and connection-bound.
+Because a `RemoteStore` handle is tied to one target and connection session.
 
 Auto-rebinding would hide lifecycle changes and make state behavior much harder to reason about.
 
-## Do raw Nexus proxies automatically heal after session replacement?
-
-No.
-
-Raw `nexus.create()` unicast proxies are session-bound handles. If the remote session is replaced, create a new proxy for that new session.
-
-Higher-layer code can automate a rebuild flow, but the old raw proxy is not silently revived in place.
-
-## Are `nexus.ref()` resources durable across reconnects?
-
-No.
-
-`nexus.ref()` capabilities are connection-bound transient resources. When the connection is replaced or closed, reacquire those capabilities on the new connection.
-
-Treat refs as lifecycle-scoped ownership handles, not global durable identities.
+This follows the Core lifecycle rules. See
+[Service Proxy Lifecycle](../proxy-lifecycle.md) for service proxies and
+[Core concepts](../concepts.md#session-bound-handles) for remote resources.
 
 ## Why does React sometimes keep the last selected value?
 
-For a same-target replacement, keeping the last ready selected value can avoid unnecessary loading flicker while the replacement is pending or after that attempt fails.
+It can avoid a loading state while creating a replacement for the same target.
+See the [Nexus State React guide](react.md#fallback-semantics) for failure and
+target-change behavior.
 
-After a failed same-target attempt, `status: "disconnected"` and `error` still mean there is no ready replacement; the retained value does not make a handle usable or indicate success. It does not apply to a target change. A target change is a stale handoff: selectors immediately return their configured fallback until the new target is ready, so old target data cannot appear as the new target's value.
+## Does `useRemoteStore()` automatically rebuild when a connection session ends?
 
-## Does `useRemoteStore()` automatically rebuild after session loss?
-
-No.
-
-`useRemoteStore()` is a higher-layer orchestration API over terminal raw-handle semantics. Change `reconnectKey` for an external committed session/lifecycle revision or call its stable `reconnect()` command to trigger a replacement acquisition attempt. This does not revive the old handle, replay actions, guarantee target availability, or add automatic retry/backoff behavior.
+No. The hook only creates a replacement after an input changes or the
+application requests one. See the [Nexus State React guide](react.md) for the
+exact behavior.
 
 ## Does a remote store scope support both reconnect controls?
 
-Yes. `createRemoteStoreScope(definition)` accepts `reconnectKey` through `Provider` options, and `Scope.useRemoteStore().reconnect()` exposes the provider's shared stable command to every child. The provider owns one shared acquisition for the scope.
+Yes. The scope provider accepts `reconnectKey`, and its children share the same
+`reconnect()` function. See the [Nexus State React guide](react.md).
 
 ## Does Nexus State v1 support patches?
 
@@ -64,4 +53,4 @@ Nexus State v1 is snapshot-first.
 
 ## Does Nexus State v1 include Jotai?
 
-No. The design leaves room for it, but the implemented public package is focused on the core runtime and the React adapter first.
+No. `@nexus-js/react` does not provide Jotai integration.

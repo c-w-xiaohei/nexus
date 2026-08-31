@@ -85,7 +85,11 @@ An exact target is actionable: Nexus first reuses a matching ready session and o
 
 ## Session-Bound Handles
 
-`create()` returns a proxy bound to the session acquired for that call. `ref()` transfers a connection-scoped capability; the materialized remote capability is likewise bound to that session. Disconnect, reload, daemon restart, and replacement invalidate old handles. Higher-level application code may observe lifecycle signals and create replacements, but the raw handle never silently retargets or retries.
+`create()` returns a service proxy tied to the connection session acquired for
+that call. `ref()` transfers a remote resource tied to the same connection.
+Disconnect, reload, daemon restart, and replacement invalidate these values.
+Application code may observe lifecycle signals and create replacements, but an
+existing service proxy or remote resource never retargets or retries by itself.
 
 For ordinary unicast service proxies, use the static `Nexus.getProxyStatus()` /
 `Nexus.subscribeProxyStatus()` pair to observe the local session without

@@ -47,14 +47,10 @@ Headless core (`connectNexusStore` / `safeConnectNexusStore`):
 
 After a `RemoteStore` exists, later transport loss or replacement-attempt failure transitions that instance to terminal lifecycle (`disconnected` / `stale`) and you rebuild by creating a new instance.
 
-Hook layer (`useRemoteStore`):
-
-- exposes status/error fields suitable for rendering initial loading, failure, and replacement progress
-- changing `reconnectKey` or calling stable `reconnect()` triggers a replacement acquisition attempt using current committed inputs
-- may retain a last ready selector value when same-target replacement is pending or fails; `disconnected` status and `error` still mean no ready replacement exists
-- target changes instead use selector fallback immediately until the new target is ready, including after a same-target failure
-- still does not revive terminal raw handles in place
-- does not guarantee that a target is available or that a replacement attempt succeeds
+`useRemoteStore()` exposes loading, failure, and replacement state for React.
+See the [Nexus State React guide](react.md) for `reconnectKey`, `reconnect()`,
+selector fallback, and target changes. The hook never makes a terminal
+`RemoteStore` handle usable again.
 
 ## `stale`
 
@@ -62,12 +58,12 @@ Use this when the handle itself is no longer the right handle.
 
 Typical causes:
 
-- target change in the React adapter
+- target change in the React bindings
 - target-semantics drift or handoff (for example, caller-owned tab discovery now selects a different tab)
 
 Do not use `stale` for same-target session replacement.
 
-If the same target's background/session is restarted and the old handle loses its backing connection, that old handle is `disconnected`.
+If the same target gets a new connection session and the old `RemoteStore` handle loses its connection, that handle is `disconnected`.
 
 Stale is not the same thing as disconnected.
 
@@ -124,14 +120,15 @@ Nexus State supports replacement.
 
 It does not treat a terminal `RemoteStore` instance as something that silently recovers in place.
 
-React replacement controls are orchestration, not a core retry policy. `useRemoteStore(definition, { reconnectKey })` responds to an external committed lifecycle revision, while `reconnect()` is a stable command for callbacks and interactions. They feed the same replacement path, can be used together, and neither replays an action.
+React replacement controls do not add a Core retry policy or replay actions. See
+the [Nexus State React guide](react.md) for their exact behavior.
 
-The same distinction applies to raw core handles:
+The same distinction applies to Core handles:
 
-- `nexus.create()` unicast proxies are session-bound
-- `nexus.ref()` resources are connection-bound transient capabilities
+- a service proxy is tied to one connection session
+- a remote resource is tied to the connection that created it
 
-If session/connection identity changes, applications should reacquire handles/capabilities instead of expecting old ones to heal.
+When a connection session changes, create a new service proxy or remote resource instead of reusing the old one.
 
 ## Error Types
 

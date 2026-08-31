@@ -144,7 +144,9 @@ Primary capabilities:
 - `[Symbol.dispose]()` through JavaScript `using`
 - `actions.*`
 
-`RemoteStore` is connection/session-scoped by design. Treat `disconnected`, `stale`, and `destroyed` as explicit lifecycle boundaries that require replacement, not in-place healing.
+A `RemoteStore` handle is tied to one connection session. After it becomes
+`disconnected`, `stale`, or `destroyed`, create a replacement instead of
+reusing it.
 
 ### Example
 

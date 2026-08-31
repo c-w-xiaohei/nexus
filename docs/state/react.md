@@ -1,72 +1,22 @@
 # Nexus State React Guide
 
-This Nexus State guide covers `@nexus-js/react`.
+This page covers the Nexus State-specific bindings in `@nexus-js/react`. For
+providing a Nexus instance, typed React scopes, and service proxy status,
+see the [general React integration guide](../react.md).
 
 ## Public Surface
 
 ```ts
 import {
-  createNexusScope,
   createRemoteStoreScope,
-  NexusProvider,
-  useNexus,
-  useProxyStatus,
   useRemoteStore,
   useStoreSelector,
 } from "@nexus-js/react";
 ```
 
-## `NexusProvider`
-
-Inject a Nexus instance into the React tree.
-
-```tsx
-<NexusProvider nexus={nexus}>
-  <App />
-</NexusProvider>
-```
-
-## `useNexus()`
-
-Reads the injected Nexus instance.
-
-```tsx
-function RuntimeName() {
-  useNexus();
-  return <span>Nexus context is available.</span>;
-}
-```
-
-It fails fast outside `NexusProvider` on purpose.
-
-## `createNexusScope()`
-
-Use a model-bound React scope when the same application contains multiple adapter models and the provider, hooks, store definitions, and targeting options must stay associated at compile time:
-
-```tsx
-import { createNexusScope } from "@nexus-js/react";
-import {
-  usingBackgroundScript,
-  type ChromeAdapterModel,
-} from "@nexus-js/chrome";
-
-const ChromeNexus = createNexusScope<ChromeAdapterModel>();
-const chromeNexus = usingBackgroundScript();
-
-function ChromeApp() {
-  return (
-    <ChromeNexus.NexusProvider nexus={chromeNexus}>
-      <App />
-    </ChromeNexus.NexusProvider>
-  );
-}
-```
-
-Use `ChromeNexus.useNexus()`, `ChromeNexus.useRemoteStore()`, and `ChromeNexus.createRemoteStoreScope()` inside that tree. The default `NexusProvider` and hooks remain the simpler path when the application does not need model-specific React context typing.
-
 ## `createRemoteStoreScope()`
 
-Recommended React pattern for shared remote stores. Declare the store connection once near the subtree that needs it, then consume selector, actions, status, or the raw remote result from children.
+Use a remote store scope when several components need the same store. Place one scope provider inside `NexusProvider` near the subtree, then read state, actions, status, errors, or the `UseRemoteStoreResult` from its children.
 
 ```tsx
 import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
@@ -115,47 +65,18 @@ function CounterStatus() {
 
 Scope hooks fail fast outside `RemoteStoreScope.Provider`. The scope provider still depends on `NexusProvider` because it delegates to `useRemoteStore()` internally.
 
-The provider owns one shared acquisition for its subtree. Its `options` accept `reconnectKey`, and every `CounterScope.useRemoteStore()` consumer receives the same stable `reconnect` command. The scope does not add a registry, retry manager, replay policy, or action fallback. `useActions()` returns `null` until the underlying remote store exists, so callers keep explicit control over disabled UI, recovery, and replay decisions.
-
-## `useProxyStatus()`
-
-Observe the lifecycle of an already-acquired exact ordinary unicast root proxy.
-This hook needs no `NexusProvider` and does not acquire, release, reconnect, or
-replace the proxy.
-
-```tsx
-import { useProxyStatus } from "@nexus-js/react";
-
-function OrderStatus({ orders }: { orders: object | null }) {
-  const status = useProxyStatus(orders);
-  return <span>{status?.type ?? "unavailable"}</span>;
-}
-```
-
-Pass a selector to subscribe a component to a derived value. React compares
-the selected snapshot with `Object.is`.
-
-```tsx
-const connected = useProxyStatus(orders, (status) => status.type === "active");
-```
-
-Only `null` and `undefined` mean no proxy and return `null`. Other invalid
-values are passed to Core validation and throw its original `NexusUsageError`.
-The proxy remains session-bound: this hook only observes it; application code
-owns any explicit replacement acquisition.
-
-During server rendering the hook returns `null` without reading Core. Hydration
-starts from that same `null` snapshot, then reads and observes the client proxy.
-Supplying a proxy on the client requires `@nexus-js/core` >= 1.1.0; the React
-package otherwise remains compatible with Core >= 1.0.0 for its existing APIs.
+The provider manages one shared `RemoteStore` handle for its subtree. Its `options` accept `reconnectKey`, and every `CounterScope.useRemoteStore()` consumer receives the same stable `reconnect` function. The scope does not retry calls or replay actions. `useActions()` returns `null` until a `RemoteStore` handle exists, so the UI decides when actions are available.
 
 ## `useRemoteStore()`
 
-Low-level hook for connecting directly to a remote Nexus State store. Use it when one component owns the connection lifecycle or when you need direct composition around the raw remote result. For shared subtree usage, prefer `createRemoteStoreScope()` so leaf components do not each start their own store connection.
+Use this lower-level hook when one component should create and destroy its own `RemoteStore` handle, or when it needs the full `UseRemoteStoreResult`. For a shared subtree, prefer `createRemoteStoreScope()` so child components do not create separate handles.
 
-Use `reconnectKey` for an external committed session or lifecycle revision, such as a background restart notification. Use `remote.reconnect()` from an event handler, callback, or timer. Both controls feed the same hook-owned replacement acquisition path using the latest committed Nexus instance, definition, target, and connector options. Updates from one React commit may coalesce into one attempt; a later commit starts a newer generation and only its result can publish. `reconnectKey` is React-only orchestration state and is not forwarded to the core store connector.
+The component must be rendered under `NexusProvider`. The direct-hook examples
+below assume that provider is already present.
 
-Both controls trigger a replacement acquisition attempt. They do not revive an old handle, replay store actions, retry failed business actions, or guarantee that the remote target is available or that the attempt succeeds. The `reconnect` function reference is stable; the `UseRemoteStoreResult` object is not promised to be stable.
+Change `reconnectKey` when the application learns that the same target has a new connection session, such as after a background restart. Call `remote.reconnect()` from an event handler, callback, or timer when the application should try again. Either action starts an attempt to create a new `RemoteStore` handle with the latest Nexus instance, definition, target, and options. If attempts overlap, only the newest result is used. `reconnectKey` is a React option and is not passed to the Core store API.
+
+Neither control revives an old `RemoteStore` handle, replays an action, or guarantees that the target is available. The `reconnect` function keeps the same identity across renders. The `UseRemoteStoreResult` object may change.
 
 ```tsx
 import { chromeTarget } from "@nexus-js/chrome";
@@ -184,10 +105,10 @@ type UseRemoteStoreResult<TState, TActions> = {
 ### Important semantics
 
 - before first ready: `store` may be `null`
-- on replacement: the hook result moves through replacement setup with `store: null`
+- while creating a replacement: `store` is `null`
 - failed connect or replacement attempts are explicit, not disguised as ongoing initialization
-- raw handles do not auto-heal; hook behavior is orchestration that may acquire a replacement handle
-- changing `reconnectKey` or calling `reconnect()` triggers a same-target replacement attempt without changing core session-bound semantics
+- a terminal `RemoteStore` handle does not become usable again
+- changing `reconnectKey` or calling `reconnect()` starts an attempt to create a replacement for the same target
 
 ## Loading And Error UI
 
@@ -220,7 +141,7 @@ function CounterView() {
 }
 ```
 
-For direct low-level usage, branch on `status`, `store`, and `error` from `useRemoteStore()`.
+For direct use, branch on `status`, `store`, and `error` from the `UseRemoteStoreResult`.
 
 ```tsx
 function CounterView() {
@@ -269,7 +190,7 @@ function CounterValue() {
 }
 ```
 
-When using a remote store scope, prefer `CounterScope.useSelector(...)`; it delegates to this hook with the shared remote result from context.
+When using a remote store scope, prefer `CounterScope.useSelector(...)`; it reads from the shared `UseRemoteStoreResult`.
 
 ### Fallback semantics
 
@@ -278,22 +199,20 @@ When using a remote store scope, prefer `CounterScope.useSelector(...)`; it dele
 - if a same-target replacement attempt fails, the selector may still preserve that last ready value while `status` is `disconnected` and `error` explains the failed attempt; the value does not make a handle usable or indicate successful replacement
 - a target change is a stale handoff: selectors use their fallback until the new target is ready, rather than presenting the old target's value as the new target's value
 
-## What To Do When A Handle Becomes `disconnected` Or `stale`
+## What To Do When A `RemoteStore` Handle Becomes `disconnected` Or `stale`
 
 Treat those as explicit Nexus State lifecycle signals.
 
 - `disconnected` usually means the current connection is gone or a new connection attempt failed
-- `stale` means the old handle no longer matches the target semantics you asked for
+- `stale` means the `RemoteStore` handle no longer matches the requested target
 
-In practice, React code usually responds by rendering fallback UI and letting `useRemoteStore()` create a replacement handle path when inputs change.
+React code usually renders fallback UI and lets `useRemoteStore()` create a new `RemoteStore` handle when its inputs change. The terminal handle remains terminal.
 
-This is higher-layer rebuild behavior. It should not be interpreted as raw handle auto-healing: old terminal handles remain terminal.
+When the connection session for the same target ends, the hook does not retry automatically. A remount, changed hook input, changed `reconnectKey`, or `reconnect()` starts an attempt to create a replacement `RemoteStore` handle. The target may still be unavailable, and the attempt may fail.
 
-For same-target session loss, do not assume automatic retry or rebuild from the hook alone. A remount, changed hook input, changed `reconnectKey`, or `reconnect()` triggers a replacement acquisition attempt; target availability and success remain separate outcomes.
+### Create A Replacement For The Same Target
 
-### Same-target session loss pattern (explicit reacquire)
-
-If your app must stay on the same target (for example `chromeTarget.background()`) after a restart/session-loss event, reacquire by changing the external `reconnectKey` revision or calling `reconnect()` from an interaction.
+If the application must stay on the same target after its connection session changes, update `reconnectKey` or call `reconnect()`. The following components assume an enclosing `NexusProvider`:
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -329,7 +248,7 @@ function CounterRemote({ reconnectKey }: { reconnectKey: number }) {
   if (remote.status.type === "disconnected" || remote.status.type === "stale") {
     return (
       <div>
-        <p>Session lost. Reconnect to rebuild store handle.</p>
+        <p>Connection ended. Create a new RemoteStore handle.</p>
         <button onClick={remote.reconnect}>Reconnect</button>
       </div>
     );
@@ -345,39 +264,9 @@ function CounterRemote({ reconnectKey }: { reconnectKey: number }) {
 }
 ```
 
-This preserves the raw core rule: an old handle is terminal, while React provides an explicit path to request a replacement acquisition attempt.
+The old `RemoteStore` handle remains terminal. The React hook starts a separate attempt to create a replacement.
 
-## Example
-
-```tsx
-import { chromeTarget } from "@nexus-js/chrome";
-
-const CounterScope = createRemoteStoreScope(counterStore);
-
-function Counter() {
-  return (
-    <CounterScope.Provider options={{ target: chromeTarget.background() }}>
-      <CounterButton />
-    </CounterScope.Provider>
-  );
-}
-
-function CounterButton() {
-  const count = CounterScope.useSelector((state) => state.count, {
-    fallback: 0,
-  });
-  const actions = CounterScope.useActions();
-  const status = CounterScope.useStatus();
-
-  if (!actions || status.type !== "ready") {
-    return <span>Loading...</span>;
-  }
-
-  return <button onClick={() => actions.increment(1)}>{count}</button>;
-}
-```
-
-### Scope reconnect from a child
+## Scope Reconnect From A Child
 
 Use the same scope-owned command when a child renders a recovery control:
 
@@ -388,10 +277,8 @@ function CounterReconnectButton() {
 }
 ```
 
-## What This Package Does Not Do
+## Limits
 
-- It does not create a second state runtime.
-- It does not expose Jotai integration yet.
-- It does not hide remote lifecycle semantics.
-
-Its job is to make the Nexus State headless runtime usable in React, not to redefine it.
+- These bindings do not create a second State runtime.
+- They do not provide Jotai integration.
+- They do not hide `RemoteStore` status or replacement.

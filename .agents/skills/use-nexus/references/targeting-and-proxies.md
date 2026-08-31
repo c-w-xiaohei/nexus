@@ -136,4 +136,4 @@ current snapshot after registration, then reports future distinct transitions.
 Neither recovers a session, discovers a provider, nor reconnects; acquire a
 fresh proxy with the application's chosen target when replacement is wanted.
 
-Nexus Relay does not change these raw-handle rules. Downstream callers still target the adjacent relay provider with ordinary `nexus.create(...)`; the relay provider separately uses `forwardThrough` and `forwardTarget` for its upstream call.
+Nexus Relay does not change these service proxy and remote resource rules. Downstream callers still target the adjacent relay provider with ordinary `nexus.create(...)`; the relay provider separately uses `forwardThrough` and `forwardTarget` for its upstream call.
