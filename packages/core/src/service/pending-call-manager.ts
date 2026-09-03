@@ -1,5 +1,45 @@
 import type { MessageId, SerializedError } from "../types/message.js";
 import { Logger } from "../logger.js";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
+
+const releaseQueuedResourceCapabilities = (
+  values: readonly unknown[],
+): void => {
+  const visited = new WeakSet<object>();
+  const visit = (nestedValue: unknown): void => {
+    if (
+      (typeof nestedValue !== "object" || nestedValue === null) &&
+      typeof nestedValue !== "function"
+    ) {
+      return;
+    }
+    if (visited.has(nestedValue)) return;
+    visited.add(nestedValue);
+
+    const release = (nestedValue as { [RELEASE_PROXY_SYMBOL]?: unknown })[
+      RELEASE_PROXY_SYMBOL
+    ];
+    if (typeof release === "function") {
+      try {
+        release();
+      } catch {
+        // Continue draining the queue when one release capability fails.
+      }
+      return;
+    }
+
+    if (Array.isArray(nestedValue)) {
+      nestedValue.forEach(visit);
+      return;
+    }
+    const prototype = Object.getPrototypeOf(nestedValue);
+    if (prototype === Object.prototype || prototype === null) {
+      Object.values(nestedValue).forEach(visit);
+    }
+  };
+
+  values.forEach(visit);
+};
 
 /**
  * A helper to create an AsyncIterable and control it externally.
@@ -29,13 +69,16 @@ class AsyncIteratorController<T> {
   }
 
   public end(discardQueuedResults = false) {
+    if (discardQueuedResults) {
+      releaseQueuedResourceCapabilities(
+        this.pushQueue.map((result) => result.value),
+      );
+      this.pushQueue = [];
+    }
     if (this.isFinished) {
       return;
     }
     this.isFinished = true;
-    if (discardQueuedResults) {
-      this.pushQueue = [];
-    }
     const result: IteratorResult<T> = { done: true, value: undefined };
     this.pullQueue.forEach((resolve) => resolve(result));
     this.pullQueue = [];

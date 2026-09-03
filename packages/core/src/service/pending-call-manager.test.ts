@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { PendingCallManager } from "./pending-call-manager";
 
 describe("PendingCallManager", () => {
@@ -59,6 +60,74 @@ describe("PendingCallManager", () => {
     expect(manager.canHandleResponse(1, "second")).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     manager.handleResponse(1, "late", null, "second");
+  });
+
+  it("releases queued nested resource proxies when a finished stream is cancelled", async () => {
+    const manager = PendingCallManager.create();
+    const releaseDelivered = vi.fn();
+    const releaseQueuedFunction = vi.fn();
+    const releaseQueuedObject = vi.fn();
+    const deliveredResource = Object.assign(() => undefined, {
+      [RELEASE_PROXY_SYMBOL]: releaseDelivered,
+    });
+    const queuedFunctionResource = Object.assign(() => undefined, {
+      [RELEASE_PROXY_SYMBOL]: releaseQueuedFunction,
+    });
+    const queuedObjectResource = {
+      [RELEASE_PROXY_SYMBOL]: releaseQueuedObject,
+    };
+    const stream = manager.register(1, {
+      strategy: "stream",
+      isBroadcast: true,
+      sentConnectionIds: ["first", "second"],
+      timeout: 1_000,
+    }) as AsyncIterable<unknown>;
+
+    const queuedValue = Object.assign(Object.create(null) as object, {
+      nested: [
+        queuedFunctionResource,
+        Object.assign(Object.create(null) as object, {
+          resource: queuedFunctionResource,
+        }),
+        queuedObjectResource,
+      ],
+    });
+    manager.handleResponse(1, queuedValue, null, "second");
+    manager.handleResponse(1, deliveredResource, null, "first");
+
+    for await (const result of stream) {
+      expect(result).toEqual({ status: "fulfilled", value: deliveredResource });
+      break;
+    }
+
+    expect(releaseDelivered).not.toHaveBeenCalled();
+    expect(releaseQueuedFunction).toHaveBeenCalledTimes(1);
+    expect(releaseQueuedObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a resource repeated across discarded stream results once", async () => {
+    const manager = PendingCallManager.create();
+    const release = vi.fn();
+    const resource = Object.assign(() => undefined, {
+      [RELEASE_PROXY_SYMBOL]: release,
+    });
+    const stream = manager.register(1, {
+      strategy: "stream",
+      isBroadcast: true,
+      sentConnectionIds: ["first", "second", "third"],
+      timeout: 1_000,
+    }) as AsyncIterable<unknown>;
+
+    manager.handleResponse(1, resource, null, "second");
+    manager.handleResponse(1, resource, null, "third");
+    manager.handleResponse(1, "first", null, "first");
+
+    for await (const result of stream) {
+      expect(result).toEqual({ status: "fulfilled", value: "first" });
+      break;
+    }
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("makes stream return idempotent and resolves pending pulls as done", async () => {
