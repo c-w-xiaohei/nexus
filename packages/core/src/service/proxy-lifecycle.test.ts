@@ -303,4 +303,117 @@ describe("proxy lifecycle", () => {
       expect.objectContaining({ code: "E_USAGE_INVALID" }),
     );
   });
+
+  it("removes engine subscriptions when an abandoned root is finalized", async () => {
+    const weakRefs: Array<{ target: object | undefined }> = [];
+    const finalizers: Array<{
+      callback: (heldValue: () => void) => void;
+      heldValue: () => void;
+    }> = [];
+
+    class ControlledWeakRef<T extends object> {
+      public readonly record: { target: T | undefined };
+
+      public constructor(target: T) {
+        this.record = { target };
+        weakRefs.push(this.record);
+      }
+
+      public deref(): T | undefined {
+        return this.record.target;
+      }
+    }
+
+    class ControlledFinalizationRegistry<T> {
+      public constructor(private readonly callback: (heldValue: T) => void) {}
+
+      public register(
+        _target: object,
+        heldValue: T,
+        _unregisterToken?: object,
+      ): void {
+        finalizers.push({
+          callback: this.callback as (heldValue: () => void) => void,
+          heldValue: heldValue as () => void,
+        });
+      }
+
+      public unregister(_unregisterToken: object): boolean {
+        return true;
+      }
+    }
+
+    vi.stubGlobal("WeakRef", ControlledWeakRef);
+    vi.stubGlobal("FinalizationRegistry", ControlledFinalizationRegistry);
+    await vi.resetModules();
+
+    try {
+      const lifecycleModule = await import("./proxy-lifecycle");
+      const proxy = {};
+      let onStale: (() => void) | undefined;
+      let onDisconnect: (() => void) | undefined;
+      let staleUnsubscribed = false;
+      let disconnectUnsubscribed = false;
+      Object.assign(proxy, {
+        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
+          listener: () => void,
+        ) => {
+          onStale = listener;
+          return () => {
+            staleUnsubscribed = true;
+          };
+        },
+        [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
+          listener: () => void,
+        ) => {
+          onDisconnect = listener;
+          return () => {
+            disconnectUnsubscribed = true;
+          };
+        },
+      });
+      lifecycleModule.installProxyLifecycle(proxy, "orders", "one");
+
+      expect(staleUnsubscribed).toBe(false);
+      expect(disconnectUnsubscribed).toBe(false);
+      expect(weakRefs).toHaveLength(1);
+      expect(finalizers).toHaveLength(1);
+
+      weakRefs[0]!.target = undefined;
+      finalizers[0]!.callback(finalizers[0]!.heldValue);
+
+      expect(staleUnsubscribed).toBe(true);
+      expect(disconnectUnsubscribed).toBe(true);
+      onStale?.();
+      onDisconnect?.();
+
+      const callbackProxy = {};
+      let onCallbackStale: (() => void) | undefined;
+      let callbackStaleUnsubscribed = false;
+      let callbackDisconnectUnsubscribed = false;
+      Object.assign(callbackProxy, {
+        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
+          listener: () => void,
+        ) => {
+          onCallbackStale = listener;
+          return () => {
+            callbackStaleUnsubscribed = true;
+          };
+        },
+        [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => () => {
+          callbackDisconnectUnsubscribed = true;
+        },
+      });
+      lifecycleModule.installProxyLifecycle(callbackProxy, "orders", "two");
+
+      weakRefs[1]!.target = undefined;
+      onCallbackStale?.();
+
+      expect(callbackStaleUnsubscribed).toBe(true);
+      expect(callbackDisconnectUnsubscribed).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      await vi.resetModules();
+    }
+  });
 });

@@ -25,11 +25,35 @@ const activeStale = Object.freeze({
 } as const);
 const noop = (): void => undefined;
 const lifecycleDetails = Symbol("nexus.proxy.lifecycle.details");
+const lifecycleFinalizer = new FinalizationRegistry<() => void>((cleanup) => {
+  cleanup();
+});
 
 type ProxyLifecycleDetails = {
   owner: object;
   snapshot: ProxyDebugSnapshot;
   listeners: Set<{ notify: (status: ProxyStatus) => void }>;
+};
+
+const transitionTo = (
+  details: ProxyLifecycleDetails,
+  snapshot: (status: ProxyStatus) => ProxyDebugSnapshot,
+  status: ProxyStatus,
+): void => {
+  details.snapshot = snapshot(status);
+  for (const listener of [...details.listeners]) {
+    if (details.snapshot.status !== status) {
+      return;
+    }
+    if (!details.listeners.has(listener)) {
+      continue;
+    }
+    try {
+      listener.notify(status);
+    } catch (error) {
+      console.error("Nexus: proxy lifecycle listener failed.", error);
+    }
+  }
 };
 
 const requireDetails = (proxy: object): ProxyLifecycleDetails => {
@@ -78,51 +102,68 @@ export const installProxyLifecycle = (
     snapshot: snapshot(activeCurrent),
     listeners: new Set(),
   };
-  const transitionTo = (status: ProxyStatus): void => {
-    details.snapshot = snapshot(status);
-    for (const listener of [...details.listeners]) {
-      if (details.snapshot.status !== status) {
-        return;
-      }
-      if (!details.listeners.has(listener)) {
-        continue;
-      }
-      try {
-        listener.notify(status);
-      } catch (error) {
-        console.error("Nexus: proxy lifecycle listener failed.", error);
-      }
-    }
-  };
   Object.defineProperty(proxy, lifecycleDetails, {
     value: details,
   });
-  const stopStale: () => void = subscribeStale(() => {
+  const detailsRef = new WeakRef(details);
+  const finalizerToken = {};
+  let stopStale = noop;
+  let stopDisconnect = noop;
+  let stopped = false;
+  const cleanup = (): void => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    stopStale();
+    stopDisconnect();
+    lifecycleFinalizer.unregister(finalizerToken);
+  };
+  lifecycleFinalizer.register(proxy, cleanup, finalizerToken);
+
+  stopStale = subscribeStale(() => {
+    const current = detailsRef.deref();
+    if (!current) {
+      cleanup();
+      return;
+    }
     if (
-      details.snapshot.status.type !== "active" ||
-      details.snapshot.status.selection !== "current"
+      current.snapshot.status.type !== "active" ||
+      current.snapshot.status.selection !== "current"
     ) {
       return;
     }
-    transitionTo(activeStale);
+    transitionTo(current, snapshot, activeStale);
   });
-  const stopDisconnect: () => void = subscribeDisconnect(() => {
-    if (details.snapshot.status.type === "disconnected") {
+  if (stopped) {
+    stopStale();
+  }
+  stopDisconnect = subscribeDisconnect(() => {
+    const current = detailsRef.deref();
+    if (!current) {
+      cleanup();
       return;
     }
-    stopStale();
-    stopDisconnect();
+    if (current.snapshot.status.type === "disconnected") {
+      return;
+    }
+    cleanup();
     const error = Object.freeze(
       new NexusDisconnectedError("Nexus connection disconnected."),
     );
     transitionTo(
+      current,
+      snapshot,
       Object.freeze({
         type: "disconnected",
         error,
       }),
     );
-    details.listeners.clear();
+    current.listeners.clear();
   });
+  if (stopped) {
+    stopDisconnect();
+  }
 };
 
 export const getProxyStatus = (proxy: object): ProxyStatus =>
