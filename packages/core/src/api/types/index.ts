@@ -1,5 +1,5 @@
 import type { AdapterModel, ContextMetaOf } from "@/types/adapter-model";
-import type { RefWrapper } from "@/types/ref-wrapper";
+import type { RefWrapper } from "../../types/ref-wrapper";
 import type { Result } from "better-result";
 import type { Token } from "../token";
 import type {

@@ -1,4 +1,5 @@
 import {
+  Nexus,
   NexusServiceError,
   NexusUsageError,
   Token,
@@ -20,7 +21,6 @@ import { Result } from "better-result";
 
 const { err, ok } = Result;
 const DEFAULT_SELECT_WAIT_TIMEOUT = 30_000;
-const REF_WRAPPER_SYMBOL = Symbol.for("nexus.ref.wrapper");
 
 export interface MockProviderRegistration<M extends AdapterModel> {
   readonly target?: ConnectionTargetOf<M>;
@@ -245,6 +245,7 @@ const createMulticastProxy = <T extends object>(
 export function createMockNexus<
   M extends AdapterModel = AdapterModel,
 >(): MockNexus<M> {
+  const refFactory = new Nexus<M>();
   const providers = new Map<string, RegisteredService<M>[]>();
   const failures = new Map<string, Error>();
   const listeners = new Set<() => void>();
@@ -755,11 +756,8 @@ export function createMockNexus<
       if (localMeta) localMeta = { ...localMeta, ...updates };
       return Promise.resolve(ok(undefined));
     },
-    ref: (target) => unwrap(nexus.safeRef(target)),
-    safeRef: (target) =>
-      typeof target === "object" && target !== null
-        ? ok({ [REF_WRAPPER_SYMBOL]: true, target })
-        : err(usageError("Nexus.ref() requires an object.")),
+    ref: (target) => refFactory.ref(target),
+    safeRef: (target) => refFactory.safeRef(target),
     release: (proxy) => releaseCalls.push({ proxy }),
     safeRelease: (proxy) => {
       releaseCalls.push({ proxy });
