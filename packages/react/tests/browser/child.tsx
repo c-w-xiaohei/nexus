@@ -1,8 +1,8 @@
 import { Nexus } from "@nexus-js/core";
-import type { RemoteStore } from "@nexus-js/core/state";
 import {
   createNexusScope,
   useStore,
+  type RemoteStoreWithInitialState,
   type UseRemoteStoreResult,
 } from "@nexus-js/react";
 import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
@@ -82,7 +82,10 @@ const telemetry = {
   commits: [] as CounterState[],
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
+  oldHandle: null as RemoteStoreWithInitialState<
+    CounterState,
+    CounterActions
+  > | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
@@ -116,7 +119,7 @@ function CounterApp() {
 function StoreView({
   store,
 }: {
-  store: RemoteStore<CounterState, CounterActions>;
+  store: RemoteStoreWithInitialState<CounterState, CounterActions>;
 }) {
   const snapshot = useStore(store);
   useEffect(() => {

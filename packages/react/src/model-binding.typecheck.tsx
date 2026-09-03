@@ -114,6 +114,10 @@ declare const remoteStoreResult: UseRemoteStoreResult<
 // @ts-expect-error useStore accepts a concrete Store, not an acquisition result.
 useStore(remoteStoreResult);
 
+if (remoteStoreResult.store) {
+  useStore(remoteStoreResult.store, (state) => state.count);
+}
+
 void ChromeApp;
 void DefaultApp;
 void IframeApp;

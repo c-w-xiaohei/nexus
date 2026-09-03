@@ -17,9 +17,9 @@ import type {
   ActionResult,
   NexusStoreValidationSchemas,
   NexusStoreServiceContract,
-  RemoteStore,
   RemoteActions,
   RemoteStoreStatus,
+  RemoteStoreWithInitialState,
 } from "../types.js";
 import { createMirrorStore, type MirrorStore } from "./mirror-store.js";
 import { MARK_REMOTE_STORE_STALE_SYMBOL } from "../stale-marker.js";
@@ -76,7 +76,7 @@ const cloneState = <TState extends object>(state: TState): TState => {
 export class RemoteStoreEntity<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-> implements RemoteStore<TState, TActions> {
+> implements RemoteStoreWithInitialState<TState, TActions> {
   [MARK_REMOTE_STORE_STALE_SYMBOL](): void {
     this.markStaleByTargetChange();
   }

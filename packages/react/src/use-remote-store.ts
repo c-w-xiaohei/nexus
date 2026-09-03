@@ -15,6 +15,14 @@ const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
 
 type ActionFunction = (...args: any[]) => any;
 
+/** A remote Store handle with the Core 1.1 direct-selection capability. */
+export interface RemoteStoreWithInitialState<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+> extends RemoteStore<TState, TActions> {
+  getInitialState(): TState;
+}
+
 export type NexusStoreNexus<M extends AdapterModel> = Pick<
   NexusInstance<M>,
   "create" | "safeCreate"
@@ -28,7 +36,7 @@ export interface UseRemoteStoreResult<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
 > {
-  readonly store: RemoteStore<TState, TActions> | null;
+  readonly store: RemoteStoreWithInitialState<TState, TActions> | null;
   readonly status: RemoteStoreStatus;
   readonly error: Error | null;
   readonly reconnect: () => void;
@@ -121,21 +129,29 @@ export const useRemoteStoreWithNexus = <
   options: UseRemoteStoreOptions<M> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
   const { reconnectKey = null, ...connectOptions } = options;
-  const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(
-    null,
-  );
+  const [store, setStore] = useState<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const [status, setStatus] = useState<RemoteStoreStatus>(INITIALIZING_STATUS);
   const [error, setError] = useState<Error | null>(null);
   const [manualReconnectRevision, reconnect] = useReducer(
     (revision: number) => revision + 1,
     0,
   );
-  const activeStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
-  const staleStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
+  const activeStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
+  const staleStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const activeTargetRef = useRef<TargetIdentity | null>(null);
-  const lastConnectedStoreRef = useRef<RemoteStore<TState, TActions> | null>(
-    null,
-  );
+  const lastConnectedStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const lastConnectedTargetRef = useRef<TargetIdentity | null>(null);
   const effectTargetRef = useRef<TargetIdentity | null>(null);
   const lastStatusRef = useRef<RemoteStoreStatus>(INITIALIZING_STATUS);

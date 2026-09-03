@@ -10,6 +10,7 @@ import {
   createRemoteStoreScope,
   useRemoteStore,
   useStore,
+  type RemoteStoreWithInitialState,
 } from "@nexus-js/react";
 ```
 
@@ -91,7 +92,7 @@ function CounterRemote() {
 function CounterValue({
   store,
 }: {
-  store: RemoteStore<CounterState, CounterActions>;
+  store: RemoteStoreWithInitialState<CounterState, CounterActions>;
 }) {
   const count = useStore(store, (state) => state.count);
   return <button onClick={() => store.actions.increment(1)}>{count}</button>;

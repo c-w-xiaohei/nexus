@@ -108,9 +108,8 @@ export type RemoteStoreStatus =
 export interface RemoteStore<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
-> extends Disposable {
+> {
   getState(): TState;
-  getInitialState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
   /**
@@ -119,8 +118,17 @@ export interface RemoteStore<
    */
   subscribeStatus?(listener: () => void): () => void;
   destroy(): void;
-  [Symbol.dispose](): void;
   readonly actions: RemoteActions<TActions>;
+}
+
+/** A Core 1.1 remote Store handle returned by Nexus State acquisition APIs. */
+export interface RemoteStoreWithInitialState<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+>
+  extends RemoteStore<TState, TActions>, Disposable {
+  getInitialState(): TState;
+  [Symbol.dispose](): void;
 }
 
 export interface ConnectNexusStoreOptions<

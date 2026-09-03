@@ -40,14 +40,22 @@ export type NexusStoreStatus =
 export interface NexusStoreHandle<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
-> extends Disposable {
+> {
   getState(): TState;
-  getInitialState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): NexusStoreStatus;
   destroy(): void;
-  [Symbol.dispose](): void;
   readonly actions: RemoteActions<TActions>;
+}
+
+/** A Core 1.1 local Store handle returned by `createNexusStore()`. */
+export interface NexusStoreHandleWithInitialState<
+  TState extends object,
+  TActions extends Record<string, (...args: any[]) => any>,
+>
+  extends NexusStoreHandle<TState, TActions>, Disposable {
+  getInitialState(): TState;
+  [Symbol.dispose](): void;
 }
 
 export interface CreateNexusStoreResult<
@@ -59,7 +67,7 @@ export interface CreateNexusStoreResult<
     NexusStoreServiceContract<TState, TActions>,
     M
   >;
-  readonly store: NexusStoreHandle<TState, TActions>;
+  readonly store: NexusStoreHandleWithInitialState<TState, TActions>;
 }
 
 export const createNexusStore = <
@@ -125,7 +133,7 @@ export const createNexusStore = <
     },
   ) as unknown as RemoteActions<TActions>;
 
-  const store: NexusStoreHandle<TState, TActions> = {
+  const store: NexusStoreHandleWithInitialState<TState, TActions> = {
     getState: () => host.getSnapshot().state,
     getInitialState: () => cloneState(initialState),
     subscribe: (listener) => {

@@ -4,13 +4,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { Nexus, type AdapterModel, type NexusInstance } from "@nexus-js/core";
 import type {
   NexusStoreDefinition,
-  RemoteStore,
   RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { NexusProvider } from "./provider";
 import { createRemoteStoreScope } from "./create-remote-store-scope";
 import { useNexus } from "./use-nexus";
-import { useRemoteStore } from "./use-remote-store";
+import {
+  useRemoteStore,
+  type RemoteStoreWithInitialState,
+} from "./use-remote-store";
 import { useNullableStore } from "./use-store";
 
 interface CounterState {
@@ -22,7 +24,9 @@ interface CounterActions {
   increment(by: number): Promise<number>;
 }
 
-interface FakeRemoteStore<TState extends object> extends RemoteStore<
+interface FakeRemoteStore<
+  TState extends object,
+> extends RemoteStoreWithInitialState<
   TState,
   Record<string, (...args: any[]) => any>
 > {

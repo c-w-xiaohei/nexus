@@ -5,7 +5,11 @@ import {
   type DefineNexusStoreOptions,
   defineNexusStore,
   safeConnectNexusStore,
+  type NexusStoreHandle,
   type NexusStoreServiceContract,
+  type NexusStoreStatus,
+  type RemoteStore,
+  type RemoteStoreStatus,
   type StoreTokenMetadata,
 } from "./index.js";
 
@@ -16,6 +20,29 @@ interface CounterState {
 interface CounterActions extends Record<string, (...args: any[]) => any> {
   increment(by: number): number;
 }
+
+const remoteStoreV10: RemoteStore<CounterState, CounterActions> = {
+  getState: () => ({ count: 0 }),
+  subscribe: () => () => undefined,
+  getStatus: (): RemoteStoreStatus => ({ type: "initializing" }),
+  destroy: () => undefined,
+  actions: { increment: async (by) => by },
+};
+
+const localStoreV10: NexusStoreHandle<CounterState, CounterActions> = {
+  getState: () => ({ count: 0 }),
+  subscribe: () => () => undefined,
+  getStatus: (): NexusStoreStatus => ({
+    type: "ready",
+    storeInstanceId: "local",
+    version: 0,
+  }),
+  destroy: () => undefined,
+  actions: { increment: async (by) => by },
+};
+
+void remoteStoreV10;
+void localStoreV10;
 
 type ChromeContextMeta =
   | { runtime: "background" }
@@ -110,11 +137,23 @@ chromeNexus.provide(
   createNexusStore(chromeDefinitionWithDefaultTarget).provider,
 );
 
+const localStore = createNexusStore(chromeDefinition).store;
+localStore.getInitialState();
+localStore[Symbol.dispose]();
+
 void connectNexusStore(chromeNexus, chromeDefinition, {
   target: { context: "background" },
+}).then((remote) => {
+  remote.getInitialState();
+  remote[Symbol.dispose]();
 });
 void safeConnectNexusStore(chromeNexus, chromeDefinition, {
   target: { context: "background" },
+}).then((result) => {
+  if (result.isOk()) {
+    result.value.getInitialState();
+    result.value[Symbol.dispose]();
+  }
 });
 
 const upstreamDefinitionInput = {

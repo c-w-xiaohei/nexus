@@ -70,7 +70,9 @@ console.log(store.getInitialState());
 
 Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
-`store` is a local `NexusStoreHandle` and supports JavaScript `using`:
+`store` is a local `NexusStoreHandleWithInitialState`, which extends the
+Core 1.0-compatible `NexusStoreHandle` with `getInitialState()` and JavaScript
+`using` support:
 
 ```ts
 using store = createNexusStore(counterStore).store;
@@ -85,7 +87,8 @@ snapshot has a new identity.
 
 ## `connectNexusStore()`
 
-Connects to a remote Nexus State store and returns a `RemoteStore`.
+Connects to a remote Nexus State store and returns a
+`RemoteStoreWithInitialState`.
 
 ```ts
 const remote = await connectNexusStore(nexus, counterStore, {
@@ -99,7 +102,7 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - creates a proxy through ordinary service paths
 - performs one setup step that establishes the initial snapshot and subscription together
 - initializes the local mirror from the baseline
-- returns no `RemoteStore` when the handshake fails
+- returns no Store handle when the handshake fails
 
 Lifecycle boundary:
 
@@ -137,25 +140,31 @@ Use safe-style APIs when:
 - you want explicit error branching without exceptions
 - you are writing orchestration or infrastructure code where failure handling is part of the flow
 
-## `RemoteStore`
+## Store Handle Types
 
-Nexus State `RemoteStore` is the client-side handle.
+`RemoteStore` is the Core 1.0-compatible client-side Store interface.
+`RemoteStoreWithInitialState` is the concrete Core 1.1 handle returned by
+`connectNexusStore()` and `safeConnectNexusStore()`; it adds
+`getInitialState()` and `[Symbol.dispose]()`.
 
-Primary capabilities:
+`RemoteStore` capabilities:
 
 - `getState()`
-- `getInitialState()`
 - `subscribe(listener)`
 - `getStatus()`
 - `destroy()`
-- `[Symbol.dispose]()` through JavaScript `using`
 - `actions.*`
 
-A `RemoteStore` handle is tied to one connection session. After it becomes
+`RemoteStoreWithInitialState` also supports `getInitialState()` and JavaScript
+`using` through `[Symbol.dispose]()`. The local
+`NexusStoreHandleWithInitialState` returned by `createNexusStore()` provides
+the same two capabilities.
+
+A remote Store handle is tied to one connection session. After it becomes
 `disconnected`, `stale`, or `destroyed`, create a replacement instead of
 reusing it.
 
-`getInitialState()` returns a defensive clone of the successful handshake
+On `RemoteStoreWithInitialState`, `getInitialState()` returns a defensive clone of the successful handshake
 baseline. Later synchronized snapshots do not change that baseline, and every
 returned snapshot has a new identity.
 
