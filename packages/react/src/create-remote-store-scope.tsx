@@ -10,10 +10,7 @@ import {
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,
 } from "./use-remote-store.js";
-import {
-  useStoreSelector,
-  type UseStoreSelectorOptions,
-} from "./use-store-selector.js";
+import { useNullableStore } from "./use-store.js";
 
 type ActionFunction = (...args: any[]) => any;
 
@@ -26,7 +23,7 @@ export interface RemoteStoreScope<
   useRemoteStore(): UseRemoteStoreResult<TState, TActions>;
   useSelector<TResult>(
     selector: (state: TState) => TResult,
-    options: UseStoreSelectorOptions<TResult>,
+    options: { readonly fallback: TResult },
   ): TResult;
   useActions(): RemoteActions<TActions> | null;
   useStatus(): RemoteStoreStatus;
@@ -87,10 +84,10 @@ export const createRemoteStoreScopeWithNexus = <
 
   const useSelector = <TResult,>(
     selector: (state: TState) => TResult,
-    options: UseStoreSelectorOptions<TResult>,
+    options: { readonly fallback: TResult },
   ): TResult => {
     const remote = useScopedRemoteStore();
-    return useStoreSelector(remote, selector, options);
+    return useNullableStore(remote.store, selector, options.fallback);
   };
 
   const useActions = (): RemoteActions<TActions> | null => {

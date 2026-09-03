@@ -1,5 +1,10 @@
 import { Nexus } from "@nexus-js/core";
-import { createNexusScope, useStoreSelector } from "@nexus-js/react";
+import type { RemoteStore } from "@nexus-js/core/state";
+import {
+  createNexusScope,
+  useStore,
+  type UseRemoteStoreResult,
+} from "@nexus-js/react";
 import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -8,11 +13,17 @@ import {
   HOST_ORIGIN,
   iframeCounterStore,
   frameNonce,
+  type CounterActions,
   type CounterState,
 } from "./shared";
 
-const frameId = new URLSearchParams(window.location.search).get("frameId");
-if (!frameId) throw new Error("Missing frameId query parameter");
+const frameId = getRequiredFrameId();
+
+function getRequiredFrameId() {
+  const value = new URLSearchParams(window.location.search).get("frameId");
+  if (!value) throw new Error("Missing frameId query parameter");
+  return value;
+}
 
 type BrowserEventListener = Parameters<typeof window.addEventListener>[1];
 type BrowserAddOptions = Parameters<typeof window.addEventListener>[2];
@@ -71,17 +82,12 @@ const telemetry = {
   commits: [] as CounterState[],
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as
-    | null
-    | ReturnType<
-        typeof IframeNexusScope.useRemoteStore<CounterState, any>
-      >["store"],
+  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
-let latestRemote: ReturnType<
-  typeof IframeNexusScope.useRemoteStore<CounterState, any>
-> | null = null;
+let latestRemote: UseRemoteStoreResult<CounterState, CounterActions> | null =
+  null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
@@ -93,32 +99,45 @@ function CounterApp() {
     where: hostWhere,
   });
   latestRemote = remote;
-  const count = useStoreSelector(remote, (state) => state.count, {
-    fallback: -1,
-  });
-  const writes = useStoreSelector(remote, (state) => state.writes.length, {
-    fallback: -1,
-  });
 
   useEffect(() => {
     telemetry.statuses.push(remote.status.type);
   }, [remote.status]);
 
-  useEffect(() => {
-    if (!remote.store || remote.status.type !== "ready") return;
-    telemetry.commits.push(remote.store.getState());
-  }, [remote.store, remote.status, count, writes]);
-
   return (
     <main>
       <div id="frame-id">{frameId}</div>
       <div id="status">{remote.status.type}</div>
-      <div id="count">{count}</div>
-      <div id="writes">{writes}</div>
-      <div id="last-write">
-        {remote.store?.getState().writes.at(-1)?.actor ?? "none"}
-      </div>
+      {remote.store ? <StoreView store={remote.store} /> : <StoreFallback />}
     </main>
+  );
+}
+
+function StoreView({
+  store,
+}: {
+  store: RemoteStore<CounterState, CounterActions>;
+}) {
+  const snapshot = useStore(store);
+  useEffect(() => {
+    telemetry.commits.push(snapshot);
+  }, [snapshot]);
+  return (
+    <>
+      <div id="count">{snapshot.count}</div>
+      <div id="writes">{snapshot.writes.length}</div>
+      <div id="last-write">{snapshot.writes.at(-1)?.actor ?? "none"}</div>
+    </>
+  );
+}
+
+function StoreFallback() {
+  return (
+    <>
+      <div id="count">-1</div>
+      <div id="writes">-1</div>
+      <div id="last-write">none</div>
+    </>
   );
 }
 

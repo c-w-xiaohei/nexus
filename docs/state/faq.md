@@ -28,11 +28,11 @@ This follows the Core lifecycle rules. See
 [Service Proxy Lifecycle](../proxy-lifecycle.md) for service proxies and
 [Core concepts](../concepts.md#session-bound-handles) for remote resources.
 
-## Why does React sometimes keep the last selected value?
+## What does scope selector fallback mean?
 
-It can avoid a loading state while creating a replacement for the same target.
-See the [Nexus State React guide](react.md#fallback-semantics) for failure and
-target-change behavior.
+`RemoteStoreScope.useSelector()` returns its explicit fallback whenever the
+scope has no current RemoteStore handle. It never retains a previous handle's
+selected value during replacement or failure.
 
 ## Does `useRemoteStore()` automatically rebuild when a connection session ends?
 

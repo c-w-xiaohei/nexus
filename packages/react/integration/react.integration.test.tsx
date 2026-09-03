@@ -1,7 +1,7 @@
 import React from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { createNexusScope, useStoreSelector } from "../src";
+import { createNexusScope } from "../src";
 import {
   createCounterDefinition,
   createReactNexusHarness,
@@ -48,20 +48,29 @@ describe("react integration", () => {
     }
   });
 
-  it("action updates become visible through useStoreSelector", async () => {
+  it("scope selection observes remote action updates", async () => {
     const harness = await createReactNexusHarness({
       hosts: [{ id: "host-a", initialCount: 0 }],
     });
 
     try {
       const definition = createCounterDefinition();
-      const wrapper = createWrapper(harness);
+      const CounterScope = ReactNexusScope.createRemoteStoreScope(definition);
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <ReactNexusScope.NexusProvider nexus={harness.client.nexus}>
+          <CounterScope.Provider
+            options={{
+              target: { context: "host", hostId: "host-a" },
+            }}
+          >
+            {children}
+          </CounterScope.Provider>
+        </ReactNexusScope.NexusProvider>
+      );
       const { result } = renderHook(
         () => {
-          const remote = ReactNexusScope.useRemoteStore(definition, {
-            target: { context: "host", hostId: "host-a" },
-          });
-          const selected = useStoreSelector(remote, (state) => state.count, {
+          const remote = CounterScope.useRemoteStore();
+          const selected = CounterScope.useSelector((state) => state.count, {
             fallback: -1,
           });
           return { remote, selected };
@@ -126,21 +135,27 @@ describe("react integration", () => {
 
     try {
       const definition = createCounterDefinition();
-      const wrapper = createWrapper(harness);
+      const CounterScope = ReactNexusScope.createRemoteStoreScope(definition);
+      let hostId = "host-a";
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <ReactNexusScope.NexusProvider nexus={harness.client.nexus}>
+          <CounterScope.Provider
+            options={{
+              target: { context: "host", hostId },
+            }}
+          >
+            {children}
+          </CounterScope.Provider>
+        </ReactNexusScope.NexusProvider>
+      );
       const { result, rerender } = renderHook(
-        ({ hostId }) => {
-          const remote = ReactNexusScope.useRemoteStore(definition, {
-            target: { context: "host", hostId },
-          });
-          const selected = useStoreSelector(remote, (state) => state.count, {
+        () => ({
+          remote: CounterScope.useRemoteStore(),
+          selected: CounterScope.useSelector((state) => state.count, {
             fallback: -1,
-          });
-          return { remote, selected };
-        },
-        {
-          initialProps: { hostId: "host-a" },
-          wrapper,
-        },
+          }),
+        }),
+        { wrapper },
       );
 
       await waitFor(() => {
@@ -148,13 +163,16 @@ describe("react integration", () => {
         expect(result.current.selected).toBe(7);
       });
 
-      rerender({ hostId: "host-b" });
+      hostId = "host-b";
+      rerender();
 
-      await act(async () => {
-        await Promise.resolve();
+      await waitFor(() => {
+        expect(result.current.remote.status.type).toBe("initializing");
+        expect(result.current.selected).toBe(-1);
       });
 
       await waitFor(() => {
+        expect(harness.getHostSubscriptions("host-a")).toBe(0);
         expect(result.current.remote.status.type).toBe("ready");
         expect(result.current.selected).toBe(100);
       });

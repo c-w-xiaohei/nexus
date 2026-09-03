@@ -65,6 +65,7 @@ nexus.configure({
 });
 
 console.log(store.getState());
+console.log(store.getInitialState());
 ```
 
 Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
@@ -77,6 +78,10 @@ using store = createNexusStore(counterStore).store;
 
 On scope exit, `using` delegates to the same synchronous, idempotent
 `destroy()` transition.
+
+`getInitialState()` returns a defensive clone of the state captured when the
+authoritative host was created. Later actions do not change it; every returned
+snapshot has a new identity.
 
 ## `connectNexusStore()`
 
@@ -94,6 +99,7 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - creates a proxy through ordinary service paths
 - performs one setup step that establishes the initial snapshot and subscription together
 - initializes the local mirror from the baseline
+- returns no `RemoteStore` when the handshake fails
 
 Lifecycle boundary:
 
@@ -138,6 +144,7 @@ Nexus State `RemoteStore` is the client-side handle.
 Primary capabilities:
 
 - `getState()`
+- `getInitialState()`
 - `subscribe(listener)`
 - `getStatus()`
 - `destroy()`
@@ -147,6 +154,10 @@ Primary capabilities:
 A `RemoteStore` handle is tied to one connection session. After it becomes
 `disconnected`, `stale`, or `destroyed`, create a replacement instead of
 reusing it.
+
+`getInitialState()` returns a defensive clone of the successful handshake
+baseline. Later synchronized snapshots do not change that baseline, and every
+returned snapshot has a new identity.
 
 ### Example
 

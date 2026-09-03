@@ -65,6 +65,14 @@ const isStructuredDisconnectError = (error: unknown): boolean => {
 const isObjectLike = (value: unknown): value is object =>
   typeof value === "object" && value !== null;
 
+const cloneState = <TState extends object>(state: TState): TState => {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(state);
+  }
+
+  return JSON.parse(JSON.stringify(state)) as TState;
+};
+
 export class RemoteStoreEntity<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
@@ -77,6 +85,7 @@ export class RemoteStoreEntity<
   private readonly actionProxy: RemoteActions<TActions>;
   private readonly validation?: NexusStoreValidationSchemas<TState, TActions>;
   private readonly actionCommitTimeoutMs: number;
+  private initialState: TState;
   private status: RemoteStoreStatus = { type: "initializing" };
   private readonly pendingEvents: Array<{
     type: "snapshot";
@@ -115,6 +124,7 @@ export class RemoteStoreEntity<
     this.actionCommitTimeoutMs =
       options.actionCommitTimeoutMs ?? DEFAULT_ACTION_COMMIT_TIMEOUT_MS;
     this.mirror = createMirrorStore({ initialState });
+    this.initialState = cloneState(initialState);
 
     this.actionProxy = new Proxy(
       {},
@@ -140,6 +150,10 @@ export class RemoteStoreEntity<
 
   public getState(): TState {
     return this.mirror.getSnapshot();
+  }
+
+  public getInitialState(): TState {
+    return cloneState(this.initialState);
   }
 
   public subscribe(listener: (state: TState) => void): () => void {
@@ -285,6 +299,7 @@ export class RemoteStoreEntity<
 
     this.subscriptionId = data.subscriptionId;
     this.handshakeCompleted = true;
+    this.initialState = cloneState(data.state);
     this.applyIncomingSnapshot(
       {
         type: "snapshot",

@@ -96,6 +96,6 @@ APIs.
 
 ## Nexus State
 
-For `createRemoteStoreScope()`, `useRemoteStore()`, `useStoreSelector()`, and
+For `createRemoteStoreScope()`, `useRemoteStore()`, `useStore()`, and
 State-specific loading, replacement, and selector semantics, use the
 [Nexus State React guide](state/react.md).

@@ -189,7 +189,7 @@ function CounterView() {
 }
 ```
 
-The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately.
+The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately. For a direct owner, render a child after `remote.store` exists and select it with `useStore(remote.store, selector)`.
 
 See `docs/state/react.md` for `reconnectKey`, `reconnect()`, replacement, and selector fallback.
 

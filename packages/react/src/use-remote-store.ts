@@ -8,10 +8,6 @@ import {
   type RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { useNexus } from "./use-nexus.js";
-import {
-  clearStoreAsAdapterStale,
-  markStoreAsAdapterStale,
-} from "./use-store-selector.js";
 
 const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
   "nexus.state.remote-store.mark-stale",
@@ -103,12 +99,6 @@ const markStoreStale = (target: RemoteStore<any, any>): void => {
   if (typeof marker === "function") {
     marker.call(target);
   }
-
-  markStoreAsAdapterStale(target);
-};
-
-const clearStoreStale = (target: RemoteStore<any, any>): void => {
-  clearStoreAsAdapterStale(target);
 };
 
 export const useRemoteStore = <
@@ -192,7 +182,6 @@ export const useRemoteStoreWithNexus = <
 
         staleStoreRef.current = previousStore;
       } else {
-        clearStoreStale(previousStore);
         previousStore.destroy();
       }
 
@@ -222,12 +211,10 @@ export const useRemoteStoreWithNexus = <
         }
 
         if (staleStoreRef.current && staleStoreRef.current !== remote) {
-          clearStoreStale(staleStoreRef.current);
           staleStoreRef.current.destroy();
           staleStoreRef.current = null;
         }
 
-        clearStoreStale(remote);
         activeStoreRef.current = remote;
         activeTargetRef.current = target;
         lastConnectedStoreRef.current = remote;
@@ -278,12 +265,10 @@ export const useRemoteStoreWithNexus = <
       if (activeStore) {
         activeStoreRef.current = null;
         activeTargetRef.current = null;
-        clearStoreStale(activeStore);
         activeStore.destroy();
       }
 
       if (staleStoreRef.current) {
-        clearStoreStale(staleStoreRef.current);
         staleStoreRef.current.destroy();
         staleStoreRef.current = null;
       }

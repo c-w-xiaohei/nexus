@@ -84,7 +84,7 @@ The important point is that `disconnected` and `stale` are not silent. They are 
 Keep these two layers separate:
 
 - headless core (`connectNexusStore` / `RemoteStore`)
-- React hook orchestration (`useRemoteStore` and selector hooks)
+- React hook orchestration (`useRemoteStore`, `useStore`, and scoped selection)
 
 Headless core behavior:
 

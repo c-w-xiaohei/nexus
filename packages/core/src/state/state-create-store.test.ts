@@ -77,6 +77,15 @@ describe("createNexusStore", () => {
     expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
   });
 
+  it("keeps getInitialState fixed after local actions", async () => {
+    const { store } = createNexusStore(createCounterDefinition());
+
+    await store.actions.increment(3);
+
+    expect(store.getInitialState()).toEqual({ count: 0 });
+    expect(store.getState()).toEqual({ count: 3 });
+  });
+
   it("keeps service subscribe baseline mutations from changing authoritative state", async () => {
     const definition = createCounterDefinition();
     const { provider, store } = createNexusStore(definition);

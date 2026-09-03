@@ -110,6 +110,7 @@ export interface RemoteStore<
   TActions extends Record<string, ActionFunction>,
 > extends Disposable {
   getState(): TState;
+  getInitialState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
   /**

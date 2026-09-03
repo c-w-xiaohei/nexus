@@ -2790,6 +2790,34 @@ describe("state client runtime and connect APIs", () => {
     expect(throwingListener).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps getInitialState fixed at the remote handshake baseline", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: -1 });
+
+    remote.completeHandshake({
+      storeInstanceId: "store-initial-state",
+      subscriptionId: "sub-initial-state",
+      version: 1,
+      state: { count: 1 },
+    });
+    remote.onSync({
+      type: "snapshot",
+      storeInstanceId: "store-initial-state",
+      version: 2,
+      state: { count: 2 },
+    });
+
+    expect(remote.getInitialState()).toEqual({ count: 1 });
+    expect(remote.getState()).toEqual({ count: 2 });
+  });
+
   it("does not notify a status listener removed by an earlier listener", () => {
     const service = {
       subscribe: vi.fn(),

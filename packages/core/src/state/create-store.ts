@@ -25,6 +25,14 @@ const ignoredActionProxyKeys = new Set([
   "toString",
 ]);
 
+const cloneState = <TState extends object>(state: TState): TState => {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(state);
+  }
+
+  return JSON.parse(JSON.stringify(state)) as TState;
+};
+
 export type NexusStoreStatus =
   | { type: "ready"; storeInstanceId: string; version: number }
   | { type: "destroyed" };
@@ -34,6 +42,7 @@ export interface NexusStoreHandle<
   TActions extends Record<string, (...args: any[]) => any>,
 > extends Disposable {
   getState(): TState;
+  getInitialState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): NexusStoreStatus;
   destroy(): void;
@@ -61,6 +70,7 @@ export const createNexusStore = <
   definition: NexusStoreDefinition<TState, TActions, M>,
 ): CreateNexusStoreResult<TState, TActions, M> => {
   const host = createStoreHost(definition);
+  const initialState = host.getSnapshot().state;
   let destroyed = false;
 
   const service: NexusStoreServiceContract<TState, TActions> = {
@@ -117,6 +127,7 @@ export const createNexusStore = <
 
   const store: NexusStoreHandle<TState, TActions> = {
     getState: () => host.getSnapshot().state,
+    getInitialState: () => cloneState(initialState),
     subscribe: (listener) => {
       const subscriptionId = host.subscribeLocal((event) => {
         if (event.type === "snapshot") {

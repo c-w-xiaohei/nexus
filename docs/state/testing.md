@@ -59,8 +59,8 @@ Use React tests when you want to verify:
 - disposal of a pending acquisition that resolves after a newer request
 - scope sharing, including shared reconnect controls
 - selector fallback behavior
-- same-target continuity after a failed replacement, with `disconnected` status/error
-- immediate cross-target fallback handoff, including after a same-target failure
+- fallback plus `disconnected` status/error after a failed same-target replacement
+- fallback during cross-target handoff until the replacement is ready
 
 Current examples live in:
 

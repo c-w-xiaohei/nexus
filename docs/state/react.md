@@ -1,8 +1,7 @@
 # Nexus State React Guide
 
-This page covers the Nexus State-specific bindings in `@nexus-js/react`. For
-providing a Nexus instance, typed React scopes, and service proxy status,
-see the [general React integration guide](../react.md).
+This page covers the Nexus State bindings in `@nexus-js/react`. For Nexus
+providers, typed React scopes, and service proxy status, see [React](../react.md).
 
 ## Public Surface
 
@@ -10,25 +9,22 @@ see the [general React integration guide](../react.md).
 import {
   createRemoteStoreScope,
   useRemoteStore,
-  useStoreSelector,
+  useStore,
 } from "@nexus-js/react";
 ```
 
-## `createRemoteStoreScope()`
+## Shared Subtree Ownership
 
-Use a remote store scope when several components need the same store. Place one scope provider inside `NexusProvider` near the subtree, then read state, actions, status, errors, or the `UseRemoteStoreResult` from its children.
+Use `createRemoteStoreScope()` when several components consume one Store. One
+Provider owns one side-effectful RemoteStore handle and remote subscription for
+its subtree. Consumers use the scope hooks and never acquire another handle.
 
 ```tsx
-import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
-import { usingBackgroundScript, chromeTarget } from "@nexus-js/chrome";
-import { counterStore } from "./counter-store";
-
 const CounterScope = createRemoteStoreScope(counterStore);
-const chromeNexus = usingBackgroundScript();
 
 function CounterPanel() {
   return (
-    <NexusProvider nexus={chromeNexus}>
+    <NexusProvider nexus={nexus}>
       <CounterScope.Provider options={{ target: chromeTarget.background() }}>
         <CounterButton />
         <CounterStatus />
@@ -42,243 +38,81 @@ function CounterButton() {
     fallback: 0,
   });
   const actions = CounterScope.useActions();
-  const status = CounterScope.useStatus();
-
-  if (!actions || status.type !== "ready") {
-    return <button disabled>{count}</button>;
-  }
-
-  return <button onClick={() => actions.increment(1)}>{count}</button>;
-}
-
-function CounterStatus() {
-  const status = CounterScope.useStatus();
-  const error = CounterScope.useError();
-
-  if (status.type === "disconnected") {
-    return <span>Disconnected: {error?.message}</span>;
-  }
-
-  return <span>{status.type}</span>;
-}
-```
-
-Scope hooks fail fast outside `RemoteStoreScope.Provider`. The scope provider still depends on `NexusProvider` because it delegates to `useRemoteStore()` internally.
-
-The provider manages one shared `RemoteStore` handle for its subtree. Its `options` accept `reconnectKey`, and every `CounterScope.useRemoteStore()` consumer receives the same stable `reconnect` function. The scope does not retry calls or replay actions. `useActions()` returns `null` until a `RemoteStore` handle exists, so the UI decides when actions are available.
-
-## `useRemoteStore()`
-
-Use this lower-level hook when one component should create and destroy its own `RemoteStore` handle, or when it needs the full `UseRemoteStoreResult`. For a shared subtree, prefer `createRemoteStoreScope()` so child components do not create separate handles.
-
-The component must be rendered under `NexusProvider`. The direct-hook examples
-below assume that provider is already present.
-
-Change `reconnectKey` when the application learns that the same target has a new connection session, such as after a background restart. Call `remote.reconnect()` from an event handler, callback, or timer when the application should try again. Either action starts an attempt to create a new `RemoteStore` handle with the latest Nexus instance, definition, target, and options. If attempts overlap, only the newest result is used. `reconnectKey` is a React option and is not passed to the Core store API.
-
-Neither control revives an old `RemoteStore` handle, replays an action, or guarantees that the target is available. The `reconnect` function keeps the same identity across renders. The `UseRemoteStoreResult` object may change.
-
-```tsx
-import { chromeTarget } from "@nexus-js/chrome";
-
-function CounterRemote({ sessionEpoch }: { sessionEpoch: number }) {
-  const remote = useRemoteStore(counterStore, {
-    target: chromeTarget.background(),
-    reconnectKey: sessionEpoch,
-  });
-
-  return <button onClick={remote.reconnect}>Reconnect</button>;
-}
-```
-
-Return shape:
-
-```ts
-type UseRemoteStoreResult<TState, TActions> = {
-  store: RemoteStore<TState, TActions> | null;
-  status: RemoteStoreStatus;
-  error: Error | null;
-  reconnect(): void;
-};
-```
-
-### Important semantics
-
-- before first ready: `store` may be `null`
-- while creating a replacement: `store` is `null`
-- failed connect or replacement attempts are explicit, not disguised as ongoing initialization
-- a terminal `RemoteStore` handle does not become usable again
-- changing `reconnectKey` or calling `reconnect()` starts an attempt to create a replacement for the same target
-
-## Loading And Error UI
-
-With a scope, branch on `useStatus()`, `useActions()`, and `useError()` in the leaf components that render lifecycle UI.
-
-```tsx
-import { chromeTarget } from "@nexus-js/chrome";
-
-function CounterView() {
-  const count = CounterScope.useSelector((state) => state.count, {
-    fallback: 0,
-  });
-  const actions = CounterScope.useActions();
-  const status = CounterScope.useStatus();
-  const error = CounterScope.useError();
-
-  if (status.type === "initializing") {
-    return <span>Loading...</span>;
-  }
-
-  if (status.type === "disconnected") {
-    return <span>Disconnected: {error?.message}</span>;
-  }
-
-  if (!actions || status.type !== "ready") {
-    return <span>Unavailable</span>;
-  }
-
-  return <button onClick={() => actions.increment(1)}>{count}</button>;
-}
-```
-
-For direct use, branch on `status`, `store`, and `error` from the `UseRemoteStoreResult`.
-
-```tsx
-function CounterView() {
-  const remote = useRemoteStore(counterStore, {
-    target: chromeTarget.background(),
-  });
-
-  const count = useStoreSelector(remote, (state) => state.count, {
-    fallback: 0,
-  });
-
-  if (remote.status.type === "initializing") {
-    return <span>Loading...</span>;
-  }
-
-  if (remote.status.type === "disconnected") {
-    return <span>Disconnected: {remote.error?.message}</span>;
-  }
-
-  if (!remote.store || remote.status.type !== "ready") {
-    return <span>Unavailable</span>;
-  }
-
   return (
-    <button onClick={() => remote.store.actions.increment(1)}>{count}</button>
+    <button disabled={!actions} onClick={() => actions?.increment(1)}>
+      {count}
+    </button>
   );
 }
 ```
 
-## `useStoreSelector()`
+`useSelector(selector, { fallback })` returns the explicit fallback whenever
+the current scoped RemoteStore handle is `null`, including before acquisition,
+during replacement, and after a failed attempt. It does not retain selected
+values from an old handle. `useRemoteStore`, `useActions`, `useStatus`, and
+`useError` share the Provider's single result.
 
-Nexus State selector hook on top of `useSyncExternalStore`.
+Each different Store needs its own RemoteStore handle. Consumers of the same
+Store should share a scope rather than each calling `useRemoteStore()`.
+
+## Direct Handle Selection
+
+`useRemoteStore(definition, options)` owns async IPC acquisition, status,
+replacement, latest-wins behavior, and cleanup. Use it when one component owns
+that lifecycle or needs the complete `UseRemoteStoreResult`.
+
+`useStore(store, selector?)` is the direct Store selection hook, shaped like
+Zustand. It accepts only a concrete structural Store with `getState`,
+`getInitialState`, and `subscribe`. With no selector it returns whole state;
+with a selector it returns the selected value. It has no fallback, status,
+error, target, reconnect, replacement, equality, or cache options.
+
+`useStore` is an optional Core 1.1 capability. `@nexus-js/react` keeps its
+`@nexus-js/core >=1.0.0` peer range because existing owner and scope APIs work
+with Core 1.0. Calling `useStore` with a Core 1.0 handle throws
+`useStore requires Core >=1.1.0` on both client and server rendering.
+
+Render a child only after a concrete RemoteStore handle exists so Hooks remain
+unconditional in each component.
 
 ```tsx
-import { chromeTarget } from "@nexus-js/chrome";
-
-function CounterValue() {
+function CounterRemote() {
   const remote = useRemoteStore(counterStore, {
     target: chromeTarget.background(),
   });
-  const count = useStoreSelector(remote, (state) => state.count, {
-    fallback: 0,
-  });
-
-  return <span>{count}</span>;
-}
-```
-
-When using a remote store scope, prefer `CounterScope.useSelector(...)`; it reads from the shared `UseRemoteStoreResult`.
-
-### Fallback semantics
-
-- fallback is used before a usable store exists
-- after a store has been ready, temporary replacement setup for the same target may preserve the last selected value
-- if a same-target replacement attempt fails, the selector may still preserve that last ready value while `status` is `disconnected` and `error` explains the failed attempt; the value does not make a handle usable or indicate successful replacement
-- a target change is a stale handoff: selectors use their fallback until the new target is ready, rather than presenting the old target's value as the new target's value
-
-## What To Do When A `RemoteStore` Handle Becomes `disconnected` Or `stale`
-
-Treat those as explicit Nexus State lifecycle signals.
-
-- `disconnected` usually means the current connection is gone or a new connection attempt failed
-- `stale` means the `RemoteStore` handle no longer matches the requested target
-
-React code usually renders fallback UI and lets `useRemoteStore()` create a new `RemoteStore` handle when its inputs change. The terminal handle remains terminal.
-
-When the connection session for the same target ends, the hook does not retry automatically. A remount, changed hook input, changed `reconnectKey`, or `reconnect()` starts an attempt to create a replacement `RemoteStore` handle. The target may still be unavailable, and the attempt may fail.
-
-### Create A Replacement For The Same Target
-
-If the application must stay on the same target after its connection session changes, update `reconnectKey` or call `reconnect()`. The following components assume an enclosing `NexusProvider`:
-
-```tsx
-import { useEffect, useState } from "react";
-import { chromeTarget } from "@nexus-js/chrome";
-
-// Application- or adapter-owned subscription, not a Nexus export.
-declare function observeBackgroundSession(
-  onSessionChange: () => void,
-): () => void;
-
-function CounterBoundary() {
-  const [sessionEpoch, setSessionEpoch] = useState(0);
-
-  useEffect(() => {
-    return observeBackgroundSession(() => {
-      setSessionEpoch((value) => value + 1);
-    });
-  }, []);
-
-  return <CounterRemote reconnectKey={sessionEpoch} />;
-}
-
-function CounterRemote({ reconnectKey }: { reconnectKey: number }) {
-  const remote = useRemoteStore(counterStore, {
-    target: chromeTarget.background(),
-    reconnectKey,
-  });
-
-  const count = useStoreSelector(remote, (state) => state.count, {
-    fallback: 0,
-  });
-
-  if (remote.status.type === "disconnected" || remote.status.type === "stale") {
-    return (
-      <div>
-        <p>Connection ended. Create a new RemoteStore handle.</p>
-        <button onClick={remote.reconnect}>Reconnect</button>
-      </div>
-    );
-  }
 
   if (!remote.store || remote.status.type !== "ready") {
-    return <span>Loading...</span>;
+    return <span>{remote.status.type}</span>;
   }
 
-  return (
-    <button onClick={() => remote.store.actions.increment(1)}>{count}</button>
-  );
+  return <CounterValue store={remote.store} />;
+}
+
+function CounterValue({
+  store,
+}: {
+  store: RemoteStore<CounterState, CounterActions>;
+}) {
+  const count = useStore(store, (state) => state.count);
+  return <button onClick={() => store.actions.increment(1)}>{count}</button>;
 }
 ```
 
-The old `RemoteStore` handle remains terminal. The React hook starts a separate attempt to create a replacement.
+## Lifecycle Controls
 
-## Scope Reconnect From A Child
-
-Use the same scope-owned command when a child renders a recovery control:
+Change `reconnectKey` when application code knows the same target has a new
+connection session. Call `remote.reconnect()` from an event handler, callback,
+or timer to request replacement. Both create a new RemoteStore handle using the
+latest inputs; neither revives a terminal handle, replays actions, nor
+guarantees availability. Overlapping attempts are latest-wins.
 
 ```tsx
-function CounterReconnectButton() {
+function ReconnectButton() {
   const { reconnect } = CounterScope.useRemoteStore();
   return <button onClick={reconnect}>Reconnect</button>;
 }
 ```
 
-## Limits
-
-- These bindings do not create a second State runtime.
-- They do not provide Jotai integration.
-- They do not hide `RemoteStore` status or replacement.
+`RemoteStore` handles are session-bound. Treat `disconnected` and `stale` as
+explicit lifecycle signals, render availability UI from `status` and `error`,
+and acquire a replacement through the owner hook or scope Provider.

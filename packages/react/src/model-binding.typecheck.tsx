@@ -14,6 +14,8 @@ import { createNexusScope } from "./create-nexus-scope.js";
 import { NexusProvider } from "./provider.js";
 import { useNexus } from "./use-nexus.js";
 import { useProxyStatus } from "./use-proxy-status.js";
+import { useStore } from "./use-store.js";
+import type { UseRemoteStoreResult } from "./use-remote-store.js";
 
 interface ChromeModel extends AdapterModel {
   contextMeta: { context: "chrome" };
@@ -103,6 +105,14 @@ const DefaultApp = () => {
 
   return <NexusProvider nexus={new Nexus()} />;
 };
+
+declare const remoteStoreResult: UseRemoteStoreResult<
+  { count: number },
+  { increment(): void }
+>;
+
+// @ts-expect-error useStore accepts a concrete Store, not an acquisition result.
+useStore(remoteStoreResult);
 
 void ChromeApp;
 void DefaultApp;
