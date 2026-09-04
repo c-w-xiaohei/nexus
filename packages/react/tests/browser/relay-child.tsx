@@ -1,5 +1,10 @@
 import { Nexus } from "@nexus-js/core";
-import { createNexusScope, useStoreSelector } from "@nexus-js/react";
+import {
+  createNexusScope,
+  useStore,
+  type RemoteStoreWithInitialState,
+  type UseRemoteStoreResult,
+} from "@nexus-js/react";
 import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -10,6 +15,7 @@ import {
   iframeCounterStore,
   relayChildNonce,
   relayFrameTarget,
+  type CounterActions,
   type CounterState,
   type RelayProfileService,
 } from "./shared";
@@ -37,17 +43,15 @@ const childNexus = new Nexus<IframeAdapterModel>().configure({
 const telemetry = {
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as
-    | ReturnType<
-        typeof IframeNexusScope.useRemoteStore<CounterState, any>
-      >["store"]
-    | null,
+  oldHandle: null as RemoteStoreWithInitialState<
+    CounterState,
+    CounterActions
+  > | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
-let latestRemote: ReturnType<
-  typeof IframeNexusScope.useRemoteStore<CounterState, any>
-> | null = null;
+let latestRemote: UseRemoteStoreResult<CounterState, CounterActions> | null =
+  null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
@@ -58,12 +62,6 @@ function RelayChildApp() {
     target: relayFrameTarget,
   });
   latestRemote = remote;
-  const count = useStoreSelector(remote, (state) => state.count, {
-    fallback: -1,
-  });
-  const writes = useStoreSelector(remote, (state) => state.writes.length, {
-    fallback: -1,
-  });
 
   useEffect(() => {
     telemetry.statuses.push(remote.status.type);
@@ -81,12 +79,33 @@ function RelayChildApp() {
     <main>
       <div id="child-id">{childId}</div>
       <div id="status">{remote.status.type}</div>
-      <div id="count">{count}</div>
-      <div id="writes">{writes}</div>
-      <div id="last-write">
-        {remote.store?.getState().writes.at(-1)?.actor ?? "none"}
-      </div>
+      {remote.store ? <StoreView store={remote.store} /> : <StoreFallback />}
     </main>
+  );
+}
+
+function StoreView({
+  store,
+}: {
+  store: RemoteStoreWithInitialState<CounterState, CounterActions>;
+}) {
+  const snapshot = useStore(store);
+  return (
+    <>
+      <div id="count">{snapshot.count}</div>
+      <div id="writes">{snapshot.writes.length}</div>
+      <div id="last-write">{snapshot.writes.at(-1)?.actor ?? "none"}</div>
+    </>
+  );
+}
+
+function StoreFallback() {
+  return (
+    <>
+      <div id="count">-1</div>
+      <div id="writes">-1</div>
+      <div id="last-write">none</div>
+    </>
   );
 }
 

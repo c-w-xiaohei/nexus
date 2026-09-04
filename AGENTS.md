@@ -20,7 +20,7 @@ No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 - `packages/core` - core runtime, RPC engine, connection management, transport abstractions, and Nexus State.
 - `packages/chrome` - Chrome extension adapter and `using...` context helpers.
 - `packages/iframe` - iframe parent/child adapter over `postMessage`.
-- `packages/react` - React bindings for Nexus State.
+- `packages/react` - React bindings for Nexus instances, service proxy status, and Nexus State.
 - `packages/node-ipc` - Node IPC adapter for daemon/client runtimes.
 - `docs` - public documentation.
 - `.doc` - internal proposals, plans, and mandatory style guidance.

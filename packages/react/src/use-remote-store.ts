@@ -8,16 +8,20 @@ import {
   type RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { useNexus } from "./use-nexus.js";
-import {
-  clearStoreAsAdapterStale,
-  markStoreAsAdapterStale,
-} from "./use-store-selector.js";
 
 const MARK_REMOTE_STORE_STALE_SYMBOL = Symbol.for(
   "nexus.state.remote-store.mark-stale",
 );
 
 type ActionFunction = (...args: any[]) => any;
+
+/** A remote Store handle with the Core 1.1 direct-selection capability. */
+export interface RemoteStoreWithInitialState<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+> extends RemoteStore<TState, TActions> {
+  getInitialState(): TState;
+}
 
 export type NexusStoreNexus<M extends AdapterModel> = Pick<
   NexusInstance<M>,
@@ -32,7 +36,7 @@ export interface UseRemoteStoreResult<
   TState extends object,
   TActions extends Record<string, ActionFunction>,
 > {
-  readonly store: RemoteStore<TState, TActions> | null;
+  readonly store: RemoteStoreWithInitialState<TState, TActions> | null;
   readonly status: RemoteStoreStatus;
   readonly error: Error | null;
   readonly reconnect: () => void;
@@ -71,7 +75,30 @@ const getLastKnownVersion = (status: RemoteStoreStatus): number | null => {
 const sameStatus = (
   left: RemoteStoreStatus,
   right: RemoteStoreStatus,
-): boolean => JSON.stringify(left) === JSON.stringify(right);
+): boolean => {
+  switch (left.type) {
+    case "ready":
+      return (
+        right.type === "ready" &&
+        left.storeInstanceId === right.storeInstanceId &&
+        left.version === right.version
+      );
+    case "disconnected":
+      return (
+        right.type === "disconnected" &&
+        left.lastKnownVersion === right.lastKnownVersion &&
+        left.cause === right.cause
+      );
+    case "stale":
+      return (
+        right.type === "stale" &&
+        left.lastKnownVersion === right.lastKnownVersion &&
+        left.reason === right.reason
+      );
+    default:
+      return left.type === right.type;
+  }
+};
 
 const markStoreStale = (target: RemoteStore<any, any>): void => {
   const marker = (target as unknown as Record<symbol, unknown>)[
@@ -80,12 +107,6 @@ const markStoreStale = (target: RemoteStore<any, any>): void => {
   if (typeof marker === "function") {
     marker.call(target);
   }
-
-  markStoreAsAdapterStale(target);
-};
-
-const clearStoreStale = (target: RemoteStore<any, any>): void => {
-  clearStoreAsAdapterStale(target);
 };
 
 export const useRemoteStore = <
@@ -108,21 +129,29 @@ export const useRemoteStoreWithNexus = <
   options: UseRemoteStoreOptions<M> = {},
 ): UseRemoteStoreResult<TState, TActions> => {
   const { reconnectKey = null, ...connectOptions } = options;
-  const [store, setStore] = useState<RemoteStore<TState, TActions> | null>(
-    null,
-  );
+  const [store, setStore] = useState<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const [status, setStatus] = useState<RemoteStoreStatus>(INITIALIZING_STATUS);
   const [error, setError] = useState<Error | null>(null);
   const [manualReconnectRevision, reconnect] = useReducer(
     (revision: number) => revision + 1,
     0,
   );
-  const activeStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
-  const staleStoreRef = useRef<RemoteStore<TState, TActions> | null>(null);
+  const activeStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
+  const staleStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const activeTargetRef = useRef<TargetIdentity | null>(null);
-  const lastConnectedStoreRef = useRef<RemoteStore<TState, TActions> | null>(
-    null,
-  );
+  const lastConnectedStoreRef = useRef<RemoteStoreWithInitialState<
+    TState,
+    TActions
+  > | null>(null);
   const lastConnectedTargetRef = useRef<TargetIdentity | null>(null);
   const effectTargetRef = useRef<TargetIdentity | null>(null);
   const lastStatusRef = useRef<RemoteStoreStatus>(INITIALIZING_STATUS);
@@ -169,7 +198,6 @@ export const useRemoteStoreWithNexus = <
 
         staleStoreRef.current = previousStore;
       } else {
-        clearStoreStale(previousStore);
         previousStore.destroy();
       }
 
@@ -199,12 +227,10 @@ export const useRemoteStoreWithNexus = <
         }
 
         if (staleStoreRef.current && staleStoreRef.current !== remote) {
-          clearStoreStale(staleStoreRef.current);
           staleStoreRef.current.destroy();
           staleStoreRef.current = null;
         }
 
-        clearStoreStale(remote);
         activeStoreRef.current = remote;
         activeTargetRef.current = target;
         lastConnectedStoreRef.current = remote;
@@ -255,12 +281,10 @@ export const useRemoteStoreWithNexus = <
       if (activeStore) {
         activeStoreRef.current = null;
         activeTargetRef.current = null;
-        clearStoreStale(activeStore);
         activeStore.destroy();
       }
 
       if (staleStoreRef.current) {
-        clearStoreStale(staleStoreRef.current);
         staleStoreRef.current.destroy();
         staleStoreRef.current = null;
       }
@@ -288,17 +312,16 @@ export const useRemoteStoreWithNexus = <
 
     publishStatusIfNeeded();
 
-    const statusPoll = setInterval(() => {
-      publishStatusIfNeeded();
-    }, 25);
+    if (store.subscribeStatus) {
+      return store.subscribeStatus(publishStatusIfNeeded);
+    }
 
-    const unsubscribe = store.subscribe(() => {
-      publishStatusIfNeeded();
-    });
+    const statusPoll = setInterval(publishStatusIfNeeded, 25);
+    const unsubscribeState = store.subscribe(publishStatusIfNeeded);
 
     return () => {
       clearInterval(statusPoll);
-      unsubscribe();
+      unsubscribeState();
     };
   }, [store]);
 

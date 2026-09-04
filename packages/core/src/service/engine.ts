@@ -30,6 +30,7 @@ import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
 } from "@/types/symbols";
+import { installProxyLifecycle } from "./proxy-lifecycle";
 import { Result } from "better-result";
 const { err, ok } = Result;
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
@@ -243,6 +244,7 @@ export class Engine<M extends AdapterModel> {
           },
         },
       );
+      installProxyLifecycle(proxy, serviceName, connectionId);
     }
 
     return proxy;
@@ -398,6 +400,7 @@ export class Engine<M extends AdapterModel> {
       }
       this.disconnectListeners.delete(connectionId);
     }
+    this.targetStaleListeners.delete(connectionId);
 
     for (const service of this.resourceManager.listExposedServices()) {
       if (isServiceWithHooks(service)) {
@@ -405,7 +408,11 @@ export class Engine<M extends AdapterModel> {
           service,
           SERVICE_ON_DISCONNECT,
         ) as ((connectionId: string) => void) | undefined;
-        onDisconnect?.(connectionId);
+        try {
+          onDisconnect?.(connectionId);
+        } catch (error) {
+          this.logger.error("Exposed service disconnect hook failed.", error);
+        }
       }
     }
 
@@ -427,15 +434,19 @@ export class Engine<M extends AdapterModel> {
     const staleEntries: TargetStaleSubscription<M>[] = [];
 
     for (const entry of Array.from(listeners)) {
-      if (
-        shouldMarkTargetStale({
-          staleTarget: entry.staleTarget,
-          newIdentity,
-          oldIdentity,
-          connectionMeta,
-        })
-      ) {
-        staleEntries.push(entry);
+      try {
+        if (
+          shouldMarkTargetStale({
+            staleTarget: entry.staleTarget,
+            newIdentity,
+            oldIdentity,
+            connectionMeta,
+          })
+        ) {
+          staleEntries.push(entry);
+        }
+      } catch (error) {
+        this.logger.error("Stale target predicate failed.", error);
       }
     }
 

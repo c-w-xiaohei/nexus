@@ -96,13 +96,13 @@ const remoteCounter = await connectNexusStore(nexus, counterStore, {
 });
 ```
 
-At this point you have a `RemoteStore`, which is a local mirror handle for a remote authoritative store.
+At this point you have a `RemoteStore` handle with a local mirror of the host's state.
 
-Treat this handle as session-bound:
+The `RemoteStore` handle is tied to one connection session:
 
-- it is valid for the connection/session that created it
+- it is valid for the connection session that created it
 - if that session is replaced, build a new `RemoteStore` via `connectNexusStore(...)`
-- do not assume old handles auto-heal across session replacement
+- the previous `RemoteStore` handle does not become usable again
 
 ## 4. Read, Subscribe, And Dispatch
 
@@ -136,90 +136,16 @@ try {
   const snapshot = remote.getState();
   console.log(snapshot.count);
 } finally {
-  // Always release both listener and handle.
+  // Always unsubscribe the listener and destroy the handle.
   unsubscribe();
   remote.destroy();
 }
 ```
 
-If a connection closes and the handle becomes `disconnected` or `stale`, create a new `RemoteStore` instance for a new attempt instead of reusing the old instance.
-
-## Reconnect/Rebuild Pattern For Applications
-
-In production apps, separate core handle semantics from orchestration:
-
-- core semantics: one handle maps to one connection/session lifecycle
-- app orchestration: watch lifecycle signals and create replacement handles
-
-Minimal rebuild loop pattern:
-
-```ts
-let current: Awaited<ReturnType<typeof connectNexusStore>> | null = null;
-
-async function connectOrReplace() {
-  if (current) {
-    current.destroy();
-    current = null;
-  }
-
-  current = await connectNexusStore(nexus, counterStore, options);
-}
-
-async function incrementWithRecovery(by = 1) {
-  if (!current) {
-    await connectOrReplace();
-  }
-
-  try {
-    return {
-      kind: "applied",
-      count: await current!.actions.increment(by),
-    } as const;
-  } catch (error) {
-    const status = current?.getStatus().type;
-    if (status === "disconnected" || status === "stale") {
-      // Transport/session loss can make commit outcome unknown.
-      // Reacquire a fresh handle, then re-check state or surface recovery UI.
-      await connectOrReplace();
-
-      return {
-        kind: "needs-recovery-decision",
-        latestCount: current!.getState().count,
-        reason:
-          "Session changed while increment was in-flight; previous commit outcome is unknown.",
-      } as const;
-    }
-    throw error;
-  }
-}
-
-async function incrementAgainWhenReplayIsSafe(by = 1) {
-  const outcome = await incrementWithRecovery(by);
-  if (outcome.kind === "applied") {
-    return outcome.count;
-  }
-
-  // Do not replay by default.
-  // Retry only if your app guarantees idempotency or request deduplication.
-  throw new Error(
-    `${outcome.reason} Latest observed count: ${outcome.latestCount}. ` +
-      "Ask the user to retry, or replay only under an idempotent/deduplicated contract.",
-  );
-}
-
-function destroyCurrent() {
-  current?.destroy();
-  current = null;
-}
-```
-
-For the headless API, do not rely on `subscribe()` callbacks to observe status-only transitions such as `ready -> disconnected`.
-
-`subscribe()` is a state-snapshot stream, not a status event channel. Trigger rebuild from your own orchestration signals (for example action failures, explicit lifecycle checks with `getStatus()`, or transport-level lifecycle events in your runtime).
-
-If an action fails during disconnect/session loss, do not blindly retry the same action. Commit may have happened remotely before the failure surfaced. Reacquire a new handle, re-check state (or surface a recovery choice), and only retry when your action contract is idempotent (or request-deduplicated).
-
-The important distinction is still explicit rebuild on lifecycle change, not implicit recovery of an old handle.
+If a `RemoteStore` handle becomes `disconnected`, `stale`, or `destroyed`, create
+a new handle instead of reusing it. Do not retry an action automatically after
+a disconnect because the action may already have completed on the host. See
+[Lifecycle and errors](lifecycle-and-errors.md) for the full rules.
 
 ## 5. React Usage
 
@@ -263,9 +189,9 @@ function CounterView() {
 }
 ```
 
-The scope provider creates one shared remote store connection for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately.
+The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately. For a direct owner, render a child after `remote.store` exists and select it with `useStore(remote.store, selector)`.
 
-For React session/lifecycle replacement, pass an external committed revision through scope provider `reconnectKey`, or call `const { reconnect } = CounterScope.useRemoteStore()` at the top level of a scope leaf and invoke it from an interaction. Both trigger a replacement acquisition attempt; see `docs/state/react.md` and `docs/state/lifecycle-and-errors.md` for lifecycle and selector handoff semantics.
+See `docs/state/react.md` for `reconnectKey`, `reconnect()`, replacement, and selector fallback.
 
 ## What To Read Next
 

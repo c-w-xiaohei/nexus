@@ -1,5 +1,6 @@
 import { Token } from "../src/api/token";
 import type { NexusInstance } from "../src/api/types";
+import type { RefWrapper } from "../src/types/ref-wrapper";
 import { createStarNetwork } from "../src/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "../src/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "../src/types/symbols";
@@ -72,7 +73,7 @@ export interface IBackgroundService {
 
 export interface IContentScriptService {
   highlightUser(user: string): Promise<boolean>;
-  getTimelineProcessor(): Promise<TimelineProcessor>;
+  getTimelineProcessor(): Promise<RefWrapper<TimelineProcessor>>;
   refresh(): Promise<void>;
   getTitle(): Promise<string>;
   bumpSessionCounter(): Promise<number>;
@@ -163,11 +164,11 @@ export class ContentScriptServiceImpl implements IContentScriptService {
     return true;
   }
 
-  async getTimelineProcessor(): Promise<TimelineProcessor> {
+  async getTimelineProcessor(): Promise<RefWrapper<TimelineProcessor>> {
     return {
       [REF_WRAPPER_SYMBOL]: true,
       target: new TimelineProcessor(this.meta.issueId),
-    } as never;
+    };
   }
 
   async refresh(): Promise<void> {}

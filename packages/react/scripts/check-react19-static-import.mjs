@@ -69,7 +69,7 @@ try {
   );
   await writeFile(
     path.join(fixtureRoot, "check.mjs"),
-    `import { NexusProvider, useNexus, useRemoteStore, useStoreSelector } from "@nexus-js/react";\n\nfor (const [name, value] of Object.entries({ NexusProvider, useNexus, useRemoteStore, useStoreSelector })) {\n  if (typeof value !== "function") {\n    throw new Error(\`Expected named export \${name} to be a function.\`);\n  }\n}\n`,
+    `import { NexusProvider, useNexus, useRemoteStore, useStore } from "@nexus-js/react";\n\nfor (const [name, value] of Object.entries({ NexusProvider, useNexus, useRemoteStore, useStore })) {\n  if (typeof value !== "function") {\n    throw new Error(\`Expected named export \${name} to be a function.\`);\n  }\n}\n`,
   );
 
   run(

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CallProcessor } from "../../src/service/call-processor";
+import { NexusDisconnectedError } from "../../src/errors/call-errors";
 import { NexusResourceError } from "../../src/errors/resource-errors";
 import {
   type AppUserMeta,
@@ -70,6 +70,30 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     );
 
     world.background.nexus.release(processorProxy);
+
+    await vi.waitFor(() => {
+      expect(cs1ResourceManager.countLocalResources()).toBe(
+        initialResourceCount,
+      );
+    });
+  });
+
+  it("releases an explicitly marked remote resource through using", async () => {
+    const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
+    const initialResourceCount = cs1ResourceManager.countLocalResources();
+    const csApi = await world.background.nexus.create(
+      ContentScriptServiceToken,
+      {
+        target: { context: "content-script", issueId: "CS1" },
+      },
+    );
+
+    {
+      using processorProxy = await csApi.getTimelineProcessor();
+      await expect(processorProxy.process()).resolves.toMatchObject({
+        issueId: "CS1",
+      });
+    }
 
     await vi.waitFor(() => {
       expect(cs1ResourceManager.countLocalResources()).toBe(
@@ -149,7 +173,7 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const freshProcessorProxy = await freshApi.getTimelineProcessor();
 
     await expect(oldProcessorProxy.process()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
     await expect(freshProcessorProxy.process()).resolves.toMatchObject({
       issueId: "CS1",

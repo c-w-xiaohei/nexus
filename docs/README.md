@@ -17,6 +17,8 @@ Then use these as needed:
 - `docs/packages.md` for install/import choices
 - `docs/testing/README.md` for unit testing application code that consumes Nexus
 - `docs/auth-and-policy.md` for cross-adapter authorization policy
+- `docs/proxy-lifecycle.md` for ordinary service proxy lifecycle observation
+- `docs/react.md` for Nexus instances, service proxy status, and Nexus State in React
 - `docs/relay.md` for explicit service/store relay across adjacent Nexus graphs
 - `docs/node-ipc/README.md` for local daemon/client IPC over Unix sockets
 
@@ -28,6 +30,8 @@ If you only read one page first, read `docs/getting-started.md`.
 - I need typed cross-context RPC only: continue from `docs/getting-started.md`
 - I need help choosing packages or adapters: use `docs/packages.md` and `docs/platforms.md`
 - I need connection/service authorization rules: use `docs/auth-and-policy.md`
+- I need to observe an existing service proxy: use `docs/proxy-lifecycle.md`
+- I need to use Nexus from React: use `docs/react.md`
 - I need to forward selected services or stores through a bridge context: use `docs/relay.md`
 - I need a local daemon process and local clients: use `docs/node-ipc/README.md`
 - I need synchronized remote state: go to `docs/state/README.md`
@@ -41,6 +45,7 @@ If you only read one page first, read `docs/getting-started.md`.
 - Cross-adapter authorization policy through core `policy.canConnect` and `policy.canCall`
 - Nexus Relay for explicit provider-level service and store forwarding across adjacent Nexus graphs
 - Nexus State as a subsystem for synchronized remote state, built on top of core Nexus APIs
+- React bindings for Nexus instances, service proxy status, and Nexus State via `@nexus-js/react`
 - User-level unit testing utilities via `@nexus-js/testing`
 
 ## Testing Docs

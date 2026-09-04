@@ -25,6 +25,14 @@ const ignoredActionProxyKeys = new Set([
   "toString",
 ]);
 
+const cloneState = <TState extends object>(state: TState): TState => {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(state);
+  }
+
+  return JSON.parse(JSON.stringify(state)) as TState;
+};
+
 export type NexusStoreStatus =
   | { type: "ready"; storeInstanceId: string; version: number }
   | { type: "destroyed" };
@@ -40,6 +48,16 @@ export interface NexusStoreHandle<
   readonly actions: RemoteActions<TActions>;
 }
 
+/** A Core 1.1 local Store handle returned by `createNexusStore()`. */
+export interface NexusStoreHandleWithInitialState<
+  TState extends object,
+  TActions extends Record<string, (...args: any[]) => any>,
+>
+  extends NexusStoreHandle<TState, TActions>, Disposable {
+  getInitialState(): TState;
+  [Symbol.dispose](): void;
+}
+
 export interface CreateNexusStoreResult<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
@@ -49,7 +67,7 @@ export interface CreateNexusStoreResult<
     NexusStoreServiceContract<TState, TActions>,
     M
   >;
-  readonly store: NexusStoreHandle<TState, TActions>;
+  readonly store: NexusStoreHandleWithInitialState<TState, TActions>;
 }
 
 export const createNexusStore = <
@@ -60,6 +78,7 @@ export const createNexusStore = <
   definition: NexusStoreDefinition<TState, TActions, M>,
 ): CreateNexusStoreResult<TState, TActions, M> => {
   const host = createStoreHost(definition);
+  const initialState = host.getSnapshot().state;
   let destroyed = false;
 
   const service: NexusStoreServiceContract<TState, TActions> = {
@@ -114,8 +133,9 @@ export const createNexusStore = <
     },
   ) as unknown as RemoteActions<TActions>;
 
-  const store: NexusStoreHandle<TState, TActions> = {
+  const store: NexusStoreHandleWithInitialState<TState, TActions> = {
     getState: () => host.getSnapshot().state,
+    getInitialState: () => cloneState(initialState),
     subscribe: (listener) => {
       const subscriptionId = host.subscribeLocal((event) => {
         if (event.type === "snapshot") {
@@ -153,6 +173,9 @@ export const createNexusStore = <
 
       destroyed = true;
       host.destroy();
+    },
+    [Symbol.dispose]() {
+      this.destroy();
     },
     actions,
   };

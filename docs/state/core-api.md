@@ -65,13 +65,30 @@ nexus.configure({
 });
 
 console.log(store.getState());
+console.log(store.getInitialState());
 ```
 
 Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
+`store` is a local `NexusStoreHandleWithInitialState`, which extends the
+Core 1.0-compatible `NexusStoreHandle` with `getInitialState()` and JavaScript
+`using` support:
+
+```ts
+using store = createNexusStore(counterStore).store;
+```
+
+On scope exit, `using` delegates to the same synchronous, idempotent
+`destroy()` transition.
+
+`getInitialState()` returns a defensive clone of the state captured when the
+authoritative host was created. Later actions do not change it; every returned
+snapshot has a new identity.
+
 ## `connectNexusStore()`
 
-Connects to a remote Nexus State store and returns a `RemoteStore`.
+Connects to a remote Nexus State store and returns a
+`RemoteStoreWithInitialState`.
 
 ```ts
 const remote = await connectNexusStore(nexus, counterStore, {
@@ -85,6 +102,7 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - creates a proxy through ordinary service paths
 - performs one setup step that establishes the initial snapshot and subscription together
 - initializes the local mirror from the baseline
+- returns no Store handle when the handshake fails
 
 Lifecycle boundary:
 
@@ -122,11 +140,14 @@ Use safe-style APIs when:
 - you want explicit error branching without exceptions
 - you are writing orchestration or infrastructure code where failure handling is part of the flow
 
-## `RemoteStore`
+## Store Handle Types
 
-Nexus State `RemoteStore` is the client-side handle.
+`RemoteStore` is the Core 1.0-compatible client-side Store interface.
+`RemoteStoreWithInitialState` is the concrete Core 1.1 handle returned by
+`connectNexusStore()` and `safeConnectNexusStore()`; it adds
+`getInitialState()` and `[Symbol.dispose]()`.
 
-Primary capabilities:
+`RemoteStore` capabilities:
 
 - `getState()`
 - `subscribe(listener)`
@@ -134,12 +155,23 @@ Primary capabilities:
 - `destroy()`
 - `actions.*`
 
-`RemoteStore` is connection/session-scoped by design. Treat `disconnected`, `stale`, and `destroyed` as explicit lifecycle boundaries that require replacement, not in-place healing.
+`RemoteStoreWithInitialState` also supports `getInitialState()` and JavaScript
+`using` through `[Symbol.dispose]()`. The local
+`NexusStoreHandleWithInitialState` returned by `createNexusStore()` provides
+the same two capabilities.
+
+A remote Store handle is tied to one connection session. After it becomes
+`disconnected`, `stale`, or `destroyed`, create a replacement instead of
+reusing it.
+
+On `RemoteStoreWithInitialState`, `getInitialState()` returns a defensive clone of the successful handshake
+baseline. Later synchronized snapshots do not change that baseline, and every
+returned snapshot has a new identity.
 
 ### Example
 
 ```ts
-const remote = await connectNexusStore(nexus, counterStore, options);
+using remote = await connectNexusStore(nexus, counterStore, options);
 
 const stop = remote.subscribe((state) => {
   console.log(state.count);
@@ -150,8 +182,11 @@ await remote.actions.increment(1);
 console.log(remote.getStatus());
 
 stop();
-remote.destroy();
 ```
+
+`using` delegates to the same synchronous, idempotent terminal transition as
+`destroy()`. It starts the existing best-effort remote unsubscribe but does not
+add an acknowledgement or asynchronous cleanup guarantee.
 
 ## `safeInvokeStoreAction()`
 

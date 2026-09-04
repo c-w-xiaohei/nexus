@@ -18,6 +18,7 @@ import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteStore,
+  RemoteStoreWithInitialState,
 } from "./types";
 import { RemoteStoreEntity } from "./client/remote-store";
 import {
@@ -118,7 +119,7 @@ export const safeConnectNexusStore = <
   options: ConnectNexusStoreOptions<M> = {},
 ): Promise<
   Result<
-    RemoteStore<TState, TActions>,
+    RemoteStoreWithInitialState<TState, TActions>,
     | NexusStoreConnectError
     | NexusStoreProtocolError
     | NexusStoreDisconnectedError
@@ -204,7 +205,7 @@ export const safeConnectNexusStore = <
       });
       if (remoteResult.isErr()) {
         return err<
-          RemoteStore<TState, TActions>,
+          RemoteStoreWithInitialState<TState, TActions>,
           | NexusStoreConnectError
           | NexusStoreProtocolError
           | NexusStoreDisconnectedError
@@ -249,7 +250,7 @@ export const safeConnectNexusStore = <
       if (subscribeDisconnectResult.isErr()) {
         cleanupFailedHandshake();
         return err<
-          RemoteStore<TState, TActions>,
+          RemoteStoreWithInitialState<TState, TActions>,
           | NexusStoreConnectError
           | NexusStoreProtocolError
           | NexusStoreDisconnectedError
@@ -271,7 +272,7 @@ export const safeConnectNexusStore = <
         if (unsubscribeDisconnectResult.isErr()) {
           cleanupFailedHandshake();
           return err<
-            RemoteStore<TState, TActions>,
+            RemoteStoreWithInitialState<TState, TActions>,
             | NexusStoreConnectError
             | NexusStoreProtocolError
             | NexusStoreDisconnectedError
@@ -299,7 +300,7 @@ export const safeConnectNexusStore = <
       if (subscribeTargetStaleResult.isErr()) {
         cleanupFailedHandshake();
         return err<
-          RemoteStore<TState, TActions>,
+          RemoteStoreWithInitialState<TState, TActions>,
           | NexusStoreConnectError
           | NexusStoreProtocolError
           | NexusStoreDisconnectedError
@@ -319,7 +320,7 @@ export const safeConnectNexusStore = <
         if (unsubscribeTargetStaleResult.isErr()) {
           cleanupFailedHandshake();
           return err<
-            RemoteStore<TState, TActions>,
+            RemoteStoreWithInitialState<TState, TActions>,
             | NexusStoreConnectError
             | NexusStoreProtocolError
             | NexusStoreDisconnectedError
@@ -334,7 +335,7 @@ export const safeConnectNexusStore = <
       }
 
       const safeValidateHandshakeStatus = (): Result<
-        RemoteStore<TState, TActions>,
+        RemoteStoreWithInitialState<TState, TActions>,
         NexusStoreProtocolError | NexusStoreDisconnectedError
       > => {
         const status = remote.getStatus();
@@ -356,7 +357,7 @@ export const safeConnectNexusStore = <
           );
         }
 
-        return ok(remote as RemoteStore<TState, TActions>);
+        return ok(remote);
       };
 
       let subscribePromise: Promise<unknown>;
@@ -441,7 +442,7 @@ export const connectNexusStore = async <
   nexus: SafeCreateNexusLike<M> | CreateNexusLike<M>,
   definition: NexusStoreDefinition<TState, TActions, M>,
   options: ConnectNexusStoreOptions<M> = {},
-): Promise<RemoteStore<TState, TActions>> => {
+): Promise<RemoteStoreWithInitialState<TState, TActions>> => {
   const safeNexus: SafeCreateNexusLike<M> =
     "safeCreate" in nexus
       ? { safeCreate: nexus.safeCreate.bind(nexus) }

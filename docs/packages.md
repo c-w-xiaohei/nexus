@@ -12,7 +12,7 @@ The key distinction is:
 - Start with `@nexus-js/core` in all Nexus applications
 - Use the `@nexus-js/core/state` entrypoint when you need synchronized remote state
 - Use the `@nexus-js/core/relay` entrypoint when a bridge context forwards selected services or stores between adjacent Nexus graphs
-- Add `@nexus-js/react` only when your UI is React and uses Nexus State hooks
+- Add `@nexus-js/react` when React components need a Nexus instance, service proxy status, or Nexus State
 - Add `@nexus-js/chrome` when building a Chrome extension integration
 - Add `@nexus-js/iframe` when connecting a parent window and iframe over `postMessage`
 - Add `@nexus-js/node-ipc` when connecting local Node daemon and client processes over Unix sockets
@@ -28,7 +28,7 @@ Most common installs:
 pnpm add @nexus-js/core
 ```
 
-Add React bindings only if you use Nexus State from React:
+Add React bindings when a React UI needs Nexus integration:
 
 ```bash
 pnpm add @nexus-js/core @nexus-js/react
@@ -96,9 +96,9 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 ## UI Binding Package
 
 - `@nexus-js/react`
-  - React bindings for Nexus State
-  - Provides `createRemoteStoreScope(...)` for provider-based shared remote store connections plus low-level hooks for direct connections and selectors
-  - Supports declarative replacement with `reconnectKey` and stable `reconnect()` commands; see `docs/state/react.md`
+  - React bindings for Nexus instances, service proxy status, and Nexus State
+  - Provides `useProxyStatus(...)`, `createRemoteStoreScope(...)` for shared `RemoteStore` handles, and lower-level State hooks
+  - See `docs/react.md` for general React integration and `docs/state/react.md` for Nexus State
   - Depends on `@nexus-js/core` and works with stores imported from `@nexus-js/core/state`
 
 ## Testing Package
@@ -131,6 +131,7 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 - Core RPC only: `@nexus-js/core`
 - Headless synchronized state: install `@nexus-js/core`, import from `@nexus-js/core/state`
 - Explicit service/store relay: install `@nexus-js/core`, import from `@nexus-js/core/relay`
+- React with Nexus instances or service proxy status: install `@nexus-js/core` + `@nexus-js/react`
 - React with Nexus State: install `@nexus-js/core` + `@nexus-js/react`, import state APIs from `@nexus-js/core/state`
 - Chrome extension app with RPC: `@nexus-js/core` + `@nexus-js/chrome`
 - Parent window and iframe app with RPC: `@nexus-js/core` + `@nexus-js/iframe`
@@ -149,6 +150,7 @@ It is part of the `@nexus-js/core` package surface and is imported as a subpath 
 - Runtime/platform framing: `docs/platforms.md`
 - Nexus Relay: `docs/relay.md`
 - Authorization and policy: `docs/auth-and-policy.md`
+- React integration: `docs/react.md`
 - Iframe guide: `docs/iframe/README.md`
 - Node IPC guide: `docs/node-ipc/README.md`
 - Nexus State docs entry: `docs/state/README.md`

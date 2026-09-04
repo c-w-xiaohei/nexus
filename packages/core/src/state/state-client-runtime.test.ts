@@ -1033,6 +1033,47 @@ describe("state client runtime and connect APIs", () => {
     expect(remote.getStatus().type).toBe("destroyed");
   });
 
+  it("disposes a remote store through using with one best-effort unsubscribe", async () => {
+    const unsubscribe = vi.fn(async () => {});
+    const service = {
+      subscribe: vi.fn(async () => ({
+        storeInstanceId: "store-using-dispose",
+        subscriptionId: "sub-using-dispose",
+        version: 0,
+        state: { count: 0 },
+      })),
+      unsubscribe,
+      dispatch: vi.fn(async () => ({
+        type: "dispatch-result",
+        committedVersion: 1,
+        result: 1,
+      })),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = await connectNexusStore(
+      { create: async () => service } as any,
+      defineNexusStore({
+        token: new Token("state:counter:using-dispose"),
+        state: () => ({ count: 0 }),
+        actions: () => ({ increment: () => 1 }),
+      }),
+      { target: { context: "background" } },
+    );
+
+    {
+      using handle = remote;
+      expect(handle.getStatus().type).toBe("ready");
+    }
+
+    remote[Symbol.dispose]();
+    expect(remote.getStatus()).toEqual({ type: "destroyed" });
+    await vi.waitFor(() => {
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("terminal stale/disconnected transitions stop serving future snapshots without explicit mirror destroy", async () => {
     let onSync!: (event: {
       type: "snapshot";
@@ -2685,5 +2726,181 @@ describe("state client runtime and connect APIs", () => {
       NexusStoreProtocolError,
     );
     expect(remote.getStatus().type).toBe("disconnected");
+  });
+
+  it("commits mirror and status before notifying status subscribers", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: 0 });
+    const observed: Array<{ status: string; count: number }> = [];
+    const stateObserved: Array<{ count: number; version: number }> = [];
+    const throwingListener = vi.fn(() => {
+      throw new Error("observer failure");
+    });
+    remote.subscribe((state) => {
+      const status = remote.getStatus();
+      if (state.count === 1 && status.type === "ready") {
+        stateObserved.push({ count: state.count, version: status.version });
+      }
+    });
+    remote.subscribeStatus(throwingListener);
+    const cleanup = remote.subscribeStatus(() => {
+      observed.push({
+        status: remote.getStatus().type,
+        count: remote.getState().count,
+      });
+    });
+
+    remote.completeHandshake({
+      storeInstanceId: "store-status",
+      subscriptionId: "sub-status",
+      version: 0,
+      state: { count: 0 },
+    });
+    remote.onSync({
+      type: "snapshot",
+      storeInstanceId: "store-status",
+      version: 1,
+      state: { count: 1 },
+    });
+    remote.onSync({
+      type: "snapshot",
+      storeInstanceId: "store-status",
+      version: 1,
+      state: { count: 1 },
+    });
+    remote.markStaleByTargetChange();
+    remote.markStaleByTargetChange();
+    cleanup();
+    cleanup();
+    remote.destroy();
+
+    expect(observed).toEqual([
+      { status: "ready", count: 0 },
+      { status: "ready", count: 1 },
+      { status: "stale", count: 1 },
+    ]);
+    expect(stateObserved).toEqual([{ count: 1, version: 1 }]);
+    expect(throwingListener).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps getInitialState fixed at the remote handshake baseline", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: -1 });
+
+    remote.completeHandshake({
+      storeInstanceId: "store-initial-state",
+      subscriptionId: "sub-initial-state",
+      version: 1,
+      state: { count: 1 },
+    });
+    remote.onSync({
+      type: "snapshot",
+      storeInstanceId: "store-initial-state",
+      version: 2,
+      state: { count: 2 },
+    });
+
+    expect(remote.getInitialState()).toEqual({ count: 1 });
+    expect(remote.getState()).toEqual({ count: 2 });
+  });
+
+  it("does not notify a status listener removed by an earlier listener", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: 0 });
+    const removedListener = vi.fn();
+    let removeListener!: () => void;
+    const removingListener = vi.fn(() => removeListener());
+    remote.subscribeStatus(removingListener);
+    removeListener = remote.subscribeStatus(removedListener);
+
+    remote.completeHandshake({
+      storeInstanceId: "store-status-removal",
+      subscriptionId: "sub-status-removal",
+      version: 0,
+      state: { count: 0 },
+    });
+
+    expect(removingListener).toHaveBeenCalledTimes(1);
+    expect(removedListener).not.toHaveBeenCalled();
+  });
+
+  it("does not notify remaining status listeners twice after reentrant destroy", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: 0 });
+    const destroyListener = vi.fn(() => remote.destroy());
+    const remainingListener = vi.fn();
+    remote.subscribeStatus(destroyListener);
+    remote.subscribeStatus(remainingListener);
+
+    remote.completeHandshake({
+      storeInstanceId: "store-status-destroy",
+      subscriptionId: "sub-status-destroy",
+      version: 0,
+      state: { count: 0 },
+    });
+
+    expect(destroyListener).toHaveBeenCalledTimes(2);
+    expect(remainingListener).toHaveBeenCalledTimes(1);
+    expect(remote.getStatus().type).toBe("destroyed");
+  });
+
+  it("does not notify later listeners for a superseded ready status", () => {
+    const service = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(async () => {}),
+      dispatch: vi.fn(),
+    } as unknown as NexusStoreServiceContract<
+      { count: number },
+      { increment(): number }
+    >;
+    const remote = new RemoteStoreEntity(service, { count: 0 });
+    const staleListener = vi.fn(() => {
+      if (remote.getStatus().type === "ready") {
+        remote.markStaleByTargetChange();
+      }
+    });
+    const laterListener = vi.fn(() => remote.getStatus().type);
+    remote.subscribeStatus(staleListener);
+    remote.subscribeStatus(laterListener);
+
+    remote.completeHandshake({
+      storeInstanceId: "store-status-stale",
+      subscriptionId: "sub-status-stale",
+      version: 0,
+      state: { count: 0 },
+    });
+
+    expect(staleListener).toHaveBeenCalledTimes(2);
+    expect(laterListener).toHaveBeenCalledTimes(1);
+    expect(laterListener).toHaveReturnedWith("stale");
+    expect(remote.getStatus().type).toBe("stale");
   });
 });

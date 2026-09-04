@@ -1,17 +1,19 @@
-import React from "react";
+import React, { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { Nexus, type AdapterModel, type NexusInstance } from "@nexus-js/core";
 import type {
   NexusStoreDefinition,
-  RemoteStore,
   RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { NexusProvider } from "./provider";
 import { createRemoteStoreScope } from "./create-remote-store-scope";
 import { useNexus } from "./use-nexus";
-import { useRemoteStore } from "./use-remote-store";
-import { useStoreSelector } from "./use-store-selector";
+import {
+  useRemoteStore,
+  type RemoteStoreWithInitialState,
+} from "./use-remote-store";
+import { useNullableStore } from "./use-store";
 
 interface CounterState {
   count: number;
@@ -22,12 +24,18 @@ interface CounterActions {
   increment(by: number): Promise<number>;
 }
 
-interface FakeRemoteStore<TState extends object> extends RemoteStore<
+interface FakeRemoteStore<
+  TState extends object,
+> extends RemoteStoreWithInitialState<
   TState,
   Record<string, (...args: any[]) => any>
 > {
   [key: symbol]: unknown;
   staleMarkerCalls: number;
+  statusSubscriptionCalls: number;
+  statusUnsubscriptionCalls: number;
+  stateSubscriptionCalls: number;
+  stateUnsubscriptionCalls: number;
   pushState(nextState: TState): void;
   setStatus(nextStatus: RemoteStoreStatus): void;
 }
@@ -54,11 +62,28 @@ const createFakeRemoteStore = (
   let state = initialState;
   let status = initialStatus;
   const listeners = new Set<(snapshot: CounterState) => void>();
+  const statusListeners = new Set<() => void>();
   let staleMarkerCalls = 0;
+  let statusSubscriptionCalls = 0;
+  let statusUnsubscriptionCalls = 0;
+  let stateSubscriptionCalls = 0;
+  let stateUnsubscriptionCalls = 0;
 
   return {
     get staleMarkerCalls() {
       return staleMarkerCalls;
+    },
+    get statusSubscriptionCalls() {
+      return statusSubscriptionCalls;
+    },
+    get statusUnsubscriptionCalls() {
+      return statusUnsubscriptionCalls;
+    },
+    get stateSubscriptionCalls() {
+      return stateSubscriptionCalls;
+    },
+    get stateUnsubscriptionCalls() {
+      return stateUnsubscriptionCalls;
     },
     actions: {
       async increment(by: number) {
@@ -72,18 +97,34 @@ const createFakeRemoteStore = (
     getState() {
       return state;
     },
+    getInitialState() {
+      return initialState;
+    },
     getStatus() {
       return status;
     },
+    subscribeStatus(listener) {
+      statusSubscriptionCalls += 1;
+      statusListeners.add(listener);
+      return () => {
+        statusUnsubscriptionCalls += 1;
+        statusListeners.delete(listener);
+      };
+    },
     subscribe(listener) {
+      stateSubscriptionCalls += 1;
       listeners.add(listener);
       return () => {
+        stateUnsubscriptionCalls += 1;
         listeners.delete(listener);
       };
     },
     destroy() {
       status = { type: "destroyed" };
       listeners.clear();
+    },
+    [Symbol.dispose]() {
+      this.destroy();
     },
     pushState(nextState) {
       state = nextState;
@@ -93,6 +134,9 @@ const createFakeRemoteStore = (
     },
     setStatus(nextStatus) {
       status = nextStatus;
+      for (const listener of statusListeners) {
+        listener();
+      }
     },
     [markStaleSymbol]() {
       staleMarkerCalls += 1;
@@ -154,7 +198,7 @@ describe("react adapter", () => {
     expect(typeof entry.createRemoteStoreScope).toBe("function");
     expect(typeof entry.useNexus).toBe("function");
     expect(typeof entry.useRemoteStore).toBe("function");
-    expect(typeof entry.useStoreSelector).toBe("function");
+    expect(typeof entry.useStore).toBe("function");
   });
 
   it("remote store scope Provider connects once and shares result, actions, and status", async () => {
@@ -589,7 +633,7 @@ describe("react adapter", () => {
     expect(connectSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("useStoreSelector is hook-safe and fallback-aware", async () => {
+  it("nullable scoped selection is hook-safe and fallback-aware", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const remote = createFakeRemoteStore(
@@ -605,9 +649,11 @@ describe("react adapter", () => {
         const value = useRemoteStore(definition, {
           target: { context: "bg" },
         });
-        const selected = useStoreSelector(value, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          value.store,
+          (state) => state.count,
+          -1,
+        );
         return { value, selected };
       },
       { wrapper },
@@ -623,7 +669,7 @@ describe("react adapter", () => {
     remote.pushState({ count: 1 });
 
     await waitFor(() => {
-      expect(result.current.selected).toBe(1);
+      expect(result.current.selected).toBe(-1);
     });
 
     remote.setStatus({
@@ -708,9 +754,11 @@ describe("react adapter", () => {
     const { result, rerender } = renderHook(
       ({ target }) => {
         const remote = useRemoteStore(definition, { target });
-        const selected = useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          remote.store,
+          (state) => state.count,
+          -1,
+        );
         renders.push({
           target: target.context,
           selected,
@@ -798,7 +846,7 @@ describe("react adapter", () => {
     });
   });
 
-  it("cross-target reconnect keeps the old selector value stale until the latest replacement is ready", async () => {
+  it("cross-target reconnect renders selector fallback until the latest replacement is ready", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const firstStore = createFakeRemoteStore(
@@ -823,9 +871,11 @@ describe("react adapter", () => {
     const { result, rerender } = renderHook(
       ({ target }) => {
         const remote = useRemoteStore(definition, { target });
-        const selected = useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          remote.store,
+          (state) => state.count,
+          -1,
+        );
         return { remote, selected };
       },
       {
@@ -905,9 +955,11 @@ describe("react adapter", () => {
     const { result, rerender } = renderHook(
       ({ target }) => {
         const remote = useRemoteStore(definition, { target });
-        const selected = useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          remote.store,
+          (state) => state.count,
+          -1,
+        );
         return { remote, selected };
       },
       {
@@ -955,7 +1007,7 @@ describe("react adapter", () => {
     });
   });
 
-  it("target change after same-target reconnect failure invalidates the cached selector value", async () => {
+  it("target change after same-target reconnect failure renders selector fallback", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const firstStore = createFakeRemoteStore(
@@ -980,9 +1032,11 @@ describe("react adapter", () => {
     const { result, rerender } = renderHook(
       ({ target }) => {
         const remote = useRemoteStore(definition, { target });
-        const selected = useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          remote.store,
+          (state) => state.count,
+          -1,
+        );
         renders.push({
           target: target.context,
           selected,
@@ -1009,7 +1063,7 @@ describe("react adapter", () => {
       expect(result.current.remote.error?.message).toBe(
         "same-target-connect-failed",
       );
-      expect(result.current.selected).toBe(1);
+      expect(result.current.selected).toBe(-1);
     });
 
     rerender({ target: { context: "b" } });
@@ -1314,7 +1368,7 @@ describe("react adapter", () => {
     expect(markerStore[markerSymbol]).toHaveBeenCalledTimes(1);
   });
 
-  it("failed reconnect reports disconnected and keeps last selected value", async () => {
+  it("failed reconnect reports disconnected and renders selector fallback", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -1334,9 +1388,11 @@ describe("react adapter", () => {
           target: { context: "bg" },
           timeout,
         });
-        const selected = useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        });
+        const selected = useNullableStore(
+          remote.store,
+          (state) => state.count,
+          -1,
+        );
         return { remote, selected };
       },
       {
@@ -1356,7 +1412,7 @@ describe("react adapter", () => {
       expect(result.current.remote.store).toBeNull();
       expect(result.current.remote.status.type).toBe("disconnected");
       expect(result.current.remote.error?.message).toBe("reconnect-failed");
-      expect(result.current.selected).toBe(7);
+      expect(result.current.selected).toBe(-1);
       if (result.current.remote.status.type === "disconnected") {
         expect(result.current.remote.status.lastKnownVersion).toBe(7);
         expect(result.current.remote.status.cause).toBeInstanceOf(Error);
@@ -1440,6 +1496,149 @@ describe("react adapter", () => {
     await waitFor(() => {
       expect(result.current.status.type).toBe("disconnected");
     });
+    expect(remote.statusSubscriptionCalls).toBe(1);
+  });
+
+  it("uses a store status subscription without creating the polling timer", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:push", version: 0 },
+    );
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+
+    expect(remote.statusSubscriptionCalls).toBe(1);
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 25);
+    setIntervalSpy.mockRestore();
+  });
+
+  it("cleans up the status subscription on unmount", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:status-unmount", version: 0 },
+    );
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+    unmount();
+
+    expect(remote.statusSubscriptionCalls).toBe(1);
+    expect(remote.statusUnsubscriptionCalls).toBe(1);
+  });
+
+  it("cleans up the old status subscription when the store switches", async () => {
+    clearConnectSpy();
+    const firstStore = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:status-old", version: 0 },
+    );
+    const secondStore = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:status-new", version: 1 },
+    );
+    connectSpy
+      .mockResolvedValueOnce(firstStore)
+      .mockResolvedValueOnce(secondStore);
+
+    const { result, rerender } = renderHook(
+      ({ timeout }) =>
+        useRemoteStore(definition, { target: { context: "bg" }, timeout }),
+      {
+        initialProps: { timeout: 1 },
+        wrapper: createWrapper(createTestNexus()),
+      },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(firstStore));
+    rerender({ timeout: 2 });
+    await waitFor(() => expect(result.current.store).toBe(secondStore));
+
+    expect(firstStore.statusSubscriptionCalls).toBe(1);
+    expect(firstStore.statusUnsubscriptionCalls).toBe(1);
+  });
+
+  it("balances status subscriptions across the StrictMode lifecycle probe", async () => {
+    clearConnectSpy();
+    const nexus = createTestNexus();
+    const stores: FakeRemoteStore<CounterState>[] = [];
+    connectSpy.mockImplementation(() => {
+      const store = createFakeRemoteStore(
+        { count: stores.length },
+        {
+          type: "ready",
+          storeInstanceId: `instance:status-strict:${stores.length}`,
+          version: stores.length,
+        },
+      );
+      stores.push(store);
+      return Promise.resolve(store);
+    });
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      {
+        wrapper: ({ children }) => (
+          <StrictMode>
+            <NexusProvider nexus={nexus}>{children}</NexusProvider>
+          </StrictMode>
+        ),
+      },
+    );
+
+    await waitFor(() => expect(result.current.store).not.toBeNull());
+    unmount();
+
+    expect(stores.length).toBeGreaterThan(0);
+    expect(
+      stores.every(
+        (store) =>
+          store.statusSubscriptionCalls === store.statusUnsubscriptionCalls,
+      ),
+    ).toBe(true);
+  });
+
+  it("retains status polling for a legacy store without subscribeStatus", async () => {
+    clearConnectSpy();
+    const remote = createFakeRemoteStore(
+      { count: 0 },
+      { type: "ready", storeInstanceId: "instance:legacy", version: 0 },
+    );
+    delete remote.subscribeStatus;
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    connectSpy.mockResolvedValueOnce(remote);
+
+    const { result, unmount } = renderHook(
+      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      { wrapper: createWrapper(createTestNexus()) },
+    );
+
+    await waitFor(() => expect(result.current.store).toBe(remote));
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25);
+    expect(remote.stateSubscriptionCalls).toBe(1);
+    const clearIntervalCallsBeforeUnmount = clearIntervalSpy.mock.calls.length;
+    unmount();
+    expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(
+      clearIntervalCallsBeforeUnmount,
+    );
+    expect(remote.stateUnsubscriptionCalls).toBe(1);
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 
   it("target change after disconnected state marks adapter stale immediately", async () => {
@@ -1462,9 +1661,7 @@ describe("react adapter", () => {
     const wrapper = createWrapper(nexus);
     const { result, rerender } = renderHook(
       ({ remote }) =>
-        useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        }),
+        useNullableStore(remote.store, (state) => state.count, -1),
       {
         initialProps: {
           remote: createRemoteResult(null, { type: "initializing" }),
@@ -1509,95 +1706,5 @@ describe("react adapter", () => {
       expect(remoteResult.current.store).toBe(secondStore);
       expect(remoteResult.current.status.type).toBe("ready");
     });
-  });
-
-  it("useStoreSelector keeps last mirrored value after ready across reconnect initializing", () => {
-    const store = createFakeRemoteStore(
-      { count: 7 },
-      { type: "ready", storeInstanceId: "instance:keep", version: 7 },
-    );
-
-    const { result, rerender } = renderHook(
-      ({ remote }) =>
-        useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        }),
-      {
-        initialProps: {
-          remote: createRemoteResult(null, { type: "initializing" }),
-        },
-      },
-    );
-
-    expect(result.current).toBe(-1);
-
-    rerender({
-      remote: createRemoteResult(store, {
-        type: "ready",
-        storeInstanceId: "instance:keep",
-        version: 7,
-      }),
-    });
-    expect(result.current).toBe(7);
-
-    rerender({
-      remote: createRemoteResult(null, {
-        type: "disconnected",
-        lastKnownVersion: 7,
-      }),
-    });
-    expect(result.current).toBe(7);
-
-    rerender({
-      remote: createRemoteResult(null, { type: "initializing" }),
-    });
-    expect(result.current).toBe(7);
-  });
-
-  it("useStoreSelector falls back after cross-target stale transition", () => {
-    const staleStore = createFakeRemoteStore(
-      { count: 7 },
-      { type: "stale", lastKnownVersion: 7, reason: "target-changed" },
-    );
-    const readyStore = createFakeRemoteStore(
-      { count: 7 },
-      { type: "ready", storeInstanceId: "instance:old", version: 7 },
-    );
-
-    const { result, rerender } = renderHook(
-      ({ remote }) =>
-        useStoreSelector(remote, (state) => state.count, {
-          fallback: -1,
-        }),
-      {
-        initialProps: {
-          remote: createRemoteResult(readyStore, {
-            type: "ready",
-            storeInstanceId: "instance:old",
-            version: 7,
-          }),
-        },
-      },
-    );
-
-    expect(result.current).toBe(7);
-
-    rerender({
-      remote: createRemoteResult(null, { type: "initializing" }),
-    });
-    expect(result.current).toBe(7);
-
-    rerender({
-      remote: createRemoteResult(staleStore, {
-        type: "stale",
-        lastKnownVersion: 7,
-        reason: "target-changed",
-      }),
-    });
-
-    rerender({
-      remote: createRemoteResult(null, { type: "initializing" }),
-    });
-    expect(result.current).toBe(-1);
   });
 });

@@ -84,7 +84,7 @@ The important point is that `disconnected` and `stale` are not silent. They are 
 Keep these two layers separate:
 
 - headless core (`connectNexusStore` / `RemoteStore`)
-- React hook orchestration (`useRemoteStore` and selector hooks)
+- React hook orchestration (`useRemoteStore`, `useStore`, and scoped selection)
 
 Headless core behavior:
 
@@ -94,11 +94,11 @@ Headless core behavior:
 
 Hook-level behavior:
 
-- hooks expose UI-oriented lifecycle (`status`, `store`, `error`) during initial load and replacement
-- `reconnectKey` represents an external committed session/lifecycle revision, while stable `reconnect()` is an imperative request; both feed the same replacement path
-- same-target replacement can preserve a selector's last ready value even after an attempt fails, but `disconnected` status and `error` mean no ready replacement exists; a target change is a stale handoff and selectors immediately use fallback until the new target is ready
-- same-target session loss does not imply automatic retry/rebuild; an explicit control only triggers a replacement acquisition attempt
-- this is higher-layer orchestration, not in-place healing of a terminal raw handle
+- hooks expose `status`, `store`, and `error` during initial load and replacement
+- hooks may create a replacement `RemoteStore` handle, but they do not make a terminal handle usable again
+
+See the [Nexus State React guide](react.md) for `reconnectKey`, `reconnect()`,
+selector fallback, and target changes.
 
 ## Stale vs Disconnected
 
@@ -163,9 +163,10 @@ that instance is terminal.
 
 Recovery means creating a new handle, not reviving the old one in place.
 
-This lines up with core semantics:
+This follows the Core lifecycle rules:
 
-- raw `nexus.create()` proxies are session-bound
-- `nexus.ref()` capabilities are connection-bound transient resources
+- a service proxy is tied to one connection session
+- a remote resource is tied to the connection that created it
 
-Higher-level state or React orchestration can trigger rebuild flows, but those flows create replacement handles rather than healing terminal ones.
+State or React code can create a replacement `RemoteStore` handle, but it does
+not make a terminal handle usable again.

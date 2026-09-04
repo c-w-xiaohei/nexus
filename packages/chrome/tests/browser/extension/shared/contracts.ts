@@ -1,4 +1,4 @@
-import { Token } from "@nexus-js/core";
+import { Token, type RefWrapper } from "@nexus-js/core";
 
 export interface FixtureAppMeta {
   readonly fixture: boolean;
@@ -15,7 +15,7 @@ export interface WorkspaceService {
   setSetting(value: string): Promise<string>;
   pending(): Promise<string>;
   worker(): Promise<WorkerFacts>;
-  createCapability(): Promise<WorkspaceCapability>;
+  createCapability(): Promise<RefWrapper<WorkspaceCapability>>;
   acceptCallback(callback: () => Promise<string>): Promise<string>;
 }
 
@@ -29,7 +29,7 @@ export interface DocumentToolService {
   fail(): Promise<never>;
   hold(): Promise<string>;
   acceptCallback(callback: () => Promise<string>): Promise<string>;
-  createReference(): Promise<DocumentReference>;
+  createReference(): Promise<RefWrapper<DocumentReference>>;
   useReference(reference: DocumentReference): Promise<string>;
 }
 

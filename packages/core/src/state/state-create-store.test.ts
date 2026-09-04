@@ -77,6 +77,15 @@ describe("createNexusStore", () => {
     expect(store.getStatus()).toMatchObject({ type: "ready", version: 0 });
   });
 
+  it("keeps getInitialState fixed after local actions", async () => {
+    const { store } = createNexusStore(createCounterDefinition());
+
+    await store.actions.increment(3);
+
+    expect(store.getInitialState()).toEqual({ count: 0 });
+    expect(store.getState()).toEqual({ count: 3 });
+  });
+
   it("keeps service subscribe baseline mutations from changing authoritative state", async () => {
     const definition = createCounterDefinition();
     const { provider, store } = createNexusStore(definition);
@@ -145,6 +154,25 @@ describe("createNexusStore", () => {
     expect(() => store.subscribe(() => {})).toThrow(
       "Nexus State host is destroyed",
     );
+    await expect(store.actions.increment(1)).rejects.toThrow(
+      "Nexus State host is destroyed",
+    );
+  });
+
+  it("disposes the local authoritative store through using idempotently", async () => {
+    const definition = createCounterDefinition();
+    const { store } = createNexusStore(definition);
+    const listener = vi.fn();
+
+    {
+      using handle = store;
+      handle.subscribe(listener);
+      await handle.actions.increment(1);
+      expect(listener).toHaveBeenCalledTimes(1);
+    }
+
+    store[Symbol.dispose]();
+    expect(store.getStatus()).toEqual({ type: "destroyed" });
     await expect(store.actions.increment(1)).rejects.toThrow(
       "Nexus State host is destroyed",
     );

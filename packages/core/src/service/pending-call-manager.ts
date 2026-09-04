@@ -1,5 +1,45 @@
 import type { MessageId, SerializedError } from "../types/message.js";
 import { Logger } from "../logger.js";
+import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
+
+const releaseQueuedResourceCapabilities = (
+  values: readonly unknown[],
+): void => {
+  const visited = new WeakSet<object>();
+  const visit = (nestedValue: unknown): void => {
+    if (
+      (typeof nestedValue !== "object" || nestedValue === null) &&
+      typeof nestedValue !== "function"
+    ) {
+      return;
+    }
+    if (visited.has(nestedValue)) return;
+    visited.add(nestedValue);
+
+    const release = (nestedValue as { [RELEASE_PROXY_SYMBOL]?: unknown })[
+      RELEASE_PROXY_SYMBOL
+    ];
+    if (typeof release === "function") {
+      try {
+        release();
+      } catch {
+        // Continue draining the queue when one release capability fails.
+      }
+      return;
+    }
+
+    if (Array.isArray(nestedValue)) {
+      nestedValue.forEach(visit);
+      return;
+    }
+    const prototype = Object.getPrototypeOf(nestedValue);
+    if (prototype === Object.prototype || prototype === null) {
+      Object.values(nestedValue).forEach(visit);
+    }
+  };
+
+  values.forEach(visit);
+};
 
 /**
  * A helper to create an AsyncIterable and control it externally.
@@ -9,6 +49,9 @@ class AsyncIteratorController<T> {
   private pullQueue: ((result: IteratorResult<T>) => void)[] = [];
   private pushQueue: IteratorResult<T>[] = [];
   private isFinished = false;
+  private hasReturned = false;
+
+  constructor(private readonly onReturn?: () => void) {}
 
   public push(value: T) {
     if (this.isFinished) {
@@ -25,7 +68,13 @@ class AsyncIteratorController<T> {
     this.pushQueue.push(result);
   }
 
-  public end() {
+  public end(discardQueuedResults = false) {
+    if (discardQueuedResults) {
+      releaseQueuedResourceCapabilities(
+        this.pushQueue.map((result) => result.value),
+      );
+      this.pushQueue = [];
+    }
     if (this.isFinished) {
       return;
     }
@@ -50,6 +99,14 @@ class AsyncIteratorController<T> {
         return new Promise((resolve) => {
           this.pullQueue.push(resolve);
         });
+      },
+      return: (): Promise<IteratorResult<T>> => {
+        this.end(true);
+        if (!this.hasReturned) {
+          this.hasReturned = true;
+          this.onReturn?.();
+        }
+        return Promise.resolve({ done: true, value: undefined });
       },
       [Symbol.asyncIterator]() {
         return this;
@@ -388,7 +445,11 @@ export namespace PendingCallManager {
       );
 
       if (strategy === "stream") {
-        const controller = new AsyncIteratorController<any>();
+        const controller = new AsyncIteratorController<any>(() => {
+          // Iterator cancellation is local only; the remote invocation may continue.
+          clearTimeout(timeoutHandle);
+          finalizeCall(messageId);
+        });
         const timeoutHandle = setTimeout(() => {
           handleResponse(messageId, null, null, undefined, true);
         }, timeout);

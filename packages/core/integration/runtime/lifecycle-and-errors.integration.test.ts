@@ -7,14 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Nexus } from "../../src/api/nexus";
 import { Token } from "../../src/api/token";
-import type { IEndpoint } from "../../src/transport";
+import type { IEndpoint, IPort } from "../../src/transport";
 import { LogicalConnection } from "../../src/connection/logical-connection";
 import { CallProcessor } from "../../src/service/call-processor";
+import { NexusDisconnectedError } from "../../src/index";
 import { NexusMessageType } from "../../src/types/message";
 
 import {
   type AppAdapterModel,
+  type AppConnectionMeta,
   type AppUserMeta,
+  BackgroundServiceImpl,
   type IBackgroundService,
   BackgroundServiceToken,
   ContentScriptServiceToken,
@@ -86,8 +89,123 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     });
 
     await expect(bgApi.getSettings()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
+  });
+
+  it("rejects a synchronous send failure that closes its connection as disconnected", async () => {
+    const token = new Token<IBackgroundService>(
+      "synchronous-send-failure-background-service",
+    );
+    let failPopupSends = false;
+    let popupMessageHandler: ((message: unknown) => void) | undefined;
+    let backgroundMessageHandler: ((message: unknown) => void) | undefined;
+    let popupDisconnectHandler: (() => void) | undefined;
+    let backgroundDisconnectHandler: (() => void) | undefined;
+
+    const popupPort: IPort = {
+      postMessage: vi.fn((message: unknown) => {
+        if (failPopupSends) {
+          throw new Error("native port is disconnected");
+        }
+        setTimeout(() => backgroundMessageHandler?.(message), 0);
+      }),
+      onMessage: vi.fn((handler: (message: unknown) => void) => {
+        popupMessageHandler = handler;
+      }),
+      onDisconnect: vi.fn((handler: () => void) => {
+        popupDisconnectHandler = handler;
+      }),
+      close: vi.fn(() => {
+        popupDisconnectHandler?.();
+        backgroundDisconnectHandler?.();
+      }),
+    };
+    const backgroundPort: IPort = {
+      postMessage: vi.fn((message: unknown) => {
+        setTimeout(() => popupMessageHandler?.(message), 0);
+      }),
+      onMessage: vi.fn((handler: (message: unknown) => void) => {
+        backgroundMessageHandler = handler;
+      }),
+      onDisconnect: vi.fn((handler: () => void) => {
+        backgroundDisconnectHandler = handler;
+      }),
+      close: vi.fn(() => {
+        popupDisconnectHandler?.();
+        backgroundDisconnectHandler?.();
+      }),
+    };
+
+    let acceptConnection:
+      | ((port: IPort, connectionMeta: AppConnectionMeta) => void)
+      | undefined;
+    const background = new Nexus<AppAdapterModel>().configure({
+      endpoint: {
+        meta: { context: "background", version: "1.0" },
+        implementation: {
+          listen: (accept) => {
+            acceptConnection = accept;
+          },
+        },
+      },
+      providers: [{ token, service: new BackgroundServiceImpl() }],
+    });
+    const popup = new Nexus<AppAdapterModel>().configure({
+      endpoint: {
+        meta: { context: "popup" },
+        implementation: {
+          connect: async () => {
+            if (!acceptConnection) {
+              throw new Error("background listener is not ready");
+            }
+            acceptConnection(backgroundPort, { from: "popup" });
+            return { port: popupPort, connectionMeta: { from: "background" } };
+          },
+          listen: () => undefined,
+          matchesTarget: (target, contextMeta) =>
+            target.context === contextMeta.context,
+        },
+      },
+      connectTo: [{ context: "background" }],
+    });
+
+    const api = await popup.create(token, {
+      target: { context: "background" },
+    });
+    expect((background as any).connectionManager.connections.size).toBe(1);
+    expect((popup as any).connectionManager.connections.size).toBe(1);
+    const popupEngine = (popup as any).engine;
+    const pendingCallManager = popupEngine.pendingCallManager;
+    const handleResponse = vi.spyOn(pendingCallManager, "handleResponse");
+    let messageId: number | string | undefined;
+    const register = pendingCallManager.register.bind(pendingCallManager);
+    vi.spyOn(pendingCallManager, "register").mockImplementation(
+      (...args: unknown[]) => {
+        messageId = args[0] as number | string;
+        return register(...(args as Parameters<typeof register>));
+      },
+    );
+
+    vi.useFakeTimers();
+    try {
+      failPopupSends = true;
+
+      const call = api.getSettings();
+      await expect(call).rejects.toMatchObject({ code: "E_CONN_CLOSED" });
+      await expect(call).rejects.toBeInstanceOf(NexusDisconnectedError);
+      expect((popup as any).connectionManager.connections.size).toBe(0);
+      expect(messageId).toBeDefined();
+      expect(pendingCallManager.canHandleResponse(messageId!, "conn-1")).toBe(
+        false,
+      );
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(handleResponse).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps old unicast create() proxy session-bound after replacement connection appears", async () => {
@@ -109,7 +227,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     oldConnection!.close();
 
     await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
 
     const freshApi = await world.background.nexus.create(
@@ -121,7 +239,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
     await expect(freshApi.getTitle()).resolves.toContain("CS1");
     await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Disconnected,
+      NexusDisconnectedError,
     );
   });
 

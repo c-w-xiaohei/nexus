@@ -112,8 +112,23 @@ export interface RemoteStore<
   getState(): TState;
   subscribe(listener: (state: TState) => void): () => void;
   getStatus(): RemoteStoreStatus;
+  /**
+   * Observes future status invalidations. Unsubscribing prevents future calls,
+   * and an observer error does not prevent other observers from running.
+   */
+  subscribeStatus?(listener: () => void): () => void;
   destroy(): void;
   readonly actions: RemoteActions<TActions>;
+}
+
+/** A Core 1.1 remote Store handle returned by Nexus State acquisition APIs. */
+export interface RemoteStoreWithInitialState<
+  TState extends object,
+  TActions extends Record<string, ActionFunction>,
+>
+  extends RemoteStore<TState, TActions>, Disposable {
+  getInitialState(): TState;
+  [Symbol.dispose](): void;
 }
 
 export interface ConnectNexusStoreOptions<

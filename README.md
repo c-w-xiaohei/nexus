@@ -106,23 +106,23 @@ Application code owns discovery. Querying an active tab, finding eligible frames
 
 Raw proxies and remote references are session-bound. After disconnect, reload, restart, or session replacement, create a fresh handle. Nexus does not silently rebind, retry, replay, or discover a replacement.
 
-## Choose Your Runtime
+## Choose Your Setup
 
-| Use case                        | Install                                 | Start here                                           |
-| ------------------------------- | --------------------------------------- | ---------------------------------------------------- |
-| Chrome extension contexts       | `@nexus-js/core` + `@nexus-js/chrome`   | [Chrome adapter](docs/platforms.md#chrome-extension) |
-| Parent page and iframe          | `@nexus-js/core` + `@nexus-js/iframe`   | [Iframe guide](docs/iframe/README.md)                |
-| Local daemon and clients        | `@nexus-js/core` + `@nexus-js/node-ipc` | [Node IPC guide](docs/node-ipc/README.md)            |
-| Worker or custom transport      | `@nexus-js/core`                        | [Platform guide](docs/platforms.md)                  |
-| Remote synchronized state       | `@nexus-js/core`                        | [Nexus State](docs/state/README.md)                  |
-| React bindings for remote state | `@nexus-js/core` + `@nexus-js/react`    | [React guide](docs/state/react.md)                   |
-| Application unit tests          | `@nexus-js/testing`                     | [Testing guide](docs/testing/README.md)              |
+| Use case                   | Install                                 | Start here                                           |
+| -------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| Chrome extension contexts  | `@nexus-js/core` + `@nexus-js/chrome`   | [Chrome adapter](docs/platforms.md#chrome-extension) |
+| Parent page and iframe     | `@nexus-js/core` + `@nexus-js/iframe`   | [Iframe guide](docs/iframe/README.md)                |
+| Local daemon and clients   | `@nexus-js/core` + `@nexus-js/node-ipc` | [Node IPC guide](docs/node-ipc/README.md)            |
+| Worker or custom transport | `@nexus-js/core`                        | [Platform guide](docs/platforms.md)                  |
+| Remote synchronized state  | `@nexus-js/core`                        | [Nexus State](docs/state/README.md)                  |
+| React integration          | `@nexus-js/core` + `@nexus-js/react`    | [React guide](docs/react.md)                         |
+| Application unit tests     | `@nexus-js/testing`                     | [Testing guide](docs/testing/README.md)              |
 
 ## Capabilities
 
 - Typed RPC, callbacks, and disposable remote resources
 - Connection and service authorization
-- Synchronized remote state and React bindings
+- React bindings for Nexus instances, service proxy status, and synchronized state
 - Explicit provider-level Relay between adjacent Nexus graphs
 - Custom endpoint implementations through `IEndpoint<AdapterModel>`
 
@@ -135,6 +135,7 @@ Nexus does not start browser contexts, inject content scripts, create iframes, s
 - [Identity and connection metadata](docs/identity-and-metadata.md)
 - [Platforms and adapters](docs/platforms.md)
 - [Authorization and policy](docs/auth-and-policy.md)
+- [React integration](docs/react.md)
 - [Nexus Relay](docs/relay.md)
 - [Nexus State](docs/state/README.md)
 - [Testing](docs/testing/README.md)

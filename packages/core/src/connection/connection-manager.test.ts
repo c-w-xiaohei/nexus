@@ -11,6 +11,7 @@ import type { IPort } from "@/transport/types/port";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import type { AdapterModel } from "@/types/adapter-model";
 import { JsonSerializer } from "@/transport/serializers/json-serializer";
+import { Result } from "better-result";
 
 interface TestUserMeta {
   context: string;
@@ -570,6 +571,38 @@ describe("ConnectionManager", () => {
   });
 
   describe("Connection Disconnect and Cleanup (B4)", () => {
+    it("keeps a send failure as unknown when the connection remains ready", async () => {
+      await initializeManager(hostManager);
+      const client = await createTestStack(clientMeta, hostL1OnConnect);
+      const connection = await resolveManager(client.manager, {
+        target: hostMeta,
+      });
+      const sendError = new Error("transient port failure");
+      vi.spyOn(connection!, "sendMessage").mockReturnValue(
+        Result.err(sendError),
+      );
+
+      const result = client.manager.safeSendMessage(
+        { connectionId: connection!.connectionId },
+        {
+          type: NexusMessageType.APPLY,
+          id: 1,
+          resourceId: null,
+          path: [],
+          args: [],
+        },
+      );
+
+      expect(result).toMatchObject({
+        error: {
+          code: "E_UNKNOWN",
+          cause: sendError,
+          context: { connectionId: connection!.connectionId },
+        },
+      });
+      expect(connection!.isReady()).toBe(true);
+    });
+
     it("settles an outgoing queued-publication failure without waiting for the handshake timeout", async () => {
       try {
         let readyPortHandler: ((packet: string) => void) | undefined;

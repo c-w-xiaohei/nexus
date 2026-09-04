@@ -4,14 +4,9 @@ Nexus State has four useful testing layers.
 
 ## 1. Application Unit Tests
 
-Use `@nexus-js/testing` when application code consumes Nexus through a `NexusInstance` and you want a deterministic unit test without a real runtime topology.
-
-For plain service-consuming code, register the service contract behind the Token:
-
-```ts
-const mock = createMockNexus();
-mock.service(UserToken, userService);
-```
+For general `createMockNexus()` setup and React provider examples, see the
+[application testing guide](../testing/README.md). This page covers the parts
+specific to Nexus State.
 
 For Nexus State app code, prefer registering the real store service contract from `createNexusStore(...)` instead of hand-writing `NexusStoreServiceContract` objects:
 
@@ -34,14 +29,6 @@ const remote = await connectNexusStore(mock.nexus, counterStore, {
 expect(store.getState()).toEqual(remote.getState());
 ```
 
-React component tests should inject the mock instance through `NexusProvider`:
-
-```tsx
-const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <NexusProvider nexus={mock.nexus}>{children}</NexusProvider>
-);
-```
-
 This verifies application collaboration with the store service contract. It does not verify real cross-runtime message delivery, browser extension behavior, disconnect timing, or adapter lifecycle semantics.
 
 ## 2. Store Runtime Tests
@@ -62,19 +49,18 @@ Current examples live in:
 - `packages/core/src/state/state-errors.test.ts`
 - `packages/core/src/state/state.test.ts`
 
-## 3. React Adapter Tests
+## 3. React Binding Tests
 
 Use React tests when you want to verify:
 
-- provider wiring
-- `useNexus()` fail-fast behavior
+- remote store scope wiring
 - `useRemoteStore()` lifecycle semantics
 - `reconnectKey` changes and stable `reconnect()` commands
 - disposal of a pending acquisition that resolves after a newer request
 - scope sharing, including shared reconnect controls
 - selector fallback behavior
-- same-target continuity after a failed replacement, with `disconnected` status/error
-- immediate cross-target fallback handoff, including after a same-target failure
+- fallback plus `disconnected` status/error after a failed same-target replacement
+- fallback during cross-target handoff until the replacement is ready
 
 Current examples live in:
 
@@ -90,11 +76,11 @@ Use integration tests when you need to prove:
 - multiple isolated contexts connect to it
 - updates fan out correctly
 - a disconnected context stops receiving updates
-- host-side cleanup removes orphaned remote resources/subscriptions
-- reconnect paths rebuild handles/resources explicitly instead of reusing terminal ones
-- restart/session-loss paths require explicit reacquire/rebuild semantics
+- host-side cleanup removes remote resources and subscriptions left by disconnected clients
+- reconnect paths create new `RemoteStore` handles instead of reusing terminal handles
+- connection session changes require a new `RemoteStore` handle
 
-Use React adapter tests for hook-level replacement semantics. Use real multi-context integration tests for actual restart, transport, and session behavior.
+Use React binding tests for hook replacement behavior. Use real multi-context integration tests for restart, transport, and connection session behavior.
 
 Current examples live in:
 

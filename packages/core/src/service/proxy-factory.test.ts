@@ -59,6 +59,14 @@ describe("ProxyFactory", () => {
   });
 
   describe("createServiceProxy", () => {
+    it("does not expose Symbol.dispose", () => {
+      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
+        target: { connectionId: "conn-1" },
+      });
+
+      expect(serviceProxy[Symbol.dispose]).toBeUndefined();
+    });
+
     it("should dispatch an APPLY call on method invocation", () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
@@ -244,6 +252,32 @@ describe("ProxyFactory", () => {
       );
       simulateFinalization(mockRegister.mock.calls[0][0]);
       expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
+    });
+
+    it("disposes shared resource facades exactly once and terminalizes them", async () => {
+      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
+        "res-dispose",
+        "conn-dispose",
+      );
+      const nested = remoteObj.deep.path;
+      const lifetimeAnchor = mockRegister.mock.calls[0][0];
+
+      nested[Symbol.dispose]();
+      remoteObj[Symbol.dispose]();
+
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
+        "res-dispose",
+        "conn-dispose",
+      );
+      expect(resourceManager.countRemoteProxies()).toBe(0);
+      expect(mockUnregister).toHaveBeenCalledOnce();
+      expect(mockUnregister).toHaveBeenCalledWith(lifetimeAnchor);
+      await expect(remoteObj.run()).rejects.toThrow(NexusResourceError);
+      await expect(nested.value).rejects.toThrow(/released/i);
+      expect(() => {
+        nested.value = "blocked-after-dispose";
+      }).toThrow(NexusResourceError);
     });
 
     it("uses one finalization anchor for root and deep resource facades", async () => {
