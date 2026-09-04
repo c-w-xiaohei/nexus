@@ -1,5 +1,29 @@
 # @nexus-js/node-ipc
 
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [69c260c]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+  - @nexus-js/core@1.1.0
+
 ## 0.5.0
 
 ### Minor Changes

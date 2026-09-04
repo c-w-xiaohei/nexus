@@ -1,5 +1,41 @@
 # @nexus-js/core
 
+## 1.1.0
+
+### Minor Changes
+
+- a536a9a: Cancel local pending multicast stream state when async iteration ends early.
+- a536a9a: Support JavaScript `using` for local and remote Nexus State handles.
+- a536a9a: Support JavaScript `using` for explicitly typed remote resource proxies.
+- a536a9a: Add status subscriptions and constrained diagnostics for exact ordinary unicast
+  proxy roots.
+- a536a9a: Send current and future proxy status snapshots directly to lifecycle listeners.
+- a536a9a: Export `NexusDisconnectedError` and normalize closed local proxy calls to that
+  public error type.
+- a536a9a: Add push subscriptions for RemoteStore lifecycle status changes.
+- a536a9a: Add `getInitialState()` and JavaScript `using` support to concrete local and
+  remote Core Store handles without widening the existing compatibility-facing
+  Store interfaces. Remove
+  `useStoreSelector` in favor of Zustand-shaped `useStore(store, selector?)`.
+  Scoped `useSelector` now returns its explicit fallback whenever no current
+  `RemoteStore` handle exists, without retaining values from a previous handle.
+- a536a9a: Add static `Nexus.release` and `Nexus.safeRelease` helpers for remote resource
+  capabilities.
+
+### Patch Changes
+
+- a536a9a: Reject unavailable bound call targets before creating pending calls or payload
+  resources.
+- a536a9a: Preserve capabilities accepted by earlier targets when later call dispatch fails.
+- a536a9a: Fail calls when a resolved connection does not accept its dispatched message.
+- a536a9a: Reject strategy-one calls with multiple ready targets before dispatching.
+- a536a9a: Classify send failures that synchronously close their logical connection as disconnected.
+- 69c260c: Fix remote Resource proxy cleanup across connections, explicit release, late
+  responses, and failed payload revival.
+- a536a9a: Continue disconnect cleanup when an exposed service hook throws.
+- a536a9a: Continue evaluating stale target subscriptions when a predicate throws.
+- a536a9a: Return release capability failures through safe release results.
+
 ## 1.0.0
 
 ### Major Changes
