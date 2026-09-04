@@ -1,5 +1,31 @@
 # @nexus-js/chrome
 
+## 0.4.1
+
+### Patch Changes
+
+- a536a9a: Propagate synchronous Chrome port send failures to the connection error
+  boundary instead of reporting the message as sent.
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [69c260c]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+- Updated dependencies [a536a9a]
+  - @nexus-js/core@1.1.0
+
 ## 0.4.0
 
 ### Minor Changes

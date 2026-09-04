@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/react",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "React bindings for Nexus instances, service proxy status, and Nexus State",
   "private": false,
   "license": "MIT",

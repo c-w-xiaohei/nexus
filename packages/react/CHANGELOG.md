@@ -1,5 +1,22 @@
 # @nexus-js/react
 
+## 0.7.0
+
+### Minor Changes
+
+- a536a9a: Add `useProxyStatus` to observe an existing unicast service proxy. Supplying a proxy requires Core >= 1.1.0 at runtime.
+- a536a9a: Add `getInitialState()` and JavaScript `using` support to concrete local and
+  remote Core Store handles without widening the existing compatibility-facing
+  Store interfaces. Remove
+  `useStoreSelector` in favor of Zustand-shaped `useStore(store, selector?)`.
+  Scoped `useSelector` now returns its explicit fallback whenever no current
+  `RemoteStore` handle exists, without retaining values from a previous handle.
+
+### Patch Changes
+
+- a536a9a: Use RemoteStore status subscriptions when available while retaining polling for
+  older or custom stores.
+
 ## 0.6.0
 
 ### Minor Changes
