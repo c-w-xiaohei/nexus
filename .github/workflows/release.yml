@@ -11,9 +11,10 @@ on:
     branches:
       - main
 
-# Grant necessary permissions for GITHUB_TOKEN so changesets/action can push
+# Grant release PR permissions and allow npm trusted publishing via OIDC.
 permissions:
   contents: write
+  id-token: write
   pull-requests: write
 
 # Prevent concurrent releases to avoid race conditions
@@ -37,7 +38,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # npm trusted publishing requires Node.js 22.14.0+ and npm 11.5.1+.
+          node-version: 24
           cache: "pnpm"
           # Configure npm registry for publishing
           registry-url: "https://registry.npmjs.org"
@@ -61,7 +63,7 @@ jobs:
         env:
           # Expose the repository token to subprocesses that read GITHUB_TOKEN directly.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # NPM_TOKEN must be configured as a repository secret
+          # OIDC is preferred for configured packages; the token is the fallback for
+          # first-time package publishes, before trusted publishing can be configured.
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # setup-node writes npm auth using NODE_AUTH_TOKEN.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
