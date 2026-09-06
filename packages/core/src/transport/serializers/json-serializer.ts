@@ -34,34 +34,21 @@ export namespace JsonSerializer {
         );
       }
 
-      return batchMessage.calls
-        .reduce<Result<any[][], NexusProtocolError>>(
-          (result, call) =>
-            result.andThen((calls) => {
-              if (!call || typeof call !== "object") {
-                return err(
-                  new NexusProtocolError(
-                    "Invalid Nexus-JSON batch message: call must be an object",
-                    {
-                      messageType: batchMessage.type,
-                      call,
-                    },
-                  ),
-                );
-              }
-
-              return messageToPacketArray(call).map((packedCall) => [
-                ...calls,
-                packedCall,
-              ]);
-            }),
-          ok([]),
-        )
-        .map((packedCalls) => [
-          batchMessage.type,
-          batchMessage.id,
-          packedCalls,
-        ]);
+      const packedCalls: any[][] = [];
+      for (const call of batchMessage.calls) {
+        if (!call || typeof call !== "object") {
+          return err(
+            new NexusProtocolError(
+              "Invalid Nexus-JSON batch message: call must be an object",
+              { messageType: batchMessage.type, call },
+            ),
+          );
+        }
+        const packed = messageToPacketArray(call);
+        if (packed.isErr()) return err(packed.error);
+        packedCalls.push(packed.value);
+      }
+      return ok([batchMessage.type, batchMessage.id, packedCalls]);
     }
 
     const structure = MESSAGE_PACKET_STRUCTURE[message.type];
@@ -100,30 +87,21 @@ export namespace JsonSerializer {
         );
       }
 
-      return packedCalls
-        .reduce<Result<any[], NexusProtocolError>>(
-          (result, packedCall) =>
-            result.andThen((calls) => {
-              if (!Array.isArray(packedCall)) {
-                return err(
-                  new NexusProtocolError(
-                    "Invalid Nexus-JSON batch packet: nested call must be an array",
-                    {
-                      packet,
-                      packedCall,
-                    },
-                  ),
-                );
-              }
-
-              return packetArrayToMessage(packedCall).map((call) => [
-                ...calls,
-                call,
-              ]);
-            }),
-          ok([]),
-        )
-        .map((calls) => ({ type, id, calls }) as Message.BatchMessage);
+      const calls: Message.NexusMessage[] = [];
+      for (const packedCall of packedCalls) {
+        if (!Array.isArray(packedCall)) {
+          return err(
+            new NexusProtocolError(
+              "Invalid Nexus-JSON batch packet: nested call must be an array",
+              { packet, packedCall },
+            ),
+          );
+        }
+        const call = packetArrayToMessage(packedCall);
+        if (call.isErr()) return err(call.error);
+        calls.push(call.value);
+      }
+      return ok({ type, id, calls } as Message.BatchMessage);
     }
 
     const structure = MESSAGE_PACKET_STRUCTURE[messageType];
@@ -197,7 +175,7 @@ export namespace JsonSerializer {
 
   export const safeSerialize = (
     logicalMessage: Message.NexusMessage,
-  ): Result<string | ArrayBuffer, NexusProtocolError> =>
+  ): Result<string, NexusProtocolError> =>
     messageToPacketArray(logicalMessage).andThen((packetArray) => {
       try {
         return ok(JSON.stringify(packetArray));

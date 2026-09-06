@@ -11,26 +11,11 @@ const textDecoder = new TextDecoder();
 export namespace BinarySerializer {
   export const safeSerialize = (
     logicalMessage: NexusMessage,
-  ): Result<string | ArrayBuffer, NexusProtocolError> =>
+  ): Result<ArrayBuffer, NexusProtocolError> =>
     JsonSerializer.safeSerialize(logicalMessage).andThen((jsonPacket) => {
-      if (typeof jsonPacket !== "string") {
-        return err(
-          new NexusProtocolError(
-            "BinarySerializer expects string JSON packets",
-            {
-              packetType: typeof jsonPacket,
-            },
-          ),
-        );
-      }
-
       try {
         const encoded = textEncoder.encode(jsonPacket);
-        const buffer = encoded.buffer.slice(
-          encoded.byteOffset,
-          encoded.byteOffset + encoded.byteLength,
-        );
-        return ok(buffer);
+        return ok(encoded.buffer);
       } catch (error) {
         return err(
           new NexusProtocolError(

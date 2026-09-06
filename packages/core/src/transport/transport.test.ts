@@ -104,6 +104,34 @@ describe("Transport", () => {
   });
 
   describe("connect", () => {
+    it("closes a port when processor subscription fails", async () => {
+      const subscriptionError = new Error("subscription failed");
+      const close = vi.fn();
+      mockEndpoint.connect = async () => ({
+        port: {
+          postMessage: vi.fn(),
+          onDisconnect: vi.fn(),
+          close,
+          onMessage: () => {
+            throw subscriptionError;
+          },
+        },
+        connectionMeta: { source: "test" },
+      });
+      const result = await Transport.safeConnect(
+        Transport.create(mockEndpoint),
+        { context: "test" },
+        {
+          onLogicalMessage: vi.fn(),
+          onDisconnect: vi.fn(),
+        },
+      );
+      expect(result).toMatchObject({
+        error: { code: "E_ENDPOINT_CONNECT_FAILED" },
+      });
+      expect(close).toHaveBeenCalledOnce();
+    });
+
     it("uses endpoint.connect and returns processor with metadata", async () => {
       const [port1] = createMockPortPair();
       const mockRemoteMetadata = { source: "remote-endpoint" };

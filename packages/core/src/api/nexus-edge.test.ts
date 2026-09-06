@@ -1,10 +1,8 @@
 import { Result } from "better-result";
 import { describe, expect, it, vi } from "vitest";
 import {
-  ConnectionManagerError,
-  ConnectionManagerHandshakeFailedError,
-} from "../connection/connection-manager";
-import {
+  NexusError,
+  NexusConnectionConstraintFailedError,
   NexusEndpointCapabilityError,
   NexusEndpointConnectError,
   NexusHandshakeError,
@@ -19,7 +17,15 @@ const { ok } = Result;
 
 const endpoint = () => ({
   listen: vi.fn(),
-  connect: vi.fn(async () => ({ port: undefined, connectionMeta: {} })),
+  connect: vi.fn(async () => ({
+    port: {
+      postMessage: vi.fn(),
+      onMessage: vi.fn(),
+      onDisconnect: vi.fn(),
+      close: vi.fn(),
+    },
+    connectionMeta: {},
+  })),
 });
 
 const deferred = <T>() => {
@@ -149,8 +155,13 @@ describe("Nexus service acquisition API", () => {
       },
     ];
     for (const { error, proxy } of cases) {
-      expect(Nexus.safeRelease(proxy).error).toBe(error);
-      expect(nexus.safeRelease(proxy).error).toBe(error);
+      for (const result of [
+        Nexus.safeRelease(proxy),
+        nexus.safeRelease(proxy),
+      ]) {
+        expect(result.isErr()).toBe(true);
+        if (result.isErr()) expect(result.error).toBe(error);
+      }
       const staticThrown = (() => {
         try {
           Nexus.release(proxy);
@@ -183,7 +194,7 @@ describe("Nexus service acquisition API", () => {
           throw thrown;
         },
       };
-      expect(nexus.safeRelease(proxy).error).toMatchObject({ message });
+      expect(nexus.safeRelease(proxy)).toMatchObject({ error: { message } });
     }
 
     let hostile!: object;
@@ -198,8 +209,8 @@ describe("Nexus service acquisition API", () => {
         },
       },
     );
-    expect(nexus.safeRelease(hostile).error).toMatchObject({
-      message: "Unknown error",
+    expect(nexus.safeRelease(hostile)).toMatchObject({
+      error: { message: "Unknown error" },
     });
   });
 
@@ -528,7 +539,7 @@ describe("Nexus service acquisition API", () => {
         safeResolveConnections: vi
           .fn()
           .mockResolvedValueOnce(
-            Result.err(new ConnectionManagerError("denied", "E_AUTH_DENIED")),
+            Result.err(new NexusError("denied", "E_UNKNOWN")),
           )
           .mockReturnValueOnce(unresolved.promise),
         getReadyTargetConnections: vi.fn(),
@@ -696,12 +707,18 @@ describe("Nexus service acquisition API", () => {
     expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
   });
 
-  it("maps direct and nested endpoint failures to public endpoint connect errors", async () => {
-    const direct = new NexusEndpointConnectError("direct");
-    const nested = new ConnectionManagerError("nested", "E_UNKNOWN", {
-      cause: new NexusEndpointConnectError("nested cause"),
-    });
-    for (const error of [direct, nested]) {
+  it("preserves endpoint context and supplies the public cause without duplicating an existing one", async () => {
+    const errors = [
+      new NexusEndpointConnectError("direct", { target: "peer" }),
+      new NexusEndpointConnectError("nested", {
+        cause: {
+          name: "NativeError",
+          code: "ECONNREFUSED",
+          message: "refused",
+        },
+      }),
+    ];
+    for (const error of errors) {
       const manager = {
         safeResolveConnections: vi.fn(async () => Result.err(error)),
         getReadyTargetConnections: vi.fn(),
@@ -711,46 +728,48 @@ describe("Nexus service acquisition API", () => {
         new Token<object>("service"),
         { target: { context: "host" } },
       );
-      expect(result.error).toBeInstanceOf(NexusEndpointConnectError);
-      expect(result.error).not.toBeInstanceOf(ConnectionManagerError);
-      expect(result.error).toMatchObject({ code: "E_ENDPOINT_CONNECT_FAILED" });
+      expect(result).toMatchObject({
+        error: {
+          code: "E_ENDPOINT_CONNECT_FAILED",
+          context: error.context,
+          cause: error.cause ?? {
+            code: "E_ENDPOINT_CONNECT_FAILED",
+            message: error.message,
+          },
+        },
+      });
+      if (result.isErr() && error.cause) expect(result.error).toBe(error);
     }
   });
 
   it("maps every manager terminal error to a public Nexus error", async () => {
     const cases: readonly [
-      ConnectionManagerError | Error,
+      NexusError,
       new (...args: any[]) => Error,
       string,
     ][] = [
       [
-        new ConnectionManagerError(
-          "constraint",
-          "E_CONNECTION_CONSTRAINT_FAILED",
-        ),
+        new NexusConnectionConstraintFailedError("constraint"),
         NexusServiceError,
         "E_TARGET_CONSTRAINT_FAILED",
       ],
       [
-        new ConnectionManagerError("protocol", "E_PROTOCOL_INCOMPATIBLE"),
+        new NexusProtocolIncompatibleError("protocol"),
         NexusProtocolIncompatibleError,
         "E_PROTOCOL_INCOMPATIBLE",
       ],
       [
-        new ConnectionManagerHandshakeFailedError("failed"),
+        new NexusHandshakeError("failed", "E_HANDSHAKE_FAILED"),
         NexusHandshakeError,
         "E_HANDSHAKE_FAILED",
       ],
       [
-        new ConnectionManagerError("rejected", "E_AUTH_CONNECT_DENIED"),
+        new NexusHandshakeError("rejected"),
         NexusHandshakeError,
         "E_HANDSHAKE_REJECTED",
       ],
       [
-        new ConnectionManagerError(
-          "capability",
-          "E_ENDPOINT_CAPABILITY_MISMATCH",
-        ),
+        new NexusEndpointCapabilityError("capability"),
         NexusEndpointCapabilityError,
         "E_ENDPOINT_CAPABILITY_MISMATCH",
       ],
@@ -759,20 +778,9 @@ describe("Nexus service acquisition API", () => {
         NexusEndpointConnectError,
         "E_ENDPOINT_CONNECT_FAILED",
       ],
+      [new NexusUsageError("usage"), NexusUsageError, "E_USAGE_INVALID"],
       [
-        new ConnectionManagerError("nested", "E_UNKNOWN", {
-          cause: new NexusEndpointConnectError("nested"),
-        }),
-        NexusEndpointConnectError,
-        "E_ENDPOINT_CONNECT_FAILED",
-      ],
-      [
-        new ConnectionManagerError("usage", "E_USAGE_INVALID"),
-        NexusUsageError,
-        "E_USAGE_INVALID",
-      ],
-      [
-        new ConnectionManagerError("unknown", "E_UNKNOWN"),
+        new NexusError("unknown", "E_UNKNOWN"),
         NexusServiceError,
         "E_SERVICE_UNAVAILABLE",
       ],
@@ -787,24 +795,19 @@ describe("Nexus service acquisition API", () => {
         new Token<object>("service"),
         { target: { context: "host" } },
       );
-      expect(result.error).toBeInstanceOf(ErrorType);
-      expect(result.error).not.toBeInstanceOf(ConnectionManagerError);
-      expect(result.error).toMatchObject({ code });
+      expect(result).toMatchObject({ error: { code } });
+      if (result.isErr()) expect(result.error).toBeInstanceOf(ErrorType);
     }
   });
 
   it("preserves serialized causes for handshake and capability terminal mappings", async () => {
     const cases = [
-      new ConnectionManagerHandshakeFailedError("handshake", {
-        cause: new Error("peer rejected"),
+      new NexusHandshakeError("handshake", "E_HANDSHAKE_FAILED", undefined, {
+        cause: { name: "Error", code: "E_UNKNOWN", message: "peer rejected" },
       }),
-      new ConnectionManagerError(
-        "capability",
-        "E_ENDPOINT_CAPABILITY_MISMATCH",
-        {
-          cause: new NexusEndpointCapabilityError("missing connect"),
-        },
-      ),
+      new NexusEndpointCapabilityError("capability", {
+        cause: { name: "Error", code: "E_UNKNOWN", message: "missing connect" },
+      }),
     ];
     for (const error of cases) {
       const manager = {
@@ -816,10 +819,8 @@ describe("Nexus service acquisition API", () => {
         new Token<object>("service"),
         { target: { context: "host" } },
       );
-      expect(result.error).not.toBeInstanceOf(ConnectionManagerError);
-      expect(result.error).toMatchObject({
-        cause: expect.objectContaining({ message: expect.any(String) }),
-      });
+      expect(result).toMatchObject({ error: { cause: error.cause } });
+      if (result.isErr()) expect(result.error).toBe(error);
     }
   });
 
@@ -908,8 +909,7 @@ describe("Nexus service acquisition API", () => {
         },
         {
           name: "terminal error",
-          resolve: () =>
-            Result.err(new ConnectionManagerError("bad", "E_UNKNOWN")),
+          resolve: () => Result.err(new NexusError("bad", "E_UNKNOWN")),
           settle: async () => undefined,
           code: "E_SERVICE_UNAVAILABLE",
         },

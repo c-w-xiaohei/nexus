@@ -1,122 +1,141 @@
-import { PortProcessor } from "../transport/port-processor";
+import type {
+  PortProcessor,
+  PortProcessorHandlers,
+} from "../transport/port-processor";
 import type {
   AdapterModel,
   ConnectionMetaOf,
   ContextMetaOf,
 } from "../types/adapter-model";
 import type { ConnectionContext } from "../types/identity";
-import type {
-  NexusMessage,
-  HandshakeReqMessage,
-  HandshakeAckMessage,
-  HandshakeReadyMessage,
-  IdentityUpdateMessage,
-  ProviderAvailableMessage,
+import {
+  NexusMessageType,
+  type NexusMessage,
+  type HandshakeReqMessage,
+  type SerializedError,
 } from "../types/message";
-import { NexusMessageType } from "../types/message";
-import { ConnectionStatus, type LogicalConnectionHandlers } from "./types";
+import type { LogicalConnectionHandlers } from "./types";
 import { Logger } from "@/logger";
 import { toSerializedError } from "@/utils/error";
 import { NexusProtocolIncompatibleError } from "@/errors";
 import { Result } from "better-result";
-const { err, ok } = Result;
+import { delay } from "es-toolkit/promise";
 
+const { ok, err } = Result;
 const PROVIDER_CATALOG_CAPABILITY = "provider-catalog-v1";
 
-type LogicalConnectionErrorCode = "E_AUTH_CONNECT_DENIED" | "E_USAGE_INVALID";
+/** Construction inputs for an attached, not-yet-handshaken session. */
+export interface ConnectionConfig<M extends AdapterModel> {
+  connectionId: string;
+  localEndpointMeta: ContextMetaOf<M>;
+  connectionMeta: ConnectionMetaOf<M>;
+  direction: "incoming" | "outgoing";
+  nextMessageId: () => number;
+  localProviders?: () => readonly string[];
+}
 
-type LogicalConnectionErrorOptions = {
-  readonly context?: Record<string, unknown>;
-};
+type AcquiredPort<M extends AdapterModel> = Result<
+  {
+    portProcessor: PortProcessor.Context;
+    connectionMeta: ConnectionMetaOf<M>;
+  },
+  unknown
+>;
 
-class LogicalConnectionBaseError extends Error {
-  readonly code: LogicalConnectionErrorCode;
-  readonly context?: Record<string, unknown>;
+/** Startup inputs shared by accepted ports and active dials. */
+export interface ConnectionOpenOptions<M extends AdapterModel> extends Omit<
+  ConnectionConfig<M>,
+  "connectionMeta" | "localEndpointMeta"
+> {
+  /** Transfer a processor to this attempt, even if acquisition finishes after timeout. */
+  acquire(
+    handlers: PortProcessorHandlers,
+  ): AcquiredPort<M> | Promise<AcquiredPort<M>>;
+  /** Read the latest identity at attachment, not at dial start. */
+  localIdentity(): ContextMetaOf<M>;
+  /** Deadline covering acquisition, authorization and publication, in milliseconds. */
+  timeoutMs: number;
+  /** Identity offered to the passive peer, applied only after authorization. */
+  assignmentMetadata?: ContextMetaOf<M>;
+}
 
-  constructor(
-    message: string,
-    code: LogicalConnectionErrorCode,
-    options: LogicalConnectionErrorOptions = {},
-  ) {
-    super(message);
-    this.name = "LogicalConnectionError";
-    this.code = code;
-    this.context = options.context;
-  }
+class HandshakeFailedError extends Error {
+  readonly code = "E_HANDSHAKE_FAILED";
 }
 
 class LogicalConnectionAuthDeniedError extends Error {
   readonly code = "E_AUTH_CONNECT_DENIED";
-
   constructor(message: string) {
     super(message);
     this.name = "LogicalConnectionAuthDeniedError";
   }
 }
 
-class LogicalConnectionHandshakeRejectedError extends LogicalConnectionBaseError {
-  constructor(message: string, options: LogicalConnectionErrorOptions = {}) {
-    super(message, "E_AUTH_CONNECT_DENIED", options);
-    this.name = "LogicalConnectionHandshakeRejectedError";
-  }
-}
-
-class LogicalConnectionInvalidStateError extends LogicalConnectionBaseError {
-  constructor(message: string, options: LogicalConnectionErrorOptions = {}) {
-    super(message, "E_USAGE_INVALID", options);
+class LogicalConnectionInvalidStateError extends Error {
+  readonly code = "E_USAGE_INVALID";
+  constructor(
+    message: string,
+    readonly context: Record<string, unknown>,
+  ) {
+    super(message);
     this.name = "LogicalConnectionInvalidStateError";
   }
 }
 
-export const LogicalConnectionError = {
-  Base: LogicalConnectionBaseError,
-  HandshakeRejected: LogicalConnectionHandshakeRejectedError,
-  InvalidState: LogicalConnectionInvalidStateError,
-} as const;
+type SessionState =
+  | {
+      phase: "handshaking";
+      expected:
+        | NexusMessageType.HANDSHAKE_REQ
+        | NexusMessageType.HANDSHAKE_ACK
+        | NexusMessageType.HANDSHAKE_READY
+        | null;
+      id: HandshakeReqMessage["id"] | null;
+    }
+  | {
+      phase: "activating" | "publishing";
+      messages: NexusMessage[];
+      published: Promise<void>;
+    }
+  | { phase: "ready" | "closed" };
 
 /**
- * Encapsulates all state and logic for a single point-to-point connection.
- * It manages the connection lifecycle, orchestrates the handshake protocol,
- * and acts as the bridge between the ConnectionManager and a low-level PortProcessor.
+ * One session owns its protocol state, authorization barrier and transport.
+ * Handshake correlation is an expected packet plus ID; publication owns its FIFO.
+ * State object identity prevents asynchronous work from committing after shutdown.
+ * The owner supplies policy and registers lifecycle transitions, but never drives
+ * protocol state or reconstructs authorization context from external indexes.
  */
 export class LogicalConnection<M extends AdapterModel> {
+  /** Stable session identifier, not a reusable remote endpoint address. */
   public readonly connectionId: string;
+  /** Physical direction for policy; an outgoing port can still receive the first REQ. */
   public readonly direction: "incoming" | "outgoing";
-  private status: ConnectionStatus = ConnectionStatus.INITIALIZING;
+  /** Shallow frozen snapshot of local adapter facts. */
   public readonly context: ConnectionContext<ConnectionMetaOf<M>>;
-  private _remoteIdentity?: ContextMetaOf<M>;
-  private wasEstablished = false;
-  private rejectionError?: Error;
-  private outboundHandshakeId?: HandshakeReqMessage["id"];
-  private inboundHandshakeId?: HandshakeReqMessage["id"];
-  private acknowledgedHandshakeId?: HandshakeReqMessage["id"];
-  private inboundOrderingGate: Promise<void> = Promise.resolve();
   private readonly logger: Logger;
   private readonly nextMessageId: () => number;
   private readonly localProviders: () => readonly string[];
-  private readonly remoteProvidersSet = new Set<string>();
-  private readonly queuedProviders = new Set<string>();
-  private readonly queuedOutboundMessages: NexusMessage[] = [];
-  private outboundReadyGate = false;
-
-  // This connection's own user metadata. It can be reassigned during a
-  // "christening" handshake if this is a child context.
   private localEndpointMeta: ContextMetaOf<M>;
+  private peerIdentity?: ContextMetaOf<M>;
+  private rejection?: Error;
+  // expected=null reserves a correlated attempt while its policy is pending.
+  private state: SessionState = {
+    phase: "handshaking",
+    expected: NexusMessageType.HANDSHAKE_REQ,
+    id: null,
+  };
+  private authorization: Promise<void> = Promise.resolve();
+  private readonly lifetime = new AbortController();
+  private opening?: (result: Result<void, Error>) => void;
+  private readonly providers = new Set<string>();
+  private readonly pendingProviders = new Set<string>();
 
+  /** Construct an attached session without starting it; open also owns acquisition and timeout. */
   constructor(
-    // Dependencies injected by ConnectionManager
-    private readonly portProcessor: PortProcessor.Context,
+    private readonly port: PortProcessor.Context,
     private readonly handlers: LogicalConnectionHandlers<M>,
-    // Initial state
-    config: {
-      connectionId: string;
-      localEndpointMeta: ContextMetaOf<M>;
-      // For ALL connections, this is the metadata of the remote endpoint discovered by L1.
-      connectionMeta: ConnectionMetaOf<M>;
-      direction: "incoming" | "outgoing";
-      nextMessageId: () => number;
-      localProviders?: () => readonly string[];
-    },
+    config: ConnectionConfig<M>,
   ) {
     this.connectionId = config.connectionId;
     this.direction = config.direction;
@@ -128,576 +147,603 @@ export class LogicalConnection<M extends AdapterModel> {
       connection: Object.freeze({ ...config.connectionMeta }),
     };
     this.logger = new Logger(`L2 --- LogicalConnection<${this.connectionId}>`);
-    this.logger.info("Created.", this.context);
   }
 
-  // ===========================================================================
-  // Public API for ConnectionManager
-  // ===========================================================================
-
-  /**
-   * Checks if the connection is fully established and ready for communication.
-   */
+  /** Protocol readiness precedes active-side publication by one turn; sends queue during that gap. */
   public isReady(): boolean {
-    return this.status === ConnectionStatus.CONNECTED;
+    return this.state.phase === "publishing" || this.state.phase === "ready";
   }
 
+  /** Last authorized peer identity, also retained after shutdown. */
   public get remoteIdentity(): ContextMetaOf<M> | undefined {
-    return this._remoteIdentity;
+    return this.peerIdentity;
   }
-
+  /** This session's current identity, including an authorized christening assignment. */
   public get localIdentity(): ContextMetaOf<M> {
     return this.localEndpointMeta;
   }
-
-  public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
-    this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
-  }
-
+  /** Protocol/authorization rejection retained for diagnostics and failed acquisition. */
   public get handshakeRejectionError(): Error | undefined {
-    return this.rejectionError;
+    return this.rejection;
   }
-
+  /** Detached snapshot of the monotonically accumulated peer catalog. */
   public get remoteProviders(): ReadonlySet<string> {
-    return new Set(this.remoteProvidersSet);
+    return new Set(this.providers);
+  }
+  /** Catalog membership does not itself imply readiness. */
+  public hasProvider(provider: string): boolean {
+    return this.providers.has(provider);
   }
 
-  public publishProviders(providers: readonly string[]): Result<void, Error> {
-    for (const provider of providers) this.queuedProviders.add(provider);
-    if (!this.isReady() || this.queuedProviders.size === 0)
-      return ok(undefined);
-    return this.flushQueuedProviders();
-  }
+  // ===== Acquisition And Lifetime =====
 
   /**
-   * Starts the handshake process from the active/client side.
-   * @param localEndpointMeta The user metadata of the local endpoint.
-   * @param assignmentMetadata Optional metadata to be assigned to the remote (child) endpoint.
+   * Acquire a processor and establish one session through handshake publication.
+   * Used for both accepted incoming ports and actively dialed outgoing ports.
+   *
+   * Startup proceeds in this order:
+   * 1. Start the deadline and call `config.acquire` with the session's transport
+   *    handlers. Buffer messages received before a connection can handle them.
+   * 2. Read `config.localIdentity()` at attachment time, construct the connection,
+   *    and call `handlers.onAttached` so the owner can register the session before
+   *    any buffered packet reaches authorization or protocol processing.
+   * 3. Submit the buffered messages in arrival order, including messages emitted
+   *    synchronously during `onAttached`, then switch to direct reception.
+   *    Initiate a handshake only for an outgoing port without a buffered REQ;
+   *    an early peer REQ selects the passive role regardless of port direction.
+   * 4. Complete authorization and the handshake, flush pending provider deltas
+   *    and queued sends, and register through `handlers.onReady`. Only then can opening
+   *    resolve successfully.
+   *
+   * @remarks
+   * If acquisition returns a Result synchronously, attachment and `onAttached`
+   * also run before this method returns; no extra microtask is introduced for
+   * accepted ports. The returned Promise still waits for handshake publication.
+   * On the active side, `isReady()` becomes true one timer turn before manager
+   * publication, so it is not equivalent to successful completion of `open()`.
+   *
+   * The attempt owns every successfully acquired processor until it transfers
+   * ownership to the connection. Startup failure closes any owned resource and
+   * clears the deadline. The deadline covers acquisition, authorization, and
+   * publication, and settles even if native acquisition never resolves. It does
+   * not cancel native acquisition: a processor arriving after failure is closed
+   * without registration or handshaking. After success, the connection owns its
+   * lifetime; a later disconnect does not change the already settled result.
+   *
+   * @param config - Acquisition, identity, physical direction, and startup deadline.
+   * @param handlers - Owner integration and authorization callbacks. `onAttached`
+   * registers an unverified session; `onReady` registers a routable one. Both are
+   * synchronous Result-returning hooks, not best-effort observer notifications.
+   * @returns Ok with the connection after `onReady` returns Ok, or
+   * Err for acquisition, attachment, handshake, or publication failure. Original
+   * acquisition and callback errors are retained. Timeout uses
+   * `E_HANDSHAKE_FAILED`; premature closure preserves a known handshake rejection
+   * or otherwise uses `E_HANDSHAKE_FAILED`.
    */
-  public initiateHandshake(
-    localEndpointMeta: ContextMetaOf<M>,
-    assignmentMetadata?: ContextMetaOf<M>,
-  ): Result<void, Error> {
-    if (this.status !== ConnectionStatus.INITIALIZING) {
-      this.logger.warn(
-        "Handshake initiated in non-INITIALIZING state.",
-        this.status,
+  static open<M extends AdapterModel>(
+    config: ConnectionOpenOptions<M>,
+    handlers: LogicalConnectionHandlers<M>,
+  ): Promise<Result<LogicalConnection<M>, unknown>> {
+    return new Promise((resolve) => {
+      // Ownership and reception are separate: the session takes over the port
+      // while reception stays buffered through manager registration.
+      let connection: LogicalConnection<M> | undefined;
+      let messages: NexusMessage[] | undefined = [];
+      const settle = (result: Result<LogicalConnection<M>, unknown>) => {
+        clearTimeout(deadline);
+        resolve(result);
+        // Resolve the original failure before close can reenter settlement.
+        if (result.isErr()) {
+          messages = undefined;
+          connection?.close();
+        }
+      };
+      const fail = (error: unknown) => settle(err(error));
+      // This deadline must finish even if native acquisition never resolves.
+      // Promise.race/withTimeout alone would leave late processors unclaimed.
+      const deadline = setTimeout(
+        () =>
+          fail(
+            new HandshakeFailedError(
+              `Connection ${config.connectionId} timed out during handshake.`,
+            ),
+          ),
+        config.timeoutMs,
       );
-      return err(
-        new LogicalConnectionError.InvalidState(
-          "Handshake can only be initiated in INITIALIZING state.",
-          { context: { status: this.status, connectionId: this.connectionId } },
-        ),
-      );
-    }
-    this.status = ConnectionStatus.HANDSHAKING;
-    this.logger.info("Initiating handshake.");
-    const handshakeReq: HandshakeReqMessage = {
-      type: NexusMessageType.HANDSHAKE_REQ,
-      id: this.nextMessageId(),
-      metadata: localEndpointMeta,
-      capabilities: [PROVIDER_CATALOG_CAPABILITY],
-      ...(assignmentMetadata && { assigns: assignmentMetadata }),
-    };
-    const sendResult = this.portProcessor.sendMessage(handshakeReq);
-    if (sendResult.isErr()) {
-      this.logger.error("Failed to send HANDSHAKE_REQ", sendResult.error);
-      this.close();
-      return err(sendResult.error);
-    }
+      const portHandlers: PortProcessorHandlers = {
+        onLogicalMessage: (message) => {
+          if (messages) messages.push(message);
+          else connection?.receive(message);
+        },
+        onDisconnect: () => {
+          if (messages)
+            fail(
+              new HandshakeFailedError(
+                `Connection ${config.connectionId} closed before attachment.`,
+              ),
+            );
+          else connection?.handleDisconnect();
+        },
+        onProtocolError: fail,
+      };
+      const attach = (acquired: AcquiredPort<M>) => {
+        if (acquired.isErr()) return fail(acquired.error);
+        const { portProcessor, connectionMeta } = acquired.value;
+        try {
+          if (!messages) return;
+          const attached = new LogicalConnection(portProcessor, handlers, {
+            ...config,
+            connectionMeta,
+            localEndpointMeta: config.localIdentity(),
+          });
+          // Getters may disconnect during construction; only live attempts take over.
+          if (!messages) return;
+          connection = attached;
+          attached.opening = (result) => settle(result.map(() => attached));
+          // Install cleanup before owner registration, which may fail or close.
+          const registered = handlers.onAttached(attached);
+          if (registered.isErr()) return fail(registered.error);
+          if (!messages) return;
 
-    this.outboundHandshakeId = handshakeReq.id;
-
-    return ok(undefined);
+          // Preserve the entire replay prefix, including observer-emitted packets.
+          // An early REQ chooses the passive role even on an outgoing native port.
+          const passive = messages.some(
+            (message) => message.type === NexusMessageType.HANDSHAKE_REQ,
+          );
+          for (const message of messages) attached.receive(message);
+          messages = undefined;
+          if (config.direction === "outgoing" && !passive) {
+            const started = attached.initiateHandshake(
+              config.assignmentMetadata,
+            );
+            if (started.isErr()) fail(started.error);
+          }
+        } catch (error) {
+          // Preserve construction/observer errors before cleanup can emit disconnect.
+          fail(error);
+        } finally {
+          // Until ownership transfers this attempt still owns cleanup, including
+          // a successful acquisition arriving after timeout or early disconnect.
+          if (connection?.port !== portProcessor)
+            portProcessor.close().match({
+              ok: () => undefined,
+              err: (error) =>
+                console.error(
+                  "Nexus DEV: failed to close unattached port",
+                  error,
+                ),
+            });
+        }
+      };
+      // Do not introduce a microtask before accepted ports attach to the manager.
+      try {
+        const acquired = config.acquire(portHandlers);
+        if (acquired instanceof Promise) void acquired.then(attach).catch(fail);
+        else attach(acquired);
+      } catch (error) {
+        fail(error);
+      }
+    });
   }
 
-  /**
-   * Forcibly closes the connection and notifies the manager.
-   */
+  /** Idempotently close the processor and notify onClosed, even for silent native closes. */
   public close(): void {
-    // If already closing or closed, do nothing.
-    if (
-      this.status === ConnectionStatus.CLOSING ||
-      this.status === ConnectionStatus.CLOSED
-    ) {
-      this.logger.debug(
-        "Close called on an already closing/closed connection.",
-      );
-      return;
-    }
-    this.status = ConnectionStatus.CLOSING;
-    this.logger.info("Forcibly closing connection.");
-    const closeResult = this.portProcessor.close();
-    if (closeResult.isErr()) {
-      this.logger.error("Failed to close port processor", closeResult.error);
-    }
-    // Some transports do not synchronously emit onDisconnect from close().
-    // handleDisconnect is idempotent and preserves the manager/Engine cleanup path.
-    this.handleDisconnect();
+    this.stop(true);
+  }
+  /** Finish a native disconnect without asking the processor to close again. */
+  public handleDisconnect(): void {
+    this.stop(false);
   }
 
+  private stop(closePort: boolean): void {
+    const state = this.state;
+    if (state.phase === "closed") return;
+    const identity = this.isReady() ? this.peerIdentity : undefined;
+    // Reentrant close/disconnect sees the terminal state before any native callback.
+    this.state = { phase: "closed" };
+    this.lifetime.abort();
+    if ("messages" in state) state.messages.length = 0;
+    this.pendingProviders.clear();
+    if (closePort) {
+      const closed = this.port.close();
+      if (closed.isErr())
+        this.logger.error("Failed to close port processor", closed.error);
+    }
+    this.settleOpening(
+      err(
+        this.rejection ??
+          new HandshakeFailedError(
+            `Connection ${this.connectionId} closed before publication.`,
+          ),
+      ),
+    );
+    Result.try({
+      try: () => this.handlers.onClosed(this, identity),
+      catch: asError,
+    }).match({
+      ok: () => undefined,
+      err: (error) =>
+        this.logger.error("Session owner failed to handle closure", error),
+    });
+  }
+
+  private settleOpening(result: Result<void, Error>): void {
+    const notify = this.opening;
+    this.opening = undefined;
+    notify?.(result);
+  }
+
+  // ===== Transport Ordering =====
+
   /**
-   * Sends a logical message over the connection's port.
-   * @param message The `NexusMessage` to send.
+   * Send or queue in FIFO order. Ok means local acceptance, not remote delivery.
+   * Err leaves the session closed; processor failures close it before returning.
    */
   public sendMessage(message: NexusMessage): Result<void, Error> {
-    if (this.outboundReadyGate) {
-      this.queuedOutboundMessages.push(message);
+    if (this.state.phase === "closed")
+      return err(
+        new LogicalConnectionInvalidStateError(
+          "Cannot send on a closed connection.",
+          { connectionId: this.connectionId },
+        ),
+      );
+    if ("messages" in this.state) {
+      this.state.messages.push(message);
       return ok(undefined);
     }
-    return this.sendImmediately(message);
+    return this.write(message);
   }
 
-  private sendImmediately(message: NexusMessage): Result<void, Error> {
-    const sendResult = this.portProcessor.sendMessage(message);
-    if (sendResult.isErr()) {
-      this.logger.error("Failed to send message", sendResult.error);
-      this.close();
-      return err(sendResult.error);
-    }
-
-    return ok(undefined);
+  private write(message: NexusMessage): Result<void, Error> {
+    // Control packets bypass publication buffering, not failure cleanup.
+    const sent = this.port.sendMessage(message);
+    if (sent.isErr()) this.close();
+    return sent;
   }
-
-  // ===========================================================================
-  // Handlers for PortProcessor Events
-  // ===========================================================================
 
   /**
-   * The entry point for all messages received from the underlying port.
-   * This method drives the handshake state machine or forwards messages to L3.
-   * @param message The logical message from the PortProcessor.
+   * Process one packet with transport-order authorization and concurrent RPC.
+   * Returns callback failures as Err; managed reception additionally closes on Err.
    */
   public safeHandleMessage(
     message: NexusMessage,
-  ): Promise<Result<void, globalThis.Error>> {
-    const messageHandling = this.shouldWaitForInboundOrdering(message)
-      ? this.inboundOrderingGate.then(() =>
-          this.handleMessageInTransportOrder(message),
-        )
-      : this.handleMessageInTransportOrder(message);
+  ): Promise<Result<void, Error>> {
+    const handshaking = this.state.phase === "handshaking";
+    const response =
+      message.type === NexusMessageType.RES ||
+      message.type === NexusMessageType.ERR ||
+      message.type === NexusMessageType.BATCH_RES;
+    // Only handshake and identity work extends the authorization tail. Application
+    // calls wait independently; post-handshake responses can bypass authorization
+    // for reverse RPC, but dispatch still makes them wait for publication.
+    const handling =
+      handshaking || !response
+        ? this.authorization.then(() => this.dispatch(message))
+        : this.dispatch(message);
+    if (handshaking || message.type === NexusMessageType.IDENTITY_UPDATE)
+      this.authorization = handling.catch(() => undefined);
+    return Result.tryPromise({ try: () => handling, catch: asError });
+  }
 
-    if (this.shouldGateInboundOrdering(message)) {
-      this.inboundOrderingGate = messageHandling.catch(() => undefined);
-    }
-
-    return Result.tryPromise({
-      try: () => messageHandling,
-      catch: (error) =>
-        error instanceof globalThis.Error
-          ? error
-          : new globalThis.Error(String(error)),
+  private receive(message: NexusMessage): void {
+    void this.safeHandleMessage(message).then((result) => {
+      if (result.isErr()) {
+        this.logger.error("Failed to process incoming message", result.error);
+        this.close();
+      }
     });
   }
 
-  private shouldGateInboundOrdering(message: NexusMessage): boolean {
-    return (
-      this.status !== ConnectionStatus.CONNECTED ||
-      message.type === NexusMessageType.IDENTITY_UPDATE
-    );
-  }
-
-  private shouldWaitForInboundOrdering(message: NexusMessage): boolean {
-    if (this.status !== ConnectionStatus.CONNECTED) {
-      return true;
-    }
-
-    return !isConnectedResponseMessage(message);
-  }
-
-  private async handleMessageInTransportOrder(message: NexusMessage) {
-    this.logger.debug("Received message from port.", message);
-    // Identity update authorization can be async; later service messages must
-    // wait so L3 observes the same identity order as the transport.
-    if (message.type === NexusMessageType.IDENTITY_UPDATE) {
-      await this.handleIdentityUpdate(message as IdentityUpdateMessage);
-      return;
-    }
-
-    if (message.type === NexusMessageType.PROVIDER_AVAILABLE) {
-      this.mergeRemoteProviders(
-        (message as ProviderAvailableMessage).providers,
-      );
-      return;
-    }
-
-    // If we are initializing and receive a handshake request, we are the passive
-    // side of the connection. We transition to HANDSHAKING to process it.
-    if (
-      this.status === ConnectionStatus.INITIALIZING &&
-      message.type === NexusMessageType.HANDSHAKE_REQ
-    ) {
-      this.status = ConnectionStatus.HANDSHAKING;
-    }
-
-    if (this.status === ConnectionStatus.HANDSHAKING) {
-      await this.processHandshakeMessage(message);
-    } else if (this.status === ConnectionStatus.CONNECTED) {
-      // Once connected, forward all other messages to the manager.
-      await this.handlers.onMessage(message, this.connectionId);
-    }
-  }
+  // ===== Protocol =====
 
   /**
-   * The entry point for the disconnect event from the underlying port.
+   * Low-level startup for an already attached session. Advertises this object's
+   * current identity, optionally assigning the passive peer's identity. Manager
+   * uses open instead, which also owns acquisition, reception and the deadline.
    */
-  public handleDisconnect(): void {
-    if (this.status === ConnectionStatus.CLOSED) return;
-
-    this.logger.info("Port disconnected.");
-
-    // Determine if the connection was fully established before this disconnect event.
-    const wasConnected = this.wasEstablished;
-    this.status = ConnectionStatus.CLOSED;
-
-    // Always notify the manager. Provide identity only if the connection had been
-    // successfully established. This prevents acting on a partial/unverified identity.
-    this.handlers.onClosed({
-      connectionId: this.connectionId,
-      identity: wasConnected ? this._remoteIdentity : undefined,
-    });
-  }
-
-  // ===========================================================================
-  // Internal Handshake Logic
-  // ===========================================================================
-
-  private async handleIdentityUpdate(
-    message: IdentityUpdateMessage,
-  ): Promise<void> {
-    if (this.status !== ConnectionStatus.CONNECTED || !this._remoteIdentity) {
-      this.logger.warn(
-        "Ignoring identity update received in non-connected state.",
-        this.status,
-      );
-      // Ignore if not fully connected or identity is not yet known.
-      return;
-    }
-    const oldIdentity = this._remoteIdentity;
-
-    const newIdentity = { ...oldIdentity, ...message.updates };
-    const isVerified = await this.handlers.verify(newIdentity, this.context);
-    if (!isVerified) {
-      this.logger.warn("Remote identity update verification failed. Closing.");
-      this.rejectionError = new LogicalConnectionAuthDeniedError(
-        "Identity update rejected by policy.",
-      );
-      this.close();
-      return;
-    }
-
-    this._remoteIdentity = newIdentity;
-
-    this.logger.debug("Updated remote identity and notifying manager.", {
-      from: oldIdentity,
-      to: newIdentity,
-    });
-
-    // Notify the ConnectionManager for service group updates
-    this.handlers.onIdentityUpdated?.(
-      this.connectionId,
-      newIdentity,
-      oldIdentity,
-      this.context.connection,
-    );
-  }
-
-  private async processHandshakeMessage(message: NexusMessage): Promise<void> {
-    switch (message.type) {
-      case NexusMessageType.HANDSHAKE_REQ:
-        // Passive side: Received a request, must reply with an ACK.
-        await this.handleHandshakeRequest(message as HandshakeReqMessage);
-        break;
-
-      case NexusMessageType.HANDSHAKE_ACK:
-        // Active side: Received an ACK, can finalize the connection.
-        await this.handleHandshakeAck(message as HandshakeAckMessage);
-        break;
-
-      case NexusMessageType.HANDSHAKE_READY:
-        this.handleHandshakeReady(message as HandshakeReadyMessage);
-        break;
-
-      case NexusMessageType.HANDSHAKE_REJECT:
-        // The other side rejected our connection.
-        this.logger.warn("Handshake rejected by remote.");
-        this.rejectionError = serializedErrorToError(message.error);
-        this.close();
-        break;
-
-      default:
-        this.logger.warn(
-          `Ignoring message of type ${message.type} during handshake.`,
-        );
-      // Ignore other message types during handshake.
-    }
-  }
-
-  private async handleHandshakeRequest(req: HandshakeReqMessage) {
-    this.logger.debug("Handling HANDSHAKE_REQ.", req);
+  public initiateHandshake(
+    assignmentMetadata?: ContextMetaOf<M>,
+  ): Result<void, Error> {
     if (
-      this.inboundHandshakeId !== undefined &&
-      this.inboundHandshakeId !== req.id
-    ) {
-      this.logger.warn("Ignoring HANDSHAKE_REQ for unknown handshake.", {
-        requestId: req.id,
-        inboundHandshakeId: this.inboundHandshakeId,
-      });
-      return;
-    }
-    if (!hasProviderCatalogCapability(req.capabilities)) {
-      this.rejectProtocol(req.id);
-      return;
-    }
-    this.inboundHandshakeId = req.id;
-
-    const assignedMetadata = req.assigns as ContextMetaOf<M> | undefined;
-    const remoteIdentity = req.metadata as ContextMetaOf<M>;
-
-    this.logger.debug("Verifying remote identity.", remoteIdentity);
-    const isVerified = await this.handlers.verify(remoteIdentity, this.context);
-    if (!isVerified) {
-      this.logger.warn("Remote identity verification failed. Closing.");
-      // TODO: Send HANDSHAKE_REJECT
-      const rejectResult = this.portProcessor.sendMessage({
-        type: NexusMessageType.HANDSHAKE_REJECT,
-        id: req.id,
-        error: toSerializedError(
-          new LogicalConnectionAuthDeniedError(
-            "Connection rejected by policy.",
-          ),
+      this.state.phase !== "handshaking" ||
+      this.state.expected !== NexusMessageType.HANDSHAKE_REQ
+    )
+      return err(
+        new LogicalConnectionInvalidStateError(
+          "Handshake can only be initiated in INITIALIZING state.",
+          {
+            phase: this.state.phase,
+            connectionId: this.connectionId,
+          },
         ),
-      });
-      if (rejectResult.isErr()) {
-        this.logger.error(
-          "Failed to send HANDSHAKE_REJECT",
-          rejectResult.error,
-        );
-      }
-      setTimeout(() => this.close(), 0);
-      return;
-    }
-
-    // If this is a "christening" call, the child adopts the assigned metadata
-    // only after authorization has evaluated the pre-assignment local identity.
-    if (assignedMetadata) {
-      this.localEndpointMeta = assignedMetadata;
-    }
-    this._remoteIdentity = remoteIdentity;
-
-    this.logger.debug(
-      "Verification successful. Sending HANDSHAKE_ACK.",
-      this.localEndpointMeta,
-    );
-    // Identity verified, send back our own *final* metadata in the ACK.
-    // For a christened child, this is the metadata it was just given.
-    const ack: HandshakeAckMessage = {
-      type: NexusMessageType.HANDSHAKE_ACK,
-      id: req.id,
+      );
+    const id = this.nextMessageId();
+    this.state = {
+      phase: "handshaking",
+      expected: NexusMessageType.HANDSHAKE_ACK,
+      id,
+    };
+    return this.write({
+      type: NexusMessageType.HANDSHAKE_REQ,
+      id,
       metadata: this.localEndpointMeta,
       capabilities: [PROVIDER_CATALOG_CAPABILITY],
-      providers: this.localProviders(),
+      ...(assignmentMetadata && { assigns: assignmentMetadata }),
+    });
+  }
+
+  private async dispatch(message: NexusMessage): Promise<void> {
+    const state = this.state;
+    if (state.phase === "closed") return;
+    // Catalogs and identity updates have their own admission rules. Application
+    // traffic also waits for manager publication, including response bypasses.
+    switch (message.type) {
+      case NexusMessageType.PROVIDER_AVAILABLE:
+        // Deltas may arrive before READY; readiness only controls notification.
+        this.addProviders(message.providers);
+        return;
+      case NexusMessageType.IDENTITY_UPDATE: {
+        if (!this.isReady() || !this.peerIdentity) return;
+        const previous = this.peerIdentity;
+        const identity = { ...previous, ...message.updates };
+        const allowed = await this.authorize(identity);
+        // Publication may advance while policy waits; shutdown may not be crossed.
+        if (this.state.phase === "closed") return;
+        if (!allowed) {
+          this.rejection = new LogicalConnectionAuthDeniedError(
+            "Identity update rejected by policy.",
+          );
+          this.close();
+          return;
+        }
+        this.peerIdentity = identity;
+        this.handlers.onIdentityUpdated(this, identity, previous);
+        return;
+      }
+      case NexusMessageType.HANDSHAKE_REJECT:
+        if (state.phase === "handshaking" && message.id === state.id) {
+          this.rejection = serializedErrorToError(message.error);
+          this.close();
+        }
+        return;
+      case NexusMessageType.HANDSHAKE_REQ:
+      case NexusMessageType.HANDSHAKE_ACK:
+      case NexusMessageType.HANDSHAKE_READY:
+        break;
+      default:
+        if ("published" in state) await state.published;
+        if (this.state.phase === "ready")
+          await this.handlers.onMessage(this, message);
+        return;
+    }
+
+    // A single expected-packet check rejects wrong roles, wrong IDs and replays.
+    if (
+      state.phase !== "handshaking" ||
+      state.expected !== message.type ||
+      (state.id !== null && state.id !== message.id)
+    )
+      return;
+    if (!message.capabilities?.includes(PROVIDER_CATALOG_CAPABILITY)) {
+      this.reject(
+        message.id,
+        new NexusProtocolIncompatibleError(
+          `Peer does not support required capability ${PROVIDER_CATALOG_CAPABILITY}.`,
+        ),
+        message.type === NexusMessageType.HANDSHAKE_REQ,
+      );
+      return;
+    }
+    if (message.type === NexusMessageType.HANDSHAKE_READY) {
+      this.addProviders(message.providers ?? []);
+      this.publish(false);
+      return;
+    }
+
+    const verifying: SessionState = {
+      phase: "handshaking",
+      expected: null,
+      id: message.id,
     };
-    const ackResult = this.portProcessor.sendMessage(ack);
-    if (ackResult.isErr()) {
-      this.logger.error("Failed to send HANDSHAKE_ACK", ackResult.error);
-      this.close();
-      return;
-    }
-
-    this.acknowledgedHandshakeId = req.id;
-
-    this.logger.info("ACK sent. Waiting for active side final confirmation.");
-  }
-
-  private async handleHandshakeAck(ack: HandshakeAckMessage) {
-    this.logger.debug("Handling HANDSHAKE_ACK.", ack);
-    if (ack.id !== this.outboundHandshakeId) {
-      this.logger.warn("Ignoring HANDSHAKE_ACK for unknown handshake.", {
-        ackId: ack.id,
-        outboundHandshakeId: this.outboundHandshakeId,
-      });
-      return;
-    }
-
-    if (!hasProviderCatalogCapability(ack.capabilities)) {
-      this.rejectProtocol(ack.id);
-      return;
-    }
-
-    // We are the active side. We sent a REQ and got an ACK.
-    // The ACK contains the server's user metadata.
-    this._remoteIdentity = ack.metadata as ContextMetaOf<M>;
-
-    const isVerified = await this.handlers.verify(
-      this._remoteIdentity,
-      this.context,
-    );
-    if (!isVerified) {
-      this.logger.warn("Remote identity verification failed. Closing.");
-      this.rejectionError = new LogicalConnectionAuthDeniedError(
-        "Connection rejected by policy.",
-      );
-      this.sendHandshakeReject(ack.id, this.rejectionError);
-      this.close();
-      return;
-    }
-
-    this.mergeRemoteProviders(ack.providers ?? []);
-
-    const readyResult = this.portProcessor.sendMessage({
-      type: NexusMessageType.HANDSHAKE_READY,
-      id: ack.id,
-      capabilities: [PROVIDER_CATALOG_CAPABILITY],
-      providers: this.localProviders(),
-    });
-    if (readyResult.isErr()) {
-      this.logger.error("Failed to send HANDSHAKE_READY", readyResult.error);
-      this.close();
-      return;
-    }
-
-    this.outboundReadyGate = true;
-    this.markReady(false);
-    setTimeout(() => {
-      this.flushOutboundReadyGate();
-      this.notifyReady();
-    }, 0);
-  }
-
-  private handleHandshakeReady(ready: HandshakeReadyMessage): void {
-    if (!this._remoteIdentity) {
-      this.logger.warn("Ignoring HANDSHAKE_READY without remote identity.");
-      return;
-    }
-
-    if (ready.id !== this.acknowledgedHandshakeId) {
-      this.logger.warn(
-        "Ignoring HANDSHAKE_READY for unacknowledged handshake.",
-        {
-          readyId: ready.id,
-          acknowledgedHandshakeId: this.acknowledgedHandshakeId,
-        },
+    // No next packet is admissible until this identity has been authorized.
+    this.state = verifying;
+    const identity = message.metadata as ContextMetaOf<M>;
+    const allowed = await this.authorize(identity);
+    if (this.state !== verifying) return;
+    if (!allowed) {
+      this.reject(
+        message.id,
+        new LogicalConnectionAuthDeniedError("Connection rejected by policy."),
+        message.type === NexusMessageType.HANDSHAKE_REQ,
       );
       return;
     }
-
-    if (!hasProviderCatalogCapability(ready.capabilities)) {
-      this.rejectProtocol(ready.id);
-      return;
+    this.peerIdentity = identity;
+    if (message.type === NexusMessageType.HANDSHAKE_REQ) {
+      // Policy saw the pre-assignment local identity; ACK reports the final one.
+      if (message.assigns)
+        this.localEndpointMeta = message.assigns as ContextMetaOf<M>;
+      const providers = this.localProviders();
+      this.state = {
+        phase: "handshaking",
+        expected: NexusMessageType.HANDSHAKE_READY,
+        id: message.id,
+      };
+      this.write({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: message.id,
+        metadata: this.localEndpointMeta,
+        capabilities: [PROVIDER_CATALOG_CAPABILITY],
+        providers,
+      }).unwrapOr(undefined);
+    } else {
+      this.addProviders(message.providers ?? []);
+      this.write({
+        type: NexusMessageType.HANDSHAKE_READY,
+        id: message.id,
+        capabilities: [PROVIDER_CATALOG_CAPABILITY],
+        providers: this.localProviders(),
+      }).unwrapOr(undefined);
+      this.publish(true);
     }
-
-    this.mergeRemoteProviders(ready.providers ?? []);
-
-    this.markReady();
   }
 
-  private markReady(notify = true): void {
-    if (!this._remoteIdentity) return;
-    const published = this.flushQueuedProviders();
-    if (published.isErr()) return;
-    this.status = ConnectionStatus.CONNECTED;
-    this.wasEstablished = true;
-    this.logger.info("Handshake complete. Connection is now live.");
-    if (notify) this.notifyReady();
-  }
-
-  private notifyReady(): void {
-    if (!this.isReady() || !this._remoteIdentity) return;
-    this.handlers.onVerified({
-      connectionId: this.connectionId,
-      identity: this._remoteIdentity,
+  private async authorize(remoteIdentity: ContextMetaOf<M>): Promise<boolean> {
+    // The session owns both identities and direction, including christening and
+    // subsequent local updates. Policy is only a decision, not a state lookup.
+    const allowed = await Result.tryPromise({
+      try: async () =>
+        this.handlers.authorize
+          ? this.handlers.authorize({
+              localIdentity: this.localEndpointMeta,
+              remoteIdentity,
+              connection: this.context.connection,
+              direction: this.direction,
+            })
+          : true,
+      catch: asError,
     });
-    this.notifyProviderCatalogUpdated();
+    if (allowed.isErr())
+      this.logger.debug("Connection authorization failed", allowed.error);
+    return allowed.isOk() && allowed.value === true;
   }
 
-  private mergeRemoteProviders(providers: readonly string[]): void {
-    for (const provider of providers) this.remoteProvidersSet.add(provider);
-    if (this.isReady()) this.notifyProviderCatalogUpdated();
+  private publish(deferred: boolean): void {
+    if (this.state.phase === "closed" || !this.peerIdentity) return;
+    const drain = () => {
+      // Keep this FIFO installed while draining: reentrant sends append to its end.
+      // Closing clears this same array, stopping traversal even after an Ok send.
+      for (const message of publication.messages) {
+        this.write(message).unwrapOr(undefined);
+      }
+      publication.messages.length = 0;
+      return this.state === publication;
+    };
+    const finish = () => {
+      if (!drain() || !this.peerIdentity) return;
+      const identity = this.peerIdentity;
+      const notified = Result.try({
+        try: () => this.handlers.onReady(this, identity),
+        catch: asError,
+      }).andThen((result) => result);
+      if (notified.isErr()) {
+        this.settleOpening(notified);
+        this.close();
+        return;
+      }
+      // Owner registration may reenter sends or close. Keep inbound traffic behind
+      // publication and drain new sends before completing the transition.
+      if (!drain()) return;
+      this.state = { phase: "ready" };
+      this.settleOpening(ok(undefined));
+    };
+    const completeLater = async () => {
+      try {
+        // Install publication and send catalog deltas before scheduling the timer.
+        await Promise.resolve();
+        await delay(0, { signal: this.lifetime.signal });
+        finish();
+      } catch (error) {
+        if (this.lifetime.signal.aborted) return;
+        this.settleOpening(err(asError(error)));
+        this.close();
+      }
+    };
+    // Install the final Promise before any transport callback can reenter.
+    // Shutdown cancels the delay and releases waiters to recheck the closed state.
+    const publication: Extract<SessionState, { published: Promise<void> }> = {
+      phase: "activating",
+      messages: [],
+      published: deferred ? completeLater() : Promise.resolve(),
+    };
+    this.state = publication;
+    // Flush deltas before readiness. Passive publication finishes in this same
+    // stack, before any Promise waiter resumes; the active side waits one turn.
+    // Failed writes close the session; finish() and the cancelled delay already
+    // guard publication, so there is no separate failure transition here.
+    this.flushProviders().unwrapOr(undefined);
+    publication.phase = "publishing";
+    if (!deferred) finish();
   }
 
-  private notifyProviderCatalogUpdated(): void {
-    this.handlers.onProviderCatalogUpdated?.(
-      this.connectionId,
-      Array.from(this.remoteProvidersSet),
-    );
-  }
-
-  private flushQueuedProviders(): Result<void, Error> {
-    const providers = Array.from(this.queuedProviders);
-    this.queuedProviders.clear();
-    if (providers.length === 0) return ok(undefined);
-    const sent = this.portProcessor.sendMessage({
-      type: NexusMessageType.PROVIDER_AVAILABLE,
-      id: null,
-      providers,
-    });
-    if (sent.isErr()) {
-      this.close();
-      return err(sent.error);
-    }
-    return ok(undefined);
-  }
-
-  private flushOutboundReadyGate(): void {
-    this.outboundReadyGate = false;
-    for (const message of this.queuedOutboundMessages.splice(0)) {
-      const sent = this.sendImmediately(message);
-      if (sent.isErr()) break;
-    }
-  }
-
-  private rejectProtocol(id: HandshakeReadyMessage["id"]): void {
-    this.rejectionError = new NexusProtocolIncompatibleError(
-      `Peer does not support required capability ${PROVIDER_CATALOG_CAPABILITY}.`,
-    );
-    this.sendHandshakeReject(id, this.rejectionError);
-    this.close();
-  }
-
-  private sendHandshakeReject(id: HandshakeReadyMessage["id"], error: Error) {
-    const rejectResult = this.portProcessor.sendMessage({
+  private reject(
+    id: HandshakeReqMessage["id"],
+    error: Error,
+    deferred = false,
+  ): void {
+    this.rejection = error;
+    // Rejection is best effort; send failure must not replace the original reason.
+    const sent = this.port.sendMessage({
       type: NexusMessageType.HANDSHAKE_REJECT,
       id,
       error: toSerializedError(error),
     });
-    if (rejectResult.isErr()) {
-      this.logger.error("Failed to send HANDSHAKE_REJECT", rejectResult.error);
+    if (sent.isErr())
+      this.logger.error("Failed to send HANDSHAKE_REJECT", sent.error);
+    if (this.state.phase === "closed") return;
+    if (deferred)
+      void delay(0, { signal: this.lifetime.signal }).then(
+        () => this.close(),
+        () => undefined,
+      );
+    else this.close();
+  }
+
+  // ===== Identity And Catalog =====
+
+  /** Merge local identity without broadcasting; the manager owns cross-session updates. */
+  public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
+    this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
+  }
+
+  /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
+  public publishProviders(providers: readonly string[]): Result<void, Error> {
+    if (this.state.phase === "closed") return ok(undefined);
+    for (const provider of providers) this.pendingProviders.add(provider);
+    return this.isReady() ? this.flushProviders() : ok(undefined);
+  }
+
+  private addProviders(providers: readonly string[]): void {
+    const size = this.providers.size;
+    for (const provider of providers) this.providers.add(provider);
+    if (this.isReady() && size !== this.providers.size)
+      this.handlers.onProviderCatalogUpdated?.(this);
+  }
+
+  private flushProviders(): Result<void, Error> {
+    // Reentrant registration during activation queues another delta. Drain it
+    // before publishing instead of stranding it until an unrelated registration.
+    while (this.pendingProviders.size > 0) {
+      const providers = Array.from(this.pendingProviders);
+      this.pendingProviders.clear();
+      const sent = this.write({
+        type: NexusMessageType.PROVIDER_AVAILABLE,
+        id: null,
+        providers,
+      });
+      if (sent.isErr()) return sent;
     }
+    return ok(undefined);
   }
 }
 
-function hasProviderCatalogCapability(
-  capabilities: readonly string[] | undefined,
-): boolean {
-  return capabilities?.includes(PROVIDER_CATALOG_CAPABILITY) ?? false;
+function asError(error: unknown): Error {
+  // User callbacks may throw values whose string conversion also throws.
+  return Result.try({
+    try: () => (error instanceof Error ? error : new Error(String(error))),
+    catch: () => new Error("Unknown connection callback error"),
+  }).match({ ok: (value) => value, err: (value) => value });
 }
 
-function serializedErrorToError(input: {
-  message?: string;
-  code?: string;
-  name?: string;
-  cause?: import("../types/message").SerializedError;
-}): Error {
-  if (input.code === "E_PROTOCOL_INCOMPATIBLE") {
+function serializedErrorToError(input: SerializedError): Error {
+  if (input.code === "E_PROTOCOL_INCOMPATIBLE")
     return new NexusProtocolIncompatibleError(
       input.message ?? "",
       {},
       input.cause,
     );
-  }
   const error = new Error(input.message ?? "Handshake rejected by remote.");
   error.name = input.name ?? "HandshakeRejectedError";
-  if (input.code) {
-    (error as Error & { code?: string }).code = input.code;
-  }
+  if (input.code) Object.assign(error, { code: input.code });
   return error;
-}
-
-function isConnectedResponseMessage(message: NexusMessage): boolean {
-  return (
-    message.type === NexusMessageType.RES ||
-    message.type === NexusMessageType.ERR ||
-    message.type === NexusMessageType.BATCH_RES
-  );
 }

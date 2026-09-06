@@ -21,16 +21,10 @@ export namespace Transport {
   const shouldUseBinarySerializer = <M extends AdapterModel>(
     endpoint: IEndpoint<M>,
   ): boolean => {
-    const capabilities = endpoint.capabilities;
-    if (!capabilities) {
-      return false;
-    }
-
-    if (typeof capabilities.binaryPackets === "boolean") {
-      return capabilities.binaryPackets;
-    }
-
-    return capabilities.supportsTransferables === true;
+    return (
+      endpoint.capabilities?.binaryPackets ??
+      endpoint.capabilities?.supportsTransferables === true
+    );
   };
 
   export interface Context<M extends AdapterModel> {
@@ -38,6 +32,7 @@ export namespace Transport {
     readonly serializer: ISerializer;
   }
 
+  /** Select the endpoint's packet codec without starting a listener or connection. */
   export const create = <M extends AdapterModel>(
     endpoint: IEndpoint<M>,
   ): Context<M> => ({
@@ -47,6 +42,11 @@ export namespace Transport {
       : JsonSerializer.serializer,
   });
 
+  /**
+   * Start endpoint listening and deliver a processor factory for each accepted port.
+   * The result covers listener startup, not later peer handshakes. Client-only
+   * endpoints without listen succeed without starting a listener.
+   */
   export const safeListen = async <M extends AdapterModel>(
     context: Context<M>,
     onConnect: (
@@ -87,6 +87,11 @@ export namespace Transport {
     }
   };
 
+  /**
+   * Dial an exact adapter target and synchronously subscribe the returned processor.
+   * Converts endpoint/setup exceptions to Err. Does not impose a timeout or perform
+   * the Nexus handshake; callers own cancellation and disposal of late results.
+   */
   export const safeConnect = async <M extends AdapterModel>(
     context: Context<M>,
     target: ConnectionTargetOf<M>,
@@ -112,30 +117,21 @@ export namespace Transport {
       return err(capabilityError);
     }
 
-    let connectPromise: Promise<{
-      port: IPort;
-      connectionMeta: ConnectionMetaOf<M>;
-    }>;
-    try {
-      connectPromise = context.endpoint.connect(target);
-    } catch (error) {
-      return err(createConnectError(error, target));
-    }
-
-    const connected = await Result.tryPromise({
-      try: () => connectPromise,
+    return Result.tryPromise({
+      try: async () => {
+        const { port, connectionMeta } =
+          await context.endpoint.connect!(target);
+        return {
+          portProcessor: PortProcessor.create(
+            port,
+            context.serializer,
+            handlers,
+          ),
+          connectionMeta,
+        };
+      },
       catch: (error) => createConnectError(error, target),
     });
-    if (connected.isErr()) return err(connected.error);
-    try {
-      const { port, connectionMeta } = connected.value;
-      return ok({
-        portProcessor: PortProcessor.create(port, context.serializer, handlers),
-        connectionMeta,
-      });
-    } catch (error) {
-      return err(createConnectError(error, target));
-    }
   };
 }
 

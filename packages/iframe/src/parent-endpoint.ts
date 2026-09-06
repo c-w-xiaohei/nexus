@@ -24,7 +24,7 @@ import { originMatches, validateAppId, validateOrigin } from "./validation.js";
 import { getWindow, postMessageFrom } from "./window.js";
 
 type ParentFrameState = IframeFrameTarget & {
-  router?: VirtualPortRouter.Context;
+  router?: VirtualPortRouter;
   observedOrigin?: string;
   removeLoad: () => void;
 };
@@ -69,7 +69,7 @@ export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
         "Iframe router is unavailable",
         "E_IFRAME_CONNECT_FAILED",
       );
-    const result = await VirtualPortRouter.safeConnect(state.router);
+    const result = await state.router.safeConnect();
     if (result.isErr()) {
       throw new IframeAdapterError(
         "Could not connect to iframe",
@@ -120,7 +120,7 @@ export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
   private ensureRouter(state: ParentFrameState): void {
     if (this.closed) return;
     if (state.router && !state.router.closed) return;
-    state.router = VirtualPortRouter.create({
+    state.router = new VirtualPortRouter({
       bus: this.createBus(state),
       localId: `iframe-parent:${this.options.appId}:${state.frameId}`,
       heartbeat: this.options.heartbeat,
@@ -131,7 +131,7 @@ export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
     if (!this.onConnect) return;
     this.ensureRouter(state);
     if (!state.router) return;
-    VirtualPortRouter.safeListen(state.router, (port) =>
+    state.router.safeListen((port) =>
       this.onConnect?.(port, this.createMeta(state)),
     );
   }
@@ -242,12 +242,12 @@ export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
   }
 
   private closeFrame(state: ParentFrameState): void {
-    if (state.router) VirtualPortRouter.safeClose(state.router);
+    if (state.router) state.router.safeClose();
     state.router = undefined;
   }
 
   private resetFrame(state: ParentFrameState): void {
-    if (state.router) VirtualPortRouter.safeClose(state.router);
+    if (state.router) state.router.safeClose();
     state.router = undefined;
     state.observedOrigin = undefined;
   }

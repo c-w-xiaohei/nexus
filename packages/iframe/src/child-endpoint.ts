@@ -34,7 +34,7 @@ import { getWindow, postMessageFrom } from "./window.js";
  */
 export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   readonly capabilities: EndpointCapabilities;
-  private router: VirtualPortRouter.Context | undefined;
+  private router: VirtualPortRouter | undefined;
   private cleanupLifecycle: (() => void) | undefined;
   private observedOrigin: string | undefined;
 
@@ -50,9 +50,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   ): void {
     this.ensureRouter();
     if (!this.router) return;
-    VirtualPortRouter.safeListen(this.router, (port) =>
-      onConnect(port, this.createMeta()),
-    );
+    this.router.safeListen((port) => onConnect(port, this.createMeta()));
   }
 
   async connect(
@@ -65,7 +63,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
         "Iframe router is unavailable",
         "E_IFRAME_CONNECT_FAILED",
       );
-    const result = await VirtualPortRouter.safeConnect(this.router);
+    const result = await this.router.safeConnect();
     if (result.isErr()) {
       throw new IframeAdapterError(
         "Could not connect to iframe parent",
@@ -88,13 +86,13 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   close(): void {
     this.cleanupLifecycle?.();
     this.cleanupLifecycle = undefined;
-    if (this.router) VirtualPortRouter.safeClose(this.router);
+    if (this.router) this.router.safeClose();
     this.router = undefined;
   }
 
   private ensureRouter(): void {
     if (this.router && !this.router.closed) return;
-    this.router = VirtualPortRouter.create({
+    this.router = new VirtualPortRouter({
       bus: this.createBus(),
       localId: `iframe-child:${this.options.appId}:${this.options.frameId ?? "default"}`,
       heartbeat: this.options.heartbeat,
@@ -170,7 +168,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
       this.options.localWindow ?? this.options.window,
     );
     const close = () => {
-      if (this.router) VirtualPortRouter.safeClose(this.router);
+      if (this.router) this.router.safeClose();
     };
     localWindow.addEventListener("pagehide", close as EventListener);
     localWindow.addEventListener("beforeunload", close as EventListener);

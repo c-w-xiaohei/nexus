@@ -1,7 +1,4 @@
-import {
-  ConnectionManager,
-  ConnectionManagerError,
-} from "@/connection/connection-manager";
+import type { ConnectionManager } from "@/connection/connection-manager";
 import {
   NexusConfigurationError,
   NexusEndpointCapabilityError,
@@ -10,6 +7,7 @@ import {
   NexusServiceError,
   NexusProtocolIncompatibleError,
   NexusUsageError,
+  type NexusError,
 } from "@/errors";
 import { Engine } from "@/service/engine";
 import type {
@@ -1015,78 +1013,33 @@ const provides = (
   tokenId: string,
 ): boolean => connection.remoteProviders?.has(tokenId) ?? true;
 
-const mapConnectionResolutionError = (error: ConnectionManagerError): Error => {
-  const cause = error.cause ? toSerializedError(error.cause) : undefined;
-  const endpointConnect = findEndpointConnectError(error);
-  if (endpointConnect) {
+const mapConnectionResolutionError = (error: NexusError): Error => {
+  // Manager already returns domain errors. Keep the public endpoint-cause shape
+  // for errors without a cause, and translate connection constraints to service terms.
+  if (error instanceof NexusEndpointConnectError && !error.cause) {
     return new NexusEndpointConnectError(error.message, {
       context: error.context,
-      cause: toSerializedError(endpointConnect),
+      cause: toSerializedError(error),
     });
   }
   if (error.code === "E_CONNECTION_CONSTRAINT_FAILED") {
     return new NexusServiceError(error.message, "E_TARGET_CONSTRAINT_FAILED", {
       context: error.context,
-      cause,
+      cause: error.cause,
     });
   }
-
-  if (error.code === "E_PROTOCOL_INCOMPATIBLE") {
-    return new NexusProtocolIncompatibleError(
-      error.message,
-      error.context,
-      cause,
-    );
-  }
-
-  if (error.code === "E_HANDSHAKE_FAILED") {
-    return new NexusHandshakeError(
-      error.message,
-      "E_HANDSHAKE_FAILED",
-      error.context,
-      { cause },
-    );
-  }
-
-  if (error.code === "E_AUTH_CONNECT_DENIED") {
-    return new NexusHandshakeError(
-      error.message,
-      "E_HANDSHAKE_REJECTED",
-      error.context,
-      { cause },
-    );
-  }
-
-  if (error.code === "E_ENDPOINT_CAPABILITY_MISMATCH") {
-    return new NexusEndpointCapabilityError(error.message, {
-      context: error.context,
-      cause,
-    });
-  }
-
-  if (error.code === "E_USAGE_INVALID") {
-    return new NexusUsageError(error.message, "E_USAGE_INVALID", {
-      cause,
-    });
-  }
-
+  if (
+    error instanceof NexusEndpointConnectError ||
+    error instanceof NexusEndpointCapabilityError ||
+    error instanceof NexusHandshakeError ||
+    error instanceof NexusProtocolIncompatibleError ||
+    error instanceof NexusUsageError
+  )
+    return error;
   return new NexusServiceError(error.message, "E_SERVICE_UNAVAILABLE", {
     context: error.context,
-    cause,
+    cause: error.cause ?? toSerializedError(error),
   });
-};
-
-const findEndpointConnectError = (
-  value: unknown,
-): NexusEndpointConnectError | null => {
-  let current = value;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    if (current instanceof NexusEndpointConnectError) return current;
-    seen.add(current);
-    current = (current as { cause?: unknown }).cause;
-  }
-  return null;
 };
 
 export const nexus = new Nexus();

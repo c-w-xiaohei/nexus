@@ -6,12 +6,22 @@ import {
   createConnectionManagerStack,
   createMockPortPair,
 } from "@/utils/test-utils";
-import type { ConnectionManagerHandlers } from "./types";
+import type {
+  ConnectionManagerConfig,
+  ConnectionManagerHandlers,
+  MessageTarget,
+  ResolveOptions,
+} from "./types";
 import type { IPort } from "@/transport/types/port";
-import { NexusMessageType, type ApplyMessage } from "@/types/message";
+import {
+  NexusMessageType,
+  type ApplyMessage,
+  type NexusMessage,
+} from "@/types/message";
 import type { AdapterModel } from "@/types/adapter-model";
 import { JsonSerializer } from "@/transport/serializers/json-serializer";
 import { Result } from "better-result";
+import { NexusEndpointConnectError } from "../errors/transport-errors";
 
 interface TestUserMeta {
   context: string;
@@ -36,7 +46,7 @@ const matchesTarget = (target: TestUserMeta, contextMeta: TestUserMeta) =>
 const createTestStack = async (
   meta: TestUserMeta,
   onConnect: (port: IPort, connectionMeta?: TestConnectionMeta) => void,
-  config?: any,
+  config?: ConnectionManagerConfig<TestAdapterModel>,
 ) => {
   const stack = await createConnectionManagerStack<TestAdapterModel>(
     meta,
@@ -49,48 +59,28 @@ const createTestStack = async (
 
 const initializeManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-): Promise<void> =>
-  manager.safeInitialize().then((result) => {
-    if (result.isErr()) throw result.error;
-  });
+): Promise<void> => manager.safeInitialize().then((result) => result.unwrap());
 
-const resolveManager = async <M extends AdapterModel>(
+const resolveManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  options: any,
-) =>
-  manager.safeResolveConnection(options).then((result) => {
-    if (result.isErr()) throw result.error;
-    return result.value;
-  });
+  options: ResolveOptions<M>,
+) => manager.safeResolveConnection(options).then((result) => result.unwrap());
 
-const resolveManagerCandidates = async <M extends AdapterModel>(
+const resolveManagerCandidates = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  options: any,
-) =>
-  manager.safeResolveConnections(options).then((result) => {
-    if (result.isErr()) throw result.error;
-    return result.value;
-  });
+  options: ResolveOptions<M>,
+) => manager.safeResolveConnections(options).then((result) => result.unwrap());
 
 const sendFromManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  target: any,
-  message: any,
-): string[] => {
-  const result = manager.safeSendMessage(target, message);
-  if (result.isErr()) throw result.error;
-  return result.value;
-};
+  target: MessageTarget<M>,
+  message: NexusMessage,
+): string[] => manager.safeSendMessage(target, message).unwrap();
 
 const updateManagerIdentity = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
   updates: Partial<M["contextMeta"]>,
-): void => {
-  const result = manager.safeUpdateLocalIdentity(updates);
-  if (result.isErr()) {
-    throw result.error;
-  }
-};
+): void => manager.safeUpdateLocalIdentity(updates).unwrap();
 
 describe("ConnectionManager", () => {
   // L1 Mocks
@@ -144,38 +134,249 @@ describe("ConnectionManager", () => {
   });
 
   afterEach(() => {
+    for (const connection of hostManager.connections.values())
+      connection.close();
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
   describe("Connection Establishment (B1)", () => {
-    it("should reject incoming connections when policy.canConnect returns false", async () => {
-      hostManager = new ConnectionManager(
-        {
-          policy: {
-            canConnect: vi.fn(() => false),
+    it("reclaims a processor if copying adapter metadata fails during attachment", async () => {
+      const close = vi.fn();
+      mockHostEndpoint.connect = async () => ({
+        port: {
+          postMessage: vi.fn(),
+          onMessage: vi.fn(),
+          onDisconnect: vi.fn(),
+          close,
+        },
+        connectionMeta: {
+          get from(): string {
+            throw new Error("metadata failed");
           },
-        } as any,
+        },
+      });
+      await initializeManager(hostManager);
+      const result = await hostManager.safeResolveConnection({
+        target: clientMeta,
+      });
+      expect(result).toMatchObject({ error: { code: "E_UNKNOWN" } });
+      expect(close).toHaveBeenCalledOnce();
+      expect(hostManager.connections.size).toBe(0);
+    });
+
+    it("settles a startup close immediately even when protocol readiness already has identity", async () => {
+      vi.useFakeTimers();
+      const manager = new ConnectionManager(
+        { handshakeTimeoutMs: 1000 },
         Transport.create(mockHostEndpoint),
         mockHostHandlers,
         hostMeta,
       );
-      await initializeManager(hostManager);
-      const { manager: clientManager } = await createTestStack(
-        clientMeta,
-        hostL1OnConnect,
+      await initializeManager(manager);
+      let receive!: (packet: string) => void;
+      let disconnected!: () => void;
+      let readySent = false;
+      const port: IPort = {
+        onMessage: (handler) => {
+          receive = handler;
+        },
+        onDisconnect: (handler) => {
+          disconnected = handler;
+        },
+        close: () => disconnected(),
+        postMessage: (packet) => {
+          const message = JsonSerializer.safeDeserialize(packet);
+          if (message.isErr()) throw message.error;
+          if (message.value.type === NexusMessageType.HANDSHAKE_REQ) {
+            const ack = JsonSerializer.safeSerialize({
+              type: NexusMessageType.HANDSHAKE_ACK,
+              id: message.value.id,
+              metadata: clientMeta,
+              capabilities: ["provider-catalog-v1"],
+              providers: [],
+            });
+            if (ack.isErr()) throw ack.error;
+            receive(ack.value);
+          } else if (message.value.type === NexusMessageType.HANDSHAKE_READY) {
+            readySent = true;
+            queueMicrotask(disconnected);
+          }
+        },
+      };
+      mockHostEndpoint.connect = async () => ({
+        port,
+        connectionMeta: { from: "client" },
+      });
+      const connecting = manager.safeResolveConnection({ target: clientMeta });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readySent).toBe(true);
+      expect(await connecting).toMatchObject({
+        error: { code: "E_HANDSHAKE_FAILED" },
+      });
+      expect(manager.connections.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("releases a failed coalesced dial so the next acquisition can retry", async () => {
+      let fail!: (error: Error) => void;
+      const connect = vi.fn(
+        () =>
+          new Promise<{ port: IPort; connectionMeta: TestConnectionMeta }>(
+            (_resolve, reject) => {
+              fail = reject;
+            },
+          ),
       );
-
-      await expect(
-        resolveManager(clientManager, { target: hostMeta }),
-      ).rejects.toMatchObject({ code: "E_AUTH_CONNECT_DENIED" });
-
-      await vi.waitFor(() => {
-        expect(hostManager.connections.size).toBe(0);
+      const manager = new ConnectionManager(
+        {},
+        Transport.create({
+          listen: () => undefined,
+          connect,
+        } as IEndpoint<TestAdapterModel>),
+        mockHostHandlers,
+        hostMeta,
+      );
+      await initializeManager(manager);
+      const first = manager.safeResolveConnections({ target: clientMeta });
+      const second = manager.safeResolveConnections({ target: clientMeta });
+      expect(connect).toHaveBeenCalledOnce();
+      fail(new Error("native dial failed"));
+      for (const result of await Promise.all([first, second])) {
+        expect(result).toMatchObject({
+          error: { code: "E_ENDPOINT_CONNECT_FAILED" },
+        });
+      }
+      const retry = manager.safeResolveConnections({ target: clientMeta });
+      expect(connect).toHaveBeenCalledTimes(2);
+      fail(new Error("retry failed"));
+      expect(await retry).toMatchObject({
+        error: { code: "E_ENDPOINT_CONNECT_FAILED" },
       });
     });
 
-    it("does not expose incoming connections while canConnect is pending or denied", async () => {
+    it("settles a pending dial timeout and closes a late port without handshaking", async () => {
+      vi.useFakeTimers();
+      let finishDial!: (value: {
+        port: IPort;
+        connectionMeta: TestConnectionMeta;
+      }) => void;
+      const endpoint: IEndpoint<TestAdapterModel> = {
+        listen: vi.fn(),
+        connect: () =>
+          new Promise((resolve) => {
+            finishDial = resolve;
+          }),
+      };
+      const manager = new ConnectionManager(
+        { handshakeTimeoutMs: 10 },
+        Transport.create(endpoint),
+        mockHostHandlers,
+        hostMeta,
+      );
+      await initializeManager(manager);
+      const resolved = vi.fn();
+      const connecting = manager
+        .safeResolveConnection({ target: clientMeta })
+        .then((result) => {
+          resolved(result);
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(resolved).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ code: "E_HANDSHAKE_FAILED" }),
+        }),
+      );
+      const port = {
+        postMessage: vi.fn(),
+        onMessage: vi.fn(),
+        onDisconnect: vi.fn(),
+        close: vi.fn(),
+      };
+      finishDial({ port, connectionMeta: { from: "late" } });
+      await vi.advanceTimersByTimeAsync(0);
+      await connecting;
+      expect(port.close).toHaveBeenCalledOnce();
+      expect(port.postMessage).not.toHaveBeenCalled();
+      expect(manager.connections.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(["incoming", "outgoing"] as const)(
+      "submits %s startup messages before messages arriving during authorization",
+      async (direction) => {
+        let receive!: (packet: string) => void;
+        const deliver = (
+          message: Parameters<typeof JsonSerializer.safeSerialize>[0],
+        ) => {
+          const packet = JsonSerializer.safeSerialize(message);
+          if (packet.isErr()) throw packet.error;
+          receive(packet.value as string);
+        };
+        const verified: number[] = [];
+        const canConnect = vi.fn(
+          ({ remoteIdentity }: { remoteIdentity: TestUserMeta }) => {
+            verified.push(remoteIdentity.id);
+            if (remoteIdentity.id === 2)
+              deliver({
+                type: NexusMessageType.IDENTITY_UPDATE,
+                id: null,
+                updates: { id: 4 },
+              });
+            return true;
+          },
+        );
+        const manager = new ConnectionManager(
+          { policy: { canConnect } },
+          Transport.create(mockHostEndpoint),
+          mockHostHandlers,
+          hostMeta,
+        );
+        await initializeManager(manager);
+        const port: IPort = {
+          postMessage: vi.fn(),
+          close: vi.fn(),
+          onDisconnect: vi.fn(),
+          onMessage: (handler) => {
+            receive = handler;
+            deliver({
+              type: NexusMessageType.HANDSHAKE_REQ,
+              id: 7,
+              metadata: clientMeta,
+              capabilities: ["provider-catalog-v1"],
+            });
+            deliver({
+              type: NexusMessageType.HANDSHAKE_READY,
+              id: 7,
+              capabilities: ["provider-catalog-v1"],
+              providers: [],
+            });
+            deliver({
+              type: NexusMessageType.IDENTITY_UPDATE,
+              id: null,
+              updates: { id: 3 },
+            });
+          },
+        };
+        const connectionMeta = { from: "client" };
+        if (direction === "incoming") hostL1OnConnect(port, connectionMeta);
+        else {
+          mockHostEndpoint.connect = async () => ({ port, connectionMeta });
+          const connected = await manager.safeResolveConnection({
+            target: clientMeta,
+          });
+          expect(connected.isOk()).toBe(true);
+        }
+        await vi.waitFor(() => expect(verified).toEqual([2, 3, 4]));
+        expect([...manager.connections.values()][0].remoteIdentity?.id).toBe(4);
+        for (const connection of manager.connections.values())
+          connection.close();
+      },
+    );
+
+    it("does not publish either peer while authorization is pending or denied", async () => {
       let resolvePolicy!: (allowed: boolean) => void;
       const canConnect = vi.fn(
         () => new Promise<boolean>((resolve) => (resolvePolicy = resolve)),
@@ -185,7 +386,7 @@ describe("ConnectionManager", () => {
           policy: {
             canConnect,
           },
-        } as any,
+        },
         Transport.create(mockHostEndpoint),
         mockHostHandlers,
         hostMeta,
@@ -196,7 +397,7 @@ describe("ConnectionManager", () => {
         hostL1OnConnect,
       );
 
-      const resolution = resolveManager(clientManager, {
+      const resolution = clientManager.safeResolveConnection({
         target: hostMeta,
       });
       await vi.waitFor(() => expect(canConnect).toHaveBeenCalled());
@@ -204,52 +405,16 @@ describe("ConnectionManager", () => {
         expect(hostManager.connections.size).toBe(0);
       });
       expect(hostManager.serviceGroups.get("group-denied")).toBeUndefined();
+      expect(clientManager.connections.size).toBe(0);
 
       resolvePolicy(false);
 
-      await expect(resolution).rejects.toMatchObject({
-        code: "E_AUTH_CONNECT_DENIED",
+      await expect(resolution).resolves.toMatchObject({
+        error: { code: "E_HANDSHAKE_REJECTED" },
       });
       expect(hostManager.connections.size).toBe(0);
       expect(hostManager.serviceGroups.get("group-denied")).toBeUndefined();
-    });
-
-    it("does not expose outgoing connections while remote canConnect is pending or denied", async () => {
-      let resolvePolicy!: (allowed: boolean) => void;
-      const canConnect = vi.fn(
-        () => new Promise<boolean>((resolve) => (resolvePolicy = resolve)),
-      );
-      hostManager = new ConnectionManager(
-        {
-          policy: {
-            canConnect,
-          },
-        } as any,
-        Transport.create(mockHostEndpoint),
-        mockHostHandlers,
-        hostMeta,
-      );
-      await initializeManager(hostManager);
-      const { manager: clientManager } = await createTestStack(
-        { ...clientMeta, groups: ["group-denied"] },
-        hostL1OnConnect,
-      );
-
-      const resolution = resolveManager(clientManager, { target: hostMeta });
-      await vi.waitFor(() => expect(canConnect).toHaveBeenCalled());
-      await vi.waitFor(() => {
-        expect(hostManager.connections.size).toBe(0);
-      });
       expect(clientManager.connections.size).toBe(0);
-      expect(clientManager.serviceGroups.get("group-denied")).toBeUndefined();
-
-      resolvePolicy(false);
-
-      await expect(resolution).rejects.toMatchObject({
-        code: "E_AUTH_CONNECT_DENIED",
-      });
-      expect(clientManager.connections.size).toBe(0);
-      expect(clientManager.serviceGroups.get("group-denied")).toBeUndefined();
     });
 
     it("should establish a connection when one manager resolves a connection to a listening manager", async () => {
@@ -290,7 +455,7 @@ describe("ConnectionManager", () => {
         })),
       };
       const clientManager = new ConnectionManager(
-        { handshakeTimeoutMs: 10 } as any,
+        { handshakeTimeoutMs: 10 },
         Transport.create(clientEndpoint),
         mockHostHandlers,
         clientMeta,
@@ -298,14 +463,14 @@ describe("ConnectionManager", () => {
       await initializeManager(clientManager);
 
       await expect(
-        resolveManager(clientManager, { target: hostMeta }),
-      ).rejects.toMatchObject({ code: "E_HANDSHAKE_FAILED" });
+        clientManager.safeResolveConnection({ target: hostMeta }),
+      ).resolves.toMatchObject({ error: { code: "E_HANDSHAKE_FAILED" } });
     });
 
     it("should clean up an incoming connection when the handshake request never arrives", async () => {
       const [, hostPort] = createMockPortPair();
       hostManager = new ConnectionManager(
-        { handshakeTimeoutMs: 10 } as any,
+        { handshakeTimeoutMs: 10 },
         Transport.create(mockHostEndpoint),
         mockHostHandlers,
         hostMeta,
@@ -326,6 +491,103 @@ describe("ConnectionManager", () => {
   });
 
   describe("Connection Reuse and Concurrency (B2)", () => {
+    it("settles all initialization callers when listener lookup rejects and permits retry", async () => {
+      const failure = new Error("listener getter failed");
+      const listen = vi.fn();
+      let failLookup = true;
+      Object.defineProperty(mockHostEndpoint, "listen", {
+        configurable: true,
+        get: () => {
+          if (failLookup) throw failure;
+          return listen;
+        },
+      });
+      const results = await Promise.all([
+        hostManager.safeInitialize(),
+        hostManager.safeInitialize(),
+      ]);
+      for (const result of results) {
+        expect(result).toMatchObject({
+          error: { code: "E_UNKNOWN", cause: { message: failure.message } },
+        });
+      }
+      expect(listen).not.toHaveBeenCalled();
+      failLookup = false;
+      expect((await hostManager.safeInitialize()).isOk()).toBe(true);
+      expect(listen).toHaveBeenCalledOnce();
+    });
+
+    it("releases the reserved target when setup throws before acquisition", async () => {
+      let failSetup = true;
+      const manager = new ConnectionManager(
+        {
+          get handshakeTimeoutMs() {
+            if (failSetup) throw new Error("configuration getter failed");
+            return 100;
+          },
+        },
+        Transport.create(mockHostEndpoint),
+        mockHostHandlers,
+        hostMeta,
+      );
+      mockHostEndpoint.connect = vi.fn(async () => {
+        throw new Error("native failed");
+      });
+      await initializeManager(manager);
+      expect(
+        await manager.safeResolveConnections({ target: clientMeta }),
+      ).toMatchObject({ error: { code: "E_UNKNOWN" } });
+      expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
+      failSetup = false;
+      expect(
+        await manager.safeResolveConnections({ target: clientMeta }),
+      ).toMatchObject({ error: { code: "E_ENDPOINT_CONNECT_FAILED" } });
+      expect(mockHostEndpoint.connect).toHaveBeenCalledOnce();
+    });
+
+    it("shares initialization even when listen synchronously reenters", async () => {
+      let reentrant: ReturnType<typeof hostManager.safeInitialize> | undefined;
+      let reentered = false;
+      mockHostEndpoint.listen = vi.fn(() => {
+        if (!reentered) {
+          reentered = true;
+          reentrant = hostManager.safeInitialize();
+        }
+      });
+      const first = hostManager.safeInitialize();
+      expect(mockHostEndpoint.listen).toHaveBeenCalledOnce();
+      expect((await first).isOk()).toBe(true);
+      expect(await reentrant).toBe(await first);
+    });
+
+    it("reserves a target before connect synchronously reenters acquisition", async () => {
+      const failure = new NexusEndpointConnectError("native dial failed", {
+        target: clientMeta,
+      });
+      let reentrant:
+        | ReturnType<typeof hostManager.safeResolveConnections>
+        | undefined;
+      let reentered = false;
+      mockHostEndpoint.connect = vi.fn(() => {
+        if (!reentered) {
+          reentered = true;
+          reentrant = hostManager.safeResolveConnections({
+            target: clientMeta,
+          });
+        }
+        return Promise.reject(failure);
+      });
+      await initializeManager(hostManager);
+      const first = hostManager.safeResolveConnections({ target: clientMeta });
+      expect(mockHostEndpoint.connect).toHaveBeenCalledOnce();
+      for (const result of await Promise.all([first, reentrant!])) {
+        expect(result.isErr()).toBe(true);
+        if (result.isErr()) expect(result.error).toBe(failure);
+      }
+      await hostManager.safeResolveConnections({ target: clientMeta });
+      expect(mockHostEndpoint.connect).toHaveBeenCalledTimes(2);
+    });
+
     it("should share concurrent initialization while listener startup is pending", async () => {
       let resolveListen!: () => void;
       mockHostEndpoint.listen = vi.fn(
@@ -340,14 +602,10 @@ describe("ConnectionManager", () => {
 
       expect(mockHostEndpoint.listen).toHaveBeenCalledTimes(1);
       resolveListen();
-      await expect(first).resolves.toMatchObject({
-        isOk: expect.any(Function),
-      });
-      await expect(second).resolves.toMatchObject({
-        isOk: expect.any(Function),
-      });
-      expect((await first).isOk()).toBe(true);
-      expect((await second).isOk()).toBe(true);
+      const result = await first;
+      expect(result).toEqual(Result.ok(undefined));
+      expect(await second).toBe(result);
+      expect(await hostManager.safeInitialize()).toBe(result);
       expect(mockHostEndpoint.listen).toHaveBeenCalledTimes(1);
     });
 
@@ -360,9 +618,12 @@ describe("ConnectionManager", () => {
 
       const failed = await hostManager.safeInitialize();
 
-      expect(failed.error).toMatchObject({
-        name: "ConnectionManagerOperationFailedError",
-        code: "E_UNKNOWN",
+      expect(failed).toMatchObject({
+        error: {
+          name: "NexusEndpointListenError",
+          code: "E_ENDPOINT_LISTEN_FAILED",
+          context: { originalError: listenError },
+        },
       });
       expect(() =>
         sendFromManager(
@@ -434,9 +695,84 @@ describe("ConnectionManager", () => {
         expect(hostConnections).toHaveLength(1);
       });
     });
+
+    it("shares acquisition but evaluates each caller's constraint independently", async () => {
+      await initializeManager(hostManager);
+      const client = await createTestStack(clientMeta, hostL1OnConnect);
+      const [denied, accepted] = await Promise.all([
+        client.manager.safeResolveConnections({
+          target: hostMeta,
+          where: () => false,
+        }),
+        client.manager.safeResolveConnections({
+          target: hostMeta,
+          where: () => true,
+        }),
+      ]);
+      expect(denied).toMatchObject({
+        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
+      });
+      expect(accepted.isOk()).toBe(true);
+      if (accepted.isOk())
+        expect(accepted.value[0].remoteIdentity).toEqual(hostMeta);
+      expect(client.mockEndpoint.connect).toHaveBeenCalledOnce();
+      expect(client.manager.connections.size).toBe(1);
+    });
   });
 
   describe("Service Discovery and Group Routing (B3)", () => {
+    it("selects and sends by where without dialing, and contains predicate failures", async () => {
+      const message: ApplyMessage = {
+        type: NexusMessageType.APPLY,
+        id: 1,
+        resourceId: null,
+        path: [],
+        args: [],
+      };
+      const where = vi.fn(
+        (identity: TestUserMeta) => identity.id === clientMeta.id,
+      );
+      expect(hostManager.safeGetReadyConnectionIds({ where })).toMatchObject({
+        error: { code: "E_USAGE_INVALID" },
+      });
+      expect(await hostManager.safeResolveConnection({})).toMatchObject({
+        error: { code: "E_USAGE_INVALID" },
+      });
+      expect(hostManager.safeUpdateLocalIdentity({ id: 5 })).toMatchObject({
+        error: { code: "E_USAGE_INVALID" },
+      });
+      expect(where).not.toHaveBeenCalled();
+      await initializeManager(hostManager);
+      const client = await createTestStack(clientMeta, hostL1OnConnect);
+      await resolveManager(client.manager, { target: hostMeta });
+      const [connection] = hostManager.connections.values();
+      expect(await hostManager.safeResolveConnection({})).toEqual(
+        Result.ok(null),
+      );
+      expect(hostManager.safeGetReadyConnectionIds({ where })).toEqual(
+        Result.ok([connection.connectionId]),
+      );
+      expect(hostManager.safeSendMessage({ where }, message)).toEqual(
+        Result.ok([connection.connectionId]),
+      );
+      await vi.waitFor(() =>
+        expect(client.handlers.onMessage).toHaveBeenCalledWith(
+          message,
+          expect.any(String),
+        ),
+      );
+      where.mockImplementation(() => {
+        throw new Error("predicate failed");
+      });
+      expect(hostManager.safeGetReadyConnectionIds({ where })).toMatchObject({
+        error: { code: "E_UNKNOWN" },
+      });
+      expect(hostManager.safeSendMessage({ where }, message)).toMatchObject({
+        error: { code: "E_UNKNOWN" },
+      });
+      expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
+    });
+
     it("passes separate context and shallow connection metadata to adapter matching", async () => {
       const connectionMeta = { from: "client" };
       const matchesTargetSpy = vi.fn(() => true);
@@ -567,23 +903,101 @@ describe("ConnectionManager", () => {
         );
       });
       expect(clientA.handlers.onMessage).not.toHaveBeenCalled();
+
+      // Explicit recipients preserve duplicates and recheck later recipients
+      // after each send, rather than taking a prefiltered snapshot.
+      const connectionA = hostManager.connections.get(clientAConnId!)!;
+      const connectionB = hostManager.connections.get(clientBConnId!)!;
+      const sentTo: string[] = [];
+      const sendA = vi
+        .spyOn(connectionA, "sendMessage")
+        .mockImplementation(() => {
+          sentTo.push(connectionA.connectionId);
+          return Result.ok(undefined);
+        });
+      const sendB = vi
+        .spyOn(connectionB, "sendMessage")
+        .mockImplementation(() => {
+          sentTo.push(connectionB.connectionId);
+          return Result.ok(undefined);
+        });
+      const connectionIds = [clientBConnId!, clientAConnId!, clientBConnId!];
+      expect(
+        hostManager.safeSendMessage({ connectionIds }, testMessage),
+      ).toEqual(Result.ok(connectionIds));
+      expect(sentTo).toEqual(connectionIds);
+      sentTo.length = 0;
+      sendB.mockImplementationOnce(() => {
+        sentTo.push(connectionB.connectionId);
+        connectionA.close();
+        return Result.ok(undefined);
+      });
+      expect(
+        hostManager.safeSendMessage({ connectionIds }, testMessage),
+      ).toMatchObject({
+        value: [connectionB.connectionId, connectionB.connectionId],
+      });
+      expect(sentTo).toEqual([
+        connectionB.connectionId,
+        connectionB.connectionId,
+      ]);
+      sendA.mockRestore();
+      sendB.mockRestore();
     });
   });
 
   describe("Connection Disconnect and Cleanup (B4)", () => {
-    it("keeps a send failure as unknown when the connection remains ready", async () => {
-      await initializeManager(hostManager);
-      const client = await createTestStack(clientMeta, hostL1OnConnect);
-      const connection = await resolveManager(client.manager, {
-        target: hostMeta,
-      });
-      const sendError = new Error("transient port failure");
-      vi.spyOn(connection!, "sendMessage").mockReturnValue(
-        Result.err(sendError),
-      );
+    it.each(["queries", "identity broadcast"])(
+      "excludes a closing session from reentrant %s before native cleanup returns",
+      async (operation) => {
+        await initializeManager(hostManager);
+        let hostPort!: IPort;
+        const client = await createTestStack(clientMeta, (port, meta) => {
+          hostPort = port;
+          hostL1OnConnect(port, meta);
+        });
+        client.manager.safePublishProviders(["service"]);
+        await resolveManager(client.manager, { target: hostMeta });
+        const connection = [...hostManager.connections.values()][0];
+        const closePort = vi.mocked(hostPort.close).getMockImplementation()!;
+        const observed: unknown[] = [];
+        vi.spyOn(hostPort, "close").mockImplementation(() => {
+          // Conn is already terminal, but Manager's onClosed has not run yet.
+          if (operation === "queries")
+            observed.push(hostManager.getReadyProviderConnectionIds("service"));
+          else observed.push(hostManager.safeUpdateLocalIdentity({ id: 100 }));
+          closePort();
+        });
+        connection.close();
+        expect(observed).toEqual([
+          operation === "queries" ? [] : Result.ok(undefined),
+        ]);
+        expect(hostManager.connections.size).toBe(0);
+      },
+    );
 
-      const result = client.manager.safeSendMessage(
-        { connectionId: connection!.connectionId },
+    it("closes a failed sender, preserves its cause and stops before later recipients", async () => {
+      await initializeManager(hostManager);
+      const ports: IPort[] = [];
+      const accept = (port: IPort, meta?: TestConnectionMeta) => {
+        ports.push(port);
+        hostL1OnConnect(port, meta);
+      };
+      const first = await createTestStack(clientMeta, accept);
+      const second = await createTestStack({ ...clientMeta, id: 3 }, accept);
+      await resolveManager(first.manager, { target: hostMeta });
+      await resolveManager(second.manager, { target: hostMeta });
+      const [a, b] = [...hostManager.connections.values()];
+      const sendError = new Error("native port failure");
+      const postA = vi.spyOn(ports[0], "postMessage").mockImplementation(() => {
+        throw sendError;
+      });
+      const postB = vi.spyOn(ports[1], "postMessage");
+      postA.mockClear();
+      postB.mockClear();
+
+      const result = hostManager.safeSendMessage(
+        { connectionIds: [b.connectionId, a.connectionId, b.connectionId] },
         {
           type: NexusMessageType.APPLY,
           id: 1,
@@ -595,123 +1009,80 @@ describe("ConnectionManager", () => {
 
       expect(result).toMatchObject({
         error: {
-          code: "E_UNKNOWN",
-          cause: sendError,
-          context: { connectionId: connection!.connectionId },
+          code: "E_CONN_CLOSED",
+          cause: {
+            code: "E_PROTOCOL_ERROR",
+            message: expect.stringContaining(sendError.message),
+          },
+          context: { connectionId: a.connectionId },
         },
       });
-      expect(connection!.isReady()).toBe(true);
+      expect(postA).toHaveBeenCalledOnce();
+      expect(postB).toHaveBeenCalledOnce();
+      expect(a.isReady()).toBe(false);
+      expect(b.isReady()).toBe(true);
+      expect(hostManager.connections.has(a.connectionId)).toBe(false);
+      expect(mockHostHandlers.onDisconnect).toHaveBeenCalledExactlyOnceWith(
+        a.connectionId,
+        clientMeta,
+      );
+      b.close();
     });
 
     it("settles an outgoing queued-publication failure without waiting for the handshake timeout", async () => {
-      try {
-        let readyPortHandler: ((packet: string) => void) | undefined;
-        let failingPortHandler: ((packet: string) => void) | undefined;
-        let failingHandshakeId: number | undefined;
-        const createPeerPort = (kind: "ready" | "failing"): IPort => {
-          let onMessage: ((packet: string) => void) | undefined;
-          return {
-            postMessage: vi.fn((packet: string) => {
-              const decoded = JsonSerializer.safeDeserialize(packet);
-              if (decoded.isErr()) throw decoded.error;
-              const message = decoded.value as {
-                type: NexusMessageType;
-                id: number;
-              };
-              if (message.type === NexusMessageType.HANDSHAKE_REQ) {
-                if (kind === "failing") {
-                  failingHandshakeId = message.id;
-                  return;
-                }
-                setTimeout(() => {
-                  const encoded = JsonSerializer.safeSerialize({
+      await initializeManager(hostManager);
+      const client = await createTestStack(clientMeta, hostL1OnConnect);
+      await resolveManager(client.manager, { target: hostMeta });
+      const [survivor] = hostManager.connections.values();
+      const target = { context: "failing", id: 4 };
+      let receive!: (packet: string) => void;
+      let requested!: (acknowledge: () => void) => void;
+      const request = new Promise<() => void>((resolve) => {
+        requested = resolve;
+      });
+      const close = vi.fn();
+      mockHostEndpoint.connect = async () => ({
+        connectionMeta: { from: "peer" },
+        port: {
+          onMessage: (handler) => {
+            receive = handler;
+          },
+          onDisconnect: vi.fn(),
+          close,
+          postMessage: (packet) => {
+            const message = JsonSerializer.safeDeserialize(packet).unwrap();
+            if (message.type === NexusMessageType.HANDSHAKE_REQ)
+              requested(() =>
+                receive(
+                  JsonSerializer.safeSerialize({
                     type: NexusMessageType.HANDSHAKE_ACK,
                     id: message.id,
-                    metadata: { context: kind, id: kind === "ready" ? 3 : 4 },
+                    metadata: target,
                     capabilities: ["provider-catalog-v1"],
                     providers: [],
-                  });
-                  if (encoded.isErr()) throw encoded.error;
-                  onMessage?.(encoded.value);
-                }, 0);
-                return;
-              }
-              if (
-                kind === "failing" &&
-                message.type === NexusMessageType.PROVIDER_AVAILABLE
-              ) {
-                throw new Error("queued provider publication failed");
-              }
-            }),
-            onMessage: vi.fn((handler) => {
-              onMessage = handler;
-              if (kind === "ready") readyPortHandler = handler;
-              else failingPortHandler = handler;
-            }),
-            onDisconnect: vi.fn(),
-            close: vi.fn(),
-          };
-        };
-        const endpoint: IEndpoint<TestAdapterModel> = {
-          listen: vi.fn(),
-          connect: vi.fn(async (target) => ({
-            port: createPeerPort(target.context as "ready" | "failing"),
-            connectionMeta: { from: "peer" },
-          })),
-          matchesTarget: (target, contextMeta) =>
-            target.context === contextMeta.context &&
-            target.id === contextMeta.id,
-        };
-        const manager = new ConnectionManager(
-          { handshakeTimeoutMs: 30_000 },
-          Transport.create(endpoint),
-          { onMessage: vi.fn(), onDisconnect: vi.fn() },
-          clientMeta,
-        );
-        await initializeManager(manager);
-
-        const readyPromise = manager.safeResolveConnection({
-          target: { context: "ready", id: 3 },
-        });
-        const readyResult = await readyPromise;
-        expect(readyResult.isOk()).toBe(true);
-        expect(readyPortHandler).toBeDefined();
-
-        vi.useFakeTimers();
-        const failingPromise = manager.safeResolveConnection({
-          target: { context: "failing", id: 4 },
-        });
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(manager.safePublishProviders(["service.queued"]).isOk()).toBe(
-          true,
-        );
-        expect(failingHandshakeId).toBeDefined();
-        const encodedAck = JsonSerializer.safeSerialize({
-          type: NexusMessageType.HANDSHAKE_ACK,
-          id: failingHandshakeId!,
-          metadata: { context: "failing", id: 4 },
-          capabilities: ["provider-catalog-v1"],
-          providers: [],
-        });
-        if (encodedAck.isErr()) throw encodedAck.error;
-        failingPortHandler?.(encodedAck.value as string);
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        const failingResult = await failingPromise;
-
-        expect(failingResult).toMatchObject({
-          error: { code: "E_HANDSHAKE_FAILED" },
-        });
-        expect(failingPortHandler).toBeDefined();
-        expect(manager.connections).toHaveLength(1);
-        expect([...manager.connections.values()][0].isReady()).toBe(true);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        vi.useRealTimers();
-      }
+                  }).unwrap(),
+                ),
+              );
+            if (message.type === NexusMessageType.PROVIDER_AVAILABLE)
+              throw new Error("queued provider publication failed");
+          },
+        },
+      });
+      vi.useFakeTimers();
+      const opening = hostManager.safeResolveConnection({ target });
+      const acknowledge = await request;
+      expect(hostManager.safePublishProviders(["service.queued"])).toEqual(
+        Result.ok(undefined),
+      );
+      acknowledge();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await opening).toMatchObject({
+        error: { code: "E_HANDSHAKE_FAILED" },
+      });
+      expect(close).toHaveBeenCalledOnce();
+      expect([...hostManager.connections.values()]).toEqual([survivor]);
+      expect(survivor.isReady()).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("publishes static and live provider catalogs and removes them on disconnect", async () => {
@@ -819,6 +1190,22 @@ describe("ConnectionManager", () => {
   });
 
   describe("No prewarm configuration", () => {
+    it("returns Err rather than rejecting when an adapter key throws an unprintable value", async () => {
+      mockHostEndpoint.targetKey = () => {
+        throw Object.create(null);
+      };
+      await initializeManager(hostManager);
+      expect(
+        await hostManager.safeResolveConnections({ target: clientMeta }),
+      ).toMatchObject({
+        error: {
+          code: "E_UNKNOWN",
+          context: { options: { target: clientMeta } },
+        },
+      });
+      expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
+    });
+
     it("does not establish connections upon initialization", async () => {
       // Arrange
       await initializeManager(hostManager);
@@ -883,8 +1270,10 @@ describe("ConnectionManager", () => {
 
       const where = (identity: TestUserMeta) => identity.id === 999;
       await expect(
-        resolveManager(clientA.manager, { target: hostMeta, where }),
-      ).rejects.toMatchObject({ code: "E_CONNECTION_CONSTRAINT_FAILED" });
+        clientA.manager.safeResolveConnection({ target: hostMeta, where }),
+      ).resolves.toMatchObject({
+        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
+      });
       expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
     });
 
@@ -896,11 +1285,13 @@ describe("ConnectionManager", () => {
       // Act 1: A target can create a connection, but where still filters its peer identity
       const where = (identity: TestUserMeta) => identity.id === 999;
       await expect(
-        resolveManagerCandidates(clientA.manager, {
+        clientA.manager.safeResolveConnections({
           where,
           target: hostMeta,
         }),
-      ).rejects.toMatchObject({ code: "E_CONNECTION_CONSTRAINT_FAILED" });
+      ).resolves.toMatchObject({
+        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
+      });
 
       // Assert 1: The target was acquired, then rejected by where
       expect(clientA.mockEndpoint.connect).toHaveBeenCalledTimes(1);
@@ -919,29 +1310,6 @@ describe("ConnectionManager", () => {
       expect(matches).toHaveLength(1);
       expect(matches[0]).toBeDefined();
       expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
-    });
-
-    it("reports a new target constraint failure, then reuses the ready session", async () => {
-      await initializeManager(hostManager);
-      const clientA = await createTestStack(clientMeta, hostL1OnConnect);
-
-      await expect(
-        resolveManager(clientA.manager, {
-          target: hostMeta,
-          where: (identity: TestUserMeta) => identity.id === 999,
-        }),
-      ).rejects.toMatchObject({ code: "E_CONNECTION_CONSTRAINT_FAILED" });
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledTimes(1);
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledWith(hostMeta);
-
-      const match = await resolveManager(clientA.manager, {
-        target: hostMeta,
-        where: (identity: TestUserMeta) => identity.id === hostMeta.id,
-      });
-
-      expect(match?.isReady()).toBe(true);
-      expect(match?.remoteIdentity).toEqual(hostMeta);
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledTimes(1);
     });
 
     it("returns all matching ready connections in stable allocation order", async () => {
@@ -969,6 +1337,78 @@ describe("ConnectionManager", () => {
       ).toEqual([10, 20]);
     });
 
+    it("orders published connections independently of attachment and isolates observers", async () => {
+      let finishFirst!: (allowed: boolean) => void;
+      let entered!: () => void;
+      const enteredPolicy = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const manager = new ConnectionManager<TestAdapterModel>(
+        {
+          policy: {
+            canConnect: ({ remoteIdentity }) => {
+              if (remoteIdentity.id !== 10) return true;
+              entered();
+              return new Promise<boolean>((resolve) => {
+                finishFirst = resolve;
+              });
+            },
+          },
+        },
+        Transport.create(mockHostEndpoint),
+        mockHostHandlers,
+        hostMeta,
+      );
+      const observed: number[][] = [];
+      const log = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const stopThrowing = manager.subscribeAvailabilityChanged(() => {
+        throw new Error("observer failed");
+      });
+      const stopObserving = manager.subscribeAvailabilityChanged(() => {
+        observed.push(
+          [...manager.connections.values()].map(
+            (connection) => connection.remoteIdentity!.id,
+          ),
+        );
+      });
+      try {
+        await initializeManager(manager);
+        const first = await createTestStack(
+          { context: "client", id: 10 },
+          hostL1OnConnect,
+        );
+        const second = await createTestStack(
+          { context: "client", id: 20 },
+          hostL1OnConnect,
+        );
+        const pendingFirst = resolveManager(first.manager, {
+          target: hostMeta,
+        });
+        await enteredPolicy;
+        await resolveManager(second.manager, { target: hostMeta });
+        expect(
+          [...manager.connections.values()].map((c) => c.remoteIdentity!.id),
+        ).toEqual([20]);
+        finishFirst(true);
+        await pendingFirst;
+        expect(
+          (await resolveManagerCandidates(manager, {})).map(
+            (c) => c.remoteIdentity!.id,
+          ),
+        ).toEqual([20, 10]);
+        expect(observed).toContainEqual([20, 10]);
+        for (const connection of manager.connections.values())
+          connection.close();
+        expect(manager.connections.size).toBe(0);
+      } finally {
+        stopThrowing();
+        stopObserving();
+        log.mockRestore();
+      }
+    });
+
     it("does not actively connect when broadcasting a ready snapshot", async () => {
       await initializeManager(hostManager);
       const where = (identity: TestUserMeta) => identity.context === "client";
@@ -978,29 +1418,94 @@ describe("ConnectionManager", () => {
       expect(matches).toEqual([]);
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
     });
-
-    it("creates from a target and only returns it when where verifies remote identity", async () => {
-      await initializeManager(hostManager);
-      const clientA = await createTestStack(clientMeta, hostL1OnConnect);
-
-      await expect(
-        resolveManagerCandidates(clientA.manager, {
-          target: hostMeta,
-          where: (identity: TestUserMeta) => identity.id === 999,
-        }),
-      ).rejects.toMatchObject({ code: "E_CONNECTION_CONSTRAINT_FAILED" });
-
-      const match = await resolveManagerCandidates(clientA.manager, {
-        target: hostMeta,
-        where: (identity: TestUserMeta) => identity.id === hostMeta.id,
-      });
-
-      expect(match).toHaveLength(1);
-      expect(match[0].remoteIdentity).toEqual(hostMeta);
-    });
   });
 
   describe("Dynamic Identity Update (B6)", () => {
+    it("refreshes indexes before identity callbacks and removes them before reentrant disconnect observers", async () => {
+      await initializeManager(hostManager);
+      const client = await createTestStack(
+        { ...clientMeta, groups: ["old"] },
+        hostL1OnConnect,
+      );
+      await resolveManager(client.manager, { target: hostMeta });
+      const connection = [...hostManager.connections.values()][0];
+      const changes: number[] = [];
+      const unsubscribe = hostManager.subscribeAvailabilityChanged(() => {
+        changes.push(hostManager.connections.size);
+      });
+      let disconnected!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        disconnected = resolve;
+      });
+      mockHostHandlers.onDisconnect = vi.fn((id, identity) => {
+        expect(id).toBe(connection.connectionId);
+        expect(identity).toEqual({ ...clientMeta, groups: ["new"] });
+        expect(hostManager.connections.size).toBe(0);
+        expect(hostManager.getConnectionAuthSnapshot(id)).toBeUndefined();
+        expect(hostManager.serviceGroups.get("new")?.has(id)).toBe(false);
+        connection.close();
+        disconnected();
+        throw new Error("disconnect observer failed");
+      });
+      mockHostHandlers.onIdentityUpdated = vi.fn((id, next, previous, meta) => {
+        expect(hostManager.serviceGroups.get("old")?.has(id)).toBe(false);
+        expect(hostManager.serviceGroups.get("new")?.has(id)).toBe(true);
+        expect(
+          hostManager.getConnectionAuthSnapshot(id)?.remoteIdentity,
+        ).toEqual(next);
+        expect(previous.groups).toEqual(["old"]);
+        expect(meta).toBe(connection.context.connection);
+        connection.close();
+      });
+      try {
+        expect(
+          client.manager.safeUpdateLocalIdentity({ groups: ["new"] }).isOk(),
+        ).toBe(true);
+        await closed;
+        expect(mockHostHandlers.onIdentityUpdated).toHaveBeenCalledOnce();
+        expect(mockHostHandlers.onDisconnect).toHaveBeenCalledOnce();
+        expect(changes.at(-1)).toBe(0);
+      } finally {
+        unsubscribe();
+        connection.close();
+      }
+    });
+
+    it("updates every local authorization snapshot before a reentrant failing broadcast", async () => {
+      await initializeManager(hostManager);
+      const first = await createTestStack(
+        { context: "client", id: 10 },
+        hostL1OnConnect,
+      );
+      const second = await createTestStack(
+        { context: "client", id: 20 },
+        hostL1OnConnect,
+      );
+      await resolveManager(first.manager, { target: hostMeta });
+      await resolveManager(second.manager, { target: hostMeta });
+      const [a, b] = [...hostManager.connections.values()];
+      const sendA = vi.spyOn(a, "sendMessage").mockImplementation(() => {
+        expect(
+          hostManager.getConnectionAuthSnapshot(a.connectionId)?.localIdentity
+            .id,
+        ).toBe(777);
+        expect(
+          hostManager.getConnectionAuthSnapshot(b.connectionId)?.localIdentity
+            .id,
+        ).toBe(777);
+        return Result.err(new Error("broadcast failed"));
+      });
+      const sendB = vi.spyOn(b, "sendMessage");
+      expect(hostManager.safeUpdateLocalIdentity({ id: 777 })).toMatchObject({
+        error: { code: "E_UNKNOWN" },
+      });
+      expect(sendA).toHaveBeenCalledOnce();
+      expect(sendB).not.toHaveBeenCalled();
+      expect(b.localIdentity.id).toBe(777);
+      sendA.mockRestore();
+      sendB.mockRestore();
+    });
+
     it("should update remote identity, allowing it to be found by new metadata", async () => {
       // Arrange: Host is connected to a client
       await initializeManager(hostManager);
@@ -1060,12 +1565,6 @@ describe("ConnectionManager", () => {
         target: hostMeta,
       });
 
-      // Wait for connection to be established.
-      await vi.waitFor(() => {
-        // Just ensuring the event loop ticks and connection is up
-        expect(client.handlers.onMessage).not.toHaveBeenCalled();
-      });
-
       const testMessage: ApplyMessage = {
         type: NexusMessageType.APPLY,
         id: 1,
@@ -1087,8 +1586,10 @@ describe("ConnectionManager", () => {
       };
       updateManagerIdentity(client.manager, clientUpdates);
 
-      // Wait for the identity update to propagate
-      await new Promise((r) => setTimeout(r, 50));
+      await vi.waitFor(() => {
+        expect(hostManager.serviceGroups.get("group-2")?.size).toBe(1);
+        expect(hostManager.serviceGroups.get("group-1")?.size).toBe(0);
+      });
 
       // Assert: Host routes messages to the new group after propagation
       // 1. Send to new group, SHOULD be received
@@ -1100,9 +1601,9 @@ describe("ConnectionManager", () => {
       vi.clearAllMocks();
 
       // 2. Send to old group, should NOT be received
-      sendFromManager(hostManager, { group: "group-1" }, testMessage);
-      // A short delay to ensure no message arrives if logic is correct
-      await new Promise((r) => setTimeout(r, 20));
+      expect(
+        sendFromManager(hostManager, { group: "group-1" }, testMessage),
+      ).toEqual([]);
       expect(client.handlers.onMessage).not.toHaveBeenCalled();
     });
   });
