@@ -41,6 +41,12 @@ export interface EndpointConfig<M extends AdapterModel> {
   meta?: ContextMetaOf<M>;
   implementation?: IEndpoint<M>;
   defaultTarget?: ConnectionTargetOf<M>;
+  /**
+   * Exact peers to connect to once after local listening starts. Independent of
+   * defaultTarget: no Token is required and ready() does not await these dials.
+   * Failures are logged; startup targets are not retried or reconnected.
+   */
+  connectTo?: readonly ConnectionTargetOf<M>[];
 }
 
 export interface ConnectionAuthContext<M extends AdapterModel> {

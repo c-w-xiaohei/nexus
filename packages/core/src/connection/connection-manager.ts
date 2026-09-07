@@ -42,7 +42,6 @@ export class ConnectionManager<M extends AdapterModel> {
   // Protocol readiness precedes manager publication, so this is a separate index,
   // not a filtered view of sessionsMap. Map order is publication order.
   private readonly connectionsMap = new Map<string, LogicalConnection<M>>();
-  private readonly serviceGroupsMap = new Map<string, Set<string>>();
   private readonly pendingCreations = new Map<
     string,
     Promise<Result<LogicalConnection<M>, NexusError>>
@@ -67,16 +66,6 @@ export class ConnectionManager<M extends AdapterModel> {
   /** Detached map of published sessions; contained connection objects remain live. */
   public get connections(): ReadonlyMap<string, LogicalConnection<M>> {
     return new Map(this.connectionsMap);
-  }
-
-  /** Detached membership snapshot; mutating it cannot change routing indexes. */
-  public get serviceGroups(): ReadonlyMap<string, ReadonlySet<string>> {
-    return new Map(
-      Array.from(this.serviceGroupsMap, ([group, ids]) => [
-        group,
-        new Set(ids),
-      ]),
-    );
   }
 
   /** Select advertised providers without discovering or connecting. */
@@ -147,7 +136,8 @@ export class ConnectionManager<M extends AdapterModel> {
   // ===== Initialization And Acquisition =====
 
   /**
-   * Start listening once. Reserve shared startup before entering the adapter;
+   * Start listening once, then launch configured startup dials without awaiting
+   * them or any remote provider. Reserve shared startup before entering the adapter;
    * the initiating call awaits and settles it, including unexpected rejection.
    * Concurrent callers share the outcome, not necessarily the Promise object.
    * Only failure releases startup so a later call can retry.
@@ -187,6 +177,19 @@ export class ConnectionManager<M extends AdapterModel> {
     this.initialized = result.isOk();
     if (result.isErr()) this.initialization = undefined;
     settle(result);
+    if (result.isOk()) {
+      // A child can publish services to its owner without acquiring an owner
+      // service. Reuse the same exact-target in-flight slot as demand calls.
+      for (const target of this.config.connectTo ?? []) {
+        void this.safeResolveConnections({ target }).then((connected) => {
+          if (connected.isErr())
+            this.logger.error("Startup connection failed", {
+              target,
+              error: connected.error,
+            });
+        });
+      }
+    }
     return result;
   }
 
@@ -352,8 +355,6 @@ export class ConnectionManager<M extends AdapterModel> {
     let ids: Iterable<string>;
     if ("connectionId" in target) ids = [target.connectionId];
     else if ("connectionIds" in target) ids = target.connectionIds;
-    else if ("group" in target)
-      ids = this.serviceGroupsMap.get(target.group) ?? [];
     else {
       for (const connection of this.connectionsMap.values()) {
         if (connection.isReady() && matchesWhere(connection, target.where))
@@ -464,8 +465,7 @@ export class ConnectionManager<M extends AdapterModel> {
       this.sessionsMap.set(connection.connectionId, connection);
       return ok(undefined);
     },
-    onReady: (connection, identity) => {
-      this.updateGroups(connection.connectionId, null, identity);
+    onReady: (connection) => {
       this.connectionsMap.set(connection.connectionId, connection);
       this.notifyAvailabilityChanged();
       return ok(undefined);
@@ -473,7 +473,7 @@ export class ConnectionManager<M extends AdapterModel> {
     onClosed: (connection, identity) => {
       const id = connection.connectionId;
       // Read publication from our own index, not the protocol-ready close identity.
-      if (this.connectionsMap.delete(id)) this.updateGroups(id, identity, null);
+      this.connectionsMap.delete(id);
       this.sessionsMap.delete(id);
       this.notifyAvailabilityChanged();
       this.handlers.onDisconnect(id, identity);
@@ -481,7 +481,6 @@ export class ConnectionManager<M extends AdapterModel> {
     onIdentityUpdated: (connection, next, previous) => {
       const id = connection.connectionId;
       if (!this.connectionsMap.has(id)) return;
-      this.updateGroups(id, previous, next);
       try {
         this.handlers.onIdentityUpdated?.(
           id,
@@ -500,26 +499,6 @@ export class ConnectionManager<M extends AdapterModel> {
         this.notifyAvailabilityChanged();
     },
   };
-
-  private updateGroups(
-    connectionId: string,
-    previous: (object & { groups?: string[] }) | null | undefined,
-    next: (object & { groups?: string[] }) | null,
-  ): void {
-    const oldGroups = previous?.groups ?? [];
-    const newGroups = next?.groups ?? [];
-    // Keep unchanged memberships in place to preserve group routing order.
-    for (const group of oldGroups) {
-      if (!newGroups.includes(group))
-        this.serviceGroupsMap.get(group)?.delete(connectionId);
-    }
-    for (const group of newGroups) {
-      if (oldGroups.includes(group)) continue;
-      let members = this.serviceGroupsMap.get(group);
-      if (!members) this.serviceGroupsMap.set(group, (members = new Set()));
-      members.add(connectionId);
-    }
-  }
 
   private notifyAvailabilityChanged(): void {
     // Observer errors must not interrupt publication or startup settlement.

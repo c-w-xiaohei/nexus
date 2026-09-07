@@ -94,7 +94,10 @@ const contentMetaWithoutRouteFields: ChromeContentScriptMeta = {
 };
 void contentMetaWithoutRouteFields;
 
-createBackgroundScriptConfig<AppMeta>({ app: { feature: "background" } });
+createBackgroundScriptConfig<AppMeta>({
+  app: { feature: "background" },
+  connectTo: [contentTarget],
+});
 usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
 const backgroundNexus: NexusInstance<ChromeAdapterModel<AppMeta>> =
   usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
@@ -156,10 +159,10 @@ usingOffscreenDocument<AppMeta>({ reason: "audio-processing" });
 // @ts-expect-error string shorthand cannot provide app when TAppMeta is provided.
 usingOffscreenDocument<AppMeta>("audio-processing");
 
-createExtensionPageConfig({
-  context: "extension-page",
-  page: "settings.html",
-});
+createExtensionPageConfig(
+  { context: "extension-page", page: "settings.html" },
+  { connectTo: [backgroundTarget] },
+);
 
 createExtensionPageConfig({
   context: "side-panel",

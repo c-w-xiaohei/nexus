@@ -11,8 +11,10 @@ interface ParentEchoService {
 
 const EchoToken = new Token<EchoService>("browser.echo");
 const ParentEchoToken = new Token<ParentEchoService>("browser.parent-echo");
-const frameId = new URLSearchParams(window.location.search).get("frameId");
+const query = new URLSearchParams(window.location.search);
+const frameId = query.get("frameId");
 if (!frameId) throw new Error("Missing frameId query parameter");
+const connectToMode = query.get("mode") === "connect-to";
 
 const telemetry = {
   binaryDataEnvelopes: 0,
@@ -77,50 +79,72 @@ function trackedRemoveEventListener(
 window.addEventListener = trackedAddEventListener;
 window.removeEventListener = trackedRemoveEventListener;
 
-const child = new Nexus<IframeAdapterModel>().configure({
-  ...usingIframeChild({
-    configure: false,
-    appId: "browser-app",
-    frameId,
-    parentOrigin: "http://127.0.0.1:3210",
-    nonce: `browser-nonce-${frameId}`,
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
-  }),
-  providers: [
-    {
-      token: EchoToken,
-      service: {
-        async echo(value: string) {
-          return `child:${frameId}:${value}`;
+const bootstrapChild = () => {
+  const child = new Nexus<IframeAdapterModel>().configure({
+    ...usingIframeChild({
+      configure: false,
+      appId: "browser-app",
+      frameId,
+      parentOrigin: "http://127.0.0.1:3210",
+      nonce: `browser-nonce-${frameId}`,
+      heartbeat: { intervalMs: 100, maxMisses: 2 },
+      ...(connectToMode
+        ? {
+            connectTo: [
+              {
+                context: "iframe-parent" as const,
+                appId: "browser-app",
+                origin: "http://127.0.0.1:3210",
+              },
+            ],
+          }
+        : {}),
+    }),
+    providers: [
+      {
+        token: EchoToken,
+        service: {
+          async echo(value: string) {
+            return `child:${frameId}:${value}`;
+          },
         },
       },
-    },
-  ],
-});
+    ],
+  });
+  if (connectToMode) void child.ready();
 
-async function callParentEcho(value: string) {
-  const service = await child.create(ParentEchoToken);
-  return service.echoFromParent(`${frameId}:${value}`);
-}
-
-function makeUnresponsive() {
-  for (const listener of [...messageListeners]) {
-    window.removeEventListener("message", listener);
+  async function callParentEcho(value: string) {
+    const service = await child.create(ParentEchoToken);
+    return service.echoFromParent(`${frameId}:${value}`);
   }
-}
 
-function getTelemetry() {
-  return { binaryDataEnvelopes: telemetry.binaryDataEnvelopes };
-}
+  function makeUnresponsive() {
+    for (const listener of [...messageListeners]) {
+      window.removeEventListener("message", listener);
+    }
+  }
 
-Object.assign(window, {
-  callParentEcho,
-  getTelemetry,
-  makeUnresponsive,
-  childNexus: child,
-  nexusIframeReady: true,
-});
-window.parent.postMessage(
-  { type: "child-ready", frameId },
-  "http://127.0.0.1:3210",
-);
+  function getTelemetry() {
+    return { binaryDataEnvelopes: telemetry.binaryDataEnvelopes };
+  }
+
+  Object.assign(window, {
+    callParentEcho,
+    getTelemetry,
+    makeUnresponsive,
+    childNexus: child,
+    nexusIframeReady: true,
+  });
+  window.parent.postMessage(
+    { type: "child-ready", frameId },
+    "http://127.0.0.1:3210",
+  );
+};
+
+if (query.get("bootstrap") === "load") {
+  window.addEventListener("load", bootstrapChild, { once: true });
+} else if (query.get("bootstrap") === "complete") {
+  Object.assign(window, { bootstrapChild });
+} else {
+  bootstrapChild();
+}

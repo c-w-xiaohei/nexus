@@ -37,6 +37,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   private router: VirtualPortRouter | undefined;
   private cleanupLifecycle: (() => void) | undefined;
   private observedOrigin: string | undefined;
+  private readonly pendingLoads = new Set<() => void>();
 
   constructor(private readonly options: IframeChildEndpointOptions) {
     validateAppId(options.appId);
@@ -63,7 +64,43 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
         "Iframe router is unavailable",
         "E_IFRAME_CONNECT_FAILED",
       );
-    const result = await this.router.safeConnect();
+    const router = this.router;
+    const localWindow = getWindow(
+      this.options.localWindow ?? this.options.window,
+    );
+    if (localWindow.document) {
+      // The parent resets its frame router on iframe load. Defer outgoing dials
+      // past child load to let that cleanup run, on initial navigation and reload.
+      const loaded = await new Promise<boolean>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (ready: boolean) => {
+          localWindow.removeEventListener("load", onLoad);
+          if (timer !== undefined) clearTimeout(timer);
+          this.pendingLoads.delete(cancel);
+          resolve(ready);
+        };
+        const cancel = () => finish(false);
+        const onLoad = () => {
+          // Schedule outside the load callback; cancellation can win before
+          // either this microtask or the following timer runs.
+          void Promise.resolve().then(() => {
+            if (this.pendingLoads.has(cancel))
+              timer = setTimeout(() => finish(true), 0);
+          });
+        };
+        this.pendingLoads.add(cancel);
+        // readyState becomes complete before load handlers finish. Even an
+        // already-complete document needs a task boundary, not just a microtask.
+        if (localWindow.document.readyState === "complete") onLoad();
+        else localWindow.addEventListener("load", onLoad, { once: true });
+      });
+      if (!loaded || router.closed)
+        throw new IframeAdapterError(
+          "Iframe closed before startup connection",
+          "E_IFRAME_CONNECT_FAILED",
+        );
+    }
+    const result = await router.safeConnect();
     if (result.isErr()) {
       throw new IframeAdapterError(
         "Could not connect to iframe parent",
@@ -84,6 +121,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   }
 
   close(): void {
+    for (const cancel of this.pendingLoads) cancel();
     this.cleanupLifecycle?.();
     this.cleanupLifecycle = undefined;
     if (this.router) this.router.safeClose();
@@ -168,6 +206,7 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
       this.options.localWindow ?? this.options.window,
     );
     const close = () => {
+      for (const cancel of this.pendingLoads) cancel();
       if (this.router) this.router.safeClose();
     };
     localWindow.addEventListener("pagehide", close as EventListener);

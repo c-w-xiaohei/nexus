@@ -126,7 +126,7 @@ describe("ProxyFactory", () => {
 
     it("should pass strategy and timeout options to dispatchCall", () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { group: "workers" },
+        target: { connectionIds: ["conn-1", "conn-2"] },
         strategy: "stream",
         timeout: 1000,
       });
@@ -137,7 +137,7 @@ describe("ProxyFactory", () => {
       expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "APPLY",
-          target: { group: "workers" },
+          target: { connectionIds: ["conn-1", "conn-2"] },
           resourceId: null,
           path: ["api", "doWork"],
           args: [],

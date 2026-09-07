@@ -27,6 +27,16 @@ usingIframeChild({
 
 Adapter helpers usually configure endpoint implementation, metadata, and an optional endpoint `defaultTarget`.
 
+Explicit `connectTo` targets configure one-shot startup dialing, independently of
+`defaultTarget`. Core starts them after listening, without waiting for a remote
+Token or delaying `ready()`. Failures are logged through the Nexus logger; there
+is no automatic retry or reconnect. Do not infer startup targets from a default
+route or create a dummy service proxy just to connect.
+
+Chrome custom page helpers take `createExtensionPageConfig(meta, options?)` or
+`usingExtensionPage(meta, options?)`. Put `connectTo` in the second argument;
+the first argument is only application-owned identity metadata.
+
 ## Direct Configuration
 
 Use `nexus.configure(...)` directly for custom endpoint wiring or explicit configuration composition.
@@ -136,7 +146,7 @@ Layers apply left-to-right, and later layers win for the same domain.
 Domain-aware merge rules:
 
 - omitted fields keep previous layers
-- `endpoint.meta`, `endpoint.implementation`, and `endpoint.defaultTarget` are whole-field replacements when explicitly provided
+- `endpoint.meta`, `endpoint.implementation`, `endpoint.defaultTarget`, and `endpoint.connectTo` are whole-field replacements when explicitly provided; `connectTo: []` disables inherited startup targets
 - `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
 - `policy: undefined` clears inherited policy when callers intentionally need to remove it
 - `providers` replace by `token.id`; the later provider replaces both service and policy

@@ -1,5 +1,6 @@
 import type {
   AdapterModel,
+  ConnectionTargetOf,
   IEndpoint,
   NexusConfig,
   NexusInstance,
@@ -126,7 +127,10 @@ export type IframeChildEndpointOptions = {
 };
 
 export type IframeParentOptions = IframeParentEndpointOptions &
-  Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & { configure?: true };
+  Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & {
+    configure?: true;
+    connectTo?: readonly ConnectionTargetOf<IframeAdapterModel>[];
+  };
 
 export type IframeParentConfigOptions = Omit<
   IframeParentOptions,
@@ -137,6 +141,7 @@ export type IframeChildOptions = IframeChildEndpointOptions &
   Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & {
     configure?: true;
     defaultTarget?: IframeParentConnectionTarget;
+    connectTo?: readonly ConnectionTargetOf<IframeAdapterModel>[];
   };
 
 export type IframeChildConfigOptions = Omit<IframeChildOptions, "configure"> & {

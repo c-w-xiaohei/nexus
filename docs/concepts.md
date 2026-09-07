@@ -81,6 +81,24 @@ An exact target is actionable: Nexus first reuses a matching ready session and o
 
 `defaultTarget` is only a default address for `create`. It neither preconnects nor affects `select`.
 
+`endpoint.connectTo` independently lists exact targets to connect once after local
+listening starts. It does not infer a `defaultTarget`, acquire a Token, or wait for
+remote providers. `ready()` does not await these connections; failures are logged
+through the Nexus logger and do not fail local readiness. There is no automatic
+retry or reconnect. Configuration layers replace the whole list; `[]` disables
+inherited startup dials. Adapter helpers accept explicit `connectTo` where dialing
+is supported; none infer startup targets from their default route.
+
+This supports an owner A creating context B, then waiting with
+`select(Token, { where, wait: { timeout: 10_000 } })` before B starts. B registers
+its services and connects to A through `connectTo`, without acquiring an A
+service. A's selection wakes on connection, identity, or provider changes and
+returns when a unique ready provider matches. A must already be listening before
+B's one-shot dial; use a per-creation identity in `where` to exclude an older B.
+Without `wait`, a selection with no current match returns `E_SERVICE_NO_MATCH`.
+Register services only after their dependencies are usable: connection readiness
+does not promise that arbitrary application startup work has finished.
+
 `createMulticast` requires non-empty `targets: readonly ConnectionTarget[]`; it acquires each exact target and fails the whole operation if any target cannot be acquired. `expects: "all"` (the default) returns settled results, while `expects: "stream"` returns an async iterable of settled results; neither includes connection IDs or `from` metadata. Connection IDs are not public acquisition inputs, selection keys, routing targets, or multicast result fields. `selectMulticast({ where })` never connects, has no `wait`, and binds one current provider snapshot, where zero providers is a valid empty result. `where` remains an additional AND filter in either operation. Acquisition `timeout`/`signal` cover target acquisition, `callTimeout` covers later calls, and incompatible provider-catalog protocols are structured protocol errors.
 
 ## Session-Bound Handles

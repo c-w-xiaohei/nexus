@@ -66,6 +66,7 @@ export namespace NexusKernelBuilder {
         };
         const managerConfig: ConnectionManagerConfig<M> = {
           policy: config.policy,
+          connectTo: endpoint.connectTo,
         };
         const manager = new ConnectionManager(
           managerConfig,
@@ -124,6 +125,7 @@ async function bootstrapConfig<M extends AdapterModel>(
         implementation: new registration.targetClass(),
         meta: registration.options.meta,
         defaultTarget: registration.options.defaultTarget,
+        connectTo: registration.options.connectTo,
       }
     : config.endpoint;
   return {

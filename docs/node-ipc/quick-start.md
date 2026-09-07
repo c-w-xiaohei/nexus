@@ -72,6 +72,28 @@ const echo = await nexus.create(EchoToken, {
 });
 ```
 
+### Client-Provided Services
+
+The socket client can also provide services to its daemon. If the daemon creates
+the client process, start the daemon listener first, then spawn the process and
+call `daemonNexus.select(WorkerToken, { where, wait: { timeout: 10_000 } })`.
+The client uses startup targets instead of making a dummy daemon service call:
+
+```ts
+import { usingNodeIpcClient } from "@nexus-js/node-ipc";
+import { WorkerToken, workerService } from "./shared-worker";
+
+usingNodeIpcClient({
+  appId: "worker-B",
+  connectTo: [{ context: "node-ipc-daemon", appId: "owner-A" }],
+}).provide(WorkerToken, workerService);
+```
+
+Match the spawned client's unique identity in `where`. The waiting selection
+completes after authorization and provider publication, not merely socket open.
+`connectTo` is one-shot, does not block `ready()`, does not retry, and does not
+become the client's `defaultTarget`. The daemon need not expose a service.
+
 ## 5. Add Shared-Secret Pre-Auth
 
 Shared-secret pre-auth is optional but recommended for daemon/client setups where only known local clients should connect.

@@ -6,14 +6,12 @@ export type NodeIpcDaemonMeta = {
   readonly appId: string;
   readonly instance?: string;
   readonly pid: number;
-  readonly groups?: readonly string[];
 };
 
 export type NodeIpcClientMeta = {
   readonly context: "node-ipc-client";
   readonly appId: string;
   readonly pid: number;
-  readonly groups?: readonly string[];
 };
 
 export type NodeIpcContextMeta = NodeIpcDaemonMeta | NodeIpcClientMeta;

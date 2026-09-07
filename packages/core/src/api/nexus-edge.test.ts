@@ -12,6 +12,9 @@ import {
 } from "../errors";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
+import { Logger } from "../logger";
+import { createMockPortPair } from "../utils/test-utils";
+import type { IPort } from "../transport/types/port";
 
 const { ok } = Result;
 
@@ -240,6 +243,160 @@ describe("Nexus service acquisition API", () => {
     });
     await nexus.ready();
     expect(implementation.connect).not.toHaveBeenCalled();
+  });
+
+  it("starts configured dials after listening without blocking ready or inferring a default target", async () => {
+    const listening = deferred<void>();
+    const enteredListen = deferred<void>();
+    let rejectDial!: (error: Error) => void;
+    const failedDial = new Promise<never>((_, reject) => {
+      rejectDial = reject;
+    });
+    const target = { context: "host", route: { id: "original" } };
+    const implementation = {
+      listen: vi.fn(() => {
+        enteredListen.resolve();
+        return listening.promise;
+      }),
+      connect: vi.fn(() => failedDial),
+    };
+    const nexus = new Nexus().configure({
+      endpoint: {
+        meta: { context: "client" },
+        implementation,
+        connectTo: [target, target],
+      },
+    });
+    const ready = nexus.ready();
+    await enteredListen.promise;
+    target.route.id = "mutated-after-snapshot";
+    expect(implementation.connect).not.toHaveBeenCalled();
+    listening.resolve();
+    await ready;
+    expect(implementation.connect).toHaveBeenCalledExactlyOnceWith({
+      context: "host",
+      route: { id: "original" },
+    });
+    await nexus.ready();
+    expect(implementation.connect).toHaveBeenCalledOnce();
+    expect(await nexus.safeCreate(new Token<object>("unused"))).toMatchObject({
+      error: { code: "E_TARGET_REQUIRED" },
+    });
+    // Settle the shared attempt without a port/handshake timer to leave behind.
+    rejectDial(new Error("owner unavailable"));
+  });
+
+  it.each([{}, [null], [new Date()]])(
+    "rejects invalid connectTo %p before bootstrap",
+    (connectTo) => {
+      const nexus = new Nexus();
+      expect(
+        nexus.safeConfigure({ endpoint: { connectTo: connectTo as never } }),
+      ).toMatchObject({ error: { code: "E_USAGE_INVALID" } });
+    },
+  );
+
+  it("contains startup failures without retrying or failing local readiness", async () => {
+    const failure = new Error("owner offline");
+    const logged = deferred<unknown>();
+    const errorLog = vi
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation((message, details) => {
+        if (message === "Startup connection failed") logged.resolve(details);
+      });
+    try {
+      const implementation = {
+        listen: vi.fn(),
+        connect: vi.fn(async () => {
+          throw failure;
+        }),
+      };
+      const target = { context: "owner" };
+      const nexus = new Nexus().configure({
+        endpoint: {
+          implementation,
+          meta: {},
+          connectTo: [target],
+        },
+      });
+      await nexus.ready();
+      expect(await logged.promise).toMatchObject({
+        target,
+        error: { code: "E_ENDPOINT_CONNECT_FAILED" },
+      });
+      await nexus.ready();
+      expect(implementation.connect).toHaveBeenCalledOnce();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("does not dial startup targets when local listening fails", async () => {
+    const implementation = {
+      listen: vi.fn(() => {
+        throw new Error("listener unavailable");
+      }),
+      connect: vi.fn(),
+    };
+    const nexus = new Nexus().configure({
+      endpoint: {
+        implementation,
+        meta: {},
+        connectTo: [{ context: "owner" }],
+      },
+    });
+    expect((await nexus.safeReady()).isErr()).toBe(true);
+    expect(implementation.connect).not.toHaveBeenCalled();
+  });
+
+  it("treats groups as opaque context metadata rather than a reserved routing field", async () => {
+    interface Model {
+      contextMeta: { context: string; groups?: { project: string } };
+      connectionMeta: object;
+      connectionTarget: { context: string };
+    }
+    const token = new Token<{ read(): string }>("opaque-groups");
+    let accept!: (port: IPort, meta: object) => void;
+    const [childPort, ownerPort] = createMockPortPair();
+    const owner = new Nexus<Model>().configure({
+      endpoint: {
+        meta: { context: "owner" },
+        implementation: {
+          listen: (handler) => {
+            accept = handler;
+          },
+        },
+      },
+    });
+    try {
+      await owner.ready();
+      const waiting = owner.select(token, {
+        where: (meta: Model["contextMeta"]) => meta.groups?.project === "next",
+        wait: { timeout: 1_000 },
+      });
+      const child = new Nexus<Model>().configure({
+        endpoint: {
+          meta: { context: "child", groups: { project: "initial" } },
+          implementation: {
+            listen: () => undefined,
+            connect: async () => {
+              accept(ownerPort, {});
+              return { port: childPort, connectionMeta: {} };
+            },
+          },
+          connectTo: [{ context: "owner" }],
+        },
+        providers: [{ token, service: { read: () => "child" } }],
+      });
+      // Observe publication, then change a non-array groups field. Neither
+      // handshake nor identity updates may interpret application field shapes.
+      const initial = await owner.select(token, { wait: { timeout: 1_000 } });
+      expect(await initial.read()).toBe("child");
+      await child.updateIdentity({ groups: { project: "next" } });
+      expect(await (await waiting).read()).toBe("child");
+    } finally {
+      childPort.close();
+    }
   });
 
   it("returns safe usage errors for invalid acquisition options", async () => {

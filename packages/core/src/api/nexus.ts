@@ -161,6 +161,18 @@ export class Nexus<
       );
     }
     if (
+      config.endpoint?.connectTo !== undefined &&
+      (!Array.isArray(config.endpoint.connectTo) ||
+        !Array.from(config.endpoint.connectTo).every(isPlainTarget))
+    ) {
+      return err(
+        new NexusUsageError(
+          "Nexus: endpoint.connectTo must be an array of plain exact targets.",
+          "E_USAGE_INVALID",
+        ),
+      );
+    }
+    if (
       this.lifecycle === "snapshotting" ||
       this.lifecycle === "bootstrapping"
     ) {
@@ -770,6 +782,7 @@ export class Nexus<
                 ...decorators.endpoint.options,
                 meta: clone(decorators.endpoint.options.meta),
                 defaultTarget: clone(decorators.endpoint.options.defaultTarget),
+                connectTo: clone(decorators.endpoint.options.connectTo),
               },
             }
           : null,
@@ -855,6 +868,7 @@ const cloneConfig = <M extends AdapterModel>(
         ...config.endpoint,
         meta: config.endpoint.meta ? clone(config.endpoint.meta) : undefined,
         defaultTarget: clone(config.endpoint.defaultTarget),
+        connectTo: clone(config.endpoint.connectTo),
       }
     : undefined,
   providers: config.providers?.map((provider) => ({ ...provider })),

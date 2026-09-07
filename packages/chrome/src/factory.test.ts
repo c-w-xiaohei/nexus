@@ -163,9 +163,15 @@ describe("Chrome Factory Functions", () => {
   });
 
   describe("createPopupConfig", () => {
-    it("uses caller-provided tab and window metadata", () => {
-      const config = createPopupConfig({ tabId: 123, windowId: 456 });
+    it("keeps startup configuration separate from metadata and the default target", () => {
+      const config = createPopupConfig({
+        tabId: 123,
+        windowId: 456,
+        connectTo: [],
+      });
 
+      expect(config.endpoint?.connectTo).toEqual([]);
+      expect(config.endpoint?.defaultTarget).toEqual({ kind: "background" });
       expect(config.endpoint?.meta).toEqual({
         context: "popup",
         tabId: 123,
@@ -180,11 +186,13 @@ describe("Chrome Factory Functions", () => {
       const sidePanel = { getOptions: vi.fn() };
       Object.assign(mockChrome, { sidePanel });
 
-      const config = createExtensionPageConfig({
-        context: "extension-page",
-        page: "settings.html",
-      });
+      const connectTo = [{ kind: "background" as const }];
+      const config = createExtensionPageConfig(
+        { context: "extension-page", page: "settings.html" },
+        { connectTo },
+      );
 
+      expect(config.endpoint?.connectTo).toEqual(connectTo);
       expect(config.endpoint?.meta).toEqual({
         context: "extension-page",
         page: "settings.html",
@@ -206,13 +214,18 @@ describe("Chrome Factory Functions", () => {
     it("configures custom extension page config", () => {
       const configureSpy = vi.spyOn(nexus, "configure");
 
-      const instance = usingExtensionPage({
-        context: "extension-page",
-        page: "settings.html",
-      });
+      const instance = usingExtensionPage(
+        { context: "extension-page", page: "settings.html" },
+        { connectTo: [] },
+      );
 
       expect(instance).toBeDefined();
       expect(configureSpy).toHaveBeenCalledOnce();
+      expect(configureSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          endpoint: expect.objectContaining({ connectTo: [] }),
+        }),
+      );
     });
   });
 

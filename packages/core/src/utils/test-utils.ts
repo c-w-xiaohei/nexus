@@ -393,6 +393,7 @@ export async function createStarNetwork<
             matchesObject(target, contextMeta),
         },
         defaultTarget: leaf.cmConfig?.connectTo?.[0],
+        connectTo: leaf.cmConfig?.connectTo,
       },
       providers: Object.entries(leaf.providers ?? {}).map(
         ([tokenId, service]) => ({
@@ -405,20 +406,6 @@ export async function createStarNetwork<
 
   await Promise.all(
     Array.from(leafInstances.values(), ({ nexus }) => nexus.ready()),
-  );
-
-  // Test topology setup is explicit: production ready() never acquires peers.
-  await Promise.all(
-    config.leaves.flatMap((leaf) => {
-      const key =
-        leaf.meta.context === "content-script"
-          ? `${leaf.meta.context}:${leaf.meta.issueId}`
-          : leaf.meta.context;
-      const manager = (instances.get(key)!.nexus as any).connectionManager;
-      return (leaf.cmConfig?.connectTo ?? []).map((target) =>
-        manager.safeResolveConnection({ target }),
-      );
-    }),
   );
 
   // 4. Wait for all connections to be established

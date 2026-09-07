@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 interface BrowserHarness {
+  callConnectToSelectedChild(value: string): Promise<string>;
   callCachedChildEcho(frameId: string, value: string): Promise<string>;
   callChildEcho(frameId: string, value: string): Promise<string>;
   getTelemetry(): {
@@ -8,8 +9,12 @@ interface BrowserHarness {
     childCalls: Array<{ frameId: string; value: string }>;
     binaryDataEnvelopes: number;
     loadedFrames: string[];
+    parentConnectAttempts: number;
+    selectResolved: boolean;
   };
   reloadFrame(frameId: string): Promise<void>;
+  startConnectToSelection(bootstrap?: string): Promise<void>;
+  selectConnectToChild(): void;
 }
 
 interface ChildHarness {
@@ -135,6 +140,214 @@ test("calls a child Nexus service through a real iframe boundary", async ({
     { frameId: "alpha", value: "again" },
     { frameId: "beta", value: "hello" },
   ]);
+});
+
+test("select waits for a child connectTo provider without parent demand", async ({
+  page,
+}) => {
+  let releaseChild: (() => void) | undefined;
+  const childRequest = new Promise<void>((resolve) => {
+    void page.route(
+      /http:\/\/127\.0\.0\.1:3211\/child\.html\?.*mode=connect-to/,
+      async (route) => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseChild = release;
+        });
+        await route.continue();
+      },
+    );
+  });
+
+  await page.goto("/parent.html?mode=connect-to");
+  await page.evaluate(() =>
+    (window as unknown as BrowserHarness).startConnectToSelection(),
+  );
+  await childRequest;
+
+  expect(await getTelemetry(page)).toMatchObject({
+    parentConnectAttempts: 0,
+    selectResolved: false,
+  });
+
+  if (!releaseChild) throw new Error("Child request was not intercepted");
+  releaseChild();
+  await expect
+    .poll(() =>
+      getTelemetry(page).then((telemetry) => telemetry.selectResolved),
+    )
+    .toBe(true);
+  await expect(
+    page.evaluate(() =>
+      (window as unknown as BrowserHarness).callConnectToSelectedChild(
+        "connect-to",
+      ),
+    ),
+  ).resolves.toBe("child:alpha:connect-to");
+  expect((await getTelemetry(page)).parentConnectAttempts).toBe(0);
+});
+
+test("startup connection survives a child whose initial load finishes after bootstrap", async ({
+  page,
+}) => {
+  let finishLoad!: () => void;
+  const loading = new Promise<void>((resolve) => {
+    finishLoad = resolve;
+  });
+  await page.route("**/hold-child-load.svg", async (route) => {
+    await loading;
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    });
+  });
+  await page.route(/child\.html\?.*mode=connect-to/, async (route) => {
+    const response = await route.fetch();
+    const body = await response.text();
+    await route.fulfill({
+      response,
+      body: body.replace("</body>", '<img src="/hold-child-load.svg"></body>'),
+    });
+  });
+  await page.goto("/parent.html?mode=connect-to");
+  await page.evaluate(() =>
+    (window as unknown as BrowserHarness).startConnectToSelection(),
+  );
+  try {
+    await expect
+      .poll(() => getTelemetry(page).then((value) => value.loadedFrames))
+      .toContain("alpha");
+    const frame = page.frame({ url: /frameId=alpha/ });
+    if (!frame) throw new Error("Missing child iframe");
+    await frame.evaluate(() =>
+      (
+        window as unknown as { childNexus: { ready(): Promise<void> } }
+      ).childNexus.ready(),
+    );
+    expect(await frame.evaluate(() => document.readyState)).not.toBe(
+      "complete",
+    );
+    expect((await getTelemetry(page)).selectResolved).toBe(false);
+    // The child is locally ready, but its connection must not race the parent's
+    // mandatory router reset on this document's iframe load event.
+    const loaded = frame.waitForLoadState("load");
+    finishLoad();
+    await loaded;
+    const result = await page.evaluate(() =>
+      (window as unknown as BrowserHarness).callConnectToSelectedChild(
+        "after-load",
+      ),
+    );
+    expect(result).toBe("child:alpha:after-load");
+    expect((await getTelemetry(page)).parentConnectAttempts).toBe(0);
+  } finally {
+    finishLoad();
+  }
+});
+
+for (const bootstrap of ["load", "complete"]) {
+  test(`child connectTo works when bootstrapped at ${bootstrap}`, async ({
+    page,
+  }) => {
+    await page.goto("/parent.html?mode=connect-to");
+    await page.evaluate(
+      (phase) =>
+        (window as unknown as BrowserHarness).startConnectToSelection(phase),
+      bootstrap,
+    );
+    if (bootstrap === "complete") {
+      await expect
+        .poll(() =>
+          page.frames().some((frame) => /frameId=alpha/.test(frame.url())),
+        )
+        .toBe(true);
+      const frame = page.frame({ url: /frameId=alpha/ });
+      if (!frame) throw new Error("Missing child iframe");
+      await frame.waitForLoadState("load");
+      expect((await getTelemetry(page)).selectResolved).toBe(false);
+      await frame.evaluate(() =>
+        (window as unknown as { bootstrapChild(): void }).bootstrapChild(),
+      );
+    }
+    await expect(
+      page.evaluate(() =>
+        (window as unknown as BrowserHarness).callConnectToSelectedChild(
+          "late-bootstrap",
+        ),
+      ),
+    ).resolves.toBe("child:alpha:late-bootstrap");
+    expect((await getTelemetry(page)).parentConnectAttempts).toBe(0);
+  });
+}
+
+test("a reloaded child connects back to a fresh selection without parent demand", async ({
+  page,
+}) => {
+  await page.goto("/parent.html?mode=connect-to");
+  await page.evaluate(() =>
+    (window as unknown as BrowserHarness).startConnectToSelection(),
+  );
+  await expect(
+    page.evaluate(() =>
+      (window as unknown as BrowserHarness).callConnectToSelectedChild(
+        "before-reload",
+      ),
+    ),
+  ).resolves.toBe("child:alpha:before-reload");
+
+  const frame = page.frame({ url: /frameId=alpha/ });
+  if (!frame) throw new Error("Missing child iframe");
+  const url = frame.url();
+  let releaseReload!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    releaseReload = resolve;
+  });
+  await page.route("**/hold-reload.svg", async (route) => {
+    await blocked;
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    });
+  });
+  await page.route(/child\.html\?.*reload=1/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace(
+        "</body>",
+        '<img src="/hold-reload.svg"></body>',
+      ),
+    });
+  });
+  try {
+    await frame.goto(`${url}&reload=1`, { waitUntil: "domcontentloaded" });
+    const oldProxyError = await page.evaluate(async () => {
+      try {
+        await (window as unknown as BrowserHarness).callConnectToSelectedChild(
+          "stale",
+        );
+        return undefined;
+      } catch (error) {
+        return (error as { code?: string }).code;
+      }
+    });
+    expect(oldProxyError).toBe("E_CONN_CLOSED");
+    await page.evaluate(() =>
+      (window as unknown as BrowserHarness).selectConnectToChild(),
+    );
+    expect((await getTelemetry(page)).selectResolved).toBe(false);
+    releaseReload();
+    await expect(
+      page.evaluate(() =>
+        (window as unknown as BrowserHarness).callConnectToSelectedChild(
+          "after-reload",
+        ),
+      ),
+    ).resolves.toBe("child:alpha:after-reload");
+    expect((await getTelemetry(page)).parentConnectAttempts).toBe(0);
+  } finally {
+    releaseReload();
+  }
 });
 
 test("uses binary ArrayBuffer transport packets across cross-origin iframe RPC", async ({

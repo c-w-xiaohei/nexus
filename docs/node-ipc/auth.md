@@ -139,7 +139,7 @@ It does not prove:
 - process id authenticity
 - user intent
 
-Do not use self-declared `pid` or `groups` as a security boundary unless your application authenticates those claims separately.
+Do not use self-declared `pid` or application-defined identity labels as a security boundary unless your application authenticates those claims separately.
 
 ## Related Pages
 

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
-import { composeNexusConfig, serviceProvider } from "./types/config";
+import { composeNexusConfig } from "./types/config";
+import type { AdapterModel } from "../types/adapter-model";
 
 describe("composeNexusConfig", () => {
   it("uses domain-aware last-wins semantics across config layers", () => {
@@ -12,31 +13,39 @@ describe("composeNexusConfig", () => {
     const secondService = { value: "second" };
     const firstCanCall = vi.fn(() => true);
     const replacementCanCall = vi.fn(() => false);
-    const composed = composeNexusConfig([
+    const firstEndpoint = { listen: vi.fn() };
+    const secondEndpoint = { listen: vi.fn() };
+    const composed = composeNexusConfig<AdapterModel>([
       {
         endpoint: {
           meta: { role: "first", stale: true },
-          implementation: { first: true },
+          implementation: firstEndpoint,
           defaultTarget: { context: "peer" },
+          connectTo: [{ context: "first-owner" }],
         },
         policy: { canCall: firstCanCall },
         providers: [
-          serviceProvider(firstToken, firstService, {
+          {
+            token: firstToken,
+            service: firstService,
             policy: { canCall: firstCanCall },
-          }),
+          },
         ],
       },
       {
         endpoint: {
           meta: { role: "second" },
-          implementation: { second: true },
+          implementation: secondEndpoint,
           defaultTarget: { context: "replacement" },
+          connectTo: [],
         },
         providers: [
-          serviceProvider(firstToken, replacementService, {
+          {
+            token: firstToken,
+            service: replacementService,
             policy: { canCall: replacementCanCall },
-          }),
-          serviceProvider(secondToken, secondService),
+          },
+          { token: secondToken, service: secondService },
         ],
       },
       {
@@ -45,16 +54,19 @@ describe("composeNexusConfig", () => {
     ]);
 
     expect(composed.endpoint?.meta).toEqual({ role: "second" });
-    expect(composed.endpoint?.implementation).toEqual({ second: true });
+    expect(composed.endpoint?.implementation).toBe(secondEndpoint);
     expect(composed.endpoint?.defaultTarget).toEqual({
       context: "replacement",
     });
     expect(composed.policy).toEqual({ canCall: firstCanCall });
+    expect(composed.endpoint?.connectTo).toEqual([]);
     expect(composed.providers).toEqual([
-      serviceProvider(firstToken, replacementService, {
+      {
+        token: firstToken,
+        service: replacementService,
         policy: { canCall: replacementCanCall },
-      }),
-      serviceProvider(secondToken, secondService),
+      },
+      { token: secondToken, service: secondService },
     ]);
   });
 });
@@ -69,10 +81,10 @@ describe("Nexus.configure config layering", () => {
     nexus.configure({
       endpoint: {
         meta: { role: "first", stale: true },
-        implementation: { first: true },
+        implementation: { listen: vi.fn() },
         defaultTarget: { context: "peer" },
       },
-      providers: [serviceProvider(token, firstService)],
+      providers: [{ token, service: firstService }],
     });
     nexus.configure({
       endpoint: {
@@ -80,7 +92,7 @@ describe("Nexus.configure config layering", () => {
         implementation: { listen: vi.fn() },
         defaultTarget: { context: "replacement" },
       },
-      providers: [serviceProvider(token, replacementService)],
+      providers: [{ token, service: replacementService }],
     });
 
     await nexus.ready();

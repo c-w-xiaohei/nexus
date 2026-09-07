@@ -121,7 +121,7 @@ Pure config factories:
 - `createOptionsPageConfig(options?)`
 - `createDevToolsPageConfig(options?)`
 - `createOffscreenDocumentConfig(options)`
-- `createExtensionPageConfig(meta)`
+- `createExtensionPageConfig(meta, options?)`
 
 Effectful runtime helpers:
 
@@ -131,7 +131,20 @@ Effectful runtime helpers:
 - `usingOptionsPage(options?)` - Configure for options page
 - `usingDevToolsPage(options?)` - Configure for devtools page
 - `usingOffscreenDocument(options)` - Configure for offscreen document
-- `usingExtensionPage(meta)` - Configure for a custom extension page connected to background
+- `usingExtensionPage(meta, options?)` - Configure for a custom extension page connected to background
+
+Pass explicit startup targets as `options.connectTo`. Custom page helpers keep
+arbitrary identity metadata in the first argument and connection options in the
+second, for example:
+
+```ts
+usingExtensionPage(
+  { context: "settings-page", page: "settings.html" },
+  { connectTo: [chromeTarget.background()] },
+);
+```
+
+Startup targets are independent of `defaultTarget`; omitting them does not dial.
 
 ### Target Constructors And Predicates
 

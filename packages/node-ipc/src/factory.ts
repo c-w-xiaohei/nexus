@@ -34,7 +34,6 @@ export function usingNodeIpcDaemon(
         appId: options.appId,
         instance,
         pid: process.pid,
-        groups: options.groups,
       },
       implementation: new UnixSocketServerEndpoint(address, options.authToken, {
         authTimeoutMs: options.authTimeoutMs,
@@ -81,14 +80,14 @@ export function usingNodeIpcClient(
   options: NodeIpcClientOptions | NodeIpcClientConfigOptions,
 ) {
   validateAuthToken(options.authToken);
+  const { connectTo, ...configOptions } = options;
   const config: NexusConfig<NodeIpcAdapterModel> = {
-    ...options,
+    ...configOptions,
     endpoint: {
       meta: {
         context: "node-ipc-client",
         appId: options.appId,
         pid: process.pid,
-        groups: options.groups,
       },
       implementation: new UnixSocketClientEndpoint(
         options.resolveAddress,
@@ -99,6 +98,7 @@ export function usingNodeIpcClient(
         },
       ),
       defaultTarget: options.defaultTarget,
+      ...(connectTo ? { connectTo } : {}),
     },
   };
 

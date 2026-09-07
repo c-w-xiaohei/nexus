@@ -21,6 +21,14 @@ Use `ContextMeta` for:
 
 Keep it small, serializable, and stable. Do not put secrets, mutable service state, or local adapter observations in it.
 
+Labels such as `groups` are ordinary application-defined `ContextMeta`, not a
+special core routing or authorization field. If your model defines
+`groups?: readonly string[]`, select with
+`where: (meta) => meta.groups?.includes("workers") === true`. Core still checks
+that each selected connection provides the requested Token. It does not maintain
+a separate group registry; identity updates affect future selections, not the
+membership of an already-bound multicast snapshot.
+
 ## ConnectionMeta
 
 An adapter creates `ConnectionMeta` when a concrete connection is accepted or opened. It is connection-scoped, read-only, and retained only for that logical connection session. Examples include:

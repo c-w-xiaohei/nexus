@@ -404,7 +404,6 @@ describe("ConnectionManager", () => {
       await vi.waitFor(() => {
         expect(hostManager.connections.size).toBe(0);
       });
-      expect(hostManager.serviceGroups.get("group-denied")).toBeUndefined();
       expect(clientManager.connections.size).toBe(0);
 
       resolvePolicy(false);
@@ -413,7 +412,6 @@ describe("ConnectionManager", () => {
         error: { code: "E_HANDSHAKE_REJECTED" },
       });
       expect(hostManager.connections.size).toBe(0);
-      expect(hostManager.serviceGroups.get("group-denied")).toBeUndefined();
       expect(clientManager.connections.size).toBe(0);
     });
 
@@ -720,7 +718,7 @@ describe("ConnectionManager", () => {
     });
   });
 
-  describe("Service Discovery and Group Routing (B3)", () => {
+  describe("Provider Selection and Metadata Routing (B3)", () => {
     it("selects and sends by where without dialing, and contains predicate failures", async () => {
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
@@ -802,7 +800,7 @@ describe("ConnectionManager", () => {
       });
     });
 
-    it("should expose connection and service group snapshots that cannot mutate manager internals", async () => {
+    it("exposes a connection snapshot that cannot mutate manager internals", async () => {
       await initializeManager(hostManager);
       const client = await createTestStack(
         { ...clientMeta, groups: ["group-1"] },
@@ -813,22 +811,14 @@ describe("ConnectionManager", () => {
 
       await vi.waitFor(() => {
         expect(hostManager.connections.size).toBe(1);
-        expect(hostManager.serviceGroups.get("group-1")?.size).toBe(1);
       });
       const connectionsSnapshot = hostManager.connections as Map<string, any>;
-      const groupsSnapshot = hostManager.serviceGroups as Map<
-        string,
-        Set<string>
-      >;
       connectionsSnapshot.clear();
-      groupsSnapshot.get("group-1")?.clear();
-      groupsSnapshot.clear();
 
       expect(hostManager.connections.size).toBe(1);
-      expect(hostManager.serviceGroups.get("group-1")?.size).toBe(1);
     });
 
-    it("should register connections into service groups and route messages correctly", async () => {
+    it("routes messages through observable group metadata predicates", async () => {
       // Arrange: Create two clients with different group memberships
       const clientAMeta: TestUserMeta = {
         context: "client",
@@ -852,7 +842,7 @@ describe("ConnectionManager", () => {
         resolveManager(clientB.manager, { target: hostMeta }),
       ]);
 
-      // Assert: Service groups are correctly populated on the host
+      // Find the published sessions for explicit-recipient order coverage below.
       let clientAConnId: string, clientBConnId: string;
       await vi.waitFor(() => {
         const hostConnections = [...hostManager.connections.values()];
@@ -863,11 +853,6 @@ describe("ConnectionManager", () => {
         clientBConnId = hostConnections.find(
           (c) => c.remoteIdentity?.id === 20,
         )!.connectionId;
-        const groups = hostManager.serviceGroups;
-        expect(groups.get("group-1")).toEqual(
-          new Set([clientAConnId, clientBConnId]),
-        );
-        expect(groups.get("group-2")).toEqual(new Set([clientBConnId]));
       });
 
       // Arrange: Create a valid test message to check routing
@@ -879,8 +864,12 @@ describe("ConnectionManager", () => {
         args: [{ value: 42 }], // The payload can be in the args
       };
 
-      // Act & Assert: Send message to group-1, both clients should receive it
-      sendFromManager(hostManager, { group: "group-1" }, testMessage);
+      // Act & Assert: Send to group-1 metadata, both clients should receive it.
+      sendFromManager(
+        hostManager,
+        { where: (identity) => identity.groups?.includes("group-1") ?? false },
+        testMessage,
+      );
       await vi.waitFor(() => {
         expect(clientA.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
@@ -894,8 +883,12 @@ describe("ConnectionManager", () => {
 
       vi.clearAllMocks();
 
-      // Act & Assert: Send message to group-2, only client B should receive it
-      sendFromManager(hostManager, { group: "group-2" }, testMessage);
+      // Act & Assert: Send to group-2 metadata, only client B should receive it.
+      sendFromManager(
+        hostManager,
+        { where: (identity) => identity.groups?.includes("group-2") ?? false },
+        testMessage,
+      );
       await vi.waitFor(() => {
         expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
@@ -1168,14 +1161,6 @@ describe("ConnectionManager", () => {
         const hostConnections = [...hostManager.connections.values()];
         expect(hostConnections).toHaveLength(1);
         expect(hostConnections[0].remoteIdentity).toEqual(clientAMeta);
-
-        const groups = hostManager.serviceGroups;
-        expect(groups.get("group-1")?.has(clientBConnOnHost.connectionId)).toBe(
-          false,
-        );
-        expect(groups.get("group-2")?.has(clientBConnOnHost.connectionId)).toBe(
-          false,
-        );
       });
 
       expect(clientB.handlers.onDisconnect).toHaveBeenCalledOnce();
@@ -1189,7 +1174,7 @@ describe("ConnectionManager", () => {
     });
   });
 
-  describe("No prewarm configuration", () => {
+  describe("Startup and exact acquisition", () => {
     it("returns Err rather than rejecting when an adapter key throws an unprintable value", async () => {
       mockHostEndpoint.targetKey = () => {
         throw Object.create(null);
@@ -1206,7 +1191,7 @@ describe("ConnectionManager", () => {
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
     });
 
-    it("does not establish connections upon initialization", async () => {
+    it("establishes configured startup connections only once", async () => {
       // Arrange
       await initializeManager(hostManager);
 
@@ -1220,10 +1205,13 @@ describe("ConnectionManager", () => {
       // Act
       await initializeManager(clientManager);
 
-      expect(mockEndpoint.connect).not.toHaveBeenCalled();
-
-      expect([...hostManager.connections.values()]).toHaveLength(0);
-      expect([...clientManager.connections.values()]).toHaveLength(0);
+      const connection = await resolveManager(clientManager, {
+        target: hostMeta,
+      });
+      expect(connection?.isReady()).toBe(true);
+      expect(mockEndpoint.connect).toHaveBeenCalledOnce();
+      expect([...hostManager.connections.values()]).toHaveLength(1);
+      expect([...clientManager.connections.values()]).toHaveLength(1);
     });
 
     it("reuses an exact target connection when where passes", async () => {
@@ -1421,7 +1409,7 @@ describe("ConnectionManager", () => {
   });
 
   describe("Dynamic Identity Update (B6)", () => {
-    it("refreshes indexes before identity callbacks and removes them before reentrant disconnect observers", async () => {
+    it("publishes updated metadata before identity callbacks and removes it before reentrant disconnect observers", async () => {
       await initializeManager(hostManager);
       const client = await createTestStack(
         { ...clientMeta, groups: ["old"] },
@@ -1442,14 +1430,11 @@ describe("ConnectionManager", () => {
         expect(identity).toEqual({ ...clientMeta, groups: ["new"] });
         expect(hostManager.connections.size).toBe(0);
         expect(hostManager.getConnectionAuthSnapshot(id)).toBeUndefined();
-        expect(hostManager.serviceGroups.get("new")?.has(id)).toBe(false);
         connection.close();
         disconnected();
         throw new Error("disconnect observer failed");
       });
       mockHostHandlers.onIdentityUpdated = vi.fn((id, next, previous, meta) => {
-        expect(hostManager.serviceGroups.get("old")?.has(id)).toBe(false);
-        expect(hostManager.serviceGroups.get("new")?.has(id)).toBe(true);
         expect(
           hostManager.getConnectionAuthSnapshot(id)?.remoteIdentity,
         ).toEqual(next);
@@ -1552,7 +1537,7 @@ describe("ConnectionManager", () => {
       });
     });
 
-    it("should update service groups and route messages correctly after identity update", async () => {
+    it("routes by updated group metadata after identity update", async () => {
       // Arrange: Host is connected to a client that belongs to 'group-1'
       await initializeManager(hostManager);
       const clientInitialMeta: TestUserMeta = {
@@ -1573,8 +1558,10 @@ describe("ConnectionManager", () => {
         args: [],
       };
 
-      // Assert: Client is initially in group-1
-      sendFromManager(hostManager, { group: "group-1" }, testMessage);
+      // Assert: Client is initially matched by group-1 metadata.
+      const inGroup = (group: string) => (identity: TestUserMeta) =>
+        identity.groups?.includes(group) ?? false;
+      sendFromManager(hostManager, { where: inGroup("group-1") }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
@@ -1586,23 +1573,32 @@ describe("ConnectionManager", () => {
       };
       updateManagerIdentity(client.manager, clientUpdates);
 
-      await vi.waitFor(() => {
-        expect(hostManager.serviceGroups.get("group-2")?.size).toBe(1);
-        expect(hostManager.serviceGroups.get("group-1")?.size).toBe(0);
+      await vi.waitFor(async () => {
+        expect(
+          await resolveManagerCandidates(hostManager, {
+            where: inGroup("group-2"),
+          }),
+        ).toHaveLength(1);
+        expect(
+          [...hostManager.connections.values()][0].remoteIdentity?.groups,
+        ).toEqual(["group-2"]);
       });
 
-      // Assert: Host routes messages to the new group after propagation
-      // 1. Send to new group, SHOULD be received
-      sendFromManager(hostManager, { group: "group-2" }, testMessage);
+      // Assert: Host routes messages to the new group after propagation.
+      sendFromManager(hostManager, { where: inGroup("group-2") }, testMessage);
       await vi.waitFor(() => {
         expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
       });
 
       vi.clearAllMocks();
 
-      // 2. Send to old group, should NOT be received
+      // The old metadata predicate no longer matches.
       expect(
-        sendFromManager(hostManager, { group: "group-1" }, testMessage),
+        sendFromManager(
+          hostManager,
+          { where: inGroup("group-1") },
+          testMessage,
+        ),
       ).toEqual([]);
       expect(client.handlers.onMessage).not.toHaveBeenCalled();
     });

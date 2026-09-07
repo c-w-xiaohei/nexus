@@ -95,6 +95,21 @@ await greeting.greet("parent");
 
 The parent helper does not register named targets. Keep exact `IframeConnectionTarget` values in application code, or use a Token `defaultTarget` when one route is stable.
 
+Alternatively, the parent can start listening, create the child context, and call
+`select(GreetingToken, { where, wait: { timeout: 10_000 } })` before the child is
+ready. Give the child helper explicit startup targets:
+`connectTo: [{ context: "iframe-parent", appId: "iframe-demo", origin: "https://parent.example.com" }]`.
+The child then connects without calling any parent service. Select the intended
+child using its identity and validated frame facts. Startup dialing is one-shot,
+does not block child `ready()`, and is separate from its `defaultTarget`.
+Child-originated connections wait for document load, then defer to a later task
+to allow the parent's iframe navigation cleanup to run before dialing. The task
+deferral also applies when the child starts inside a load handler. This wait
+does not delay local `ready()` and is cancelled on child close or unload.
+Load-blocking subresources delay the dial; if load never completes, the dial
+remains pending until the endpoint closes or the document unloads. No
+application-level readiness handshake is required.
+
 ## Child Setup
 
 Configure the child with the exact expected parent origin. Class services should bind to the configured Nexus instance with `@childNexus.Expose(...)`; object, State, and Relay providers should use `provide(...)`.

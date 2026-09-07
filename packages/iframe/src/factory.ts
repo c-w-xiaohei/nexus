@@ -27,8 +27,9 @@ export function usingIframeParent(
 ): NexusConfig<IframeAdapterModel> | NexusInstance<IframeAdapterModel> {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const origin = getOrigin(options.localWindow ?? options.window);
+  const { connectTo, ...configOptions } = options;
   const config: NexusConfig<IframeAdapterModel> = {
-    ...options,
+    ...configOptions,
     endpoint: {
       meta: {
         context: "iframe-parent",
@@ -37,6 +38,7 @@ export function usingIframeParent(
         origin,
       },
       implementation: new IframeParentEndpoint(options),
+      ...(connectTo ? { connectTo } : {}),
     },
   };
   return options.configure === false
@@ -60,8 +62,9 @@ export function usingIframeChild(
 ): NexusConfig<IframeAdapterModel> | NexusInstance<IframeAdapterModel> {
   const instance = options.instance ?? DEFAULT_INSTANCE;
   const frameId = options.frameId ?? "default";
+  const { connectTo, ...configOptions } = options;
   const config: NexusConfig<IframeAdapterModel> = {
-    ...options,
+    ...configOptions,
     endpoint: {
       meta: {
         context: "iframe-child",
@@ -84,6 +87,7 @@ export function usingIframeChild(
               origin: options.parentOrigin,
             },
       ),
+      ...(connectTo ? { connectTo } : {}),
     },
   };
   return options.configure === false

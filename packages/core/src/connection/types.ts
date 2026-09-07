@@ -30,7 +30,6 @@ export type ResolveOptions<M extends AdapterModel> = {
 export type MessageTarget<M extends AdapterModel> =
   | { connectionId: string }
   | { connectionIds: readonly string[] }
-  | { group: string }
   | {
       where: ConnectionWhere<M>;
     };
@@ -88,8 +87,7 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
    * @param connection - The same session previously supplied to onAttached when
    * using open(). Register this object directly; no ID-based lookup is needed.
    * @param identity - The authorized remote identity at this transition. Use it
-   * to populate identity-based indexes such as service groups, not to authorize
-   * the session again.
+   * to populate owner indexes, not to authorize the session again.
    * @returns Result.ok(undefined) once synchronous registration is complete, or
    * Result.err(error) on registration failure. Do not return a Promise. Err or a
    * thrown exception fails open() and closes the session; onClosed must remove
@@ -217,7 +215,7 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
 }
 
 export interface ConnectionManagerConfig<M extends AdapterModel> {
-  /** Internal test topology seed; ConnectionManager never consumes or prewarms it. */
+  /** One-shot exact startup targets; failures do not fail listener initialization. */
   connectTo?: readonly ConnectionTargetOf<M>[];
   policy?: NexusAuthorizationPolicy<M>;
   handshakeTimeoutMs?: number;
@@ -225,7 +223,7 @@ export interface ConnectionManagerConfig<M extends AdapterModel> {
 
 /**
  * Upstream callbacks supplied to ConnectionManager, normally by Engine.
- * Manager owns session/group indexes; these callbacks own service dispatch and
+ * Manager owns session indexes; these callbacks own service dispatch and
  * session-bound call/resource cleanup. They do not drive the handshake.
  */
 export interface ConnectionManagerHandlers<M extends AdapterModel> {
@@ -246,7 +244,7 @@ export interface ConnectionManagerHandlers<M extends AdapterModel> {
   ): void | Promise<void>;
   /**
    * Release pending calls and resources belonging to a session that has closed.
-   * Called after Manager removes attached/published/group index entries and
+   * Called after Manager removes attached/published index entries and
    * notifies availability listeners. Also called for attached sessions whose
    * handshake failed; connection acquisition failing before attachment has no
    * session to report. Invoked once per closed session, not once per close call.
@@ -262,8 +260,8 @@ export interface ConnectionManagerHandlers<M extends AdapterModel> {
   onDisconnect(connectionId: string, identity?: ContextMetaOf<M>): void;
   /**
    * Observe an authorized remote identity update on an already published session.
-   * Called after the connection commits the new identity and Manager updates
-   * group indexes. Authorization snapshot queries already expose newIdentity.
+   * Called after the connection commits the new identity. Authorization snapshot
+   * queries already expose newIdentity.
    * Updates before publication are not forwarded. Availability notification
    * follows this callback, including when it throws.
    *

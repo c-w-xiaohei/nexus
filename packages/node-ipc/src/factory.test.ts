@@ -12,10 +12,11 @@ describe("Node IPC factories", () => {
     });
     const implementation = config.endpoint?.implementation;
 
-    expect(config.endpoint?.meta).toMatchObject({
+    expect(config.endpoint?.meta).toStrictEqual({
       context: "node-ipc-daemon",
       appId: "daemon",
       instance: "alpha",
+      pid: process.pid,
     });
     expect(implementation?.listen).toBeTypeOf("function");
     expect(implementation?.capabilities).toEqual({
@@ -24,24 +25,29 @@ describe("Node IPC factories", () => {
     });
   });
 
-  it("creates client config with connect endpoint and singular defaultTarget", () => {
+  it("creates client config with startup targets independent of defaultTarget", () => {
+    const connectTo = [
+      { context: "node-ipc-daemon" as const, appId: "startup-daemon" },
+    ];
     const config = usingNodeIpcClient({
       appId: "client",
       defaultTarget: { context: "node-ipc-daemon", appId: "daemon" },
+      connectTo,
       configure: false,
     });
     const implementation = config.endpoint?.implementation;
 
-    expect(config.endpoint?.meta).toMatchObject({
+    expect(config.endpoint?.meta).toStrictEqual({
       context: "node-ipc-client",
       appId: "client",
+      pid: process.pid,
     });
     expect(implementation?.connect).toBeTypeOf("function");
     expect(config.endpoint?.defaultTarget).toEqual({
       context: "node-ipc-daemon",
       appId: "daemon",
     });
-    expect("connectTo" in (config.endpoint ?? {})).toBe(false);
+    expect(config.endpoint?.connectTo).toEqual(connectTo);
   });
 
   it("uses one target key for omitted and explicit default instances", () => {
@@ -51,6 +57,7 @@ describe("Node IPC factories", () => {
     });
     const targetKey = config.endpoint?.implementation?.targetKey;
 
+    expect(config.endpoint?.connectTo).toBeUndefined();
     expect(targetKey?.({ context: "node-ipc-daemon", appId: "daemon" })).toBe(
       targetKey?.({
         context: "node-ipc-daemon",

@@ -82,9 +82,11 @@ describe("iframe adapter factories", () => {
     const childWindow = new FakeWindow("https://child.test");
     childWindow.parent = parentWindow;
     const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const connectTo = [{ context: "iframe-child" as const, frameId: "main" }];
     const config = usingIframeParent({
       configure: false,
       appId: "app",
+      connectTo,
       window: parentWindow as unknown as Window,
       frames: [
         {
@@ -107,6 +109,7 @@ describe("iframe adapter factories", () => {
       binaryPackets: true,
       transferables: true,
     });
+    expect(config.endpoint?.connectTo).toEqual(connectTo);
   });
 
   it("derives parent config origin from localWindow when window is omitted", () => {
@@ -130,10 +133,18 @@ describe("iframe adapter factories", () => {
     expect(
       (config.endpoint?.meta as { origin?: string } | undefined)?.origin,
     ).toBe("https://parent.test");
+    expect(config.endpoint?.connectTo).toBeUndefined();
   });
 
   it("builds child config with a frozen parent default target and binary capability override", () => {
     const childWindow = new FakeWindow("https://child.test");
+    const connectTo = [
+      {
+        context: "iframe-parent" as const,
+        appId: "other-app",
+        origin: "https://other-parent.test",
+      },
+    ];
     const config = usingIframeChild({
       configure: false,
       appId: "app",
@@ -141,6 +152,7 @@ describe("iframe adapter factories", () => {
       parentOrigin: "https://parent.test",
       window: childWindow as unknown as Window,
       binaryPackets: true,
+      connectTo,
     });
     expect(config.endpoint?.meta).toEqual({
       context: "iframe-child",
@@ -161,6 +173,7 @@ describe("iframe adapter factories", () => {
       origin: "https://parent.test",
     });
     expect(Object.isFrozen(config.endpoint?.defaultTarget)).toBe(true);
+    expect(config.endpoint?.connectTo).toEqual(connectTo);
   });
 
   it("allows iframe endpoints to opt out of binary packet transport", () => {
@@ -1226,6 +1239,106 @@ describe("iframe adapter message behavior", () => {
     expect(childWindow.listeners.get("pagehide")?.size ?? 0).toBe(0);
     expect(childWindow.listeners.get("beforeunload")?.size ?? 0).toBe(0);
   });
+
+  it.each([
+    "close",
+    "pagehide",
+    "beforeunload",
+    "close-after-load",
+    "close-after-load-microtask",
+  ])("cancels a loading child's pending dial on %s", async (event) => {
+    vi.useFakeTimers();
+    const childWindow = Object.assign(new FakeWindow("https://child.test"), {
+      document: { readyState: "loading" },
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+      frameId: "main",
+    });
+    try {
+      const pending = child.connect({
+        context: "iframe-parent",
+        appId: "app",
+        origin: "https://parent.test",
+      });
+      expect(childWindow.listeners.get("load")?.size).toBe(1);
+      if (event.startsWith("close-after-load")) {
+        childWindow.document.readyState = "complete";
+        childWindow.dispatch("load", {});
+        if (event === "close-after-load-microtask") await Promise.resolve();
+        child.close();
+      } else if (event === "close") child.close();
+      else childWindow.dispatch(event, {});
+      await expect(pending).rejects.toMatchObject({
+        code: "E_IFRAME_CONNECT_FAILED",
+      });
+      expect(childWindow.listeners.get("load")?.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      child.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["loading", "complete"])(
+    "defers child connect past parent iframe load when readyState=%s",
+    async (readyState) => {
+      vi.useFakeTimers();
+      const parentWindow = new FakeWindow("https://parent.test");
+      const childWindow = Object.assign(new FakeWindow("https://child.test"), {
+        document: { readyState },
+      });
+      childWindow.parent = parentWindow;
+      const iframe = new FakeIframe(childWindow, "https://child.test/app");
+      const parent = new IframeParentEndpoint({
+        appId: "app",
+        localWindow: parentWindow as unknown as Window,
+        frames: [
+          {
+            frameId: "main",
+            iframe: iframe as unknown as HTMLIFrameElement,
+            origin: "https://child.test",
+          },
+        ],
+      });
+      const child = new IframeChildEndpoint({
+        appId: "app",
+        localWindow: childWindow as unknown as Window,
+        parentOrigin: "https://parent.test",
+        frameId: "main",
+      });
+      try {
+        const accepted = vi.fn();
+        parent.listen(accepted);
+        const pending = child.connect({
+          context: "iframe-parent",
+          appId: "app",
+          origin: "https://parent.test",
+        });
+        expect(accepted).not.toHaveBeenCalled();
+        if (readyState === "loading") {
+          childWindow.document.readyState = "complete";
+          childWindow.dispatch("load", {});
+        }
+        expect(vi.getTimerCount()).toBe(0);
+        iframe.load();
+        expect(accepted).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(0);
+        const { port } = await pending;
+        const received = vi.fn();
+        accepted.mock.calls[0]![0].onMessage(received);
+        port.postMessage("after-load");
+        expect(received).toHaveBeenCalledWith("after-load");
+        expect(childWindow.listeners.get("load")?.size ?? 0).toBe(0);
+      } finally {
+        child.close();
+        parent.close();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("child parent unavailable send failure returns connect failed", async () => {
     const childWindow = new FakeWindow("https://child.test");

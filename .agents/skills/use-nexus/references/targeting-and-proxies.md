@@ -52,6 +52,13 @@ const settings = await chromeNexus.select(SettingsToken, {
 });
 ```
 
+With `wait`, selection can start before the provider context connects. For an
+owner A spawning child B, initialize A's listener first, spawn B, then select by
+its per-creation identity. Configure B's explicit `connectTo` to A. Selection
+wakes on availability changes and resolves only after handshake/authorization,
+Token publication, and `where` match. Without `wait`, no current match fails
+immediately. Group labels need no special API: use typed `contextMeta` in `where`.
+
 ## Exact Targets And Where
 
 Use adapter targets for one exact endpoint, `createMulticast` for explicit target acquisition, and `selectMulticast` for a current provider snapshot.

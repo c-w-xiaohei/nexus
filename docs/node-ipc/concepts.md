@@ -68,7 +68,6 @@ Daemon metadata shape:
   appId: string;
   instance?: string;
   pid: number;
-  groups?: string[];
 }
 ```
 
@@ -79,7 +78,6 @@ Client metadata shape:
   context: "node-ipc-client";
   appId: string;
   pid: number;
-  groups?: string[];
 }
 ```
 

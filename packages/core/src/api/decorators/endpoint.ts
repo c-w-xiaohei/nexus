@@ -23,6 +23,8 @@ export interface EndpointOptions<M extends AdapterModel> {
    * (可选) create() 未指定目标时使用的精确默认目标。
    */
   defaultTarget?: ConnectionTargetOf<M>;
+  /** One-shot startup connections, independent of defaultTarget and ready(). */
+  connectTo?: readonly ConnectionTargetOf<M>[];
 }
 
 const EndpointOptionsSchema = z.object({
@@ -30,6 +32,7 @@ const EndpointOptionsSchema = z.object({
     (value) => typeof value === "object" && value !== null,
   ),
   defaultTarget: z.custom<object>(isPlainTarget).optional(),
+  connectTo: z.array(z.custom<object>(isPlainTarget)).readonly().optional(),
 });
 
 const validateEndpointOptions = fn(EndpointOptionsSchema, (input) => input);

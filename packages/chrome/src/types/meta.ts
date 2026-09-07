@@ -8,7 +8,7 @@ export type ChromeBuiltinContext =
   | "devtools-page"
   | "offscreen-document";
 
-type AppMeta<TAppMeta> = [TAppMeta] extends [never]
+export type ChromeAppMeta<TAppMeta = never> = [TAppMeta] extends [never]
   ? { app?: never }
   : { app: TAppMeta };
 
@@ -38,33 +38,33 @@ export type ChromeBackgroundMeta<TAppMeta = never> = {
   context: "background";
   extensionId: string;
   version?: string;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 
 export type ChromeContentScriptMeta<TAppMeta = never> = {
   context: "content-script";
   url: string;
   origin: string;
   isVisible?: boolean;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 
 export type ChromePopupMeta<TAppMeta = never> = {
   context: "popup";
   tabId?: number;
   windowId?: number;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 export type ChromeOptionsPageMeta<TAppMeta = never> = {
   context: "options-page";
   windowId?: number;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 export type ChromeDevToolsPageMeta<TAppMeta = never> = {
   context: "devtools-page";
   inspectedTabId: number;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 export type ChromeOffscreenDocumentMeta<TAppMeta = never> = {
   context: "offscreen-document";
   reason: string;
   tabId?: number;
-} & AppMeta<TAppMeta>;
+} & ChromeAppMeta<TAppMeta>;
 
 export type ChromeBackgroundTarget = Readonly<{ kind: "background" }>;
 export type ChromeContentFrameTarget = Readonly<{
