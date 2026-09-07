@@ -226,11 +226,11 @@ describe("Nexus service acquisition API", () => {
       isBroadcast: true,
       sentConnectionIds: ["private"],
       timeout: 1_000,
-    }) as Promise<Array<Record<string, unknown>>>;
+    });
     manager.handleResponse(1, "value", null, "private");
-    await expect(pending).resolves.toEqual([
-      { status: "fulfilled", value: "value" },
-    ]);
+    await expect(pending).resolves.toEqual(
+      ok([{ status: "fulfilled", value: "value" }]),
+    );
   });
   it("does not connect while readying a defaultTarget endpoint", async () => {
     const implementation = endpoint();

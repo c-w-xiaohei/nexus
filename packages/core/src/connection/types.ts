@@ -34,8 +34,6 @@ export type MessageTarget<M extends AdapterModel> =
       where: ConnectionWhere<M>;
     };
 
-export type CallTarget<M extends AdapterModel> = MessageTarget<M>;
-
 /**
  * Callbacks implemented by the session owner and passed to LogicalConnection.
  * The connection invokes them; the owner must not call them to advance a session.

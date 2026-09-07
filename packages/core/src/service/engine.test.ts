@@ -1,5 +1,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Engine } from "./engine";
+import { CallProcessor } from "./call-processor";
+import { MessageHandler } from "./message/message-handler";
 import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
@@ -13,8 +15,8 @@ const mockTestService = {
 };
 
 describe("Engine", () => {
-  let clientEngine: Engine<any, any>;
-  let hostEngine: Engine<any, any>;
+  let clientEngine: Engine<any>;
+  let hostEngine: Engine<any>;
   let clientConnectionId: string;
   let hostConnectionId: string;
 
@@ -35,18 +37,17 @@ describe("Engine", () => {
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it("should delegate dispatchCall to CallProcessor", async () => {
-    const callProcessorSpy = vi.spyOn(
-      (clientEngine as any).callProcessor,
-      "safeProcess",
-    );
+    const callProcessorSpy = vi.spyOn(CallProcessor.prototype, "safeProcess");
 
     // Create a proxy to trigger the call
     const proxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
+      strategy: "one",
+      timeout: 5000,
     });
 
     // Trigger the call
@@ -71,7 +72,7 @@ describe("Engine", () => {
 
   it("should forward incoming messages to the message handler", async () => {
     const handleMessageSpy = vi.spyOn(
-      (hostEngine as any).messageHandler,
+      MessageHandler.prototype,
       "safeHandleMessage",
     );
 
@@ -158,6 +159,8 @@ describe("Engine", () => {
     );
     const proxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
+      strategy: "one",
+      timeout: 5000,
       staleTarget: { where },
     });
 
@@ -191,6 +194,8 @@ describe("Engine", () => {
   it("exposes status and constrained diagnostics only for exact unicast roots", () => {
     const proxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
+      strategy: "one",
+      timeout: 5000,
     });
     const current = Nexus.getProxyStatus(proxy);
 
@@ -219,10 +224,14 @@ describe("Engine", () => {
     );
     const throwingProxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
+      strategy: "one",
+      timeout: 5000,
       staleTarget: { where: throwingWhere },
     });
     const matchingProxy = clientEngine.createServiceProxy<any>("testService", {
       target: { connectionId: clientConnectionId },
+      strategy: "one",
+      timeout: 5000,
       staleTarget: { where: matchingWhere },
     });
     const throwingListener = vi.fn();

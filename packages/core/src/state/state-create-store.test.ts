@@ -247,6 +247,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: (setup.clientConnection as { connectionId: string })
           .connectionId,
@@ -385,6 +387,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: clientConnectionId,
       },
@@ -429,6 +433,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: clientConnectionId,
       },
@@ -500,6 +506,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: clientConnectionId,
       },
@@ -668,6 +676,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: (setup.clientConnection as { connectionId: string })
           .connectionId,
@@ -737,6 +747,8 @@ describe("createNexusStore", () => {
     const storeProxy = (
       setup.clientEngine as any
     ).proxyFactory.createServiceProxy(definition.token.id, {
+      strategy: "one",
+      timeout: 5000,
       target: {
         connectionId: (setup.clientConnection as { connectionId: string })
           .connectionId,

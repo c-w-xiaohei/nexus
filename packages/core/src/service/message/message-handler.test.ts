@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MessageHandler } from "./message-handler";
 import { ResourceManager } from "../resource-manager";
-import type { MessageHandlerCallbacks } from "../engine";
 import { PayloadProcessor } from "../payload/payload-processor";
-import type { HandlerContext } from "./types";
 import {
   NexusMessageType,
   type ApplyMessage,
@@ -23,17 +21,19 @@ import {
 } from "../service-invocation-hooks";
 
 const mockEngine = {
-  safeSendMessage: vi.fn(() => ok([])),
+  safeSendMessage: vi.fn<MessageHandler.Context<any>["safeSendMessage"]>(() =>
+    ok(undefined),
+  ),
   handleResponse: vi.fn(),
   canHandleResponse: vi.fn(() => true),
   dispatchRelease: vi.fn(),
-} as unknown as MessageHandlerCallbacks<any>;
+};
 
 describe("MessageHandler", () => {
-  let messageHandler: MessageHandler.Runtime;
+  let messageHandler: MessageHandler<any>;
   let resourceManager: ResourceManager.Runtime;
-  let context: HandlerContext<any, any>;
-  let payloadProcessor: PayloadProcessor.Runtime<any, any>;
+  let context: MessageHandler.Context<any>;
+  let payloadProcessor: PayloadProcessor.Runtime<any>;
   let sanitizeSpy: ReturnType<typeof vi.spyOn>;
   let reviveSpy: ReturnType<typeof vi.spyOn>;
 
@@ -48,7 +48,9 @@ describe("MessageHandler", () => {
     } as any);
 
     context = {
-      engine: mockEngine,
+      safeSendMessage: mockEngine.safeSendMessage,
+      dispatchRelease: mockEngine.dispatchRelease,
+      pendingCalls: mockEngine,
       resourceManager,
       payloadProcessor,
       getConnectionAuthContext: vi.fn(() => ({
@@ -57,7 +59,7 @@ describe("MessageHandler", () => {
         connection: { from: "client" },
       })),
     };
-    messageHandler = MessageHandler.create(context);
+    messageHandler = new MessageHandler(context);
 
     sanitizeSpy = vi
       .spyOn(payloadProcessor, "safeSanitize")
@@ -101,7 +103,155 @@ describe("MessageHandler", () => {
       sourceConnectionId,
     );
     expect(result.isErr()).toBe(true);
-    expect(result.error.message).toContain("No message handler found");
+    expect(result).toMatchObject({
+      error: { message: expect.stringContaining("No message handler found") },
+    });
+  });
+
+  it("does not read service getters before authorization", async () => {
+    const getter = vi.fn(() => () => undefined);
+    resourceManager.registerExposedService(
+      "guarded",
+      Object.defineProperty({}, "run", { get: getter }),
+    );
+    context.policy = { canCall: () => false };
+    await messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.APPLY,
+        id: 70,
+        resourceId: null,
+        path: ["guarded", "run"],
+        args: [],
+      },
+      sourceConnectionId,
+    );
+    expect(getter).not.toHaveBeenCalled();
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "E_AUTH_CALL_DENIED" }),
+      }),
+      sourceConnectionId,
+    );
+  });
+
+  it("rechecks a resource released during authorization", async () => {
+    const target = vi.fn();
+    let authorize!: (allowed: boolean) => void;
+    const policy = {
+      canCall: () =>
+        new Promise<boolean>((resolve) => {
+          authorize = resolve;
+        }),
+    };
+    const resourceId = resourceManager.registerLocalResource(
+      target,
+      sourceConnectionId,
+      LocalResourceType.FUNCTION,
+      "guarded",
+      policy,
+    );
+    const handling = messageHandler.safeHandleMessage(
+      { type: NexusMessageType.APPLY, id: 71, resourceId, path: [], args: [] },
+      sourceConnectionId,
+    );
+    await Promise.resolve();
+    resourceManager.releaseLocalResource(resourceId);
+    authorize(true);
+    await handling;
+    expect(target).not.toHaveBeenCalled();
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "E_RESOURCE_NOT_FOUND" }),
+      }),
+      sourceConnectionId,
+    );
+  });
+
+  it("ends the invocation scope before waiting for the method Promise", async () => {
+    const events: string[] = [];
+    let finish!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    resourceManager.registerExposedService("scoped", {
+      [SERVICE_INVOKE_START]: () => {
+        events.push("start");
+      },
+      [SERVICE_INVOKE_END]: () => {
+        events.push("end");
+      },
+      run: () => {
+        events.push("apply");
+        return promise;
+      },
+    });
+    reviveSpy.mockImplementation((args: any[]) => {
+      events.push("revive");
+      return ok(args);
+    });
+    const handling = messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.APPLY,
+        id: 72,
+        resourceId: null,
+        path: ["scoped", "run"],
+        args: [],
+      },
+      sourceConnectionId,
+    );
+    expect(events).toEqual(["start", "revive", "apply", "end"]);
+    expect(mockEngine.safeSendMessage).not.toHaveBeenCalled();
+    finish();
+    await handling;
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("preserves errors thrown when reading invocation hooks", async () => {
+    const error = new Error("hook getter failed");
+    resourceManager.registerExposedService("broken", {
+      get [SERVICE_INVOKE_START]() {
+        throw error;
+      },
+      run() {},
+    });
+    await messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.APPLY,
+        id: 73,
+        resourceId: null,
+        path: ["broken", "run"],
+        args: [],
+      },
+      sourceConnectionId,
+    );
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "Error",
+          message: error.message,
+        }),
+      }),
+      sourceConnectionId,
+    );
+  });
+
+  it("releases an encoded reply when sending fails without replying with ERR", async () => {
+    resourceManager.registerExposedService("reply", { run: () => ({}) });
+    const error = new Error("send failed");
+    mockEngine.safeSendMessage.mockReturnValueOnce(err(error));
+    const result = await messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.APPLY,
+        id: 74,
+        resourceId: null,
+        path: ["reply", "run"],
+        args: [],
+      },
+      sourceConnectionId,
+    );
+    expect(result.isErr() && result.error).toBe(error);
+    expect(resourceManager.countLocalResources()).toBe(0);
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledOnce();
   });
 
   describe("APPLY Handler", () => {
@@ -354,7 +504,7 @@ describe("MessageHandler", () => {
       );
 
       expect(child.read).not.toHaveBeenCalled();
-      expect(context.policy.canCall).not.toHaveBeenCalledWith(
+      expect(context.policy?.canCall).not.toHaveBeenCalledWith(
         expect.objectContaining({ serviceName: `resource:${resourceId}` }),
       );
       expect(servicePolicy.canCall).toHaveBeenCalledWith(
@@ -414,7 +564,7 @@ describe("MessageHandler", () => {
       expect(adminPolicy.canCall).not.toHaveBeenCalled();
       expect(adminService[SERVICE_INVOKE_START]).not.toHaveBeenCalled();
       expect(adminService[SERVICE_INVOKE_END]).not.toHaveBeenCalled();
-      expect(context.policy.canCall).not.toHaveBeenCalled();
+      expect(context.policy?.canCall).not.toHaveBeenCalled();
       expect(mockEngine.safeSendMessage).toHaveBeenLastCalledWith(
         {
           type: NexusMessageType.ERR,
@@ -845,7 +995,7 @@ describe("MessageHandler", () => {
       await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
       expect(add).not.toHaveBeenCalled();
-      expect(context.policy.canCall).toHaveBeenCalledWith(
+      expect(context.policy?.canCall).toHaveBeenCalledWith(
         expect.objectContaining({
           serviceName: "calculator",
           path: ["add"],
@@ -890,7 +1040,7 @@ describe("MessageHandler", () => {
       );
 
       expect(child.read).not.toHaveBeenCalled();
-      expect(context.policy.canCall).toHaveBeenCalledWith(
+      expect(context.policy?.canCall).toHaveBeenCalledWith(
         expect.objectContaining({
           serviceName: "vault",
           path: ["read"],

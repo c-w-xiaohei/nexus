@@ -23,6 +23,23 @@ import { Logger } from "@/logger";
 import { Result, type Result as TResult } from "better-result";
 const { err, ok } = Result;
 
+function collectResourceIds(
+  value: unknown,
+  ids = new Set<string>(),
+): Set<string> {
+  if (value && typeof value === "object") {
+    for (const item of Array.isArray(value) ? value : Object.values(value)) {
+      collectResourceIds(item, ids);
+    }
+  } else {
+    const placeholder = Placeholder.fromString(value);
+    if (placeholder?.type === PlaceholderType.RESOURCE && placeholder.payload) {
+      ids.add(placeholder.payload);
+    }
+  }
+  return ids;
+}
+
 export namespace PayloadProcessor {
   type ErrorCode = "E_PROTOCOL_ERROR";
 
@@ -48,21 +65,43 @@ export namespace PayloadProcessor {
   export interface Runtime<M extends AdapterModel> {
     readonly resourceManager: ResourceManager.Runtime;
     readonly proxyFactory: ProxyFactory<M>;
+    /**
+     * Encodes call arguments for one session.
+     * Failed encoding rolls back newly registered capabilities.
+     */
     safeSanitize(
       args: any[],
       targetConnectionId: string,
     ): TResult<any[], globalThis.Error>;
+    /**
+     * Encodes service results using the exact authorized policy snapshot,
+     * including undefined rather than falling back to the current registration.
+     */
     safeSanitizeFromService(
       args: any[],
       targetConnectionId: string,
       serviceName: string,
-      servicePolicy?: NexusAuthorizationPolicy<M>,
+      servicePolicy: NexusAuthorizationPolicy<M> | undefined,
     ): TResult<any[], globalThis.Error>;
+    /**
+     * Revives one payload, deduplicating resource identities.
+     * Failure rolls back new facades without releasing pre-existing identities.
+     */
     safeRevive(
       args: any[],
       sourceConnectionId: string,
     ): TResult<any[], globalThis.Error>;
+    /** Releases local capabilities encoded for a handoff that was not accepted. */
     releaseSanitizedResources(value: unknown): void;
+    /**
+     * Releases late-response identities only when no existing remote facade
+     * owns them; repeated identities are released once per payload.
+     */
+    releaseOrphanedResponseResources(
+      value: unknown,
+      sourceConnectionId: string,
+      dispatchRelease: (resourceId: string, connectionId: string) => void,
+    ): void;
   }
 
   export const create = <M extends AdapterModel>(
@@ -91,21 +130,6 @@ export namespace PayloadProcessor {
         );
         context.createdResourceIds?.push(resourceId);
         return new Placeholder(PlaceholderType.RESOURCE, resourceId).toString();
-      }
-
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        Object.getPrototypeOf(value) === Object.prototype
-      ) {
-        const result: { [key: string]: any } = {};
-        for (const key in value) {
-          if (Object.prototype.hasOwnProperty.call(value, key)) {
-            result[key] = internalSanitize(value[key], context);
-          }
-        }
-        return result;
       }
 
       const type = getValueType(value);
@@ -159,21 +183,8 @@ export namespace PayloadProcessor {
     };
 
     const releaseSanitizedResources = (value: unknown): void => {
-      if (Array.isArray(value)) {
-        for (const item of value) releaseSanitizedResources(item);
-        return;
-      }
-      if (value && typeof value === "object") {
-        for (const item of Object.values(value))
-          releaseSanitizedResources(item);
-        return;
-      }
-      const placeholder = Placeholder.fromString(value);
-      if (
-        placeholder?.type === PlaceholderType.RESOURCE &&
-        placeholder.payload
-      ) {
-        resourceManager.releaseLocalResource(placeholder.payload);
+      for (const resourceId of collectResourceIds(value)) {
+        resourceManager.releaseLocalResource(resourceId);
       }
     };
 
@@ -260,12 +271,9 @@ export namespace PayloadProcessor {
       args: any[],
       targetConnectionId: string,
       serviceName: string,
-      servicePolicyOverride?: NexusAuthorizationPolicy<M>,
+      servicePolicy: NexusAuthorizationPolicy<M> | undefined,
     ): TResult<any[], globalThis.Error> {
-      const servicePolicy =
-        arguments.length >= 4
-          ? servicePolicyOverride
-          : resourceManager.getExposedServiceRecord(serviceName)?.policy;
+      // Undefined is also an authorized snapshot, never a request to reload policy.
       return safeSanitizeWithContext(args, {
         targetConnectionId,
         serviceName,
@@ -295,6 +303,7 @@ export namespace PayloadProcessor {
               ),
       });
 
+      // Encoding is transactional until its message is handed to the connection.
       if (result.isErr()) {
         for (const resourceId of createdResourceIds) {
           resourceManager.releaseLocalResource(resourceId);
@@ -327,6 +336,7 @@ export namespace PayloadProcessor {
               ),
       });
 
+      // A pre-existing identity survives rollback: discard only this attempt's facade.
       if (result.isErr()) {
         for (const {
           proxy,
@@ -354,6 +364,14 @@ export namespace PayloadProcessor {
       safeSanitizeFromService,
       safeRevive,
       releaseSanitizedResources,
+      releaseOrphanedResponseResources: (value, source, dispatchRelease) => {
+        for (const resourceId of collectResourceIds(value)) {
+          // A duplicate response must not release a capability already held by the caller.
+          if (!resourceManager.hasRemoteProxy(resourceId, source)) {
+            dispatchRelease(resourceId, source);
+          }
+        }
+      },
     };
 
     return runtime;

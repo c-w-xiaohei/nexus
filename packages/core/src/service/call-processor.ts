@@ -1,377 +1,202 @@
-import type { AdapterModel } from "@/types/adapter-model";
-import { NexusMessageType } from "@/types/message";
-import type { ApplyMessage, GetMessage, SetMessage } from "@/types/message";
-import type { DispatchCallOptions } from "./engine";
-import { PendingCallManager } from "./pending-call-manager";
-import { PayloadProcessor } from "./payload/payload-processor";
-import type { MessageTarget } from "@/connection/types";
-import type { NexusMessage } from "@/types/message";
-import { Logger } from "@/logger";
-import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Result } from "better-result";
-const { err, ok } = Result;
+import {
+  NexusMessageType,
+  type ApplyMessage,
+  type GetMessage,
+  type SetMessage,
+  type NexusMessage,
+} from "@/types/message";
+import {
+  NexusDisconnectedError,
+  NexusRemoteError,
+  NexusTargetingError,
+} from "@/errors/call-errors";
+import type { PayloadProcessor } from "./payload/payload-processor";
+import type { PendingCallManager } from "./pending-call-manager";
+import type { AdapterModel } from "@/types/adapter-model";
 
-export namespace CallProcessor {
-  type ErrorCode =
-    | "E_CONN_CLOSED"
-    | "E_REMOTE_EXCEPTION"
-    | "E_TARGET_UNEXPECTED_COUNT";
+const toError = (error: unknown): Error =>
+  error instanceof Error ? error : new Error(String(error));
 
-  type ErrorOptions = {
-    readonly context?: Record<string, unknown>;
+/** Acquisition-time session snapshot. Calls never resolve or select recipients again. */
+export type CallBinding = { timeout: number } & (
+  | { target: { connectionId: string }; strategy: "one" }
+  | { target: { connectionIds: readonly string[] }; strategy: "all" | "stream" }
+);
+
+export type ProxyOperation = { path: (string | number)[] } & (
+  | { type: "GET" }
+  | { type: "SET"; value: any }
+  | { type: "APPLY"; args: any[] }
+);
+
+export type DispatchCallOptions = CallBinding &
+  ProxyOperation & {
+    resourceId: string | null;
   };
 
-  class BaseError extends globalThis.Error {
-    readonly code: ErrorCode;
-    readonly context?: Record<string, unknown>;
+/** Dispatches fixed-session calls using shared methods and one Engine's dependencies. */
+export class CallProcessor<M extends AdapterModel> {
+  constructor(private readonly deps: CallProcessor.Dependencies<M>) {}
 
-    constructor(message: string, code: ErrorCode, options: ErrorOptions = {}) {
-      super(message);
-      this.name = "CallProcessorError";
-      this.code = code;
-      this.context = options.context;
-    }
+  /**
+   * Dispatches one operation to its bound sessions using caller-owned dependencies.
+   * Registers pending before sending and allocates capabilities per recipient.
+   * Returns a value for one, ordered settlements for all, or a cancellable stream.
+   * Partial dispatch failure keeps capabilities already handed to earlier recipients.
+   */
+  public safeProcess(
+    options: DispatchCallOptions,
+  ): Promise<Result<any, Error>> {
+    const deps = this.deps;
+    return Result.tryPromise({
+      try: async (): Promise<Result<any, Error>> => {
+        // 1. Validate the complete fixed binding before allocating call state.
+        const ready = deps.getReadyConnectionIds(options.target);
+        if (ready.isErr()) return Result.err(ready.error);
+        const connectionIds = ready.value;
+        const boundIds =
+          "connectionId" in options.target
+            ? [options.target.connectionId]
+            : options.target.connectionIds;
+        // Exact sends recheck later: earlier sends can close another session synchronously.
+        if (
+          connectionIds.length !== boundIds.length ||
+          connectionIds.some((id, index) => id !== boundIds[index])
+        ) {
+          return Result.err(
+            new NexusDisconnectedError(
+              "Call failed. A bound connection was closed or is no longer available.",
+              "E_CONN_CLOSED",
+              { path: options.path },
+            ),
+          );
+        }
+        if (connectionIds.length === 0) {
+          return Result.ok(
+            options.strategy === "stream" ? (async function* () {})() : [],
+          );
+        }
+
+        // 2. Establish the consumer before any reentrant transport can reply.
+        const id = deps.nextMessageId();
+        const pendingOptions = {
+          isBroadcast: options.strategy !== "one",
+          sentConnectionIds: connectionIds,
+          timeout: options.timeout,
+        };
+        const pending =
+          options.strategy === "stream"
+            ? deps.pendingCallManager.register(id, {
+                ...pendingOptions,
+                strategy: "stream",
+              })
+            : deps.pendingCallManager.register(id, {
+                ...pendingOptions,
+                strategy: "all",
+              });
+
+        // 3. Each handoff has independent capability ownership and rollback.
+        for (const connectionId of connectionIds) {
+          const sent = this.safeSend(options, connectionId, id);
+          if (sent.isErr()) {
+            deps.pendingCallManager.fail(id, sent.error);
+            return sent;
+          }
+        }
+
+        // 4. Keep multicast semantics even for one recipient; unwrap only unicast.
+        if (!(pending instanceof Promise)) return Result.ok(pending);
+        const result = await pending;
+        if (result.isErr() || options.strategy === "all") return result;
+        const [settled] = result.value;
+        if (result.value.length !== 1 || !settled) {
+          return Result.err(
+            new NexusTargetingError(
+              "Expected exactly one result for a unicast call.",
+              "E_TARGET_UNEXPECTED_COUNT",
+              { expected: 1, received: result.value.length },
+            ),
+          );
+        }
+        return settled.status === "fulfilled"
+          ? Result.ok(settled.value)
+          : Result.err(
+              new NexusRemoteError(
+                `Remote call failed: ${settled.reason?.message || "Unknown error"}`,
+                "E_REMOTE_EXCEPTION",
+                { remoteError: settled.reason },
+              ),
+            );
+      },
+      catch: toError,
+    }).then((result) => result.andThen((value) => value));
   }
 
-  class TargetingError extends BaseError {
-    constructor(message: string, options: ErrorOptions = {}) {
-      super(message, "E_TARGET_UNEXPECTED_COUNT", options);
-      this.name = "CallProcessorTargetingError";
-    }
+  /** Encodes and hands off one recipient's capabilities; earlier accepted handoffs are never rolled back. */
+  private safeSend(
+    options: DispatchCallOptions,
+    connectionId: string,
+    id: number,
+  ): Result<void, Error> {
+    return Result.try({
+      try: (): Result<void, Error> => {
+        const encoded = buildMessage(
+          this.deps.payloadProcessor,
+          options,
+          connectionId,
+          id,
+        );
+        if (encoded.isErr()) return encoded;
+        let delivered = false;
+        try {
+          const sent = this.deps.sendMessage(connectionId, encoded.value);
+          delivered = sent.isOk();
+          return sent;
+        } finally {
+          // A throwing transport has the same ownership outcome as a rejected handoff.
+          if (!delivered)
+            this.deps.payloadProcessor.releaseSanitizedResources(encoded.value);
+        }
+      },
+      catch: toError,
+    }).andThen((result) => result);
   }
+}
 
-  class RemoteError extends BaseError {
-    constructor(message: string, options: ErrorOptions = {}) {
-      super(message, "E_REMOTE_EXCEPTION", options);
-      this.name = "CallProcessorRemoteError";
-    }
-  }
-
-  class DisconnectedError extends BaseError {
-    constructor(message: string, options: ErrorOptions = {}) {
-      super(message, "E_CONN_CLOSED", options);
-      this.name = "CallProcessorDisconnectedError";
-    }
-  }
-
-  export const Error = {
-    Base: BaseError,
-    Targeting: TargetingError,
-    Remote: RemoteError,
-    Disconnected: DisconnectedError,
-  } as const;
-
+export namespace CallProcessor {
   export interface Dependencies<M extends AdapterModel> {
-    nextMessageId: () => number;
-    getReadyConnectionIds: (
-      target: MessageTarget<M>,
-    ) => Result<string[], globalThis.Error>;
-    sendMessage: (
-      target: MessageTarget<M>,
+    nextMessageId(): number;
+    getReadyConnectionIds(
+      target: CallBinding["target"],
+    ): Result<string[], Error>;
+    sendMessage(
+      connectionId: string,
       message: NexusMessage,
-    ) => Result<string[], globalThis.Error>;
+    ): Result<void, Error>;
     payloadProcessor: PayloadProcessor.Runtime<M>;
     pendingCallManager: PendingCallManager.Runtime;
   }
-
-  export interface Runtime {
-    safeProcess(
-      options: DispatchCallOptions,
-    ): Promise<Result<any, globalThis.Error>>;
-  }
-
-  export const create = <M extends AdapterModel>(
-    deps: Dependencies<M>,
-  ): Runtime => {
-    const logger = new Logger("L3 -> CallProcessor");
-
-    const getEmptyResultForStrategy = (
-      strategy: "one" | "first" | "all" | "stream",
-    ): any => {
-      if (strategy === "stream") {
-        return (async function* () {})();
-      }
-      if (strategy === "one" || strategy === "first") {
-        return undefined;
-      }
-      return [];
-    };
-
-    const buildMessage = (
-      options: DispatchCallOptions,
-      finalTarget: MessageTarget<M>,
-      messageId: number,
-    ): Result<GetMessage | SetMessage | ApplyMessage, globalThis.Error> => {
-      const { type, resourceId, path } = options;
-      const tempConnectionIdForSanitize =
-        "connectionId" in finalTarget ? finalTarget.connectionId : "broadcast";
-
-      switch (type) {
-        case "GET":
-          return ok({
-            type: NexusMessageType.GET,
-            id: messageId,
-            resourceId,
-            path,
-            ...(options.invocationServiceName
-              ? { invocationServiceName: options.invocationServiceName }
-              : {}),
-          });
-        case "SET": {
-          const sanitizedValue = deps.payloadProcessor.safeSanitize(
-            [options.value],
-            tempConnectionIdForSanitize,
-          );
-
-          if (sanitizedValue.isErr()) {
-            return err(sanitizedValue.error);
-          }
-
-          return ok({
-            type: NexusMessageType.SET,
-            id: messageId,
-            resourceId,
-            path,
-            ...(options.invocationServiceName
-              ? { invocationServiceName: options.invocationServiceName }
-              : {}),
-            value: sanitizedValue.value[0],
-          });
-        }
-        case "APPLY": {
-          const sanitizedArgs = deps.payloadProcessor.safeSanitize(
-            options.args,
-            tempConnectionIdForSanitize,
-          );
-
-          if (sanitizedArgs.isErr()) {
-            return err(sanitizedArgs.error);
-          }
-
-          return ok({
-            type: NexusMessageType.APPLY,
-            id: messageId,
-            resourceId,
-            path,
-            ...(options.invocationServiceName
-              ? { invocationServiceName: options.invocationServiceName }
-              : {}),
-            args: sanitizedArgs.value,
-          });
-        }
-      }
-    };
-
-    const safeAdaptResult = (
-      results: any[],
-      strategy: "one" | "first",
-    ): Result<
-      any,
-      InstanceType<typeof Error.Targeting> | InstanceType<typeof Error.Remote>
-    > => {
-      if (!results || results.length === 0) {
-        if (strategy === "one") {
-          return err(
-            new Error.Targeting(
-              "Expected exactly one result for a call with strategy 'one', but received 0.",
-              { context: { expected: 1, received: 0 } },
-            ),
-          );
-        }
-        return ok(undefined);
-      }
-
-      if (strategy === "one" && results.length !== 1) {
-        return err(
-          new Error.Targeting(
-            `Expected exactly one result for a call with strategy 'one', but received ${results.length}.`,
-            { context: { expected: 1, received: results.length } },
-          ),
-        );
-      }
-
-      const [firstResult] = results;
-      if (firstResult.status === "rejected") {
-        const remoteError = firstResult.reason;
-        return err(
-          new Error.Remote(
-            `Remote call failed: ${remoteError?.message || "Unknown error"}`,
-            { context: { remoteError } },
-          ),
-        );
-      }
-
-      return ok(firstResult.value);
-    };
-
-    const adaptResult = (
-      result: Promise<any[]>,
-      strategy: "one" | "first",
-    ): Promise<Result<any, globalThis.Error>> =>
-      Result.tryPromise({
-        try: () => result,
-        catch: (error) => toCallError(error),
-      }).then((resolved) =>
-        resolved.andThen((results) => safeAdaptResult(results, strategy)),
-      );
-
-    const safeExecuteDispatch = (
-      options: DispatchCallOptions,
-      strategy: "one" | "first" | "all" | "stream",
-    ): Promise<Result<any, globalThis.Error>> => {
-      logger.debug("Resolving target...", options.target);
-      const finalTarget = options.target;
-      logger.debug("Target resolved.", {
-        original: options.target,
-        resolved: finalTarget,
-      });
-
-      const connectionIdsResult = deps.getReadyConnectionIds(finalTarget);
-      if (connectionIdsResult.isErr()) {
-        return Promise.resolve(err(connectionIdsResult.error));
-      }
-      const sentConnectionIds = connectionIdsResult.value;
-      if (
-        ("connectionId" in finalTarget && sentConnectionIds.length !== 1) ||
-        ("connectionIds" in finalTarget &&
-          sentConnectionIds.length !== finalTarget.connectionIds.length)
-      ) {
-        return Promise.resolve(
-          err(
-            new Error.Disconnected(
-              "Call failed. A bound connection was closed or is no longer available.",
-              { context: { path: options.path } },
-            ),
-          ),
-        );
-      }
-      if (sentConnectionIds.length === 0) {
-        return Promise.resolve(ok(getEmptyResultForStrategy(strategy)));
-      }
-      if (strategy === "one" && sentConnectionIds.length > 1) {
-        return Promise.resolve(
-          err(
-            new Error.Targeting(
-              `Expected to send to exactly one target for a call with strategy 'one', but sent to ${sentConnectionIds.length}.`,
-              {
-                context: {
-                  expected: 1,
-                  received: sentConnectionIds.length,
-                  path: options.path,
-                },
-              },
-            ),
-          ),
-        );
-      }
-      const messageId = deps.nextMessageId();
-      const timeout = options.timeout ?? options.proxyOptions?.timeout ?? 5000;
-      const isBroadcast = !("connectionId" in finalTarget);
-      const pendingStrategy = strategy === "stream" ? "stream" : "all";
-      const registerResult = Result.try({
-        try: () =>
-          deps.pendingCallManager.register(messageId, {
-            strategy: pendingStrategy,
-            isBroadcast,
-            sentConnectionIds,
-            timeout,
-          }),
-        catch: (error) =>
-          error instanceof globalThis.Error
-            ? error
-            : new globalThis.Error(String(error)),
-      });
-
-      if (registerResult.isErr())
-        return Promise.resolve(err(registerResult.error));
-      for (const connectionId of sentConnectionIds) {
-        const messageResult = buildMessage(
-          options,
-          { connectionId },
-          messageId,
-        );
-        if (messageResult.isErr()) {
-          deps.pendingCallManager.fail(messageId, messageResult.error);
-          return Promise.resolve(err(messageResult.error));
-        }
-        const sendResult = deps.sendMessage(
-          { connectionId },
-          messageResult.value,
-        );
-        if (sendResult.isErr()) {
-          deps.payloadProcessor.releaseSanitizedResources(messageResult.value);
-          deps.pendingCallManager.fail(messageId, sendResult.error);
-          return Promise.resolve(err(sendResult.error));
-        }
-        if (
-          sendResult.value.length !== 1 ||
-          sendResult.value[0] !== connectionId
-        ) {
-          const sendError = new Error.Disconnected(
-            `Call failed. The connection "${connectionId}" was closed or is no longer available.`,
-            { context: { connectionId, path: options.path } },
-          );
-          deps.payloadProcessor.releaseSanitizedResources(messageResult.value);
-          deps.pendingCallManager.fail(messageId, sendError);
-          return Promise.resolve(err(sendError));
-        }
-      }
-      const sentCount = sentConnectionIds.length;
-      logger.debug(
-        `Message #${messageId} sent to ${sentCount} connection(s)`,
-        sentConnectionIds,
-      );
-
-      if (strategy === "first" || strategy === "one") {
-        logger.debug(
-          `Adapting result for message #${messageId} with strategy '${strategy}'`,
-        );
-        return adaptResult(registerResult.value as Promise<any[]>, strategy);
-      }
-
-      if (strategy === "all") {
-        return Result.tryPromise({
-          try: () => registerResult.value as Promise<any>,
-          catch: toCallError,
-        });
-      }
-
-      return Promise.resolve(ok(registerResult.value));
-    };
-
-    const safeProcess = (
-      options: DispatchCallOptions,
-    ): Promise<Result<any, globalThis.Error>> => {
-      const strategy = options.strategy ?? "first";
-      return safeExecuteDispatch(options, strategy).then((result) =>
-        result.isErr() ? err(toCallError(result.error)) : result,
-      );
-    };
-
-    return { safeProcess };
-  };
 }
 
-function toCallError(error: unknown): globalThis.Error {
-  if (error instanceof NexusDisconnectedError) {
-    return error;
+/** Encodes a fresh message whose callback/ref capabilities belong to one recipient. */
+function buildMessage<M extends AdapterModel>(
+  payload: PayloadProcessor.Runtime<M>,
+  options: DispatchCallOptions,
+  connectionId: string,
+  id: number,
+): Result<GetMessage | SetMessage | ApplyMessage, Error> {
+  const base = { id, resourceId: options.resourceId, path: options.path };
+  switch (options.type) {
+    case "GET":
+      return Result.ok({ ...base, type: NexusMessageType.GET });
+    case "SET":
+      return payload
+        .safeSanitize([options.value], connectionId)
+        .map(([value]) => ({ ...base, type: NexusMessageType.SET, value }));
+    case "APPLY":
+      return payload
+        .safeSanitize(options.args, connectionId)
+        .map((args) => ({ ...base, type: NexusMessageType.APPLY, args }));
   }
-
-  if (
-    error instanceof globalThis.Error &&
-    "code" in error &&
-    error.code === "E_CONN_CLOSED"
-  ) {
-    return new NexusDisconnectedError(
-      error.message,
-      "E_CONN_CLOSED",
-      "context" in error
-        ? (error.context as Record<string, unknown> | undefined)
-        : undefined,
-    );
-  }
-
-  return error instanceof globalThis.Error
-    ? error
-    : new globalThis.Error(String(error));
 }

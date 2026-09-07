@@ -1,6 +1,11 @@
 import type { MessageId, SerializedError } from "../types/message.js";
 import { Logger } from "../logger.js";
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols.js";
+import { Result } from "better-result";
+import {
+  NexusDisconnectedError,
+  NexusCallTimeoutError,
+} from "@/errors/call-errors";
 
 const releaseQueuedResourceCapabilities = (
   values: readonly unknown[],
@@ -51,7 +56,7 @@ class AsyncIteratorController<T> {
   private isFinished = false;
   private hasReturned = false;
 
-  constructor(private readonly onReturn?: () => void) {}
+  constructor(private readonly onReturn?: () => readonly unknown[]) {}
 
   public push(value: T) {
     if (this.isFinished) {
@@ -68,11 +73,12 @@ class AsyncIteratorController<T> {
     this.pushQueue.push(result);
   }
 
-  public end(discardQueuedResults = false) {
+  public end(discardQueuedResults = false, buffered: readonly unknown[] = []) {
     if (discardQueuedResults) {
-      releaseQueuedResourceCapabilities(
-        this.pushQueue.map((result) => result.value),
-      );
+      releaseQueuedResourceCapabilities([
+        ...buffered,
+        ...this.pushQueue.map((result) => result.value),
+      ]);
       this.pushQueue = [];
     }
     if (this.isFinished) {
@@ -101,10 +107,10 @@ class AsyncIteratorController<T> {
         });
       },
       return: (): Promise<IteratorResult<T>> => {
-        this.end(true);
         if (!this.hasReturned) {
           this.hasReturned = true;
-          this.onReturn?.();
+          const buffered = this.onReturn?.() ?? [];
+          this.end(true, buffered);
         }
         return Promise.resolve({ done: true, value: undefined });
       },
@@ -116,44 +122,6 @@ class AsyncIteratorController<T> {
 }
 
 export namespace PendingCallManager {
-  type ErrorCode = "E_CALL_TIMEOUT" | "E_CONN_CLOSED";
-
-  type ErrorOptions = {
-    readonly context?: Record<string, unknown>;
-  };
-
-  class BaseError extends globalThis.Error {
-    readonly code: ErrorCode;
-    readonly context?: Record<string, unknown>;
-
-    constructor(message: string, code: ErrorCode, options: ErrorOptions = {}) {
-      super(message);
-      this.name = "PendingCallManagerError";
-      this.code = code;
-      this.context = options.context;
-    }
-  }
-
-  class TimeoutError extends BaseError {
-    constructor(message: string, options: ErrorOptions = {}) {
-      super(message, "E_CALL_TIMEOUT", options);
-      this.name = "PendingCallTimeoutError";
-    }
-  }
-
-  class DisconnectedError extends BaseError {
-    constructor(message: string, options: ErrorOptions = {}) {
-      super(message, "E_CONN_CLOSED", options);
-      this.name = "PendingCallDisconnectedError";
-    }
-  }
-
-  export const Error = {
-    Base: BaseError,
-    Timeout: TimeoutError,
-    Disconnected: DisconnectedError,
-  } as const;
-
   export type BroadcastStrategy = "all" | "stream";
 
   type SettledResult =
@@ -163,26 +131,22 @@ export namespace PendingCallManager {
   interface PendingCallBase {
     readonly messageId: MessageId;
     readonly isBroadcast: boolean;
-    readonly targetConnectionIds: string[];
-    readonly respondedConnectionIds: Set<string>;
+    readonly targetConnectionIds: readonly string[];
     readonly disconnectedConnectionIds: Set<string>;
     readonly resultsByConnectionId: Map<string, SettledResult>;
-    expectedResponses: number;
     readonly timeoutHandle: ReturnType<typeof setTimeout>;
   }
 
   interface CollectPendingCall extends PendingCallBase {
     readonly strategy: "all";
-    readonly resolve: (value: SettledResult[]) => void;
-    readonly reject: (reason?: any) => void;
-    readonly promise: Promise<SettledResult[]>;
-    readonly results: SettledResult[];
+    readonly resolve: (
+      value: Result<SettledResult[], globalThis.Error>,
+    ) => void;
   }
 
   interface StreamPendingCall extends PendingCallBase {
     readonly strategy: "stream";
     readonly iteratorController: AsyncIteratorController<SettledResult>;
-    receivedResponses: number;
     nextResultIndex: number;
   }
 
@@ -191,15 +155,31 @@ export namespace PendingCallManager {
   export interface RegisterCallOptions {
     strategy: BroadcastStrategy;
     isBroadcast: boolean;
-    sentConnectionIds: string[];
+    sentConnectionIds: readonly string[];
     timeout: number;
   }
 
   export interface Runtime {
+    /**
+     * Registers before dispatch and settles through Result.
+     * Unicast timeout/disconnect fails; multicast retains partial-result semantics.
+     */
     register(
       messageId: MessageId,
-      options: RegisterCallOptions,
-    ): Promise<any> | AsyncIterable<any>;
+      options: RegisterCallOptions & { strategy: "all" },
+    ): Promise<Result<SettledResult[], globalThis.Error>>;
+    /**
+     * Creates an ordered stream. Early return stops reception and releases only
+     * undelivered capabilities; normal completion keeps queued results readable.
+     */
+    register(
+      messageId: MessageId,
+      options: RegisterCallOptions & { strategy: "stream" },
+    ): AsyncIterableIterator<SettledResult>;
+    /**
+     * Accepts one response per bound session.
+     * Foreign, duplicate and disconnected senders cannot settle the call.
+     */
     handleResponse(
       id: MessageId,
       result: any,
@@ -207,27 +187,16 @@ export namespace PendingCallManager {
       sourceConnectionId?: string,
       isTimeout?: boolean,
     ): void;
+    /** Checks eligibility before the message handler allocates remote resource facades. */
     canHandleResponse(id: MessageId, sourceConnectionId: string): boolean;
     onDisconnect(connectionId: string): void;
+    /** Aborts local dispatch and releases received results that cannot reach the caller. */
     fail(messageId: MessageId, error: globalThis.Error): void;
   }
 
   export const create = (): Runtime => {
     const pendingCalls = new Map<MessageId, PendingCall>();
     const logger = new Logger("L3 --- PendingCallManager");
-
-    const rejectSafely = (
-      pending: CollectPendingCall,
-      error: globalThis.Error,
-    ): void => {
-      pending.promise.catch((promiseError) => {
-        logger.error(
-          `Unhandled pending call rejection for #${pending.messageId}.`,
-          promiseError,
-        );
-      });
-      pending.reject(error);
-    };
 
     const createSettledResult = (
       result: any,
@@ -246,9 +215,20 @@ export namespace PendingCallManager {
       };
     };
 
+    /**
+     * Removes reception state and its timer without discarding a finished
+     * stream's readable queue. Cancellation owns that separate cleanup.
+     */
     const finalizeCall = (messageId: MessageId): void => {
+      const pending = pendingCalls.get(messageId);
+      if (pending) clearTimeout(pending.timeoutHandle);
       pendingCalls.delete(messageId);
     };
+
+    const isComplete = (pending: PendingCallBase): boolean =>
+      pending.resultsByConnectionId.size +
+        pending.disconnectedConnectionIds.size >=
+      pending.targetConnectionIds.length;
 
     const orderedResults = (pending: PendingCallBase): SettledResult[] =>
       pending.targetConnectionIds.flatMap((connectionId) => {
@@ -256,6 +236,10 @@ export namespace PendingCallManager {
         return result ? [result] : [];
       });
 
+    /**
+     * Moves the contiguous ready prefix into the iterator.
+     * A missing earlier response blocks later ones until disconnect or timeout.
+     */
     const flushStreamResults = (pending: StreamPendingCall): void => {
       while (pending.nextResultIndex < pending.targetConnectionIds.length) {
         const connectionId =
@@ -291,6 +275,8 @@ export namespace PendingCallManager {
             pending.iteratorController.push(result);
           }
         }
+        // These results now belong to the iterator queue, not the ordering buffer.
+        pending.nextResultIndex = pending.targetConnectionIds.length;
         pending.iteratorController.end();
         finalizeCall(pending.messageId);
         return;
@@ -303,9 +289,7 @@ export namespace PendingCallManager {
         flushStreamResults(pending);
       }
 
-      pending.receivedResponses += 1;
-      if (pending.receivedResponses >= pending.expectedResponses) {
-        clearTimeout(pending.timeoutHandle);
+      if (isComplete(pending)) {
         pending.iteratorController.end();
         finalizeCall(pending.messageId);
       }
@@ -318,20 +302,19 @@ export namespace PendingCallManager {
       sourceConnectionId?: string,
     ): void => {
       if (isTimeout) {
-        clearTimeout(pending.timeoutHandle);
         logger.warn(`Call #${pending.messageId} timed out.`, {
           isBroadcast: pending.isBroadcast,
         });
         if (pending.isBroadcast) {
-          pending.resolve(orderedResults(pending));
+          pending.resolve(Result.ok(orderedResults(pending)));
         } else {
-          rejectSafely(
-            pending,
-            new Error.Timeout(
-              `Call #${pending.messageId} timed out after timeout.`,
-              {
-                context: { messageId: pending.messageId },
-              },
+          pending.resolve(
+            Result.err(
+              new NexusCallTimeoutError(
+                `Call #${pending.messageId} timed out after timeout.`,
+                "E_CALL_TIMEOUT",
+                { messageId: pending.messageId },
+              ),
             ),
           );
         }
@@ -340,18 +323,14 @@ export namespace PendingCallManager {
       }
 
       if (settledResult) {
-        pending.results.push(settledResult);
         if (sourceConnectionId) {
           pending.resultsByConnectionId.set(sourceConnectionId, settledResult);
         }
       }
 
-      if (pending.results.length >= pending.expectedResponses) {
-        clearTimeout(pending.timeoutHandle);
-        logger.debug(
-          `Call #${pending.messageId} fulfilled. Got ${pending.results.length} of ${pending.expectedResponses} expected responses.`,
-        );
-        pending.resolve(orderedResults(pending));
+      if (isComplete(pending)) {
+        logger.debug(`Call #${pending.messageId} fulfilled.`);
+        pending.resolve(Result.ok(orderedResults(pending)));
         finalizeCall(pending.messageId);
       }
     };
@@ -361,7 +340,7 @@ export namespace PendingCallManager {
       sourceConnectionId: string,
     ): boolean =>
       pending.targetConnectionIds.includes(sourceConnectionId) &&
-      !pending.respondedConnectionIds.has(sourceConnectionId) &&
+      !pending.resultsByConnectionId.has(sourceConnectionId) &&
       !pending.disconnectedConnectionIds.has(sourceConnectionId);
 
     const handleResponse = (
@@ -389,8 +368,6 @@ export namespace PendingCallManager {
           });
           return;
         }
-
-        pending.respondedConnectionIds.add(sourceConnectionId);
       }
 
       logger.debug(
@@ -433,10 +410,20 @@ export namespace PendingCallManager {
       );
     };
 
-    const register = (
+    function register(
+      messageId: MessageId,
+      options: RegisterCallOptions & { strategy: "all" },
+    ): Promise<Result<SettledResult[], globalThis.Error>>;
+    function register(
+      messageId: MessageId,
+      options: RegisterCallOptions & { strategy: "stream" },
+    ): AsyncIterableIterator<SettledResult>;
+    function register(
       messageId: MessageId,
       options: RegisterCallOptions,
-    ): Promise<any> | AsyncIterable<any> => {
+    ):
+      | Promise<Result<SettledResult[], globalThis.Error>>
+      | AsyncIterableIterator<SettledResult> {
       const { strategy, isBroadcast, sentConnectionIds, timeout } = options;
 
       logger.debug(
@@ -447,8 +434,13 @@ export namespace PendingCallManager {
       if (strategy === "stream") {
         const controller = new AsyncIteratorController<any>(() => {
           // Iterator cancellation is local only; the remote invocation may continue.
-          clearTimeout(timeoutHandle);
           finalizeCall(messageId);
+          return pendingCall.targetConnectionIds
+            .slice(pendingCall.nextResultIndex)
+            .flatMap((id) => {
+              const result = pendingCall.resultsByConnectionId.get(id);
+              return result ? [result] : [];
+            });
         });
         const timeoutHandle = setTimeout(() => {
           handleResponse(messageId, null, null, undefined, true);
@@ -457,26 +449,23 @@ export namespace PendingCallManager {
           strategy,
           messageId,
           isBroadcast,
-          targetConnectionIds: sentConnectionIds,
-          respondedConnectionIds: new Set(),
+          targetConnectionIds: [...sentConnectionIds],
           disconnectedConnectionIds: new Set(),
           resultsByConnectionId: new Map(),
           iteratorController: controller,
-          receivedResponses: 0,
           nextResultIndex: 0,
-          expectedResponses: sentConnectionIds.length,
           timeoutHandle,
         };
         pendingCalls.set(messageId, pendingCall);
         return controller[Symbol.asyncIterator]();
       }
 
-      let resolveCall!: (value: SettledResult[]) => void;
-      let rejectCall!: (reason?: any) => void;
-      const promise: Promise<SettledResult[]> = new Promise(
-        (resolve, reject) => {
+      let resolveCall!: (
+        value: Result<SettledResult[], globalThis.Error>,
+      ) => void;
+      const promise = new Promise<Result<SettledResult[], globalThis.Error>>(
+        (resolve) => {
           resolveCall = resolve;
-          rejectCall = reject;
         },
       );
 
@@ -488,21 +477,16 @@ export namespace PendingCallManager {
         strategy: "all",
         messageId,
         isBroadcast,
-        targetConnectionIds: sentConnectionIds,
-        respondedConnectionIds: new Set(),
+        targetConnectionIds: [...sentConnectionIds],
         disconnectedConnectionIds: new Set(),
         resultsByConnectionId: new Map(),
         resolve: resolveCall,
-        reject: rejectCall,
-        promise,
-        results: [],
-        expectedResponses: sentConnectionIds.length,
         timeoutHandle,
       };
 
       pendingCalls.set(messageId, pendingCall);
       return promise;
-    };
+    }
 
     const onDisconnect = (connectionId: string): void => {
       logger.info(
@@ -520,63 +504,62 @@ export namespace PendingCallManager {
 
         if (!pending.isBroadcast) {
           if (pending.strategy === "all") {
-            clearTimeout(pending.timeoutHandle);
-            rejectSafely(
-              pending,
-              new Error.Disconnected(
-                `Call #${id} failed. The connection "${connectionId}" was closed.`,
-                { context: { connectionId, messageId: id } },
+            pending.resolve(
+              Result.err(
+                new NexusDisconnectedError(
+                  `Call #${id} failed. The connection "${connectionId}" was closed.`,
+                  "E_CONN_CLOSED",
+                  { connectionId, messageId: id },
+                ),
               ),
             );
           } else {
-            clearTimeout(pending.timeoutHandle);
             pending.iteratorController.end();
           }
           logger.warn(`Rejected unicast call #${id} due to disconnect.`);
-          pendingCalls.delete(id);
+          finalizeCall(id);
           continue;
         }
 
         const alreadyResponded =
-          pending.respondedConnectionIds.has(connectionId);
+          pending.resultsByConnectionId.has(connectionId);
         if (!alreadyResponded) {
-          pending.expectedResponses -= 1;
           pending.disconnectedConnectionIds.add(connectionId);
         }
 
         if (pending.strategy === "stream") {
           flushStreamResults(pending);
-          if (pending.receivedResponses >= pending.expectedResponses) {
-            clearTimeout(pending.timeoutHandle);
+          if (isComplete(pending)) {
             logger.debug(
               `Stream call #${id} finished due to disconnect. Ending stream.`,
             );
             pending.iteratorController.end();
-            pendingCalls.delete(id);
+            finalizeCall(id);
           }
           continue;
         }
 
-        if (pending.results.length >= pending.expectedResponses) {
-          clearTimeout(pending.timeoutHandle);
+        if (isComplete(pending)) {
           logger.debug(
             `Broadcast call #${id} finished due to disconnect. Resolving with results.`,
           );
-          if (pending.results.length === 0 && pending.expectedResponses <= 0) {
-            rejectSafely(
-              pending,
-              new Error.Disconnected(
-                `Broadcast call #${id} failed as all target connections were lost.`,
-                { context: { messageId: id } },
+          if (pending.resultsByConnectionId.size === 0) {
+            pending.resolve(
+              Result.err(
+                new NexusDisconnectedError(
+                  `Broadcast call #${id} failed as all target connections were lost.`,
+                  "E_CONN_CLOSED",
+                  { messageId: id },
+                ),
               ),
             );
             logger.warn(
               `Broadcast call #${id} failed. All targets disconnected.`,
             );
           } else {
-            pending.resolve(orderedResults(pending));
+            pending.resolve(Result.ok(orderedResults(pending)));
           }
-          pendingCalls.delete(id);
+          finalizeCall(id);
         }
       }
     };
@@ -585,13 +568,17 @@ export namespace PendingCallManager {
       const pending = pendingCalls.get(messageId);
       if (!pending) return;
 
-      clearTimeout(pending.timeoutHandle);
-      if (pending.strategy === "all") {
-        rejectSafely(pending, error);
-      } else {
-        pending.iteratorController.end();
-      }
+      // Stop accepting responses before resource releases can reenter the transport.
       finalizeCall(messageId);
+      if (pending.strategy === "all") {
+        // Dispatch failed before the caller could receive any collected results.
+        releaseQueuedResourceCapabilities([
+          ...pending.resultsByConnectionId.values(),
+        ]);
+        pending.resolve(Result.err(error));
+      } else {
+        void pending.iteratorController[Symbol.asyncIterator]().return?.();
+      }
     };
 
     return {

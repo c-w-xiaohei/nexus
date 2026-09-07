@@ -1,9 +1,12 @@
-import type { AdapterModel } from "../types/adapter-model";
-import type { DispatchCallOptions } from "./engine";
+import type { AdapterModel, ConnectionWhere } from "@/types/adapter-model";
+import type {
+  CallBinding,
+  DispatchCallOptions,
+  ProxyOperation,
+} from "./call-processor";
 import type { ResourceManager } from "./resource-manager";
-import type { CallTarget, ResolveOptions } from "@/connection/types";
-import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import {
+  RELEASE_PROXY_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
 } from "@/types/symbols";
@@ -11,10 +14,15 @@ import { Logger } from "@/logger";
 import type { Result } from "better-result";
 import { NexusResourceError } from "@/errors/resource-errors";
 
-type ReleaseContext = {
-  resourceId: string;
-  connectionId: string;
+type ReleaseContext = { resourceId: string; connectionId: string };
+type ProxyScope = {
+  binding: CallBinding;
+  basePath: (string | number)[];
+  resourceId: string | null;
+  released: boolean;
+  release: () => void;
 };
+type ProxyTarget = () => void;
 
 const INTERNAL_PROXY_PROPERTIES = new Set([
   "constructor",
@@ -23,57 +31,39 @@ const INTERNAL_PROXY_PROPERTIES = new Set([
   "toString",
   "nodeType",
 ]);
+const isLifecycleSymbol = (prop: PropertyKey): boolean =>
+  prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
+  prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL;
+const releaseServiceProxy = () =>
+  console.warn(
+    "Nexus: A service proxy cannot be released. This function is for resource proxies only.",
+  );
 
-/**
- * Options for creating a service proxy, specifying the target and behavior.
- */
-export interface CreateProxyOptions<M extends AdapterModel> {
-  target: CallTarget<M>;
-  staleTarget?: Pick<ResolveOptions<M>, "where">;
-  strategy?: "one" | "first" | "all" | "stream";
-  timeout?: number;
-  broadcastOptions?: {
-    strategy: "all" | "first" | "stream";
-  };
-}
+/** Fixed dispatch binding; staleTarget is observation policy consumed by Engine. */
+export type CreateProxyOptions<M extends AdapterModel> = CallBinding & {
+  staleTarget?: { where?: ConnectionWhere<M> };
+};
 
 export interface ProxyFactoryCallbacks {
-  safeDispatchCall(
-    options: DispatchCallOptions,
-  ): Promise<Result<any, globalThis.Error>>;
+  safeDispatchCall(options: DispatchCallOptions): Promise<Result<any, Error>>;
   dispatchRelease(resourceId: string, connectionId: string): void;
 }
 
-type ChainableProxyConfig = {
-  basePath: (string | number)[];
-  thenableFromPathLength: number;
-  hasSetter?: boolean;
-  onRelease?: () => void;
-  exposesDispose?: boolean;
-  buildCallOptions: {
-    (type: "GET", path: (string | number)[]): DispatchCallOptions;
-    (
-      type: "SET",
-      path: (string | number)[],
-      extra: { value: any },
-    ): DispatchCallOptions;
-    (
-      type: "APPLY",
-      path: (string | number)[],
-      extra: { args: any[] },
-    ): DispatchCallOptions;
-  };
-};
-
 /**
- * A factory responsible for creating all types of proxy objects used within Nexus.
- * It encapsulates the complexity of setting up proxy traps and managing their
- * registration with the ResourceManager.
+ * Creates session-bound facades and shares one set of Proxy trap methods.
+ * Weak target metadata carries each path and keeps the resource scope alive without
+ * making the factory retain user proxies. Only resource release needs a bound callback.
  */
-export class ProxyFactory<_M extends AdapterModel> {
+export class ProxyFactory<
+  M extends AdapterModel,
+> implements ProxyHandler<ProxyTarget> {
+  private readonly targets = new WeakMap<
+    ProxyTarget,
+    { scope: ProxyScope; path: (string | number)[] }
+  >();
+  private readonly remoteProxyScopes = new WeakMap<object, ProxyScope>();
   private readonly releaseRegistry: FinalizationRegistry<ReleaseContext>;
-  private readonly remoteProxyLifetimeAnchors = new WeakMap<object, object>();
-  private readonly logger: Logger = new Logger("L3 -> ProxyFactory");
+  private readonly logger = new Logger("L3 -> ProxyFactory");
 
   constructor(
     private readonly engine: ProxyFactoryCallbacks,
@@ -87,290 +77,172 @@ export class ProxyFactory<_M extends AdapterModel> {
     );
   }
 
-  private trackFireAndForget<T>(value: T): T {
-    if (value instanceof Promise) {
-      value.catch((error) =>
-        this.logger.error("Fire-and-forget proxy call failed", error),
-      );
-    }
-    return value;
-  }
-
-  private unwrapResultAsync<T>(
-    value: Promise<Result<T, globalThis.Error>>,
-  ): Promise<T> {
-    return value.then((result) => {
-      if (result.isErr()) {
-        this.logger.error("Safe call failed", result.error);
-        throw result.error;
-      }
-      return result.value;
-    });
-  }
-
-  /** Unregisters a facade's finalizer without releasing its resource identity. */
-  public discardRemoteResourceProxy(proxy: object): void {
-    const lifetimeAnchor = this.remoteProxyLifetimeAnchors.get(proxy);
-    if (!lifetimeAnchor) return;
-    this.releaseRegistry.unregister(lifetimeAnchor);
-    this.remoteProxyLifetimeAnchors.delete(proxy);
-  }
-
-  private isInternalAccess(prop: string | symbol): boolean {
-    return (
-      typeof prop === "symbol" || INTERNAL_PROXY_PROPERTIES.has(prop as string)
-    );
-  }
-
-  private createChainableProxy(config: ChainableProxyConfig): any {
-    const toRejectedPromise = (error: unknown): Promise<never> =>
-      Promise.reject(
-        error instanceof globalThis.Error
-          ? error
-          : new globalThis.Error(String(error)),
-      );
-
-    const createProxy = (path: (string | number)[]): any => {
-      return new Proxy(() => {}, {
-        get: (_target, prop, receiver) => {
-          if (prop === "then") {
-            if (path.length < config.thenableFromPathLength) {
-              return undefined;
-            }
-
-            let result: Promise<Result<any, globalThis.Error>>;
-            try {
-              result = this.engine.safeDispatchCall(
-                config.buildCallOptions("GET", path),
-              );
-            } catch (error) {
-              const rejected = toRejectedPromise(error);
-              return rejected.then.bind(rejected);
-            }
-            const unwrapped = this.unwrapResultAsync(result);
-            return unwrapped.then.bind(unwrapped);
-          }
-
-          if (prop === RELEASE_PROXY_SYMBOL) {
-            return (
-              config.onRelease ??
-              (() =>
-                console.warn(
-                  "Nexus: A service proxy cannot be released. This function is for resource proxies only.",
-                ))
-            );
-          }
-
-          if (prop === Symbol.dispose && config.exposesDispose) {
-            return config.onRelease;
-          }
-
-          if (
-            prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
-            prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL
-          ) {
-            return Reflect.get(_target, prop);
-          }
-
-          if (this.isInternalAccess(prop)) {
-            return Reflect.get(_target, prop, receiver);
-          }
-
-          return createProxy([...path, prop as string]);
-        },
-        apply: (_target, _thisArg, args) => {
-          try {
-            return this.trackFireAndForget(
-              this.unwrapResultAsync(
-                this.engine.safeDispatchCall(
-                  config.buildCallOptions("APPLY", path, { args }),
-                ),
-              ),
-            );
-          } catch (error) {
-            return this.trackFireAndForget(toRejectedPromise(error));
-          }
-        },
-        set: (_target, prop, value) => {
-          if (
-            prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
-            prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL
-          ) {
-            Reflect.set(_target, prop, value);
-            return true;
-          }
-          if (!config.hasSetter) return false;
-          try {
-            this.trackFireAndForget(
-              this.unwrapResultAsync(
-                this.engine.safeDispatchCall(
-                  config.buildCallOptions("SET", [...path, prop as string], {
-                    value,
-                  }),
-                ),
-              ),
-            );
-          } catch (error) {
-            if (error instanceof NexusResourceError) throw error;
-            this.trackFireAndForget(toRejectedPromise(error));
-          }
-          return true;
-        },
-      });
-    };
-
-    return createProxy(config.basePath);
-  }
-
-  /**
-   * Creates the top-level service proxy that the user interacts with.
-   * e.g., const myApi = nexus.create<MyApi>({ ... });
-   */
+  /** Captures the session snapshot; Engine installs lifecycle observation on unicast roots. */
   public createServiceProxy<T extends object>(
     serviceName: string,
-    options: CreateProxyOptions<_M>,
+    options: CreateProxyOptions<M>,
   ): T {
-    const strategy = options.strategy ?? options.broadcastOptions?.strategy;
-
-    return this.createChainableProxy({
+    const binding: CallBinding =
+      options.strategy === "one"
+        ? {
+            target: { connectionId: options.target.connectionId },
+            strategy: "one",
+            timeout: options.timeout,
+          }
+        : {
+            target: { connectionIds: [...options.target.connectionIds] },
+            strategy: options.strategy,
+            timeout: options.timeout,
+          };
+    const scope: ProxyScope = {
+      binding,
       basePath: [serviceName],
-      thenableFromPathLength: 2,
-      buildCallOptions: (
-        type: "GET" | "SET" | "APPLY",
-        path: (string | number)[],
-        extra?: { args?: any[]; value?: any },
-      ): DispatchCallOptions => {
-        switch (type) {
-          case "GET":
-            return {
-              type,
-              target: options.target,
-              resourceId: null,
-              path,
-              strategy,
-              timeout: options.timeout,
-              proxyOptions: options,
-            };
-          case "SET":
-            return {
-              type,
-              target: options.target,
-              resourceId: null,
-              path,
-              strategy,
-              timeout: options.timeout,
-              proxyOptions: options,
-              value: extra?.value,
-            } as DispatchCallOptions;
-          case "APPLY":
-            return {
-              type,
-              target: options.target,
-              resourceId: null,
-              path,
-              strategy,
-              timeout: options.timeout,
-              proxyOptions: options,
-              args: extra?.args ?? [],
-            };
-        }
-      },
-    }) as T;
+      resourceId: null,
+      released: false,
+      release: releaseServiceProxy,
+    };
+    return this.createProxy(scope, scope.basePath) as T;
   }
 
   /**
-   * Creates a local proxy to represent a resource that exists on a remote endpoint.
-   * This is called during the "revival" of parameters.
+   * Revives one capability. Every child path retains the same scope/finalizer anchor.
+   * Explicit release is idempotent; local resource IDs never determine remote ownership.
    */
   public createRemoteResourceProxy(
     resourceId: string,
-    sourceConnectionId: string,
+    connectionId: string,
   ): object {
-    let released = false;
-
-    // Every facade closes over this anchor, so one surviving path keeps the
-    // capability registered without the registry retaining a user proxy.
-    const lifetimeAnchor = {};
-
-    const assertActive = (): void => {
-      if (released) {
-        throw new NexusResourceError(
-          `Remote resource proxy "${resourceId}" has been released and is no longer usable.`,
-          "E_RESOURCE_ACCESS_DENIED",
-          { resourceId, connectionId: sourceConnectionId },
-        );
-      }
-    };
-
-    const release = (): void => {
-      if (released) {
-        return;
-      }
-      released = true;
-      this.discardRemoteResourceProxy(rootProxy);
-      this.resourceManager.releaseRemoteProxy(resourceId, sourceConnectionId);
-      this.engine.dispatchRelease(resourceId, sourceConnectionId);
-    };
-
-    const rootProxy = this.createChainableProxy({
+    const scope: ProxyScope = {
+      binding: { target: { connectionId }, strategy: "one", timeout: 5000 },
       basePath: [],
-      thenableFromPathLength: 1,
-      hasSetter: true,
-      onRelease: release,
-      exposesDispose: true,
-      buildCallOptions: (
-        type: "GET" | "SET" | "APPLY",
-        path: (string | number)[],
-        extra?: { args?: any[]; value?: any },
-      ): DispatchCallOptions => {
-        assertActive();
-
-        switch (type) {
-          case "GET":
-            return {
-              type,
-              target: { connectionId: sourceConnectionId },
-              resourceId,
-              path,
-              invocationServiceName:
-                this.resourceManager.getLocalResourceServiceName(resourceId),
-            };
-          case "SET":
-            return {
-              type,
-              target: { connectionId: sourceConnectionId },
-              resourceId,
-              path,
-              invocationServiceName:
-                this.resourceManager.getLocalResourceServiceName(resourceId),
-              value: extra?.value,
-            } as DispatchCallOptions;
-          case "APPLY":
-            return {
-              type,
-              target: { connectionId: sourceConnectionId },
-              resourceId,
-              path,
-              invocationServiceName:
-                this.resourceManager.getLocalResourceServiceName(resourceId),
-              args: extra?.args ?? [],
-            };
-        }
+      resourceId,
+      released: false,
+      release: () => {
+        if (scope.released) return;
+        scope.released = true;
+        this.discardRemoteResourceProxy(proxy);
+        this.resourceManager.releaseRemoteProxy(resourceId, connectionId);
+        this.engine.dispatchRelease(resourceId, connectionId);
       },
-    });
+    };
+    const proxy = this.createProxy(scope, scope.basePath);
+    // Registry held values must never reference the scope or any facade.
+    this.releaseRegistry.register(scope, { resourceId, connectionId }, scope);
+    this.resourceManager.registerRemoteProxy(resourceId, connectionId);
+    this.remoteProxyScopes.set(proxy, scope);
+    return proxy;
+  }
 
-    this.releaseRegistry.register(
-      lifetimeAnchor,
-      {
-        resourceId,
-        connectionId: sourceConnectionId,
-      },
-      lifetimeAnchor,
+  /** Drops this facade's finalizer, leaving a pre-existing shared resource identity intact. */
+  public discardRemoteResourceProxy(proxy: object): void {
+    const scope = this.remoteProxyScopes.get(proxy);
+    if (!scope) return;
+    this.releaseRegistry.unregister(scope);
+    this.remoteProxyScopes.delete(proxy);
+  }
+
+  // ===== Shared Proxy traps: only paths/scopes vary between facades =====
+
+  /** Roots are not thenable; awaiting a child path dispatches GET. Symbols remain local. */
+  public get(
+    target: ProxyTarget,
+    prop: string | symbol,
+    receiver: unknown,
+  ): any {
+    const { scope, path } = this.targets.get(target)!;
+    if (prop === "then") {
+      if (path.length === scope.basePath.length) return undefined;
+      const result = this.dispatch(scope, { type: "GET", path });
+      return result.then.bind(result);
+    }
+    if (
+      prop === RELEASE_PROXY_SYMBOL ||
+      (prop === Symbol.dispose && scope.resourceId !== null)
+    ) {
+      return scope.release;
+    }
+    if (isLifecycleSymbol(prop)) return Reflect.get(target, prop);
+    if (typeof prop === "symbol" || INTERNAL_PROXY_PROPERTIES.has(prop)) {
+      return Reflect.get(target, prop, receiver);
+    }
+    return this.createProxy(scope, [...path, prop]);
+  }
+
+  /** Calls immediately but observes rejection even when application code forgets to await. */
+  public apply(
+    target: ProxyTarget,
+    _thisArg: unknown,
+    args: any[],
+  ): Promise<any> {
+    const { scope, path } = this.targets.get(target)!;
+    return this.trackFireAndForget(
+      this.dispatch(scope, { type: "APPLY", path, args }),
     );
+  }
 
-    this.resourceManager.registerRemoteProxy(resourceId, sourceConnectionId);
-    this.remoteProxyLifetimeAnchors.set(rootProxy, lifetimeAnchor);
+  public set(target: ProxyTarget, prop: string | symbol, value: any): boolean {
+    if (isLifecycleSymbol(prop)) {
+      Reflect.set(target, prop, value);
+      return true;
+    }
+    const { scope, path } = this.targets.get(target)!;
+    if (scope.resourceId === null) return false;
+    // SET cannot return a Promise: released resources must throw from the trap itself.
+    this.assertActive(scope);
+    this.trackFireAndForget(
+      this.dispatch(scope, {
+        type: "SET",
+        path: [...path, prop as string],
+        value,
+      }),
+    );
+    return true;
+  }
 
-    return rootProxy;
+  private createProxy(scope: ProxyScope, path: (string | number)[]): any {
+    const target = () => {};
+    this.targets.set(target, { scope, path });
+    return new Proxy(target, this);
+  }
+
+  /** Async throw-style boundary: GET/APPLY failures reject, without duplicate trap-level catch branches. */
+  private async dispatch(
+    scope: ProxyScope,
+    operation: ProxyOperation,
+  ): Promise<any> {
+    try {
+      this.assertActive(scope);
+      const result = await this.engine.safeDispatchCall({
+        ...scope.binding,
+        resourceId: scope.resourceId,
+        ...operation,
+      });
+      if (result.isErr()) throw result.error;
+      return result.value;
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  private assertActive(scope: ProxyScope): void {
+    if (scope.released)
+      throw new NexusResourceError(
+        `Remote resource proxy "${scope.resourceId}" has been released and is no longer usable.`,
+        "E_RESOURCE_ACCESS_DENIED",
+        {
+          resourceId: scope.resourceId,
+          connectionId:
+            "connectionId" in scope.binding.target
+              ? scope.binding.target.connectionId
+              : undefined,
+        },
+      );
+  }
+
+  private trackFireAndForget<T>(promise: Promise<T>): Promise<T> {
+    promise.catch((error) =>
+      this.logger.error("Fire-and-forget proxy call failed", error),
+    );
+    return promise;
   }
 }

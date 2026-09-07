@@ -1,10 +1,5 @@
 import type { ConnectionManager } from "@/connection/connection-manager";
-import type {
-  MessageId,
-  NexusMessage,
-  ReleaseMessage,
-  SerializedError,
-} from "@/types/message";
+import type { NexusMessage, ReleaseMessage } from "@/types/message";
 import { NexusMessageType } from "@/types/message";
 import type {
   AdapterModel,
@@ -12,14 +7,13 @@ import type {
   ConnectionWhere,
   ContextMetaOf,
 } from "@/types/adapter-model";
-import type { CallTarget, MessageTarget } from "@/connection/types";
+import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Logger } from "@/logger";
-import { toSerializedError } from "@/utils/error";
-import { CallProcessor } from "./call-processor";
+import { CallProcessor, type DispatchCallOptions } from "./call-processor";
 import { MessageHandler } from "./message/message-handler";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { PendingCallManager } from "./pending-call-manager";
-import { CreateProxyOptions, ProxyFactory } from "./proxy-factory";
+import { type CreateProxyOptions, ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import {
   getServiceInvocationHook,
@@ -35,16 +29,6 @@ import { Result } from "better-result";
 const { err, ok } = Result;
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
-type DispatchCallBase = {
-  target: CallTarget<any>;
-  resourceId: string | null;
-  path: (string | number)[];
-  strategy?: "one" | "first" | "all" | "stream";
-  timeout?: number;
-  proxyOptions?: CreateProxyOptions<any>;
-  invocationServiceName?: string;
-};
-
 type TargetStaleSubscription<M extends AdapterModel> = {
   readonly callback: () => void;
   readonly staleTarget?: {
@@ -52,49 +36,14 @@ type TargetStaleSubscription<M extends AdapterModel> = {
   };
 };
 
-type DispatchGetCallOptions = DispatchCallBase & {
-  type: "GET";
-};
-
-type DispatchSetCallOptions = DispatchCallBase & {
-  type: "SET";
-  value: any;
-};
-
-type DispatchApplyCallOptions = DispatchCallBase & {
-  type: "APPLY";
-  args: any[];
-};
-
-export type DispatchCallOptions =
-  | DispatchGetCallOptions
-  | DispatchSetCallOptions
-  | DispatchApplyCallOptions;
-
-export interface MessageHandlerCallbacks<M extends AdapterModel> {
-  safeSendMessage(
-    message: NexusMessage,
-    target: MessageTarget<M> | string,
-  ): Result<string[], Error>;
-  handleResponse(
-    id: MessageId,
-    result: any,
-    error: SerializedError | null,
-    sourceConnectionId?: string,
-    isTimeout?: boolean,
-  ): void;
-  canHandleResponse(id: MessageId, sourceConnectionId: string): boolean;
-  dispatchRelease(resourceId: string, connectionId: string): void;
-}
-
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
   private readonly resourceManager: ResourceManager.Runtime;
   private readonly payloadProcessor: PayloadProcessor.Runtime<M>;
   private readonly proxyFactory: ProxyFactory<M>;
-  private readonly messageHandler: MessageHandler.Runtime;
+  private readonly messageHandler: MessageHandler<M>;
   private readonly pendingCallManager: PendingCallManager.Runtime;
-  private readonly callProcessor: CallProcessor.Runtime;
+  private readonly callProcessor: CallProcessor<M>;
   private readonly policy?: NexusAuthorizationPolicy<M>;
 
   private messageIdSeq = 1;
@@ -134,29 +83,24 @@ export class Engine<M extends AdapterModel> {
       this.proxyFactory,
     );
     this.pendingCallManager = PendingCallManager.create();
-    this.messageHandler = MessageHandler.create({
-      engine: {
-        safeSendMessage: (message, target) =>
-          this.safeSendMessage(message, target),
-        handleResponse: (id, result, error, sourceConnectionId, isTimeout) =>
-          this.handleResponse(id, result, error, sourceConnectionId, isTimeout),
-        canHandleResponse: (id, sourceConnectionId) =>
-          this.pendingCallManager.canHandleResponse(id, sourceConnectionId),
-        dispatchRelease: (resourceId, connectionId) =>
-          this.dispatchRelease(resourceId, connectionId),
-      },
+    this.messageHandler = new MessageHandler({
+      safeSendMessage: (message, connectionId) =>
+        this.safeSendMessage(message, connectionId),
+      dispatchRelease: (resourceId, connectionId) =>
+        this.dispatchRelease(resourceId, connectionId),
+      pendingCalls: this.pendingCallManager,
       resourceManager: this.resourceManager,
       payloadProcessor: this.payloadProcessor,
       policy: this.policy,
       getConnectionAuthContext: (connectionId) =>
         this.connectionManagerState.getConnectionAuthSnapshot(connectionId),
     });
-    this.callProcessor = CallProcessor.create({
+    this.callProcessor = new CallProcessor({
       nextMessageId: () => this.nextMessageId(),
       getReadyConnectionIds: (target) =>
         this.connectionManagerState.safeGetReadyConnectionIds(target),
-      sendMessage: (target, message) =>
-        this.connectionManagerState.safeSendMessage(target, message),
+      sendMessage: (connectionId, message) =>
+        this.safeSendMessage(message, connectionId),
       payloadProcessor: this.payloadProcessor,
       pendingCallManager: this.pendingCallManager,
     });
@@ -283,6 +227,7 @@ export class Engine<M extends AdapterModel> {
       );
   }
 
+  /** Dispatches an already-bound proxy operation; acquisition and routing remain outside L3. */
   public safeDispatchCall(
     options: DispatchCallOptions,
   ): Promise<Result<any, globalThis.Error>> {
@@ -295,7 +240,7 @@ export class Engine<M extends AdapterModel> {
       id: null,
       resourceId,
     };
-    this.safeSendMessage(message, { connectionId }).match({
+    this.safeSendMessage(message, connectionId).match({
       ok: () => undefined,
       err: (error) => {
         this.logger.warn(
@@ -306,6 +251,7 @@ export class Engine<M extends AdapterModel> {
     });
   }
 
+  /** Handles an incoming message and reports local failures without manufacturing a second reply. */
   public safeOnMessage(
     message: NexusMessage,
     sourceConnectionId: string,
@@ -317,75 +263,49 @@ export class Engine<M extends AdapterModel> {
 
     return this.messageHandler
       .safeHandleMessage(message, sourceConnectionId)
-      .then((handled) =>
-        handled.match({
-          ok: () => ok(undefined),
-          err: (error) => {
-            this.logger.error(
-              `CRITICAL - Unhandled error in message handler for type ${message.type}.`,
-              error,
-            );
-
-            if (!message.id) {
-              return ok(undefined);
-            }
-
-            const sendResult = this.safeSendMessage(
-              {
-                type: NexusMessageType.ERR,
-                id: message.id,
-                error: toSerializedError(error),
-              },
-              sourceConnectionId,
-            );
-
-            if (sendResult.isErr()) {
-              this.logger.error(
-                `Failed to send ERR response for message #${message.id}.`,
-                sendResult.error,
-              );
-              return err(sendResult.error);
-            }
-
-            return ok(undefined);
-          },
-        }),
-      );
+      .then((result) => {
+        if (result.isErr())
+          this.logger.error("Incoming message handling failed", result.error);
+        return result;
+      });
   }
 
-  public handleResponse(
-    id: MessageId,
-    result: any,
-    error: SerializedError | null,
-    sourceConnectionId?: string,
-    isTimeout = false,
-  ): void {
-    this.pendingCallManager.handleResponse(
-      id,
-      result,
-      error,
-      sourceConnectionId,
-      isTimeout,
-    );
-  }
-
+  /**
+   * Hands a message to exactly one live session.
+   * Success means local acceptance, not remote execution; empty/other recipients fail.
+   */
   public safeSendMessage(
     message: NexusMessage,
-    target: MessageTarget<M> | string,
-  ): Result<string[], Error> {
-    const messageTarget =
-      typeof target === "string" ? { connectionId: target } : target;
-
+    connectionId: string,
+  ): Result<void, Error> {
     const sendResult = this.connectionManagerState.safeSendMessage(
-      messageTarget,
+      { connectionId },
       message,
     );
 
     if (sendResult.isErr()) {
-      return err(sendResult.error);
+      const error = sendResult.error;
+      return err(
+        error.code === "E_CONN_CLOSED" &&
+          !(error instanceof NexusDisconnectedError)
+          ? new NexusDisconnectedError(
+              error.message,
+              "E_CONN_CLOSED",
+              error.context,
+            )
+          : error,
+      );
     }
 
-    return ok(sendResult.value);
+    return sendResult.value.length === 1 && sendResult.value[0] === connectionId
+      ? ok(undefined)
+      : err(
+          new NexusDisconnectedError(
+            "Connection did not accept the message.",
+            "E_CONN_CLOSED",
+            { connectionId, messageId: message.id },
+          ),
+        );
   }
 
   public onDisconnect(connectionId: string): void {

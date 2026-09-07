@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, type Mocked } from "vitest";
 import type { ProxyFactoryCallbacks } from "./proxy-factory";
 import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
+import { LocalResourceType } from "./types";
 import { Result } from "better-result";
 const { ok } = Result;
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
@@ -59,9 +60,82 @@ describe("ProxyFactory", () => {
   });
 
   describe("createServiceProxy", () => {
+    it("keeps paths and bindings isolated while traps are shared", async () => {
+      const first: any = proxyFactory.createServiceProxy("first", {
+        target: { connectionId: "A" },
+        strategy: "one",
+        timeout: 1000,
+      });
+      const second: any = proxyFactory.createServiceProxy("second", {
+        target: { connectionId: "B" },
+        strategy: "one",
+        timeout: 2000,
+      });
+      const firstMethod = first.nested.run;
+      const secondMethod = second.run;
+      await secondMethod(2);
+      await firstMethod(1);
+      await first.value;
+      expect(
+        mockEngine.safeDispatchCall.mock.calls.map(([options]) => options),
+      ).toEqual([
+        {
+          target: { connectionId: "B" },
+          strategy: "one",
+          timeout: 2000,
+          resourceId: null,
+          type: "APPLY",
+          path: ["second", "run"],
+          args: [2],
+        },
+        {
+          target: { connectionId: "A" },
+          strategy: "one",
+          timeout: 1000,
+          resourceId: null,
+          type: "APPLY",
+          path: ["first", "nested", "run"],
+          args: [1],
+        },
+        {
+          target: { connectionId: "A" },
+          strategy: "one",
+          timeout: 1000,
+          resourceId: null,
+          type: "GET",
+          path: ["first", "value"],
+        },
+      ]);
+    });
+
+    it("releasing a resource scope does not affect other proxies from the factory", async () => {
+      const first: any = proxyFactory.createRemoteResourceProxy("first", "A");
+      const second: any = proxyFactory.createRemoteResourceProxy("second", "B");
+      const firstMethod = first.nested.run;
+      const release = first[RELEASE_PROXY_SYMBOL];
+      release();
+      await expect(firstMethod()).rejects.toMatchObject({
+        code: "E_RESOURCE_ACCESS_DENIED",
+      });
+      await second.run();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
+      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceId: "second",
+          target: { connectionId: "B" },
+        }),
+      );
+      expect(mockEngine.dispatchRelease).toHaveBeenCalledExactlyOnceWith(
+        "first",
+        "A",
+      );
+    });
+
     it("does not expose Symbol.dispose", () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
+        strategy: "one",
+        timeout: 5000,
       });
 
       expect(serviceProxy[Symbol.dispose]).toBeUndefined();
@@ -70,6 +144,8 @@ describe("ProxyFactory", () => {
     it("should dispatch an APPLY call on method invocation", () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
+        strategy: "one",
+        timeout: 5000,
       });
 
       serviceProxy.doSomething("hello", 123);
@@ -89,6 +165,8 @@ describe("ProxyFactory", () => {
     it("should return the promise from dispatchCall on method invocation", async () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
+        strategy: "one",
+        timeout: 5000,
       });
       const promise = serviceProxy.doSomething();
       await expect(promise).resolves.toBe("mocked promise result");
@@ -100,6 +178,8 @@ describe("ProxyFactory", () => {
       );
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
+        strategy: "one",
+        timeout: 5000,
       });
       // The `get` trap returns a promise, so we await it to trigger the call
       await serviceProxy.getValue;
@@ -118,6 +198,8 @@ describe("ProxyFactory", () => {
     it("should not dispatch a call on simple property access", () => {
       const serviceProxy: any = proxyFactory.createServiceProxy("api", {
         target: { connectionId: "conn-1" },
+        strategy: "one",
+        timeout: 5000,
       });
       const method = serviceProxy.doSomething; // Access without calling
       expect(method).toBeTypeOf("function");
@@ -155,6 +237,24 @@ describe("ProxyFactory", () => {
       spyRegisterRemoteProxy = vi.spyOn(resourceManager, "registerRemoteProxy");
     });
 
+    it("does not infer remote service ownership from a colliding local ID", async () => {
+      const resourceId = resourceManager.registerLocalResource(
+        {},
+        "conn-1",
+        LocalResourceType.OBJECT,
+        "unrelated-local-service",
+      );
+      const remote: any = proxyFactory.createRemoteResourceProxy(
+        resourceId,
+        "conn-1",
+      );
+      await remote.read();
+      expect(mockEngine.safeDispatchCall.mock.calls[0][0]).not.toHaveProperty(
+        "invocationServiceName",
+      );
+      remote[RELEASE_PROXY_SYMBOL]();
+    });
+
     it("should register the proxy with ResourceManager and FinalizationRegistry on creation", () => {
       const proxy = proxyFactory.createRemoteResourceProxy("res-123", "conn-1");
 
@@ -190,6 +290,8 @@ describe("ProxyFactory", () => {
       expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "APPLY",
         target: { connectionId: "conn-2" },
+        strategy: "one",
+        timeout: 5000,
         resourceId: "res-func",
         path: [],
         args: ["arg1", { key: "value" }],
@@ -208,6 +310,8 @@ describe("ProxyFactory", () => {
       expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "GET",
         target: { connectionId: "conn-3" },
+        strategy: "one",
+        timeout: 5000,
         resourceId: "res-obj",
         path: ["someProp"],
       });
@@ -226,6 +330,8 @@ describe("ProxyFactory", () => {
       expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
       expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
         type: "SET",
+        strategy: "one",
+        timeout: 5000,
         target: { connectionId: "conn-4" },
         resourceId: "res-obj",
         path: ["someProp"],

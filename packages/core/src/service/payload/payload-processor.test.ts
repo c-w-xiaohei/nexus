@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Result, type Result as ResultType } from "better-result";
-const { ok } = Result;
+import { Result } from "better-result";
 import { PayloadProcessor } from "./payload-processor";
 import { ResourceManager } from "../resource-manager";
 import { ProxyFactory } from "../proxy-factory";
@@ -20,7 +19,7 @@ const unwrap = <T>(result: Result<T, globalThis.Error>): T => {
 describe("PayloadProcessor", () => {
   let resourceManager: ResourceManager.Runtime;
   let proxyFactory: ProxyFactory<any>;
-  let payloadProcessor: PayloadProcessor.Runtime<any, any>;
+  let payloadProcessor: PayloadProcessor.Runtime<any>;
 
   const mockConnectionId = "conn-1";
   const mockProxyObject = { __isProxy: true };
@@ -129,6 +128,7 @@ describe("PayloadProcessor", () => {
           [myFunc],
           mockConnectionId,
           "vault",
+          servicePolicy,
         ),
       );
 

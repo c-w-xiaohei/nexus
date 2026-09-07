@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { PendingCallManager } from "./pending-call-manager";
+import { Result } from "better-result";
 
 describe("PendingCallManager", () => {
   afterEach(() => {
@@ -14,13 +15,15 @@ describe("PendingCallManager", () => {
       isBroadcast: true,
       sentConnectionIds: ["first", "second"],
       timeout: 1_000,
-    }) as Promise<unknown[]>;
+    });
     manager.handleResponse(1, "second", null, "second");
     manager.handleResponse(1, "first", null, "first");
-    await expect(pending).resolves.toEqual([
-      { status: "fulfilled", value: "first" },
-      { status: "fulfilled", value: "second" },
-    ]);
+    await expect(pending).resolves.toEqual(
+      Result.ok([
+        { status: "fulfilled", value: "first" },
+        { status: "fulfilled", value: "second" },
+      ]),
+    );
   });
 
   it("keeps stream result order while hiding recipient IDs", async () => {
@@ -157,6 +160,46 @@ describe("PendingCallManager", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("releases queued and ordering-buffered capabilities together on cancellation", async () => {
+    vi.useFakeTimers();
+    const manager = PendingCallManager.create();
+    const release = vi.fn();
+    const resource = Object.assign(() => undefined, {
+      [RELEASE_PROXY_SYMBOL]: release,
+    });
+    const stream = manager.register(1, {
+      strategy: "stream",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B", "C", "D"],
+      timeout: 1_000,
+    }) as AsyncIterableIterator<unknown>;
+    manager.handleResponse(1, "delivered", null, "A");
+    manager.handleResponse(1, resource, null, "B");
+    manager.handleResponse(1, resource, null, "D");
+    await stream.next();
+    await stream.return?.();
+    expect(release).toHaveBeenCalledOnce();
+    expect(manager.canHandleResponse(1, "C")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases a capability blocked entirely in the ordering buffer", async () => {
+    const manager = PendingCallManager.create();
+    const release = vi.fn();
+    const resource = Object.assign(() => undefined, {
+      [RELEASE_PROXY_SYMBOL]: release,
+    });
+    const stream = manager.register(1, {
+      strategy: "stream",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B"],
+      timeout: 1_000,
+    }) as AsyncIterableIterator<unknown>;
+    manager.handleResponse(1, resource, null, "B");
+    await stream.return?.();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("rejects a disconnected unicast call", async () => {
     const manager = PendingCallManager.create();
     const pending = manager.register(1, {
@@ -164,9 +207,82 @@ describe("PendingCallManager", () => {
       isBroadcast: false,
       sentConnectionIds: ["only"],
       timeout: 1_000,
-    }) as Promise<unknown[]>;
+    });
     manager.onDisconnect("only");
-    await expect(pending).rejects.toMatchObject({ code: "E_CONN_CLOSED" });
+    await expect(pending).resolves.toMatchObject({
+      error: { code: "E_CONN_CLOSED" },
+    });
+  });
+
+  it("does not release a buffered result delivered after stream timeout", async () => {
+    vi.useFakeTimers();
+    const manager = PendingCallManager.create();
+    const release = vi.fn();
+    const resource = { [RELEASE_PROXY_SYMBOL]: release };
+    const stream = manager.register(1, {
+      strategy: "stream",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B"],
+      timeout: 1_000,
+    });
+    manager.handleResponse(1, resource, null, "B");
+    vi.advanceTimersByTime(1_000);
+    expect(await stream.next()).toEqual({
+      done: false,
+      value: { status: "fulfilled", value: resource },
+    });
+    await stream.return?.();
+    expect(release).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["all", "stream"] as const)(
+    "releases undeliverable %s results after dispatch failure",
+    async (strategy) => {
+      vi.useFakeTimers();
+      const manager = PendingCallManager.create();
+      const options = {
+        isBroadcast: true,
+        sentConnectionIds: ["A", "B"],
+        timeout: 1_000,
+      };
+      const pending =
+        strategy === "all"
+          ? manager.register(1, { ...options, strategy })
+          : manager.register(1, { ...options, strategy });
+      const release = vi.fn();
+      manager.handleResponse(1, { [RELEASE_PROXY_SYMBOL]: release }, null, "A");
+      const error = new Error("B send failed");
+      manager.fail(1, error);
+      if (pending instanceof Promise)
+        expect(await pending).toMatchObject({ error });
+      else
+        expect(await pending.next()).toEqual({ done: true, value: undefined });
+      expect(release).toHaveBeenCalledOnce();
+      expect(manager.canHandleResponse(1, "B")).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("does not count a responded recipient again when it disconnects", async () => {
+    const manager = PendingCallManager.create();
+    const pending = manager.register(1, {
+      strategy: "all",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B"],
+      timeout: 1_000,
+    });
+    manager.handleResponse(1, "A", null, "A");
+    manager.onDisconnect("A");
+    expect(manager.canHandleResponse(1, "B")).toBe(true);
+    manager.handleResponse(1, "duplicate", null, "A");
+    manager.handleResponse(1, "B", null, "B");
+    expect(await pending).toEqual(
+      Result.ok([
+        { status: "fulfilled", value: "A" },
+        { status: "fulfilled", value: "B" },
+      ]),
+    );
   });
 
   it("ignores a disconnected recipient's late response until another all recipient responds", async () => {
@@ -176,16 +292,16 @@ describe("PendingCallManager", () => {
       isBroadcast: true,
       sentConnectionIds: ["A", "B"],
       timeout: 1_000,
-    }) as Promise<unknown[]>;
+    });
 
     manager.onDisconnect("A");
     expect(manager.canHandleResponse(1, "A")).toBe(false);
     manager.handleResponse(1, "late-A", null, "A");
     manager.handleResponse(1, "from-B", null, "B");
 
-    await expect(pending).resolves.toEqual([
-      { status: "fulfilled", value: "from-B" },
-    ]);
+    await expect(pending).resolves.toEqual(
+      Result.ok([{ status: "fulfilled", value: "from-B" }]),
+    );
   });
 
   it("ignores a disconnected recipient's late stream response until another recipient responds", async () => {

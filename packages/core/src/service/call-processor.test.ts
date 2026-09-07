@@ -1,555 +1,248 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
-import { CallProcessor } from "./call-processor";
-import type { DefaultAdapterModel } from "@/types/adapter-model";
-import type { DispatchCallOptions } from "./engine";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Result } from "better-result";
+import {
+  CallProcessor,
+  type CallBinding,
+  type DispatchCallOptions,
+} from "./call-processor";
 import { PendingCallManager } from "./pending-call-manager";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { ResourceManager } from "./resource-manager";
-import { NexusDisconnectedError } from "@/errors/call-errors";
-import { Result } from "better-result";
-const { err, ok } = Result;
+import { ProxyFactory } from "./proxy-factory";
+import type { DefaultAdapterModel } from "@/types/adapter-model";
+import { NexusDisconnectedError, NexusRemoteError } from "@/errors/call-errors";
+import { NexusMessageType } from "@/types/message";
 
 describe("CallProcessor", () => {
-  let processorState: CallProcessor.Runtime;
   let deps: CallProcessor.Dependencies<DefaultAdapterModel>;
+  let processor: CallProcessor<DefaultAdapterModel>;
+  let resources: ResourceManager.Runtime;
+  const unicast: CallBinding = {
+    target: { connectionId: "A" },
+    strategy: "one",
+    timeout: 1000,
+  };
+  const multicast: CallBinding = {
+    target: { connectionIds: ["A", "B", "C"] },
+    strategy: "all",
+    timeout: 1000,
+  };
+  const call = (
+    binding: CallBinding = unicast,
+  ): DispatchCallOptions & { type: "APPLY" } => ({
+    ...binding,
+    type: "APPLY",
+    resourceId: null,
+    path: ["service", "method"],
+    args: [],
+  });
 
   beforeEach(() => {
-    vi.clearAllMocks();
-
-    deps = {
-      nextMessageId: vi.fn(() => 1),
-      getReadyConnectionIds: vi.fn((target) =>
-        ok("connectionId" in target ? [target.connectionId] : ["conn-1"]),
-      ),
-      sendMessage: vi.fn(() => ok([])),
-      payloadProcessor: PayloadProcessor.create({} as any, {} as any),
-      pendingCallManager: PendingCallManager.create(),
-    };
-
-    processorState = CallProcessor.create(deps);
-  });
-
-  describe("Error Handling", () => {
-    it("preserves an existing NexusDisconnectedError at the safe boundary", async () => {
-      const existing = new NexusDisconnectedError(
-        "Connection closed",
-        "E_CONN_CLOSED",
-      );
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(err(existing));
-
-      const result = await processorState.safeProcess({
-        type: "GET",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["prop"],
-      });
-
-      expect(result.error).toBe(existing);
-    });
-
-    it("rejects unavailable bound targets before dispatch side effects", async () => {
-      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-      const timerSpy = vi.spyOn(globalThis, "setTimeout");
-
-      for (const [target, readyConnectionIds] of [
-        [{ connectionId: "closed" }, []],
-        [{ connectionIds: ["conn-1", "closed"] }, ["conn-1"]],
-        [{ connectionIds: ["closed-1", "closed-2"] }, []],
-      ] as const) {
-        vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-          ok([...readyConnectionIds]),
-        );
-
-        const result = await processorState.safeProcess({
-          type: "APPLY",
-          target,
-          resourceId: "service",
-          path: ["method"],
-          args: [() => {}],
-          strategy: "all",
-        });
-
-        expect(result.error).toBeInstanceOf(NexusDisconnectedError);
-      }
-
-      expect(registerSpy).not.toHaveBeenCalled();
-      expect(deps.sendMessage).not.toHaveBeenCalled();
-      expect(sanitizeSpy).not.toHaveBeenCalled();
-      expect(timerSpy).not.toHaveBeenCalled();
-    });
-
-    it("should return an empty result for a broadcast that finds no connections", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok([]));
-
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { where: () => true },
-        resourceId: "service",
-        path: ["method"],
-        strategy: "all",
-      };
-
-      const result = await processorState.safeProcess(options);
-      expect(result.isOk()).toBe(true);
-      if (result.isOk()) {
-        expect(result.value).toEqual([]);
-      }
-    });
-
-    it("returns an empty broadcast result before registering a pending call, timer, or resource", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok([]));
-      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-      const timerSpy = vi.spyOn(globalThis, "setTimeout");
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { where: () => true },
-        resourceId: "service",
-        path: ["method"],
-        args: [() => {}],
-        strategy: "all",
-      });
-
-      expect(result.value).toEqual([]);
-      expect(registerSpy).not.toHaveBeenCalled();
-      expect(sanitizeSpy).not.toHaveBeenCalled();
-      expect(timerSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("Message Building and Sending", () => {
-    it("preserves resources accepted before a later multicast send fails", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2", "conn-3"]),
-      );
-      const resourceManager = ResourceManager.create();
-      const existingResourceId = resourceManager.registerLocalResource(
-        {},
-        "existing-conn",
-        0,
-      );
-      deps.payloadProcessor = PayloadProcessor.create(
-        resourceManager,
-        {} as any,
-      );
-      processorState = CallProcessor.create(deps);
-      const register = deps.pendingCallManager.register.bind(
-        deps.pendingCallManager,
-      );
-      let pendingPromise: Promise<unknown> | undefined;
-      const registerSpy = vi
-        .spyOn(deps.pendingCallManager, "register")
-        .mockImplementation((messageId, options) => {
-          pendingPromise = register(messageId, options);
-          return pendingPromise;
-        });
-      const failSpy = vi.spyOn(deps.pendingCallManager, "fail");
-      vi.mocked(deps.sendMessage).mockImplementation((target) =>
-        "connectionId" in target && target.connectionId === "conn-3"
-          ? err(new Error("conn-3 send failed"))
-          : ok("connectionId" in target ? [target.connectionId] : []),
-      );
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { connectionIds: ["conn-1", "conn-2", "conn-3"] },
-        resourceId: "service",
-        path: ["method"],
-        args: [() => {}],
-        strategy: "all",
-      });
-
-      expect(registerSpy).toHaveBeenCalledBefore(deps.sendMessage as never);
-      expect(failSpy).toHaveBeenCalledWith(1, expect.any(Error));
-      expect(result.isErr()).toBe(true);
-      expect(resourceManager.countLocalResources()).toBe(3);
-      expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
-      expect(
-        resourceManager.listLocalResourceIdsByOwner("conn-1"),
-      ).toHaveLength(1);
-      expect(
-        resourceManager.listLocalResourceIdsByOwner("conn-2"),
-      ).toHaveLength(1);
-      await expect(pendingPromise).rejects.toThrow("conn-3 send failed");
-      deps.pendingCallManager.handleResponse(1, "late", null, "conn-1");
-      deps.pendingCallManager.onDisconnect("conn-2");
-      expect(resourceManager.countLocalResources()).toBe(3);
-    });
-
-    it("preserves resources accepted before a later multicast sanitize fails", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2", "conn-3"]),
-      );
-      const resourceManager = ResourceManager.create();
-      const existingResourceId = resourceManager.registerLocalResource(
-        {},
-        "existing-conn",
-        0,
-      );
-      deps.payloadProcessor = PayloadProcessor.create(
-        resourceManager,
-        {} as any,
-      );
-      processorState = CallProcessor.create(deps);
-      const sanitize = deps.payloadProcessor.safeSanitize.bind(
-        deps.payloadProcessor,
-      );
-      vi.spyOn(deps.payloadProcessor, "safeSanitize").mockImplementation(
-        (args, connectionId) =>
-          connectionId === "conn-3"
-            ? err(new Error("conn-3 sanitize failed"))
-            : sanitize(args, connectionId),
-      );
-      vi.mocked(deps.sendMessage).mockImplementation((target) =>
-        ok("connectionId" in target ? [target.connectionId] : []),
-      );
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { connectionIds: ["conn-1", "conn-2", "conn-3"] },
-        resourceId: "service",
-        path: ["method"],
-        args: [() => {}],
-        strategy: "all",
-      });
-
-      expect(result.isErr()).toBe(true);
-      expect(deps.sendMessage).toHaveBeenCalledTimes(2);
-      expect(deps.sendMessage).toHaveBeenCalledWith(
-        { connectionId: "conn-2" },
-        expect.anything(),
-      );
-      expect(resourceManager.countLocalResources()).toBe(3);
-      expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
-      expect(
-        resourceManager.listLocalResourceIdsByOwner("conn-1"),
-      ).toHaveLength(1);
-      expect(
-        resourceManager.listLocalResourceIdsByOwner("conn-2"),
-      ).toHaveLength(1);
-    });
-
-    it("fails and cleans up when a resolved connection does not accept a message", async () => {
-      const resourceManager = ResourceManager.create();
-      const existingResourceId = resourceManager.registerLocalResource(
-        {},
-        "existing-conn",
-        0,
-      );
-      deps.payloadProcessor = PayloadProcessor.create(
-        resourceManager,
-        {} as any,
-      );
-      processorState = CallProcessor.create(deps);
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const failSpy = vi.spyOn(deps.pendingCallManager, "fail");
-      vi.mocked(deps.sendMessage).mockReturnValue(ok([]));
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["method"],
-        args: [() => {}],
-      });
-
-      expect(result.error).toBeInstanceOf(NexusDisconnectedError);
-      expect(failSpy).toHaveBeenCalledWith(
-        1,
-        expect.any(CallProcessor.Error.Disconnected),
-      );
-      expect(clearTimeoutSpy).toHaveBeenCalled();
-      expect(deps.pendingCallManager.canHandleResponse(1, "conn-1")).toBe(
-        false,
-      );
-      expect(resourceManager.countLocalResources()).toBe(1);
-      expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
-    });
-
-    it("sanitizes a multicast payload separately for every bound session", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2"]),
-      );
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        [] as any,
-      );
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-
-      await processorState.safeProcess({
-        type: "APPLY",
-        target: { connectionIds: ["conn-1", "conn-2"] },
-        resourceId: "service",
-        path: ["method"],
-        args: ["arg"],
-        strategy: "all",
-      });
-
-      expect(sanitizeSpy).toHaveBeenCalledWith(["arg"], "conn-1");
-      expect(sanitizeSpy).toHaveBeenCalledWith(["arg"], "conn-2");
-    });
-
-    it("should call PayloadProcessor.safeSanitize for APPLY calls", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        [] as any,
-      );
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["method"],
-        args: ["arg1", 123],
-      };
-
-      await processorState.safeProcess(options);
-
-      expect(sanitizeSpy).toHaveBeenCalledWith(["arg1", 123], "conn-1");
-    });
-
-    it("should call PayloadProcessor.safeSanitize for SET calls", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        [] as any,
-      );
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-
-      const options: DispatchCallOptions = {
-        type: "SET",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["prop"],
-        value: "new-value",
-      };
-
-      await processorState.safeProcess(options);
-
-      expect(sanitizeSpy).toHaveBeenCalledWith(["new-value"], "conn-1");
-    });
-
-    it("returns an empty strategy-one broadcast result before dispatch side effects", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(ok([]));
-      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-      const timerSpy = vi.spyOn(globalThis, "setTimeout");
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { where: () => true },
-        resourceId: "service",
-        path: ["method"],
-        args: ["arg"],
-        strategy: "one",
-      });
-
-      expect(result).toEqual(ok(undefined));
-      expect(registerSpy).not.toHaveBeenCalled();
-      expect(sanitizeSpy).not.toHaveBeenCalled();
-      expect(deps.sendMessage).not.toHaveBeenCalled();
-      expect(timerSpy).not.toHaveBeenCalled();
-    });
-
-    it("rejects strategy-one multicasts before dispatch side effects", async () => {
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2"]),
-      );
-      const registerSpy = vi.spyOn(deps.pendingCallManager, "register");
-      const sanitizeSpy = vi.spyOn(deps.payloadProcessor, "safeSanitize");
-
-      const result = await processorState.safeProcess({
-        type: "APPLY",
-        target: { where: () => true },
-        resourceId: "service",
-        path: ["method"],
-        args: ["arg"],
-        strategy: "one",
-      });
-
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(CallProcessor.Error.Targeting);
-      }
-      expect(registerSpy).not.toHaveBeenCalled();
-      expect(deps.sendMessage).not.toHaveBeenCalled();
-      expect(sanitizeSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("Pending Call Registration", () => {
-    it("should register a call with PendingCallManager", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      const registerSpy = vi
-        .spyOn(deps.pendingCallManager, "register")
-        .mockResolvedValue([] as any);
-
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["method"],
-        timeout: 3000,
-      };
-
-      await processorState.safeProcess(options);
-
-      expect(registerSpy).toHaveBeenCalledOnce();
-      const [messageId, registerOptions] = registerSpy.mock.calls[0];
-      expect(messageId).toBeTypeOf("number");
-      expect(registerOptions).toEqual({
-        strategy: "all",
-        isBroadcast: false,
-        sentConnectionIds: ["conn-1"],
-        timeout: 3000,
-      });
-    });
-
-    it("should correctly identify a broadcast call", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1", "conn-2"]));
-      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(
-        ok(["conn-1", "conn-2"]),
-      );
-      const registerSpy = vi
-        .spyOn(deps.pendingCallManager, "register")
-        .mockResolvedValue([] as any);
-
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { where: () => true },
-        resourceId: "service",
-        path: ["method"],
-        strategy: "all",
-      };
-
-      await processorState.safeProcess(options);
-
-      expect(registerSpy).toHaveBeenCalledWith(
-        expect.any(Number),
-        expect.objectContaining({
-          isBroadcast: true,
-          sentConnectionIds: ["conn-1", "conn-2"],
-        }),
-      );
-    });
-  });
-
-  describe("Result Adaptation", () => {
-    it.each(["one", "first", "all"] as const)(
-      "normalizes a local disconnection to NexusDisconnectedError for strategy %s",
-      async (strategy) => {
-        vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-
-        const resultPromise = processorState.safeProcess({
-          type: "GET",
-          target: { connectionId: "conn-1" },
-          resourceId: "service",
-          path: ["prop"],
-          strategy,
-        });
-        deps.pendingCallManager.onDisconnect("conn-1");
-
-        const result = await resultPromise;
-        expect(result.isErr()).toBe(true);
-        if (result.isErr()) {
-          expect(result.error).toBeInstanceOf(NexusDisconnectedError);
-          expect(result.error).toMatchObject({
-            code: "E_CONN_CLOSED",
-            context: { connectionId: "conn-1", messageId: 1 },
-          });
-        }
+    resources = ResourceManager.create();
+    const proxies = new ProxyFactory(
+      {
+        safeDispatchCall: async () => Result.ok(undefined),
+        dispatchRelease() {},
       },
+      resources,
     );
-    it("should adapt result for 'first' strategy on success", async () => {
-      const settlement = [{ status: "fulfilled", value: "success" }];
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        settlement as any,
+    const pending = PendingCallManager.create();
+    deps = {
+      nextMessageId: () => 1,
+      getReadyConnectionIds: vi.fn((target) =>
+        Result.ok(
+          "connectionId" in target
+            ? [target.connectionId]
+            : [...target.connectionIds],
+        ),
+      ),
+      sendMessage: vi.fn((connectionId, message) => {
+        pending.handleResponse(message.id, connectionId, null, connectionId);
+        return Result.ok(undefined);
+      }),
+      payloadProcessor: PayloadProcessor.create(resources, proxies),
+      pendingCallManager: pending,
+    };
+    processor = new CallProcessor(deps);
+  });
+
+  it("preserves existing connection errors", async () => {
+    const error = new NexusDisconnectedError("closed");
+    vi.mocked(deps.getReadyConnectionIds).mockReturnValue(Result.err(error));
+    const result = await processor.safeProcess(call());
+    expect(result.isErr() && result.error).toBe(error);
+  });
+
+  it.each([unicast, multicast])(
+    "rejects incomplete bindings before side effects ($strategy)",
+    async (binding) => {
+      vi.mocked(deps.getReadyConnectionIds).mockReturnValue(Result.ok([]));
+      const register = vi.spyOn(deps.pendingCallManager, "register");
+      const result = await processor.safeProcess({
+        ...call(binding),
+        args: [() => {}],
+      });
+      expect(result).toMatchObject({ error: { code: "E_CONN_CLOSED" } });
+      expect(register).not.toHaveBeenCalled();
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      expect(resources.countLocalResources()).toBe(0);
+    },
+  );
+
+  it.each(["all", "stream"] as const)(
+    "returns empty %s without pending state",
+    async (strategy) => {
+      const register = vi.spyOn(deps.pendingCallManager, "register");
+      const result = await processor.safeProcess(
+        call({ target: { connectionIds: [] }, strategy, timeout: 1000 }),
       );
-
-      const options: DispatchCallOptions = {
-        type: "GET",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["prop"],
-        strategy: "first",
-      };
-
-      const result = await processorState.safeProcess(options);
       expect(result.isOk()).toBe(true);
-      if (result.isOk()) {
-        expect(result.value).toBe("success");
+      const value = result.unwrap();
+      const values = strategy === "all" ? value : await Array.fromAsync(value);
+      expect(values).toEqual([]);
+      expect(register).not.toHaveBeenCalled();
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("registers before synchronous responses and unwraps a unicast result", async () => {
+    expect(await processor.safeProcess(call())).toEqual(Result.ok("A"));
+    expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
+  });
+
+  it("sanitizes callbacks separately for every bound recipient", async () => {
+    expect(
+      await processor.safeProcess({ ...call(multicast), args: [() => {}] }),
+    ).toEqual(
+      Result.ok([
+        { status: "fulfilled", value: "A" },
+        { status: "fulfilled", value: "B" },
+        { status: "fulfilled", value: "C" },
+      ]),
+    );
+    for (const id of ["A", "B", "C"])
+      expect(resources.listLocalResourceIdsByOwner(id)).toHaveLength(1);
+  });
+
+  it.each(["send", "sanitize"] as const)(
+    "keeps earlier capabilities after a later %s failure",
+    async (boundary) => {
+      const error = new Error("C failed");
+      if (boundary === "send") {
+        vi.mocked(deps.sendMessage).mockImplementation((id) =>
+          id === "C" ? Result.err(error) : Result.ok(undefined),
+        );
+      } else {
+        vi.mocked(deps.sendMessage).mockReturnValue(Result.ok(undefined));
+        const sanitize = deps.payloadProcessor.safeSanitize;
+        vi.spyOn(deps.payloadProcessor, "safeSanitize").mockImplementation(
+          (args, id) => (id === "C" ? Result.err(error) : sanitize(args, id)),
+        );
       }
-    });
+      const result = await processor.safeProcess({
+        ...call(multicast),
+        args: [() => {}],
+      });
+      expect(result.isErr() && result.error).toBe(error);
+      expect(resources.listLocalResourceIdsByOwner("A")).toHaveLength(1);
+      expect(resources.listLocalResourceIdsByOwner("B")).toHaveLength(1);
+      expect(resources.listLocalResourceIdsByOwner("C")).toHaveLength(0);
+      expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
+    },
+  );
 
-    it("should re-throw error for 'first' strategy on rejection", async () => {
-      const error = {
-        name: "Error",
-        code: "E_UNKNOWN",
-        message: "Remote Error",
-      };
-      const settlement = [{ status: "rejected", reason: error }];
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        settlement as any,
+  it("releases capabilities when exact send fails", async () => {
+    vi.mocked(deps.sendMessage).mockReturnValue(
+      Result.err(new NexusDisconnectedError("not accepted")),
+    );
+    const result = await processor.safeProcess({ ...call(), args: [() => {}] });
+    expect(result).toMatchObject({ error: { code: "E_CONN_CLOSED" } });
+    expect(resources.countLocalResources()).toBe(0);
+    expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
+  });
+
+  it("contains unexpected send throws and cleans the failed handoff", async () => {
+    const error = new Error("transport threw");
+    vi.mocked(deps.sendMessage).mockImplementation(() => {
+      throw error;
+    });
+    const result = await processor.safeProcess({ ...call(), args: [() => {}] });
+    expect(result.isErr() && result.error).toBe(error);
+    expect(resources.countLocalResources()).toBe(0);
+    expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
+  });
+
+  it("preserves multicast settlements for a single bound recipient", async () => {
+    expect(
+      await processor.safeProcess(
+        call({
+          target: { connectionIds: ["A"] },
+          strategy: "all",
+          timeout: 1000,
+        }),
+      ),
+    ).toEqual(Result.ok([{ status: "fulfilled", value: "A" }]));
+  });
+
+  it("sanitizes SET values and preserves the operation path", async () => {
+    await processor.safeProcess({
+      ...unicast,
+      type: "SET",
+      resourceId: "remote",
+      path: ["prop"],
+      value: undefined,
+    });
+    expect(deps.sendMessage).toHaveBeenCalledWith("A", {
+      id: 1,
+      type: NexusMessageType.SET,
+      resourceId: "remote",
+      path: ["prop"],
+      value: "\u0003U",
+    });
+  });
+
+  it("propagates a pending disconnect through Result", async () => {
+    vi.mocked(deps.sendMessage).mockReturnValue(Result.ok(undefined));
+    const result = processor.safeProcess(call());
+    deps.pendingCallManager.onDisconnect("A");
+    expect(await result).toMatchObject({
+      error: {
+        code: "E_CONN_CLOSED",
+        context: { connectionId: "A", messageId: 1 },
+      },
+    });
+  });
+
+  it("wraps a remote error with its original structured cause", async () => {
+    const remoteError = {
+      name: "Denied",
+      code: "E_AUTH_CALL_DENIED",
+      message: "denied",
+    };
+    vi.mocked(deps.sendMessage).mockImplementation((id, message) => {
+      deps.pendingCallManager.handleResponse(
+        message.id!,
+        null,
+        remoteError,
+        id,
       );
-
-      const options: DispatchCallOptions = {
-        type: "GET",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["prop"],
-        strategy: "first",
-      };
-
-      const result = await processorState.safeProcess(options);
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(CallProcessor.Error.Remote);
-      }
+      return Result.ok(undefined);
     });
-
-    it("should return raw result for 'all' strategy", async () => {
-      const settlement = [{ status: "fulfilled", value: "success" }];
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockResolvedValue(
-        settlement as any,
-      );
-
-      const options: DispatchCallOptions = {
-        type: "GET",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["prop"],
-        strategy: "all",
-      };
-
-      const result = await processorState.safeProcess(options);
-      expect(result.isOk()).toBe(true);
-      if (result.isOk()) {
-        expect(result.value).toEqual(settlement);
-      }
+    const result = await processor.safeProcess(call());
+    expect(result.isErr() && result.error).toBeInstanceOf(NexusRemoteError);
+    expect(result).toMatchObject({
+      error: { code: "E_REMOTE_EXCEPTION", context: { remoteError } },
     });
+  });
 
-    it("should return Err when 'all' strategy promise rejects", async () => {
-      vi.mocked(deps.sendMessage).mockReturnValue(ok(["conn-1"]));
-      vi.spyOn(deps.pendingCallManager, "register").mockReturnValue(
-        Promise.reject(new Error("pending failed")) as any,
-      );
-
-      const options: DispatchCallOptions = {
-        type: "APPLY",
-        target: { connectionId: "conn-1" },
-        resourceId: "service",
-        path: ["method"],
-        strategy: "all",
-      };
-
-      const result = await processorState.safeProcess(options);
-      expect(result.isErr()).toBe(true);
-    });
+  it("returns a fixed ordered stream", async () => {
+    const result = await processor.safeProcess(
+      call({ ...multicast, strategy: "stream" }),
+    );
+    const results = [];
+    for await (const value of result.unwrap()) results.push(value);
+    expect(results).toEqual(
+      ["A", "B", "C"].map((value) => ({ status: "fulfilled", value })),
+    );
   });
 });

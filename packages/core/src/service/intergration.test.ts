@@ -5,7 +5,7 @@ import { ResourceManager } from "./resource-manager";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { CallProcessor } from "./call-processor";
+import { NexusRemoteError } from "@/errors/call-errors";
 import { NexusDisconnectedError } from "@/errors/call-errors";
 
 // ===========================================================================
@@ -113,10 +113,10 @@ class TaskServiceImpl implements TaskService {
 // ===========================================================================
 
 describe("L3 Engine Integration Test: Task Service", () => {
-  let clientEngine: Engine<any, any>;
-  let hostEngine: Engine<any, any>;
+  let clientEngine: Engine<any>;
+  let hostEngine: Engine<any>;
   let serviceProxy: TaskService;
-  let clientCm: ConnectionManager<any, any>;
+  let clientCm: ConnectionManager<any>;
   let hostConnectionId: string;
 
   // Note: This setup is now async.
@@ -142,10 +142,11 @@ describe("L3 Engine Integration Test: Task Service", () => {
     // --- Create Proxy ---
     // With the redesigned ProxyFactory, we now create a proxy bound directly
     // to the "tasks" service by name.
-    serviceProxy = (clientEngine as any).proxyFactory.createServiceProxy(
-      "tasks",
-      { target: { connectionId: setup.clientConnection.connectionId } },
-    );
+    serviceProxy = clientEngine.createServiceProxy("tasks", {
+      target: { connectionId: setup.clientConnection.connectionId },
+      strategy: "one",
+      timeout: 5000,
+    });
   });
 
   it("should perform a basic RPC call and receive a result", async () => {
@@ -255,7 +256,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
   it("should propagate errors from the host back to the client", async () => {
     // Using `expect.rejects` to assert that the promise fails
     await expect(serviceProxy.throwError()).rejects.toBeInstanceOf(
-      CallProcessor.Error.Remote,
+      NexusRemoteError,
     );
   });
 
@@ -333,13 +334,14 @@ describe("L3 Engine Integration Test: Task Service", () => {
     let broadcastProxy: TaskService;
 
     beforeEach(() => {
-      // Create a proxy that snapshots currently ready connections.
+      // Bind the current ready recipient list, as acquisition does.
       // Even with one client, this tests the broadcast/multi-response logic.
       broadcastProxy = (clientEngine as any).proxyFactory.createServiceProxy(
         "tasks",
         {
-          target: { where: (meta: any) => meta.id === "host" },
+          target: { connectionIds: [...clientCm.connections.keys()] },
           strategy: "all",
+          timeout: 5000,
         },
       );
     });
@@ -353,10 +355,6 @@ describe("L3 Engine Integration Test: Task Service", () => {
       expect(tasksResult).toBeInstanceOf(Array);
       expect(tasksResult).toHaveLength(1);
       expect(tasksResult[0].status).toBe("fulfilled");
-      // Assert that the 'from' field contains the connection ID as seen by the client
-      const hostConnectionId = (clientCm as any).connections
-        .keys()
-        .next().value;
       const tasks = tasksResult[0].value;
       expect(tasks).toHaveLength(1);
       expect(tasks[0].title).toBe("Task for broadcast");
@@ -366,8 +364,9 @@ describe("L3 Engine Integration Test: Task Service", () => {
       const streamProxy = (clientEngine as any).proxyFactory.createServiceProxy(
         "tasks",
         {
-          target: { where: (meta: any) => meta.id === "host" },
+          target: { connectionIds: [...clientCm.connections.keys()] },
           strategy: "stream",
+          timeout: 5000,
         },
       );
 

@@ -9,7 +9,7 @@ import { Nexus } from "../../src/api/nexus";
 import { Token } from "../../src/api/token";
 import type { IEndpoint, IPort } from "../../src/transport";
 import { LogicalConnection } from "../../src/connection/logical-connection";
-import { CallProcessor } from "../../src/service/call-processor";
+import { NexusRemoteError } from "../../src/errors/call-errors";
 import { NexusDisconnectedError } from "../../src/index";
 import { NexusMessageType } from "../../src/types/message";
 
@@ -311,7 +311,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
     const promise = contentApi.highlightUser("non-existent-user");
 
-    await expect(promise).rejects.toBeInstanceOf(CallProcessor.Error.Remote);
+    await expect(promise).rejects.toBeInstanceOf(NexusRemoteError);
     await expect(promise).rejects.toThrow(/User "non-existent-user" not found/);
   });
 
