@@ -20,6 +20,7 @@ import {
 } from "../protocol.js";
 import type { ServiceInvocationContext } from "../../service/service-invocation-hooks.js";
 import { RELEASE_PROXY_SYMBOL } from "../../types/symbols.js";
+import { Logger } from "../../logger.js";
 
 interface SubscriptionRecord<TState extends object> {
   readonly onSync: (event: {
@@ -98,6 +99,7 @@ class StoreHostEntity<
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
 > implements StoreHostRuntime<TState, TActions> {
+  private readonly logger = new Logger("L3 -> StateHost");
   private readonly storeInstanceId = createStoreInstanceId();
   private version = 0;
   private destroyed = false;
@@ -429,12 +431,18 @@ class StoreHostEntity<
     // should not poison fanout, and it is treated as an orphaned subscription.
     for (const [subscriptionId, subscription] of this.subscriptions.entries()) {
       try {
-        subscription.onSync({
-          type: "snapshot",
-          storeInstanceId: this.storeInstanceId,
-          version: this.version,
-          state: this.cloneSnapshot(snapshot),
-        });
+        // Remote callbacks return Promises even though the listener contract is void.
+        // Observe delivery without blocking fanout or changing subscription ownership.
+        void Promise.resolve(
+          subscription.onSync({
+            type: "snapshot",
+            storeInstanceId: this.storeInstanceId,
+            version: this.version,
+            state: this.cloneSnapshot(snapshot),
+          }),
+        ).catch((error) =>
+          this.logger.error("State snapshot notification failed", error),
+        );
       } catch {
         this.deleteSubscription(subscriptionId);
       }

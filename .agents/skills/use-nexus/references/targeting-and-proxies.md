@@ -128,6 +128,15 @@ Multicast calls settle each recipient as `{ status: "fulfilled", value }` or `{ 
 
 ## Session-Bound Handles
 
+`safeCreate` / `safeSelect` return Results for acquisition only. Returned proxy
+methods and awaited reads retain their Promise/settled-result contracts. Await
+or explicitly catch calls; the proxy does not attach a logging catch to ordinary
+calls. Resource property assignment remains fire-and-forget with configured
+framework error logging, and does not expose completion even when the assignment
+expression is awaited. `Asyncified` property types are unchanged. Release is
+local and idempotent with best-effort host notification; `safeRelease` does not
+acknowledge remote cleanup. See the error/lifetime contracts in `docs/concepts.md`.
+
 Raw core handles are lifecycle-scoped.
 
 - `nexus.create(...)` returns a proxy bound to the resolved remote session.

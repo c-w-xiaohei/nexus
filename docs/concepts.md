@@ -103,6 +103,20 @@ does not promise that arbitrary application startup work has finished.
 
 ## Session-Bound Handles
 
+Proxy methods and awaited property reads use ordinary Promises. A unicast remote
+failure rejects that Promise; multicast keeps its per-recipient settled results.
+`safeCreate` and `safeSelect` return a Result for acquisition only, not a proxy
+whose methods return Results. Await or explicitly catch calls: Nexus does not
+attach an automatic error logger to ordinary calls, so ignored rejections follow
+the runtime's normal unhandled-rejection behavior.
+
+Remote resource property assignment retains its fire-and-forget behavior. It
+does not expose the RPC completion Promise; even awaiting an assignment expression
+does not wait for remote completion. Asynchronous write failures are logged through
+the configured Nexus logger. Assignment after explicit resource release throws
+synchronously. Service root assignment is not supported; `Asyncified` property
+types remain unchanged.
+
 `create()` returns a service proxy tied to the connection session acquired for
 that call. `ref()` transfers a remote resource tied to the same connection.
 Disconnect, reload, daemon restart, and replacement invalidate these values.
@@ -119,6 +133,11 @@ explicit replacement rules.
 capabilities without requiring the creating Nexus instance. They do not control
 service proxy lifecycle: ordinary service proxies are not releasable, and
 release never reconnects or replaces a session-bound handle.
+
+Release invalidates the local resource facade immediately and attempts to notify
+its host. Notification failure is logged, not returned as a release failure.
+`safeRelease` captures local release exceptions; an Ok result is not a remote
+acknowledgement or a guarantee that host cleanup has already run.
 
 An explicitly typed `RefWrapper<T>` service result becomes a disposable remote
 resource proxy. The receiver owns that lease and can release it with JavaScript

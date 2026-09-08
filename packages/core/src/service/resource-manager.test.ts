@@ -3,7 +3,7 @@ import { ResourceManager } from "./resource-manager";
 import { LocalResourceType } from "./types";
 
 describe("ResourceManager", () => {
-  let resourceManager: ResourceManager.Runtime;
+  let resourceManager: ResourceManager;
 
   // Mock objects
   const mockService = {
@@ -16,7 +16,7 @@ describe("ResourceManager", () => {
 
   beforeEach(() => {
     // Create a new instance for each test to ensure isolation.
-    resourceManager = ResourceManager.create();
+    resourceManager = new ResourceManager();
   });
 
   describe("Exposed Services", () => {

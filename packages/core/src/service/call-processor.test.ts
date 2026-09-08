@@ -9,14 +9,13 @@ import { PendingCallManager } from "./pending-call-manager";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { ResourceManager } from "./resource-manager";
 import { ProxyFactory } from "./proxy-factory";
-import type { DefaultAdapterModel } from "@/types/adapter-model";
 import { NexusDisconnectedError, NexusRemoteError } from "@/errors/call-errors";
 import { NexusMessageType } from "@/types/message";
 
 describe("CallProcessor", () => {
-  let deps: CallProcessor.Dependencies<DefaultAdapterModel>;
-  let processor: CallProcessor<DefaultAdapterModel>;
-  let resources: ResourceManager.Runtime;
+  let deps: ConstructorParameters<typeof CallProcessor>[0];
+  let processor: CallProcessor;
+  let resources: ResourceManager;
   const unicast: CallBinding = {
     target: { connectionId: "A" },
     strategy: "one",
@@ -38,7 +37,7 @@ describe("CallProcessor", () => {
   });
 
   beforeEach(() => {
-    resources = ResourceManager.create();
+    resources = new ResourceManager();
     const proxies = new ProxyFactory(
       {
         safeDispatchCall: async () => Result.ok(undefined),
@@ -46,9 +45,8 @@ describe("CallProcessor", () => {
       },
       resources,
     );
-    const pending = PendingCallManager.create();
+    const pending = new PendingCallManager();
     deps = {
-      nextMessageId: () => 1,
       getReadyConnectionIds: vi.fn((target) =>
         Result.ok(
           "connectionId" in target
@@ -56,11 +54,11 @@ describe("CallProcessor", () => {
             : [...target.connectionIds],
         ),
       ),
-      sendMessage: vi.fn((connectionId, message) => {
-        pending.handleResponse(message.id, connectionId, null, connectionId);
+      sendMessage: vi.fn((message, connectionId) => {
+        pending.handleResponse(message.id!, connectionId, null, connectionId);
         return Result.ok(undefined);
       }),
-      payloadProcessor: PayloadProcessor.create(resources, proxies),
+      payloadProcessor: new PayloadProcessor(resources, proxies),
       pendingCallManager: pending,
     };
     processor = new CallProcessor(deps);
@@ -110,6 +108,16 @@ describe("CallProcessor", () => {
     expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
   });
 
+  it("owns an independent monotonically increasing message sequence", async () => {
+    await processor.safeProcess(call());
+    await processor.safeProcess(call());
+    const other = new CallProcessor(deps);
+    await other.safeProcess(call());
+    expect(
+      vi.mocked(deps.sendMessage).mock.calls.map(([message]) => message.id),
+    ).toEqual([1, 2, 1]);
+  });
+
   it("sanitizes callbacks separately for every bound recipient", async () => {
     expect(
       await processor.safeProcess({ ...call(multicast), args: [() => {}] }),
@@ -129,12 +137,14 @@ describe("CallProcessor", () => {
     async (boundary) => {
       const error = new Error("C failed");
       if (boundary === "send") {
-        vi.mocked(deps.sendMessage).mockImplementation((id) =>
+        vi.mocked(deps.sendMessage).mockImplementation((_message, id) =>
           id === "C" ? Result.err(error) : Result.ok(undefined),
         );
       } else {
         vi.mocked(deps.sendMessage).mockReturnValue(Result.ok(undefined));
-        const sanitize = deps.payloadProcessor.safeSanitize;
+        const sanitize = deps.payloadProcessor.safeSanitize.bind(
+          deps.payloadProcessor,
+        );
         vi.spyOn(deps.payloadProcessor, "safeSanitize").mockImplementation(
           (args, id) => (id === "C" ? Result.err(error) : sanitize(args, id)),
         );
@@ -192,13 +202,16 @@ describe("CallProcessor", () => {
       path: ["prop"],
       value: undefined,
     });
-    expect(deps.sendMessage).toHaveBeenCalledWith("A", {
-      id: 1,
-      type: NexusMessageType.SET,
-      resourceId: "remote",
-      path: ["prop"],
-      value: "\u0003U",
-    });
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      {
+        id: 1,
+        type: NexusMessageType.SET,
+        resourceId: "remote",
+        path: ["prop"],
+        value: "\u0003U",
+      },
+      "A",
+    );
   });
 
   it("propagates a pending disconnect through Result", async () => {
@@ -219,7 +232,7 @@ describe("CallProcessor", () => {
       code: "E_AUTH_CALL_DENIED",
       message: "denied",
     };
-    vi.mocked(deps.sendMessage).mockImplementation((id, message) => {
+    vi.mocked(deps.sendMessage).mockImplementation((message, id) => {
       deps.pendingCallManager.handleResponse(
         message.id!,
         null,

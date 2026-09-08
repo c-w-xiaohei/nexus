@@ -38,15 +38,13 @@ type TargetStaleSubscription<M extends AdapterModel> = {
 
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
-  private readonly resourceManager: ResourceManager.Runtime;
-  private readonly payloadProcessor: PayloadProcessor.Runtime<M>;
-  private readonly proxyFactory: ProxyFactory<M>;
+  private readonly resourceManager: ResourceManager;
+  private readonly payloadProcessor: PayloadProcessor;
+  private readonly proxyFactory: ProxyFactory;
   private readonly messageHandler: MessageHandler<M>;
-  private readonly pendingCallManager: PendingCallManager.Runtime;
-  private readonly callProcessor: CallProcessor<M>;
-  private readonly policy?: NexusAuthorizationPolicy<M>;
+  private readonly pendingCallManager: PendingCallManager;
+  private readonly callProcessor: CallProcessor;
 
-  private messageIdSeq = 1;
   private readonly disconnectListeners = new Map<string, Set<() => void>>();
   private readonly targetStaleListeners = new Map<
     string,
@@ -63,26 +61,18 @@ export class Engine<M extends AdapterModel> {
       policy?: NexusAuthorizationPolicy<M>;
     } = {},
   ) {
-    this.policy = config.policy;
-    this.resourceManager = ResourceManager.create();
+    this.resourceManager = new ResourceManager();
 
     if (config.providers) {
       this.registerServices(config.providers);
     }
 
-    this.proxyFactory = new ProxyFactory<M>(
-      {
-        safeDispatchCall: (options) => this.safeDispatchCall(options),
-        dispatchRelease: (resourceId, connectionId) =>
-          this.dispatchRelease(resourceId, connectionId),
-      },
-      this.resourceManager,
-    );
-    this.payloadProcessor = PayloadProcessor.create(
+    this.proxyFactory = new ProxyFactory(this, this.resourceManager);
+    this.payloadProcessor = new PayloadProcessor(
       this.resourceManager,
       this.proxyFactory,
     );
-    this.pendingCallManager = PendingCallManager.create();
+    this.pendingCallManager = new PendingCallManager();
     this.messageHandler = new MessageHandler({
       safeSendMessage: (message, connectionId) =>
         this.safeSendMessage(message, connectionId),
@@ -91,23 +81,18 @@ export class Engine<M extends AdapterModel> {
       pendingCalls: this.pendingCallManager,
       resourceManager: this.resourceManager,
       payloadProcessor: this.payloadProcessor,
-      policy: this.policy,
+      policy: config.policy,
       getConnectionAuthContext: (connectionId) =>
         this.connectionManagerState.getConnectionAuthSnapshot(connectionId),
     });
     this.callProcessor = new CallProcessor({
-      nextMessageId: () => this.nextMessageId(),
       getReadyConnectionIds: (target) =>
         this.connectionManagerState.safeGetReadyConnectionIds(target),
-      sendMessage: (connectionId, message) =>
+      sendMessage: (message, connectionId) =>
         this.safeSendMessage(message, connectionId),
       payloadProcessor: this.payloadProcessor,
       pendingCallManager: this.pendingCallManager,
     });
-  }
-
-  private nextMessageId(): number {
-    return this.messageIdSeq++;
   }
 
   public createServiceProxy<T extends object>(
@@ -234,6 +219,7 @@ export class Engine<M extends AdapterModel> {
     return this.callProcessor.safeProcess(options);
   }
 
+  /** Best-effort notification after local release; logs send failure without waiting for a remote ACK. */
   public dispatchRelease(resourceId: string, connectionId: string): void {
     const message: ReleaseMessage = {
       type: NexusMessageType.RELEASE,

@@ -7,11 +7,9 @@ import {
   type ApplyMessage,
   type NexusMessage,
 } from "@/types/message";
-import type {
-  AdapterModel,
-  ContextMetaOf,
-  ConnectionMetaOf,
-} from "@/types/adapter-model";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { Engine } from "../engine";
+import type { ConnectionManager } from "@/connection/connection-manager";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { toSerializedError } from "@/utils/error";
 import type { PayloadProcessor } from "../payload/payload-processor";
@@ -22,7 +20,7 @@ import {
   isServiceWithHooks,
   SERVICE_INVOKE_START,
   SERVICE_INVOKE_END,
-  type ServiceInvocationContext,
+  type ServiceInvocationHooks,
 } from "../service-invocation-hooks";
 
 type Request = GetMessage | SetMessage | ApplyMessage;
@@ -30,6 +28,7 @@ type AuthorizedCall<M extends AdapterModel> = {
   serviceName: string;
   servicePolicy: NexusAuthorizationPolicy<M> | undefined;
 };
+type InvocationTarget = { root: any; target: any; parent: any };
 
 const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
@@ -48,7 +47,20 @@ class MessageResourceError extends Error {
 
 /** Owns incoming RPC processing for one Engine; dependencies and methods are shared across requests. */
 export class MessageHandler<M extends AdapterModel> {
-  constructor(private readonly context: MessageHandler.Context<M>) {}
+  constructor(
+    private readonly context: {
+      safeSendMessage: Engine<M>["safeSendMessage"];
+      dispatchRelease: Engine<M>["dispatchRelease"];
+      pendingCalls: Pick<
+        PendingCallManager,
+        "handleResponse" | "canHandleResponse"
+      >;
+      resourceManager: ResourceManager;
+      payloadProcessor: PayloadProcessor;
+      policy?: NexusAuthorizationPolicy<M>;
+      getConnectionAuthContext?: ConnectionManager<M>["getConnectionAuthSnapshot"];
+    },
+  ) {}
 
   /**
    * Processes one message. Only requests receive replies, with one send attempt.
@@ -58,62 +70,62 @@ export class MessageHandler<M extends AdapterModel> {
     message: NexusMessage,
     source: string,
   ): Promise<Result<void, Error>> {
-    return Result.tryPromise({
-      try: async (): Promise<Result<void, Error>> => {
-        const {
-          payloadProcessor: payload,
-          pendingCalls: pending,
-          resourceManager: resources,
-        } = this.context;
-        switch (message.type) {
-          case NexusMessageType.GET:
-          case NexusMessageType.SET:
-          case NexusMessageType.APPLY:
-            return this.safeReply(message, source);
-          case NexusMessageType.RES: {
-            // Reject before revival so duplicate/late responses cannot allocate orphan facades.
-            if (!pending.canHandleResponse(message.id, source)) {
-              payload.releaseOrphanedResponseResources(
-                message.result,
-                source,
-                this.context.dispatchRelease,
-              );
-              break;
-            }
-            const revived = payload.safeRevive([message.result], source);
-            pending.handleResponse(
-              message.id,
-              revived.isOk() ? revived.value[0] : null,
-              revived.isErr() ? toSerializedError(revived.error) : null,
+    // This is the unexpected-exception boundary for incoming messages, not a reply retry.
+    try {
+      const {
+        payloadProcessor: payload,
+        pendingCalls: pending,
+        resourceManager: resources,
+      } = this.context;
+      switch (message.type) {
+        case NexusMessageType.GET:
+        case NexusMessageType.SET:
+        case NexusMessageType.APPLY:
+          return await this.safeReply(message, source);
+        case NexusMessageType.RES: {
+          // Reject before revival so duplicate/late responses cannot allocate orphan facades.
+          if (!pending.canHandleResponse(message.id, source)) {
+            payload.releaseOrphanedResponseResources(
+              message.result,
               source,
+              this.context.dispatchRelease,
             );
             break;
           }
-          case NexusMessageType.ERR:
-            pending.handleResponse(message.id, null, message.error, source);
-            break;
-          case NexusMessageType.RELEASE:
-            if (
-              resources.getLocalResource(message.resourceId)
-                ?.ownerConnectionId === source
-            ) {
-              resources.releaseLocalResource(message.resourceId);
-            }
-            break;
-          default:
-            return Result.err(
-              Object.assign(
-                new Error(
-                  `No message handler found for message type "${message.type}"`,
-                ),
-                { code: "E_USAGE_INVALID" },
-              ),
-            );
+          const revived = payload.safeRevive([message.result], source);
+          pending.handleResponse(
+            message.id,
+            revived.isOk() ? revived.value[0] : null,
+            revived.isErr() ? toSerializedError(revived.error) : null,
+            source,
+          );
+          break;
         }
-        return Result.ok(undefined);
-      },
-      catch: toError,
-    }).then((result) => result.andThen((value) => value));
+        case NexusMessageType.ERR:
+          pending.handleResponse(message.id, null, message.error, source);
+          break;
+        case NexusMessageType.RELEASE:
+          if (
+            resources.getLocalResource(message.resourceId)
+              ?.ownerConnectionId === source
+          ) {
+            resources.releaseLocalResource(message.resourceId);
+          }
+          break;
+        default:
+          return Result.err(
+            Object.assign(
+              new Error(
+                `No message handler found for message type "${message.type}"`,
+              ),
+              { code: "E_USAGE_INVALID" },
+            ),
+          );
+      }
+      return Result.ok(undefined);
+    } catch (error) {
+      return Result.err(toError(error));
+    }
   }
 
   // ===== Request lifecycle: authorize -> execute -> encode -> hand off =====
@@ -123,10 +135,12 @@ export class MessageHandler<M extends AdapterModel> {
     message: Request,
     source: string,
   ): Promise<Result<void, Error>> {
-    const encoded = await Result.tryPromise({
-      try: () => this.prepareReply(message, source),
-      catch: toError,
-    }).then((result) => result.andThen((value) => value));
+    let encoded: Result<any[], Error>;
+    try {
+      encoded = await this.prepareReply(message, source);
+    } catch (error) {
+      encoded = Result.err(toError(error));
+    }
     const reply: NexusMessage = encoded.isErr()
       ? {
           type: NexusMessageType.ERR,
@@ -167,7 +181,7 @@ export class MessageHandler<M extends AdapterModel> {
     // Authorization may await application code. Recheck before any getter or proxy trap.
     const resolved = this.resolvePath(message, source);
     if (resolved.isErr()) return resolved;
-    const { root, propertyPath, target, parent } = resolved.value;
+    const { root, propertyPath, target } = resolved.value;
     const payload = this.context.payloadProcessor;
     let result: any;
     switch (message.type) {
@@ -190,59 +204,14 @@ export class MessageHandler<M extends AdapterModel> {
         break;
       }
       case NexusMessageType.APPLY: {
-        if (typeof target !== "function")
-          return Result.err(
-            new MessageResourceError(
-              `Target at path [${[message.resourceId, ...message.path].join(".")}] is not a function.`,
-              "E_TARGET_NOT_CALLABLE",
-              { resourceId: message.resourceId, path: message.path },
-            ),
-          );
-        const serviceName = authorized.value.serviceName;
-        const service = !serviceName.startsWith("resource:")
-          ? this.context.resourceManager.getExposedService(serviceName)
-          : undefined;
-        // Preserve hook lookup priority and short-circuiting: getters may run application code.
-        const hookTarget = isServiceWithHooks(service)
-          ? service
-          : isServiceWithHooks(root)
-            ? root
-            : isServiceWithHooks(parent ?? target)
-              ? (parent ?? target)
-              : undefined;
-        const start = getServiceInvocationHook(
-          hookTarget,
-          SERVICE_INVOKE_START,
-        ) as
-          | ((
-              context: ServiceInvocationContext,
-            ) => ServiceInvocationContext | undefined)
-          | undefined;
-        const end = getServiceInvocationHook(hookTarget, SERVICE_INVOKE_END) as
-          | ((context?: ServiceInvocationContext) => void)
-          | undefined;
-        const auth = start
-          ? this.context.getConnectionAuthContext?.(source)
-          : undefined;
-        const invocation = start?.({
-          sourceConnectionId: source,
-          sourceIdentity: auth?.remoteIdentity,
-          localIdentity: auth?.localIdentity,
-          platform: auth?.connection,
-        });
-        try {
-          const args = payload.safeRevive(message.args, source);
-          if (args.isErr()) return args;
-          result = Reflect.apply(
-            target,
-            parent,
-            invocation === undefined ? args.value : [...args.value, invocation],
-          );
-        } finally {
-          // State/Relay require start -> revive -> apply -> end synchronously, even on failure.
-          end?.(invocation);
-        }
-        result = await result;
+        const invoked = this.invoke(
+          message,
+          source,
+          authorized.value.serviceName,
+          resolved.value,
+        );
+        if (invoked.isErr()) return invoked;
+        result = await invoked.value;
         break;
       }
     }
@@ -253,6 +222,65 @@ export class MessageHandler<M extends AdapterModel> {
       authorized.value.serviceName,
       authorized.value.servicePolicy,
     );
+  }
+
+  /**
+   * Runs only the synchronous invocation scope: start -> revive -> apply -> end.
+   * The caller awaits the returned value afterwards; State/Relay require this order.
+   * Application throws propagate to safeReply without being wrapped by Result.map.
+   */
+  private invoke(
+    message: ApplyMessage,
+    source: string,
+    serviceName: string,
+    { root, target, parent }: InvocationTarget,
+  ): Result<any, Error> {
+    if (typeof target !== "function")
+      return Result.err(
+        new MessageResourceError(
+          `Target at path [${[message.resourceId, ...message.path].join(".")}] is not a function.`,
+          "E_TARGET_NOT_CALLABLE",
+          { resourceId: message.resourceId, path: message.path },
+        ),
+      );
+    const service = serviceName.startsWith("resource:")
+      ? undefined
+      : this.context.resourceManager.getExposedService(serviceName);
+    // Preserve short-circuit lookup: hook getters may execute application code.
+    const owner = [service, root, parent ?? target].find(isServiceWithHooks);
+    const start = getServiceInvocationHook(
+      owner,
+      SERVICE_INVOKE_START,
+    ) as ServiceInvocationHooks[typeof SERVICE_INVOKE_START];
+    const end = getServiceInvocationHook(
+      owner,
+      SERVICE_INVOKE_END,
+    ) as ServiceInvocationHooks[typeof SERVICE_INVOKE_END];
+    const auth = start
+      ? this.context.getConnectionAuthContext?.(source)
+      : undefined;
+    const invocation = start?.({
+      sourceConnectionId: source,
+      sourceIdentity: auth?.remoteIdentity,
+      localIdentity: auth?.localIdentity,
+      platform: auth?.connection,
+    });
+    try {
+      const args = this.context.payloadProcessor.safeRevive(
+        message.args,
+        source,
+      );
+      if (args.isErr()) return args;
+      return Result.ok(
+        Reflect.apply(
+          target,
+          parent,
+          invocation === undefined ? args.value : [...args.value, invocation],
+        ),
+      );
+    } finally {
+      end?.(invocation);
+    }
   }
 
   // ===== Authorization: registry metadata first, application properties afterwards =====
@@ -401,33 +429,6 @@ export class MessageHandler<M extends AdapterModel> {
         ),
       );
     return Result.ok(resource);
-  }
-}
-
-export namespace MessageHandler {
-  export interface Context<M extends AdapterModel> {
-    readonly safeSendMessage: (
-      message: NexusMessage,
-      connectionId: string,
-    ) => Result<void, Error>;
-    readonly dispatchRelease: (
-      resourceId: string,
-      connectionId: string,
-    ) => void;
-    readonly pendingCalls: Pick<
-      PendingCallManager.Runtime,
-      "handleResponse" | "canHandleResponse"
-    >;
-    readonly resourceManager: ResourceManager.Runtime;
-    readonly payloadProcessor: PayloadProcessor.Runtime<M>;
-    policy?: NexusAuthorizationPolicy<M>;
-    getConnectionAuthContext?: (connectionId: string) =>
-      | {
-          readonly localIdentity: ContextMetaOf<M>;
-          readonly remoteIdentity: ContextMetaOf<M>;
-          readonly connection: ConnectionMetaOf<M>;
-        }
-      | undefined;
   }
 }
 

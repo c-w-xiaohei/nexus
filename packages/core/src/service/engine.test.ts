@@ -7,6 +7,9 @@ import { createL3Endpoints } from "@/utils/test-utils";
 import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
 import { Nexus } from "@/api/nexus";
 import { NexusDisconnectedError, NexusUsageError } from "@/errors";
+import { Result } from "better-result";
+import { Logger } from "@/logger";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 
 // A mock service to be registered on the host engine for tests.
 const mockTestService = {
@@ -38,6 +41,34 @@ describe("Engine", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("safeRelease succeeds locally even when the release notification cannot be sent", async () => {
+    const error = new NexusDisconnectedError("connection closed");
+    const send = vi
+      .spyOn(clientEngine, "safeSendMessage")
+      .mockReturnValue(Result.err(error));
+    const warn = vi
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => {});
+    const resource: any = (
+      clientEngine as any
+    ).proxyFactory.createRemoteResourceProxy("released", clientConnectionId);
+
+    expect(Nexus.safeRelease(resource).isOk()).toBe(true);
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      { type: NexusMessageType.RELEASE, id: null, resourceId: "released" },
+      clientConnectionId,
+    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      `Failed to dispatch release for resource #released to ${clientConnectionId}.`,
+      error,
+    );
+    await expect(resource.run()).rejects.toMatchObject({
+      code: "E_RESOURCE_ACCESS_DENIED",
+    });
+    resource[RELEASE_PROXY_SYMBOL]();
+    expect(send).toHaveBeenCalledOnce();
   });
 
   it("should delegate dispatchCall to CallProcessor", async () => {

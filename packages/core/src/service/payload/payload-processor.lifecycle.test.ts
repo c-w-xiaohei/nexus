@@ -3,7 +3,7 @@ import { Result } from "better-result";
 import { PayloadProcessor } from "./payload-processor";
 import { Placeholder } from "./placeholder";
 import { PlaceholderType } from "./protocol";
-import { ProxyFactory, type ProxyFactoryCallbacks } from "../proxy-factory";
+import { ProxyFactory } from "../proxy-factory";
 import { ResourceManager } from "../resource-manager";
 
 const { ok } = Result;
@@ -18,8 +18,8 @@ const malformedMap = new Placeholder(
 ).toString();
 
 const createPayloadProcessor = () => {
-  const resourceManager = ResourceManager.create();
-  const engine: ProxyFactoryCallbacks = {
+  const resourceManager = new ResourceManager();
+  const engine: ConstructorParameters<typeof ProxyFactory>[0] = {
     safeDispatchCall: vi.fn(() => Promise.resolve(ok(undefined))),
     dispatchRelease: vi.fn(),
   };
@@ -27,7 +27,7 @@ const createPayloadProcessor = () => {
   return {
     engine,
     resourceManager,
-    payloadProcessor: PayloadProcessor.create(resourceManager, proxyFactory),
+    payloadProcessor: new PayloadProcessor(resourceManager, proxyFactory),
   };
 };
 
@@ -67,7 +67,7 @@ describe("PayloadProcessor resource identity", () => {
   it("discards a failed revive's temporary facade for an existing identity", () => {
     const registrations = new Map<object, unknown>();
     let latestRegistrationToken: object | undefined;
-    let finalize: (heldValue: unknown) => void;
+    let finalize!: (heldValue: unknown) => void;
     const originalFinalizationRegistry = global.FinalizationRegistry;
     global.FinalizationRegistry = class {
       constructor(callback: (heldValue: unknown) => void) {

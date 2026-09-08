@@ -1,6 +1,7 @@
 import type { ServiceProvider } from "@/api/types/config";
 import type { NexusInstance } from "@/api/types";
 import { Token } from "@/api/token";
+import { Logger } from "@/logger";
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
@@ -413,6 +414,7 @@ export const relayNexusStore = <
     UpstreamM
   >(definition.token.id);
   const relayStoreInstanceId = createRelaySessionId();
+  const logger = new Logger("L3 -> RelayStore");
   let downstreamVersion = 0;
   let latestState: TState | null = null;
   let upstreamStoreInstanceId: string | null = null;
@@ -455,7 +457,10 @@ export const relayNexusStore = <
 
     for (const [subscriptionId, subscription] of subscriptions.entries()) {
       try {
-        subscription.onSync(snapshot);
+        // Fanout owns these background calls, not the generic proxy invocation layer.
+        void Promise.resolve(subscription.onSync(snapshot)).catch((error) =>
+          logger.error("Relay snapshot notification failed", error),
+        );
       } catch {
         subscriptions.delete(subscriptionId);
       }
@@ -480,7 +485,9 @@ export const relayNexusStore = <
 
     for (const subscription of subscriptions.values()) {
       try {
-        subscription.onSync(terminalEnvelope);
+        void Promise.resolve(subscription.onSync(terminalEnvelope)).catch(
+          (error) => logger.error("Relay terminal notification failed", error),
+        );
       } catch {
         // listener isolation only
       }

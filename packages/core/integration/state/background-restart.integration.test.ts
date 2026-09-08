@@ -146,7 +146,8 @@ const createStoreService = (options: {
         };
 
         for (const callback of subscriptions.values()) {
-          callback(event);
+          // This fixture deliberately sends across closed/held sessions during restart.
+          void Promise.resolve(callback(event)).catch(() => undefined);
         }
       };
 

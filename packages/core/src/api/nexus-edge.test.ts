@@ -220,7 +220,7 @@ describe("Nexus service acquisition API", () => {
   it("does not expose recipient IDs from all or stream settlements", async () => {
     const { PendingCallManager } =
       await import("../service/pending-call-manager");
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const pending = manager.register(1, {
       strategy: "all",
       isBroadcast: true,

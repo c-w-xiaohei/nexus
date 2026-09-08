@@ -24,6 +24,12 @@ graph TD
 
 ## Dispatch And Ownership
 
+- `ProxyFactory.dispatch` is the Result-to-Promise-rejection boundary, not another
+  safe API. GET/APPLY return failures to the caller without automatic logging.
+  SET has no caller-visible completion Promise, so its trap observes and logs
+  asynchronous failure; the synchronous released-resource guard stays in place.
+  RELEASE is also best-effort with send-failure logging, not a remote cleanup ACK.
+
 - `CallBinding` pairs one connection with `one`, or a fixed connection list with
   `all` / `stream`. Timeout is explicit. `staleTarget.where` only observes
   selection invalidation; it does not reroute calls.
@@ -46,17 +52,23 @@ graph TD
 - APPLY keeps `invokeStart -> revive -> Reflect.apply -> finally invokeEnd`
   synchronous, then awaits the returned value. GET transports the property value
   without awaiting it. State and Relay depend on this distinction.
+- `invoke` owns that synchronous scope; `prepareReply` only selects the operation
+  and encodes its result. `safeReply` keeps execution errors separate from the
+  single reply handoff, so send failures never cause reply loops.
 - The resource host determines service attribution; a remote resource ID must
   not be resolved against the caller's unrelated local resource registry.
 
 ## Payload And Lifetime
 
-`CallProcessor` and `MessageHandler` are per-Engine classes. Constructor-injected
-dependencies stay on the instance; shared methods handle dispatch and request
-execution without forwarding context through each helper. `ProxyFactory` also
-shares its trap methods, with weak target metadata carrying paths and resource
-lifetime scopes. Request execution and reply encoding remain private to
-`MessageHandler`; no separate request handler or request-result contract is needed.
+All L3 runtime components are per-Engine classes; the class is also the instance
+type, without a parallel `Runtime` interface or factory return object. Only
+authorization and service creation retain model-dependent types. Dependency
+signatures reuse existing methods rather than redefining transport contracts.
+`ProxyFactory` shares its traps. One weak index associates both callable targets
+and facades with a binding/path. Resource facades additionally share a release
+state, which doubles as the finalizer anchor and does not point back to a facade.
+Service facades have no resource lifecycle state. Pending streams implement the
+iterator protocol directly.
 
 `protocol.ts` retains independent sanitizer and reviver tables. Payload traversal
 and capability rollback belong to `PayloadProcessor`; wire conversion semantics

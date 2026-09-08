@@ -17,9 +17,9 @@ const unwrap = <T>(result: Result<T, globalThis.Error>): T => {
 };
 
 describe("PayloadProcessor", () => {
-  let resourceManager: ResourceManager.Runtime;
-  let proxyFactory: ProxyFactory<any>;
-  let payloadProcessor: PayloadProcessor.Runtime<any>;
+  let resourceManager: ResourceManager;
+  let proxyFactory: ProxyFactory;
+  let payloadProcessor: PayloadProcessor;
 
   const mockConnectionId = "conn-1";
   const mockProxyObject = { __isProxy: true };
@@ -27,7 +27,7 @@ describe("PayloadProcessor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    resourceManager = ResourceManager.create();
+    resourceManager = new ResourceManager();
     proxyFactory = new (ProxyFactory as any)();
 
     vi.spyOn(resourceManager, "registerLocalResource").mockReturnValue(
@@ -37,7 +37,7 @@ describe("PayloadProcessor", () => {
       mockProxyObject,
     );
 
-    payloadProcessor = PayloadProcessor.create(resourceManager, proxyFactory);
+    payloadProcessor = new PayloadProcessor(resourceManager, proxyFactory);
   });
 
   describe("safeSanitize", () => {
@@ -187,6 +187,8 @@ describe("PayloadProcessor", () => {
         myObject,
         mockConnectionId,
         LocalResourceType.OBJECT,
+        undefined,
+        undefined,
       );
       expect(result[0]).toBe(
         new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),

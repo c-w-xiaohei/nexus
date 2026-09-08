@@ -13,6 +13,7 @@ import {
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
 } from "@/types/symbols";
 import { relayNexusStore } from "./index";
+import { Logger } from "@/logger";
 
 interface CounterState {
   count: number;
@@ -46,6 +47,69 @@ const createInvocation = (connectionId: string): ServiceInvocationContext => ({
 });
 
 describe("relayNexusStore", () => {
+  it.each(["snapshot", "terminal"] as const)(
+    "observes background %s notification failures without blocking siblings",
+    async (type) => {
+      let upstreamOnSync!: (event: unknown) => void;
+      const registration = relayNexusStore(definition, {
+        forwardThrough: {
+          create: vi.fn(async () => ({
+            subscribe: vi.fn(async (onSync: typeof upstreamOnSync) => {
+              upstreamOnSync = onSync;
+              return {
+                storeInstanceId: "bg-store",
+                subscriptionId: "bg-sub",
+                version: 1,
+                state: { count: 0 },
+              };
+            }),
+            unsubscribe: vi.fn(async () => undefined),
+            dispatch: vi.fn(),
+          })),
+        } as any,
+        forwardTarget: { context: "background" },
+      });
+      const delivery = deferred<void>();
+      const logged = deferred<void>();
+      const log = vi
+        .spyOn(Logger.prototype, "error")
+        .mockImplementation(() => logged.resolve());
+      const sibling = vi.fn();
+      const error = new NexusStoreDisconnectedError("delivery failed");
+      try {
+        await registration.service.subscribe(
+          () => delivery.promise,
+          createInvocation("alpha"),
+        );
+        await registration.service.subscribe(sibling, createInvocation("beta"));
+        upstreamOnSync(
+          type === "snapshot"
+            ? {
+                type,
+                storeInstanceId: "bg-store",
+                version: 2,
+                state: { count: 1 },
+              }
+            : {
+                type,
+                storeInstanceId: "bg-store",
+                lastKnownVersion: 1,
+                reason: "disconnected",
+              },
+        );
+        expect(sibling).toHaveBeenCalledOnce();
+        delivery.reject(error);
+        await logged.promise;
+        expect(log).toHaveBeenCalledExactlyOnceWith(
+          `Relay ${type} notification failed`,
+          error,
+        );
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
   it("waits for the upstream baseline before resolving downstream subscribe", async () => {
     const gate = deferred<{
       storeInstanceId: string;

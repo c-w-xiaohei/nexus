@@ -4,7 +4,6 @@ import {
   type ApplyMessage,
   type GetMessage,
   type SetMessage,
-  type NexusMessage,
 } from "@/types/message";
 import {
   NexusDisconnectedError,
@@ -14,6 +13,7 @@ import {
 import type { PayloadProcessor } from "./payload/payload-processor";
 import type { PendingCallManager } from "./pending-call-manager";
 import type { AdapterModel } from "@/types/adapter-model";
+import type { Engine } from "./engine";
 
 const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
@@ -36,8 +36,19 @@ export type DispatchCallOptions = CallBinding &
   };
 
 /** Dispatches fixed-session calls using shared methods and one Engine's dependencies. */
-export class CallProcessor<M extends AdapterModel> {
-  constructor(private readonly deps: CallProcessor.Dependencies<M>) {}
+export class CallProcessor {
+  private messageIdSeq = 1;
+
+  constructor(
+    private readonly deps: {
+      getReadyConnectionIds(
+        target: CallBinding["target"],
+      ): Result<string[], Error>;
+      sendMessage: Engine<AdapterModel>["safeSendMessage"];
+      payloadProcessor: PayloadProcessor;
+      pendingCallManager: PendingCallManager;
+    },
+  ) {}
 
   /**
    * Dispatches one operation to its bound sessions using caller-owned dependencies.
@@ -79,7 +90,7 @@ export class CallProcessor<M extends AdapterModel> {
         }
 
         // 2. Establish the consumer before any reentrant transport can reply.
-        const id = deps.nextMessageId();
+        const id = this.messageIdSeq++;
         const pendingOptions = {
           isBroadcast: options.strategy !== "one",
           sentConnectionIds: connectionIds,
@@ -150,7 +161,7 @@ export class CallProcessor<M extends AdapterModel> {
         if (encoded.isErr()) return encoded;
         let delivered = false;
         try {
-          const sent = this.deps.sendMessage(connectionId, encoded.value);
+          const sent = this.deps.sendMessage(encoded.value, connectionId);
           delivered = sent.isOk();
           return sent;
         } finally {
@@ -164,24 +175,9 @@ export class CallProcessor<M extends AdapterModel> {
   }
 }
 
-export namespace CallProcessor {
-  export interface Dependencies<M extends AdapterModel> {
-    nextMessageId(): number;
-    getReadyConnectionIds(
-      target: CallBinding["target"],
-    ): Result<string[], Error>;
-    sendMessage(
-      connectionId: string,
-      message: NexusMessage,
-    ): Result<void, Error>;
-    payloadProcessor: PayloadProcessor.Runtime<M>;
-    pendingCallManager: PendingCallManager.Runtime;
-  }
-}
-
 /** Encodes a fresh message whose callback/ref capabilities belong to one recipient. */
-function buildMessage<M extends AdapterModel>(
-  payload: PayloadProcessor.Runtime<M>,
+function buildMessage(
+  payload: PayloadProcessor,
   options: DispatchCallOptions,
   connectionId: string,
   id: number,

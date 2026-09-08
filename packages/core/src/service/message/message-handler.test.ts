@@ -21,9 +21,9 @@ import {
 } from "../service-invocation-hooks";
 
 const mockEngine = {
-  safeSendMessage: vi.fn<MessageHandler.Context<any>["safeSendMessage"]>(() =>
-    ok(undefined),
-  ),
+  safeSendMessage: vi.fn<
+    ConstructorParameters<typeof MessageHandler<any>>[0]["safeSendMessage"]
+  >(() => ok(undefined)),
   handleResponse: vi.fn(),
   canHandleResponse: vi.fn(() => true),
   dispatchRelease: vi.fn(),
@@ -31,9 +31,9 @@ const mockEngine = {
 
 describe("MessageHandler", () => {
   let messageHandler: MessageHandler<any>;
-  let resourceManager: ResourceManager.Runtime;
-  let context: MessageHandler.Context<any>;
-  let payloadProcessor: PayloadProcessor.Runtime<any>;
+  let resourceManager: ResourceManager;
+  let context: ConstructorParameters<typeof MessageHandler<any>>[0];
+  let payloadProcessor: PayloadProcessor;
   let sanitizeSpy: ReturnType<typeof vi.spyOn>;
   let reviveSpy: ReturnType<typeof vi.spyOn>;
 
@@ -42,8 +42,8 @@ describe("MessageHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    resourceManager = ResourceManager.create();
-    payloadProcessor = PayloadProcessor.create(resourceManager, {
+    resourceManager = new ResourceManager();
+    payloadProcessor = new PayloadProcessor(resourceManager, {
       createRemoteResourceProxy: vi.fn(),
     } as any);
 
@@ -235,23 +235,73 @@ describe("MessageHandler", () => {
     );
   });
 
-  it("releases an encoded reply when sending fails without replying with ERR", async () => {
-    resourceManager.registerExposedService("reply", { run: () => ({}) });
-    const error = new Error("send failed");
-    mockEngine.safeSendMessage.mockReturnValueOnce(err(error));
+  it.each(["error", "throw"] as const)(
+    "releases an encoded reply after send %s without replying with ERR",
+    async (failure) => {
+      resourceManager.registerExposedService("reply", { run: () => ({}) });
+      const error = new Error("send failed");
+      mockEngine.safeSendMessage.mockImplementationOnce(() => {
+        if (failure === "throw") throw error;
+        return err(error);
+      });
+      const result = await messageHandler.safeHandleMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 74,
+          resourceId: null,
+          path: ["reply", "run"],
+          args: [],
+        },
+        sourceConnectionId,
+      );
+      expect(result.isErr() && result.error).toBe(error);
+      expect(resourceManager.countLocalResources()).toBe(0);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("encodes a GET Promise without awaiting it", async () => {
+    const value = new Promise(() => {});
+    resourceManager.registerExposedService("promises", { value });
+    const encode = vi
+      .mocked(payloadProcessor.safeSanitizeFromService)
+      .mockReturnValueOnce(ok(["encoded"]));
     const result = await messageHandler.safeHandleMessage(
       {
-        type: NexusMessageType.APPLY,
-        id: 74,
+        type: NexusMessageType.GET,
+        id: 75,
         resourceId: null,
-        path: ["reply", "run"],
-        args: [],
+        path: ["promises", "value"],
+      },
+      sourceConnectionId,
+    );
+    expect(result.isOk()).toBe(true);
+    expect(encode.mock.calls[0][0][0]).toBe(value);
+    expect(mockEngine.safeSendMessage).toHaveBeenCalledExactlyOnceWith(
+      {
+        type: NexusMessageType.RES,
+        id: 75,
+        result: "encoded",
+      },
+      sourceConnectionId,
+    );
+  });
+
+  it("returns unexpected response processing errors without replying", async () => {
+    const error = new Error("revival failed unexpectedly");
+    reviveSpy.mockImplementationOnce(() => {
+      throw error;
+    });
+    const result = await messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.RES,
+        id: 76,
+        result: "value",
       },
       sourceConnectionId,
     );
     expect(result.isErr() && result.error).toBe(error);
-    expect(resourceManager.countLocalResources()).toBe(0);
-    expect(mockEngine.safeSendMessage).toHaveBeenCalledOnce();
+    expect(mockEngine.safeSendMessage).not.toHaveBeenCalled();
   });
 
   describe("APPLY Handler", () => {

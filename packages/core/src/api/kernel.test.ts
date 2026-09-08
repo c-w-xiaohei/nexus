@@ -152,7 +152,9 @@ describe("NexusKernelBuilder", () => {
     }
 
     expect((result.value.connectionManager as any).config.policy).toBe(policy);
-    expect((result.value.engine as any).policy).toBe(policy);
+    expect((result.value.engine as any).messageHandler.context.policy).toBe(
+      policy,
+    );
   });
 
   it("should fail endpoint source conflicts before endpoint instantiation", async () => {

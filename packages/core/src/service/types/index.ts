@@ -2,10 +2,6 @@ import type { AdapterModel } from "@/types/adapter-model";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 
 /**
- * This barrel file will export all types and interfaces specific to Layer 3.
- */
-
-/**
  * The type of a locally held resource that is exposed to remote contexts.
  * - `function`: A standard function or a method.
  * - `object`: An object passed by reference, typically marked with `@Ref`.
@@ -32,29 +28,10 @@ export interface LocalResourceRecord {
   servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
 }
 
-/**
- * Represents a pending remote call that is waiting for a response.
- */
-export interface PendingCall {
-  /** The function to call to resolve the promise associated with this call. */
-  resolve: (value: any) => void;
-  /** The function to call to reject the promise associated with this call. */
-  reject: (reason?: any) => void;
-  /** An optional timeout timer for the call. */
-  timer?: ReturnType<typeof setTimeout>;
-}
-
-export interface ExposedService<T> {
-  instance: T;
-  // TODO: Add options like `isSingleton` etc.
-}
-
 /** Context for sanitizing payloads before sending. */
 export interface SanitizeContext {
   targetConnectionId: string;
   createdResourceIds?: string[];
-  /** Indicates if the value is explicitly marked with @Ref */
-  isRef?: boolean;
   serviceName?: string;
   servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
 }

@@ -36,7 +36,6 @@ export enum PlaceholderType {
   // REGEXP = 'X',
 }
 
-import type { AdapterModel } from "@/types/adapter-model";
 import {
   LocalResourceType,
   type ReviveContext,
@@ -44,24 +43,21 @@ import {
   ValueType,
 } from "../types";
 import { Placeholder } from "./placeholder";
-import { PayloadProcessor } from "./payload-processor";
+import type { PayloadProcessor } from "./payload-processor";
 
-type SanitizeHandler<M extends AdapterModel> = (
-  processor: PayloadProcessor.Runtime<M>,
+type SanitizeHandler = (
+  processor: PayloadProcessor,
   value: any,
   context: SanitizeContext,
 ) => Placeholder;
 
-type ReviveHandler<M extends AdapterModel> = (
-  processor: PayloadProcessor.Runtime<M>,
+type ReviveHandler = (
+  processor: PayloadProcessor,
   placeholder: Placeholder,
   context: ReviveContext,
 ) => any;
 
-export const SANITIZER_TABLE_CONFIG = new Map<
-  ValueType,
-  SanitizeHandler<AdapterModel>
->([
+export const SANITIZER_TABLE_CONFIG = new Map<ValueType, SanitizeHandler>([
   [
     ValueType.FUNCTION,
     (processor, value, context) => {
@@ -104,10 +100,7 @@ export const SANITIZER_TABLE_CONFIG = new Map<
   ],
 ]);
 
-export const REVIVER_TABLE_CONFIG = new Map<
-  PlaceholderType,
-  ReviveHandler<AdapterModel>
->([
+export const REVIVER_TABLE_CONFIG = new Map<PlaceholderType, ReviveHandler>([
   [
     PlaceholderType.RESOURCE,
     (processor, placeholder, context) =>

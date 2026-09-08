@@ -8,8 +8,68 @@ describe("PendingCallManager", () => {
     vi.useRealTimers();
   });
 
+  it("preserves timeout and all-disconnected collect semantics", async () => {
+    vi.useFakeTimers();
+    const manager = new PendingCallManager();
+    const unicast = manager.register(1, {
+      strategy: "all",
+      isBroadcast: false,
+      sentConnectionIds: ["A"],
+      timeout: 100,
+    });
+    const multicast = manager.register(2, {
+      strategy: "all",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B"],
+      timeout: 100,
+    });
+    manager.handleResponse(2, "B", null, "B");
+    vi.advanceTimersByTime(100);
+    expect(await unicast).toMatchObject({ error: { code: "E_CALL_TIMEOUT" } });
+    expect(await multicast).toEqual(
+      Result.ok([{ status: "fulfilled", value: "B" }]),
+    );
+    const disconnected = manager.register(3, {
+      strategy: "all",
+      isBroadcast: true,
+      sentConnectionIds: ["A", "B"],
+      timeout: 100,
+    });
+    manager.onDisconnect("A");
+    manager.onDisconnect("B");
+    expect(await disconnected).toMatchObject({
+      error: { code: "E_CONN_CLOSED" },
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("settles waiting stream readers on cancellation without affecting another manager", async () => {
+    vi.useFakeTimers();
+    const first = new PendingCallManager();
+    const second = new PendingCallManager();
+    const options = {
+      strategy: "stream" as const,
+      isBroadcast: true,
+      sentConnectionIds: ["A"],
+      timeout: 100,
+    };
+    const stream = first.register(1, options);
+    const other = second.register(1, options);
+    const reading = stream.next();
+    await stream.return?.();
+    expect(await reading).toEqual({ done: true, value: undefined });
+    expect(second.canHandleResponse(1, "A")).toBe(true);
+    second.handleResponse(1, "value", null, "A");
+    expect(await other.next()).toEqual({
+      done: false,
+      value: { status: "fulfilled", value: "value" },
+    });
+    expect(await other.next()).toEqual({ done: true, value: undefined });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("orders all results by private target order without exposing connection IDs", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const pending = manager.register(1, {
       strategy: "all",
       isBroadcast: true,
@@ -27,7 +87,7 @@ describe("PendingCallManager", () => {
   });
 
   it("keeps stream result order while hiding recipient IDs", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const stream = manager.register(1, {
       strategy: "stream",
       isBroadcast: true,
@@ -46,7 +106,7 @@ describe("PendingCallManager", () => {
 
   it("cancels a stream after an early iteration break", async () => {
     vi.useFakeTimers();
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const stream = manager.register(1, {
       strategy: "stream",
       isBroadcast: true,
@@ -66,7 +126,7 @@ describe("PendingCallManager", () => {
   });
 
   it("releases queued nested resource proxies when a finished stream is cancelled", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const releaseDelivered = vi.fn();
     const releaseQueuedFunction = vi.fn();
     const releaseQueuedObject = vi.fn();
@@ -109,7 +169,7 @@ describe("PendingCallManager", () => {
   });
 
   it("releases a resource repeated across discarded stream results once", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const release = vi.fn();
     const resource = Object.assign(() => undefined, {
       [RELEASE_PROXY_SYMBOL]: release,
@@ -135,7 +195,7 @@ describe("PendingCallManager", () => {
 
   it("makes stream return idempotent and resolves pending pulls as done", async () => {
     vi.useFakeTimers();
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const stream = manager.register(1, {
       strategy: "stream",
       isBroadcast: true,
@@ -162,7 +222,7 @@ describe("PendingCallManager", () => {
 
   it("releases queued and ordering-buffered capabilities together on cancellation", async () => {
     vi.useFakeTimers();
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const release = vi.fn();
     const resource = Object.assign(() => undefined, {
       [RELEASE_PROXY_SYMBOL]: release,
@@ -184,7 +244,7 @@ describe("PendingCallManager", () => {
   });
 
   it("releases a capability blocked entirely in the ordering buffer", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const release = vi.fn();
     const resource = Object.assign(() => undefined, {
       [RELEASE_PROXY_SYMBOL]: release,
@@ -201,7 +261,7 @@ describe("PendingCallManager", () => {
   });
 
   it("rejects a disconnected unicast call", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const pending = manager.register(1, {
       strategy: "all",
       isBroadcast: false,
@@ -216,7 +276,7 @@ describe("PendingCallManager", () => {
 
   it("does not release a buffered result delivered after stream timeout", async () => {
     vi.useFakeTimers();
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const release = vi.fn();
     const resource = { [RELEASE_PROXY_SYMBOL]: release };
     const stream = manager.register(1, {
@@ -240,7 +300,7 @@ describe("PendingCallManager", () => {
     "releases undeliverable %s results after dispatch failure",
     async (strategy) => {
       vi.useFakeTimers();
-      const manager = PendingCallManager.create();
+      const manager = new PendingCallManager();
       const options = {
         isBroadcast: true,
         sentConnectionIds: ["A", "B"],
@@ -265,7 +325,7 @@ describe("PendingCallManager", () => {
   );
 
   it("does not count a responded recipient again when it disconnects", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const pending = manager.register(1, {
       strategy: "all",
       isBroadcast: true,
@@ -286,7 +346,7 @@ describe("PendingCallManager", () => {
   });
 
   it("ignores a disconnected recipient's late response until another all recipient responds", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const pending = manager.register(1, {
       strategy: "all",
       isBroadcast: true,
@@ -305,7 +365,7 @@ describe("PendingCallManager", () => {
   });
 
   it("ignores a disconnected recipient's late stream response until another recipient responds", async () => {
-    const manager = PendingCallManager.create();
+    const manager = new PendingCallManager();
     const stream = manager.register(1, {
       strategy: "stream",
       isBroadcast: true,

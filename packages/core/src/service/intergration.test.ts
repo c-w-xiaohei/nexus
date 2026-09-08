@@ -61,7 +61,7 @@ class TaskServiceImpl implements TaskService {
     for (const onUpdate of this.subscribers.values()) {
       // It's crucial that the call to the remote callback is not awaited
       // so that one slow client doesn't block notifications for others.
-      onUpdate(taskList);
+      void Promise.resolve(onUpdate(taskList)).catch(() => undefined);
     }
   }
 
@@ -81,7 +81,7 @@ class TaskServiceImpl implements TaskService {
     const id = `sub-${this.nextSubId++}`;
     this.subscribers.set(id, onUpdate);
     // Immediately send the current list to the new subscriber
-    onUpdate(Array.from(this.tasks.values()));
+    await onUpdate(Array.from(this.tasks.values()));
     return id;
   }
 
@@ -228,7 +228,7 @@ describe("L3 Engine Integration Test: Task Service", () => {
   it("should manually release a resource proxy from the client", async () => {
     const task = await serviceProxy.addTask("Task to be processed", {});
     const hostResourceManager = (hostEngine as any)
-      .resourceManager as ResourceManager.Runtime;
+      .resourceManager as ResourceManager;
     const localResourcesBefore =
       hostResourceManager.listLocalResourceIdsByOwner(hostConnectionId);
 
@@ -304,9 +304,9 @@ describe("L3 Engine Integration Test: Task Service", () => {
 
     // Spy on the internal resource managers
     const clientResourceManager = (clientEngine as any)
-      .resourceManager as ResourceManager.Runtime;
+      .resourceManager as ResourceManager;
     const hostResourceManager = (hostEngine as any)
-      .resourceManager as ResourceManager.Runtime;
+      .resourceManager as ResourceManager;
 
     // A local resource (the onUpdate callback) should exist on the client
     expect(clientResourceManager.countLocalResources()).toBeGreaterThan(0);

@@ -15,6 +15,7 @@ import {
 } from "./errors";
 import { createStoreHost } from "./host/store-host";
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
+import { Logger } from "../logger";
 
 const createCounterDefinition = () =>
   defineNexusStore({
@@ -137,6 +138,37 @@ describe("state host runtime baseline handshake", () => {
 
     expect(unstable).toHaveBeenCalledTimes(1);
     expect(stable).toHaveBeenCalledTimes(2);
+  });
+
+  it("observes remote callback rejection without blocking fanout or removing the subscription", async () => {
+    const host = createStoreHost(createCounterDefinition());
+    const delivery = deferred<void>();
+    const logged = deferred<void>();
+    const log = vi
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => logged.resolve());
+    const callback = vi.fn(() => delivery.promise);
+    const sibling = vi.fn();
+    const error = new NexusStoreDisconnectedError("delivery failed");
+    try {
+      await host.subscribe(callback);
+      await host.subscribe(sibling);
+      await host.dispatch("increment", [1]);
+      expect(sibling).toHaveBeenCalledOnce();
+      delivery.reject(error);
+      await logged.promise;
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        "State snapshot notification failed",
+        error,
+      );
+      callback.mockResolvedValueOnce(undefined);
+      await host.dispatch("increment", [1]);
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(sibling).toHaveBeenCalledTimes(2);
+    } finally {
+      host.destroy();
+      log.mockRestore();
+    }
   });
 
   it("clears disconnected owner marker once invocation ends", async () => {

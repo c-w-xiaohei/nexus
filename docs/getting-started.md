@@ -244,6 +244,10 @@ if (result.isErr()) {
 The same `Promise<Result<T, E>>` convention applies to `safeReady(...)` and
 `safeUpdateIdentity(...)`.
 
+`safeCreate` makes acquisition safe, not subsequent calls on the returned proxy.
+The `remote.ping(...)` call above can still reject; handle it with `try/catch` or
+an explicit Promise catch. Ordinary proxy calls do not automatically log errors.
+
 Keep explicit targets while debugging or when the topology is complex:
 
 ```ts
