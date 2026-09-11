@@ -1,5 +1,23 @@
 # @nexus-js/node-ipc
 
+## 0.6.0
+
+### Minor Changes
+
+- 5026b21: Support optional exact `connectTo` startup targets in the client helper with
+  Core 1.2. Startup dialing does not block local readiness or automatically retry.
+
+  Breaking change: remove the helpers' `groups` option and built-in group metadata.
+  Applications define labels in their own context metadata, configure them through
+  `endpoint.meta`, and select providers with `where`. The existing declared Core
+  range is unchanged; this release was verified with the matching Core source.
+
+### Patch Changes
+
+- Updated dependencies [5026b21]
+- Updated dependencies [5026b21]
+  - @nexus-js/core@1.2.0
+
 ## 0.5.1
 
 ### Patch Changes
