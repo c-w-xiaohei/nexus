@@ -148,7 +148,7 @@ test("dispatch from one child fans out to the sibling and host with actor eviden
   });
 });
 
-test("concurrent slow actions from alpha and beta serialize without lost updates", async ({
+test("concurrent slow actions from alpha and beta read the latest state before writing", async ({
   page,
 }) => {
   await gotoReady(page);
@@ -166,7 +166,7 @@ test("concurrent slow actions from alpha and beta serialize without lost updates
   ).toEqual(["alpha", "beta"]);
 });
 
-test("throwing action rolls back state and later actions still work", async ({
+test("throwing action keeps its committed local update and later actions still work", async ({
   page,
 }) => {
   await gotoReady(page);
@@ -176,10 +176,11 @@ test("throwing action rolls back state and later actions still work", async ({
     (window as any).failAfterNoCommit(),
   );
 
-  expect(failed).toMatchObject({ ok: false, state: { count: 1 } });
-  await expectCounts(page, 1, 1);
+  // Business errors need not wait for publication, but their prior writes remain.
+  expect(failed).toMatchObject({ ok: false });
+  await expectCounts(page, 10001, 2);
   await childAction(page, "beta", () => (window as any).increment(2));
-  await expectCounts(page, 3, 2);
+  await expectCounts(page, 10003, 3);
 });
 
 test("one iframe reload cleans only its subscription and the other child keeps working", async ({

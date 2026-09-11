@@ -1,10 +1,11 @@
 import { Nexus } from "@nexus-js/core";
 import {
   createNexusScope,
-  useStore,
-  type RemoteStoreWithInitialState,
   type UseRemoteStoreResult,
+  useStoreStatus,
 } from "@nexus-js/react";
+import { useStore } from "zustand";
+import type { RemoteStore } from "@nexus-js/core/state";
 import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -34,7 +35,6 @@ const childConfig = usingIframeChild({
   frameId: childId,
   parentOrigin: RELAY_ORIGIN,
   nonce: relayChildNonce(childId),
-  heartbeat: { intervalMs: 100, maxMisses: 2 },
 });
 const childNexus = new Nexus<IframeAdapterModel>().configure({
   ...childConfig,
@@ -43,10 +43,7 @@ const childNexus = new Nexus<IframeAdapterModel>().configure({
 const telemetry = {
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as RemoteStoreWithInitialState<
-    CounterState,
-    CounterActions
-  > | null,
+  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
@@ -61,24 +58,29 @@ function RelayChildApp() {
   const remote = IframeNexusScope.useRemoteStore(iframeCounterStore, {
     target: relayFrameTarget,
   });
+  const phase = useStoreStatus(remote.store, (status) => status.type);
   latestRemote = remote;
 
   useEffect(() => {
-    telemetry.statuses.push(remote.status.type);
-  }, [remote.status]);
+    telemetry.statuses.push(
+      phase ?? (remote.error ? "failed" : "initializing"),
+    );
+  }, [phase, remote.error]);
 
   useEffect(() => {
-    if (remote.status.type !== "ready") return;
+    if (phase !== "ready") return;
     window.parent.postMessage(
       { type: "relay-child-ready", childId },
       RELAY_ORIGIN,
     );
-  }, [remote.status]);
+  }, [phase]);
 
   return (
     <main>
       <div id="child-id">{childId}</div>
-      <div id="status">{remote.status.type}</div>
+      <div id="status">
+        {phase ?? (remote.error ? "failed" : "initializing")}
+      </div>
       {remote.store ? <StoreView store={remote.store} /> : <StoreFallback />}
     </main>
   );
@@ -87,7 +89,7 @@ function RelayChildApp() {
 function StoreView({
   store,
 }: {
-  store: RemoteStoreWithInitialState<CounterState, CounterActions>;
+  store: RemoteStore<CounterState, CounterActions>;
 }) {
   const snapshot = useStore(store);
   return (
@@ -156,7 +158,7 @@ function getRelayChildTelemetry() {
   return {
     statuses: [...telemetry.statuses],
     errors: [...telemetry.errors],
-    currentStatus: latestRemote?.status.type ?? "missing",
+    currentStatus: latestRemote?.store?.getStatus().type ?? "missing",
     currentState: latestRemote?.store?.getState() ?? null,
   };
 }

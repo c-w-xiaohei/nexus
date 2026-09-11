@@ -1,9 +1,5 @@
 import { Token } from "@nexus-js/core";
-import {
-  defineNexusStore,
-  type NexusStoreServiceContract,
-} from "@nexus-js/core/state";
-import type { IframeAdapterModel } from "@nexus-js/iframe";
+import type { NexusStoreServiceContract } from "@nexus-js/core/state";
 
 export const APP_ID = "react-state-star-browser";
 export const HOST_ORIGIN = "http://127.0.0.1:3310";
@@ -40,7 +36,7 @@ export interface CounterState {
   readonly writes: CounterWrite[];
 }
 
-export type CounterActions = Record<string, (...args: any[]) => any> & {
+export type CounterActions = {
   increment(actor: string, by: number): number;
   setCount(actor: string, value: number): number;
   asyncIncrementSlow(
@@ -55,57 +51,51 @@ export const CounterStoreToken = new Token<
   NexusStoreServiceContract<CounterState, CounterActions>
 >("react.browser.counter-store");
 
-export const counterStore = defineNexusStore<CounterState, CounterActions>({
-  token: CounterStoreToken,
-  state: () => ({ count: 0, writes: [] }),
-  actions: ({ getState, setState }) => ({
-    increment(actor, by) {
-      const current = getState();
+export const counterStore = { token: CounterStoreToken };
+
+export const createCounterStoreCreator =
+  (initialCount = 0) =>
+  (set: (state: Partial<CounterState>) => void, get: () => CounterState) => ({
+    count: initialCount,
+    writes: [] as CounterWrite[],
+    increment(actor: string, by: number) {
+      const current = get();
       const count = current.count + by;
-      setState({
+      set({
         count,
         writes: [...current.writes, { actor, op: "increment", value: by }],
       });
       return count;
     },
-    setCount(actor, value) {
-      const current = getState();
-      setState({
+    setCount(actor: string, value: number) {
+      const current = get();
+      set({
         count: value,
         writes: [...current.writes, { actor, op: "setCount", value }],
       });
       return value;
     },
-    async asyncIncrementSlow(actor, by, delayMs) {
+    async asyncIncrementSlow(actor: string, by: number, delayMs: number) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
-      const current = getState();
+      const current = get();
       const count = current.count + by;
-      setState({
+      set({
         count,
         writes: [...current.writes, { actor, op: "slow", value: by }],
       });
       return count;
     },
-    async failAfterNoCommit(actor) {
-      const current = getState();
-      setState({
+    async failAfterNoCommit(actor: string) {
+      const current = get();
+      set({
         count: current.count + 10_000,
         writes: [...current.writes, { actor, op: "rollback", value: 10_000 }],
       });
       throw new Error(`fail:${actor}`);
     },
-  }),
-});
+  });
 
-export const iframeCounterStore = defineNexusStore<
-  CounterState,
-  CounterActions,
-  IframeAdapterModel
->({
-  token: CounterStoreToken,
-  state: counterStore.state,
-  actions: counterStore.actions,
-});
+export const iframeCounterStore = counterStore;
 
 export const hostTarget = {
   context: "iframe-parent",

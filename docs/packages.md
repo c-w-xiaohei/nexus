@@ -76,7 +76,9 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 - `@nexus-js/core/state`
   - Nexus State headless runtime subpath entrypoint exposed by `@nexus-js/core`
-  - Provides remote store definition, hosting, connection, lifecycle, and dispatch semantics
+  - Provides remote store contracts, native hosting, connection, lifecycle, and action semantics
+  - Hosts an original Zustand store through `createNexusStore(...)` or binds an existing one with `bindNexusStore(...)`
+  - Requires explicit `snapshot` projections and `expose` action allowlists; no `withNexusState` middleware is shipped
   - This is a subsystem capability layered on top of `@nexus-js/core`, not a separately installed package
 
 - `@nexus-js/core/relay`

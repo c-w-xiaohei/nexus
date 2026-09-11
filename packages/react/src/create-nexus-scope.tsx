@@ -1,6 +1,9 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { AdapterModel, NexusInstance } from "@nexus-js/core";
-import type { NexusStoreDefinition } from "@nexus-js/core/state";
+import type {
+  ActionFunction,
+  NexusStoreDefinition,
+} from "@nexus-js/core/state";
 import {
   useRemoteStoreWithNexus,
   type UseRemoteStoreOptions,
@@ -10,8 +13,6 @@ import {
   createRemoteStoreScopeWithNexus,
   type RemoteStoreScope,
 } from "./create-remote-store-scope.js";
-
-type ActionFunction = (...args: any[]) => any;
 
 export interface NexusScope<M extends AdapterModel> {
   readonly NexusProvider: (props: NexusProviderProps<M>) => ReactNode;

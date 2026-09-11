@@ -9,6 +9,7 @@ import {
   RELAY_APP_ID,
   RELAY_ORIGIN,
   iframeCounterStore,
+  createCounterStoreCreator,
   relayFrameNonce,
   type CounterActions,
   type CounterState,
@@ -55,18 +56,48 @@ function instrumentStore(implementation: StoreImplementation) {
     wrapper,
     Object.getOwnPropertyDescriptors(implementation),
   );
-  wrapper.dispatch = async (action, args) => {
-    telemetry.dispatchCalls.push({ action, args: [...args] });
-    return implementation.dispatch(action, args);
+  wrapper.subscribe = async (onSync, ...args) => {
+    const callback: Parameters<StoreImplementation["subscribe"]>[0] = async (
+      event,
+    ) => {
+      if (event.type === "init") {
+        const actions = Object.fromEntries(
+          Object.entries(event.actions).map(([action, invoke]) => [
+            action,
+            async (...args: unknown[]) => {
+              telemetry.dispatchCalls.push({ action, args: [...args] });
+              return (invoke as (...args: unknown[]) => unknown)(...args);
+            },
+          ]),
+        ) as typeof event.actions;
+        event = { ...event, actions };
+      }
+      return onSync(event);
+    };
+    return Reflect.apply(implementation.subscribe, implementation, [
+      callback,
+      ...args,
+    ]);
   };
   return wrapper;
 }
 
-const { provider } = createNexusStore<
-  CounterState,
-  CounterActions,
-  IframeAdapterModel
->(iframeCounterStore);
+const { provider } = createNexusStore(
+  iframeCounterStore,
+  createCounterStoreCreator(),
+  {
+    snapshot: (state: CounterState) => ({
+      count: state.count,
+      writes: state.writes,
+    }),
+    expose: [
+      "increment",
+      "setCount",
+      "asyncIncrementSlow",
+      "failAfterNoCommit",
+    ],
+  },
+);
 const hostNexus = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
@@ -79,7 +110,7 @@ const hostNexus = new Nexus<IframeAdapterModel>().configure({
         nonce: relayFrameNonce(),
       },
     ],
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
+    // Use the default heartbeat budget; these tests exercise navigation cleanup.
   }),
   providers: [
     { token: RelayProfileToken, service: profileService },

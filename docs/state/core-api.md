@@ -8,8 +8,8 @@ Current public entrypoint:
 
 ```ts
 import {
-  defineNexusStore,
   createNexusStore,
+  bindNexusStore,
   connectNexusStore,
   safeConnectNexusStore,
   safeInvokeStoreAction,
@@ -20,45 +20,57 @@ Types and errors are also exported from the same subpath.
 
 `relayNexusStore` is available from `@nexus-js/core/relay` and re-exported from `@nexus-js/core/state` for store-focused code. Use it only when a bridge context needs to project an upstream authoritative store into a downstream Nexus graph. See `docs/relay.md` for relay semantics.
 
-## `defineNexusStore()`
+## Shared Definition
 
-Use `defineNexusStore()` to declare a Nexus State store contract.
+Declare a plain shared object containing a typed service Token and optional
+validation schemas. No definition factory or registration step is needed.
 
 ```ts
-const store = defineNexusStore({
+const counterStore = {
   token,
-  state: () => ({ count: 0 }),
-  actions: ({ getState, setState }) => ({
-    async increment(by = 1) {
-      setState({ count: getState().count + by });
-      return getState().count;
-    },
-  }),
-});
+};
 ```
 
 ### Responsibilities
 
-It defines:
+The object groups:
 
 - the store identity via `token`
-- the initial state factory
-- host-side actions
-- optional convenience config through the store token's `defaultTarget`
+- optional state and action validation through `validation`
+- optional convenience targeting through the store token's `defaultTarget`
 
 ### Notes
 
 - `token` remains the real identity source
 - store default targeting comes from the token's `defaultTarget`; Nexus State does not define a second store-level default target source
+- host-side state and actions are supplied separately to `createNexusStore()` as a native Zustand `StateCreator`
 - store actions must use serializable arguments/results
-- Nexus State v1 only supports snapshot-mode sync publicly
+- synchronization publishes full snapshots
+
+The typed Token supplies state, action, and adapter-model inference. Use
+`satisfies NexusStoreDefinition<State, Actions, Model>` when a shared declaration
+needs an explicit compatibility check; do not repeat those types at every call.
 
 ## `createNexusStore()`
 
-`createNexusStore()` creates one authoritative store host and returns both the Nexus service registration and a same-context store handle.
+`createNexusStore()` creates one authoritative store host and returns the Nexus provider, the original Zustand store, and binding lifecycle methods.
 
 ```ts
-const { provider, store } = createNexusStore(counterStore);
+const { provider, store, destroy } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
+    },
+  }),
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment"],
+  },
+);
 
 nexus.configure({
   providers: [provider],
@@ -70,25 +82,48 @@ console.log(store.getInitialState());
 
 Use `provider` with `nexus.configure({ providers: [provider] })`. Use `store` only in the hosting context for local authoritative reads, subscriptions, and actions.
 
-`store` is a local `NexusStoreHandleWithInitialState`, which extends the
-Core 1.0-compatible `NexusStoreHandle` with `getInitialState()` and JavaScript
-`using` support:
+`store` is the original `Mutate<StoreApi<...>>` returned by Zustand. It keeps
+the creator's middleware mutator types and extensions. Local actions continue
+to use `store.getState().action()` and do not wait for Nexus publication.
 
 ```ts
-using store = createNexusStore(counterStore).store;
+const { store } = createNexusStore(counterStore, creator, options);
 ```
 
-On scope exit, `using` delegates to the same synchronous, idempotent
-`destroy()` transition.
+The binding result supports `using` through `[Symbol.dispose]()`; scope exit
+delegates to the same synchronous, idempotent `destroy()` transition. Destroy
+does not destroy the original Zustand store.
 
-`getInitialState()` returns a defensive clone of the state captured when the
-authoritative host was created. Later actions do not change it; every returned
-snapshot has a new identity.
+The binding does not replace or recreate Zustand's API. Its `snapshot` function
+is the complete shared data projection, and `expose` is the runtime action
+allowlist. Validation schemas validate payloads; parsed transform outputs are
+not installed into the source or remote store.
+
+### `bindNexusStore()`
+
+Use `bindNexusStore(definition, existingStore, options)` for an already-created
+Zustand store, including one composed with `persist`, `immer`, `devtools`, or
+`subscribeWithSelector`. The same options apply to both creation paths.
+
+```ts
+const binding = bindNexusStore(counterStore, store, {
+  snapshot: (local) => ({ count: local.count }),
+  expose: ["increment"],
+});
+
+binding.destroy(); // store remains usable
+```
+
+`publishWindowMs` is a fixed window beginning with the first update (default
+200ms), not a debounce; action completion does not force a flush.
+`maxPendingSnapshots` defaults to 32. A subscription that exceeds this budget or
+fails to acknowledge a callback within five seconds is stopped, without closing
+other services on the shared connection. Terminal notification is best effort;
+State does not retry failed actions or replay snapshots automatically.
 
 ## `connectNexusStore()`
 
-Connects to a remote Nexus State store and returns a
-`RemoteStoreWithInitialState`.
+Connects to a remote Nexus State store and returns a `RemoteStore`.
 
 ```ts
 const remote = await connectNexusStore(nexus, counterStore, {
@@ -100,9 +135,21 @@ const remote = await connectNexusStore(nexus, counterStore, {
 
 - resolves the target through normal Nexus rules
 - creates a proxy through ordinary service paths
-- performs one setup step that establishes the initial snapshot and subscription together
+- establishes the initial snapshot and live subscription through one callback-init setup
 - initializes the local mirror from the baseline
 - returns no Store handle when the handshake fails
+
+The init callback supplies the initial state, the raw Core function proxies for each
+action, and an idempotent unsubscribe capability. State does not add an action-name
+dispatch protocol or wrap those action proxies. Consequently, direct action failures
+retain Core error codes such as `E_CONN_CLOSED`, `E_CALL_TIMEOUT`, and
+`E_RESOURCE_ACCESS_DENIED`; `safeInvokeStoreAction()` may normalize them only at its
+public safe-result boundary.
+
+Timeout boundaries remain separate: `connectNexusStore()` uses its State `timeout`
+only for acquisition and the callback-init handshake. Action calls use Core's existing
+resource-call timeout defaults; State does not translate the acquisition timeout into
+Core's `callTimeout` option.
 
 Lifecycle boundary:
 
@@ -142,31 +189,30 @@ Use safe-style APIs when:
 
 ## Store Handle Types
 
-`RemoteStore` is the Core 1.0-compatible client-side Store interface.
-`RemoteStoreWithInitialState` is the concrete Core 1.1 handle returned by
-`connectNexusStore()` and `safeConnectNexusStore()`; it adds
-`getInitialState()` and `[Symbol.dispose]()`.
+`RemoteStore` is the client-side Store interface returned by
+`connectNexusStore()` and `safeConnectNexusStore()`.
 
 `RemoteStore` capabilities:
 
 - `getState()`
 - `subscribe(listener)`
 - `getStatus()`
+- `subscribeStatus(listener)`
 - `destroy()`
 - `actions.*`
 
-`RemoteStoreWithInitialState` also supports `getInitialState()` and JavaScript
-`using` through `[Symbol.dispose]()`. The local
-`NexusStoreHandleWithInitialState` returned by `createNexusStore()` provides
-the same two capabilities.
+`RemoteStore` supports `getInitialState()` and JavaScript `using` through
+`[Symbol.dispose]()`. The local `store` returned by `createNexusStore()` is the
+original Zustand API; the binding result, not the store, owns `destroy()` and
+`[Symbol.dispose]()`.
 
 A remote Store handle is tied to one connection session. After it becomes
 `disconnected`, `stale`, or `destroyed`, create a replacement instead of
 reusing it.
 
-On `RemoteStoreWithInitialState`, `getInitialState()` returns a defensive clone of the successful handshake
-baseline. Later synchronized snapshots do not change that baseline, and every
-returned snapshot has a new identity.
+On `RemoteStore`, `getInitialState()` returns the stable successful-handshake
+baseline. Later snapshots do not change it. Treat both initial and current state
+as immutable; repeated reads of the same snapshot preserve its identity.
 
 ### Example
 

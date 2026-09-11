@@ -1,6 +1,12 @@
-import { createContext, useContext, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import type { AdapterModel } from "@nexus-js/core";
 import type {
+  ActionFunction,
   NexusStoreDefinition,
   RemoteActions,
   RemoteStoreStatus,
@@ -10,9 +16,9 @@ import {
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,
 } from "./use-remote-store.js";
-import { useNullableStore } from "./use-store.js";
+import { useStoreStatus } from "./use-store-status.js";
 
-type ActionFunction = (...args: any[]) => any;
+const subscribeNone = () => () => {};
 
 export interface RemoteStoreScope<
   TState extends object,
@@ -26,7 +32,8 @@ export interface RemoteStoreScope<
     options: { readonly fallback: TResult },
   ): TResult;
   useActions(): RemoteActions<TActions> | null;
-  useStatus(): RemoteStoreStatus;
+  useStatus(): RemoteStoreStatus | null;
+  useStatus<T>(selector: (status: RemoteStoreStatus) => T): T | null;
   useError(): Error | null;
 }
 
@@ -86,8 +93,12 @@ export const createRemoteStoreScopeWithNexus = <
     selector: (state: TState) => TResult,
     options: { readonly fallback: TResult },
   ): TResult => {
-    const remote = useScopedRemoteStore();
-    return useNullableStore(remote.store, selector, options.fallback);
+    const { store } = useScopedRemoteStore();
+    return useSyncExternalStore(
+      store?.subscribe ?? subscribeNone,
+      () => (store ? selector(store.getState()) : options.fallback),
+      () => (store ? selector(store.getInitialState()) : options.fallback),
+    );
   };
 
   const useActions = (): RemoteActions<TActions> | null => {
@@ -95,10 +106,14 @@ export const createRemoteStoreScopeWithNexus = <
     return remote.store?.actions ?? null;
   };
 
-  const useStatus = (): RemoteStoreStatus => {
-    const remote = useScopedRemoteStore();
-    return remote.status;
-  };
+  function useStatus(): RemoteStoreStatus | null;
+  function useStatus<T>(selector: (status: RemoteStoreStatus) => T): T | null;
+  function useStatus<T>(selector?: (status: RemoteStoreStatus) => T) {
+    return useStoreStatus<T | RemoteStoreStatus>(
+      useScopedRemoteStore().store,
+      selector ?? ((status) => status),
+    );
+  }
 
   const useError = (): Error | null => {
     const remote = useScopedRemoteStore();

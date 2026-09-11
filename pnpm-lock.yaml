@@ -83,7 +83,7 @@ importers:
         version: 4.3.6
       zustand:
         specifier: 5.0.8
-        version: 5.0.8(@types/react@18.3.24)(react@18.3.1)
+        version: 5.0.8(@types/react@18.3.24)(immer@10.1.1)(react@18.3.1)
     devDependencies:
       '@types/node':
         specifier: 24.10.2
@@ -94,6 +94,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.0.18
         version: 4.0.18(vitest@4.0.18(@types/node@24.10.2)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.21.0))
+      immer:
+        specifier: 10.1.1
+        version: 10.1.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -189,6 +192,9 @@ importers:
       vitest:
         specifier: 4.0.18
         version: 4.0.18(@types/node@24.10.2)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.21.0)
+      zustand:
+        specifier: 5.0.8
+        version: 5.0.8(@types/react@18.3.24)(immer@10.1.1)(react@18.3.1)
 
   packages/testing:
     dependencies:
@@ -1648,6 +1654,9 @@ packages:
   ignore@5.3.2:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
+
+  immer@10.1.1:
+    resolution: {integrity: sha512-s2MPrmjovJcoMaHtx6K11Ra7oD05NT97w1IC5zpMkT6Atjr7H8LjaDd81iIxUYpMKSRRNMJE703M1Fhr/TctHw==}
 
   is-docker@2.2.1:
     resolution: {integrity: sha512-F+i2BKsFrH66iaUFc0woD8sLy8getkwTwtOBjvs56Cx4CgJDeKQeqfz8wAYiSb8JOprWhHH5p77PbmYCvvUuXQ==}
@@ -3648,6 +3657,8 @@ snapshots:
 
   ignore@5.3.2: {}
 
+  immer@10.1.1: {}
+
   is-docker@2.2.1: {}
 
   is-extglob@2.1.1: {}
@@ -4426,7 +4437,8 @@ snapshots:
 
   zod@4.3.6: {}
 
-  zustand@5.0.8(@types/react@18.3.24)(react@18.3.1):
+  zustand@5.0.8(@types/react@18.3.24)(immer@10.1.1)(react@18.3.1):
     optionalDependencies:
       '@types/react': 18.3.24
+      immer: 10.1.1
       react: 18.3.1

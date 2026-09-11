@@ -12,9 +12,8 @@ export {
 export { useNexus } from "./use-nexus.js";
 export {
   useRemoteStore,
-  type RemoteStoreWithInitialState,
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,
 } from "./use-remote-store.js";
-export { useStore } from "./use-store.js";
 export { useProxyStatus } from "./use-proxy-status.js";
+export { useStoreStatus } from "./use-store-status.js";

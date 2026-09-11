@@ -1,10 +1,11 @@
 import { Nexus } from "@nexus-js/core";
 import {
   createNexusScope,
-  useStore,
-  type RemoteStoreWithInitialState,
   type UseRemoteStoreResult,
+  useStoreStatus,
 } from "@nexus-js/react";
+import { useStore } from "zustand";
+import type { RemoteStore } from "@nexus-js/core/state";
 import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 import { useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -82,10 +83,7 @@ const telemetry = {
   commits: [] as CounterState[],
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as RemoteStoreWithInitialState<
-    CounterState,
-    CounterActions
-  > | null,
+  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
@@ -101,16 +99,21 @@ function CounterApp() {
     target: hostTarget,
     where: hostWhere,
   });
+  const phase = useStoreStatus(remote.store, (status) => status.type);
   latestRemote = remote;
 
   useEffect(() => {
-    telemetry.statuses.push(remote.status.type);
-  }, [remote.status]);
+    telemetry.statuses.push(
+      phase ?? (remote.error ? "failed" : "initializing"),
+    );
+  }, [phase, remote.error]);
 
   return (
     <main>
       <div id="frame-id">{frameId}</div>
-      <div id="status">{remote.status.type}</div>
+      <div id="status">
+        {phase ?? (remote.error ? "failed" : "initializing")}
+      </div>
       {remote.store ? <StoreView store={remote.store} /> : <StoreFallback />}
     </main>
   );
@@ -119,7 +122,7 @@ function CounterApp() {
 function StoreView({
   store,
 }: {
-  store: RemoteStoreWithInitialState<CounterState, CounterActions>;
+  store: RemoteStore<CounterState, CounterActions>;
 }) {
   const snapshot = useStore(store);
   useEffect(() => {
@@ -265,7 +268,7 @@ function getTelemetry() {
     statuses: [...telemetry.statuses],
     errors: [...telemetry.errors],
     currentState: latestRemote?.store?.getState() ?? null,
-    currentStatus: latestRemote?.status.type ?? "missing",
+    currentStatus: latestRemote?.store?.getStatus().type ?? "missing",
   };
 }
 

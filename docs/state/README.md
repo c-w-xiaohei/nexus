@@ -4,7 +4,7 @@ Nexus State is the synchronized remote-state subsystem for Nexus. It provides a 
 
 Use this section for Nexus State-specific setup, runtime semantics, and API details.
 
-Create stores with `const { provider, store } = createNexusStore(definition)` and register `provider` through the ordinary provider path, for example `nexus.configure({ providers: [provider] })`. Store default targeting comes from the store token's `defaultTarget`; Nexus State does not add a separate default target field.
+Create stores with `const { provider, store } = createNexusStore(definition, nativeCreator, options)` and register `provider` through the ordinary provider path, for example `nexus.configure({ providers: [provider] })`. The returned `store` is the original native Zustand API. For an already-created store, use `bindNexusStore(definition, store, options)` instead. The required options explicitly project shared data with `snapshot` and allow remote action keys with `expose`; `publishWindowMs` defaults to 200 and `maxPendingSnapshots` to 32. Store default targeting comes from the store token's `defaultTarget`; Nexus State does not add a separate default target field.
 
 For general application-level unit tests with an injectable mock `NexusInstance`, also read `docs/testing/README.md`.
 

@@ -1,35 +1,30 @@
 import { Token } from "@nexus-js/core";
-import {
-  defineNexusStore,
-  type NexusStoreServiceContract,
-} from "@nexus-js/core/state";
+import type { NexusStoreServiceContract } from "@nexus-js/core/state";
 
 export interface WorkspaceState {
   readonly count: number;
 }
 
-export interface WorkspaceStateActions extends Record<
-  string,
-  (...args: any[]) => any
-> {
+export type WorkspaceStateActions = {
   increment(): Promise<number>;
-}
+};
 
 export const WorkspaceStateToken = new Token<
   NexusStoreServiceContract<WorkspaceState, WorkspaceStateActions>
 >("nexus-e2e:workspace-state");
 
-export const workspaceStateDefinition = defineNexusStore<
-  WorkspaceState,
-  WorkspaceStateActions
->({
+export const workspaceStateDefinition = {
   token: WorkspaceStateToken,
-  state: () => ({ count: 0 }),
-  actions: ({ getState, setState }) => ({
-    async increment() {
-      const count = getState().count + 1;
-      setState({ count });
-      return count;
-    },
-  }),
+};
+
+export const workspaceStateCreator = (
+  set: (state: Partial<WorkspaceState>) => void,
+  get: () => WorkspaceState,
+) => ({
+  count: 0,
+  async increment() {
+    const count = get().count + 1;
+    set({ count });
+    return count;
+  },
 });

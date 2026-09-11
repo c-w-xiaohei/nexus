@@ -8,8 +8,6 @@ import {
 } from "@nexus-js/core";
 import {
   createNexusStore,
-  defineNexusStore,
-  type NexusStoreDefinition,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
 
@@ -279,45 +277,29 @@ const closePortState = (state: PortState): void => {
 type CounterState = { count: number };
 type CounterActions = { increment(by: number): number };
 
-export const createCounterDefinition = () => {
-  return defineNexusStore<CounterState, CounterActions, ReactAdapterModel>({
-    token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
-      "state:react:integration:counter",
-    ),
-    state: () => ({ count: 0 }),
-    actions: ({ getState, setState }) => ({
-      increment(by: number) {
-        const next = getState().count + by;
-        setState({ count: next });
-        return next;
-      },
-    }),
+const createCounterStoreCreator =
+  (initialCount: number) =>
+  (set: (state: Partial<CounterState>) => void, get: () => CounterState) => ({
+    count: initialCount,
+    increment(by: number) {
+      const next = get().count + by;
+      set({ count: next });
+      return next;
+    },
   });
-};
 
-const createDefinitionWithInitialState = (
-  initialCount: number,
-): NexusStoreDefinition<CounterState, CounterActions, ReactAdapterModel> => {
-  return defineNexusStore<CounterState, CounterActions, ReactAdapterModel>({
-    token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
-      "state:react:integration:counter",
-    ),
-    state: () => ({ count: initialCount }),
-    actions: ({ getState, setState }) => ({
-      increment(by: number) {
-        const next = getState().count + by;
-        setState({ count: next });
-        return next;
-      },
-    }),
-  });
-};
+export const createCounterDefinition = () => ({
+  token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
+    "state:react:integration:counter",
+  ),
+});
 
 export const createReactNexusHarness = async (
   options: HarnessOptions,
 ): Promise<CounterHarness> => {
   const network = new MemoryNetwork();
   const subscriptionCounts = new Map<string, Set<string>>();
+  const bindings: Array<() => void> = [];
   const hostNexusList: Array<{
     hostId: string;
     nexus: Nexus<ReactAdapterModel>;
@@ -351,22 +333,46 @@ export const createReactNexusHarness = async (
       hostEndpoint,
     );
 
-    const definition = createDefinitionWithInitialState(host.initialCount ?? 0);
-    const { provider } = createNexusStore(definition);
+    const definition = createCounterDefinition();
+    const { provider, destroy } = createNexusStore(
+      definition,
+      createCounterStoreCreator(host.initialCount ?? 0),
+      {
+        snapshot: (state: CounterState) => ({ count: state.count }),
+        expose: ["increment"],
+      },
+    );
+    bindings.push(destroy);
     const activeSubscriptions = new Set<string>();
     subscriptionCounts.set(host.id, activeSubscriptions);
 
     const implementation = provider.service;
     const wrappedImplementation = {
       ...implementation,
-      async subscribe(onSync: Parameters<typeof implementation.subscribe>[0]) {
-        const baseline = await implementation.subscribe(onSync);
-        activeSubscriptions.add(baseline.subscriptionId);
-        return baseline;
-      },
-      async unsubscribe(subscriptionId: string) {
-        activeSubscriptions.delete(subscriptionId);
-        await implementation.unsubscribe(subscriptionId);
+      async subscribe(
+        onSync: Parameters<typeof implementation.subscribe>[0],
+        ...args: unknown[]
+      ) {
+        const key = crypto.randomUUID();
+        const wrapped = async (event: Parameters<typeof onSync>[0]) => {
+          if (event.type === "init") {
+            activeSubscriptions.add(key);
+            const unsubscribe = event.unsubscribe;
+            event = {
+              ...event,
+              unsubscribe: async () => {
+                activeSubscriptions.delete(key);
+                return unsubscribe();
+              },
+            };
+          }
+          if (event.type === "terminal") activeSubscriptions.delete(key);
+          return onSync(event);
+        };
+        return Reflect.apply(implementation.subscribe, implementation, [
+          wrapped,
+          ...args,
+        ]);
       },
     };
 
@@ -377,7 +383,7 @@ export const createReactNexusHarness = async (
       },
       providers: [
         {
-          token: provider.token as Token<object, ReactAdapterModel>,
+          token: provider.token,
           service: wrappedImplementation,
         },
       ],
@@ -402,6 +408,7 @@ export const createReactNexusHarness = async (
       return subscriptionCounts.get(hostId)?.size ?? 0;
     },
     teardown() {
+      for (const destroy of bindings) destroy();
       network.teardown();
     },
   };

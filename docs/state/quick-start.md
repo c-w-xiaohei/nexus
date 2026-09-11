@@ -36,30 +36,48 @@ You will:
 
 ```ts
 import { Token } from "@nexus-js/core";
-import { defineNexusStore } from "@nexus-js/core/state";
+import type { NexusStoreServiceContract } from "@nexus-js/core/state";
 
 type CounterState = { count: number };
 
 type CounterActions = {
-  increment(by?: number): Promise<number>;
-  reset(): Promise<void>;
+  increment(by?: number): number;
+  reset(): void;
 };
 
-const CounterStoreToken = new Token("example:counter-store");
+const CounterStoreToken = new Token<
+  NexusStoreServiceContract<CounterState, CounterActions>
+>("example:counter-store");
 
-export const counterStore = defineNexusStore<CounterState, CounterActions>({
+export const counterStore = {
   token: CounterStoreToken,
-  state: () => ({ count: 0 }),
-  actions: ({ getState, setState }) => ({
-    async increment(by = 1) {
-      setState({ count: getState().count + by });
-      return getState().count;
+};
+```
+
+The contract is separate from the host's native Zustand creator. The binding
+must explicitly define the shared snapshot and remotely callable actions:
+
+```ts
+import { createNexusStore } from "@nexus-js/core/state";
+
+const { provider, store } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
     },
-    async reset() {
-      setState({ count: 0 });
+    reset() {
+      set({ count: 0 });
     },
   }),
-});
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment", "reset"],
+  },
+);
 ```
 
 ## 2. Host The Store
@@ -71,7 +89,24 @@ import { nexus } from "@nexus-js/core";
 import { createNexusStore } from "@nexus-js/core/state";
 import { counterStore } from "./counter-store";
 
-const { provider, store } = createNexusStore(counterStore);
+const { provider, store } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
+    },
+    reset() {
+      set({ count: 0 });
+    },
+  }),
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment", "reset"],
+  },
+);
 
 nexus.configure({
   providers: [provider],
@@ -80,7 +115,7 @@ nexus.configure({
 console.log(store.getState().count);
 ```
 
-Nexus State does not introduce a parallel registry. `provider` is ordinary Nexus service registration, and `store` is the same-context authoritative store handle.
+Nexus State does not introduce a parallel registry. `provider` is ordinary Nexus service registration, and `store` is the same-context authoritative store handle. It is the original Zustand API, so local calls remain synchronous and middleware extensions remain available. `bindNexusStore(...)` provides the same binding for a store created separately; destroying the binding does not destroy the source store.
 
 Store default targeting comes from the store token's `defaultTarget`. Nexus State does not define a second store-level default target concept.
 
@@ -104,7 +139,7 @@ The `RemoteStore` handle is tied to one connection session:
 - if that session is replaced, build a new `RemoteStore` via `connectNexusStore(...)`
 - the previous `RemoteStore` handle does not become usable again
 
-## 4. Read, Subscribe, And Dispatch
+## 4. Read, Subscribe, And Invoke Actions
 
 ```ts
 console.log(remoteCounter.getState().count);
@@ -174,14 +209,15 @@ function App({ sessionEpoch }: { sessionEpoch: number }) {
 }
 
 function CounterView() {
-  const { reconnect } = CounterScope.useRemoteStore();
+  const { pending, reconnect } = CounterScope.useRemoteStore();
   const count = CounterScope.useSelector((state) => state.count, {
     fallback: 0,
   });
   const actions = CounterScope.useActions();
-  const status = CounterScope.useStatus();
+  const phase = CounterScope.useStatus((status) => status.type);
 
-  if (!actions || status.type !== "ready") {
+  if (pending) return <span>Connecting</span>;
+  if (!actions || phase !== "ready") {
     return <button onClick={reconnect}>Reconnect</button>;
   }
 
@@ -189,7 +225,7 @@ function CounterView() {
 }
 ```
 
-The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately. For a direct owner, render a child after `remote.store` exists and select it with `useStore(remote.store, selector)`.
+The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately. For a direct owner, render a child after `remote.store` exists and select it with `useStore(remote.store, selector)` imported from `zustand`.
 
 See `docs/state/react.md` for `reconnectKey`, `reconnect()`, replacement, and selector fallback.
 

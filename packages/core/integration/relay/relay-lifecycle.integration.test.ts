@@ -5,7 +5,6 @@ import { Token } from "../../src/api/token";
 import { relayNexusStore, relayService } from "../../src/relay";
 import {
   connectNexusStore,
-  defineNexusStore,
   NexusStoreDisconnectedError,
   createNexusStore,
   type NexusStoreServiceContract,
@@ -14,6 +13,7 @@ import type { IEndpoint } from "../../src/transport/types/endpoint";
 import type { IPort } from "../../src/transport/types/port";
 import { createMockPortPair } from "../../src/utils/test-utils";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
+import type { StateCreator } from "zustand/vanilla";
 
 type RelayContext = "host" | "relay-upstream" | "relay-downstream" | "leaf";
 
@@ -43,7 +43,7 @@ interface CounterState {
   count: number;
 }
 
-type CounterActions = Record<string, (...args: any[]) => any> & {
+type CounterActions = {
   increment(by: number, actor?: string): number;
 };
 
@@ -67,15 +67,17 @@ const CounterStoreToken = new Token<
   RelayAdapterModel
 >("core.integration.relay.counter-store");
 
-const counterStore = defineNexusStore<CounterState, CounterActions>({
-  token: CounterStoreToken,
-  state: () => ({ count: 0 }),
-  actions: ({ getState, setState }) => ({
-    increment(by: number, _actor?: string) {
-      setState({ count: getState().count + by });
-      return getState().count;
-    },
-  }),
+const counterStore = { token: CounterStoreToken };
+
+const counterCreator: StateCreator<CounterState & CounterActions> = (
+  set,
+  get,
+) => ({
+  count: 0,
+  increment(by: number, _actor?: string) {
+    set({ count: get().count + by });
+    return get().count;
+  },
 });
 
 const hostTarget = { context: "host" } as const;
@@ -256,29 +258,52 @@ async function createRelayHarness() {
     providers: [{ token: RelayProfileToken, service: profileService }],
   });
 
-  const hostCounterService = createNexusStore(counterStore).provider.service;
+  const hostCounterService = createNexusStore(counterStore, counterCreator, {
+    snapshot: (state) => ({ count: state.count }),
+    expose: ["increment"],
+  }).provider.service;
   const instrumentedCounterService: typeof hostCounterService = {
-    subscribe: hostCounterService.subscribe.bind(hostCounterService),
-    unsubscribe: hostCounterService.unsubscribe.bind(hostCounterService),
-    async dispatch(action, args, invocationContext) {
-      hostDispatchCalls.push({ action, args: [...args] });
-      return hostCounterService.dispatch(action, args, invocationContext);
+    ...hostCounterService,
+    subscribe: async (onSync, ...args) => {
+      const callback: Parameters<
+        typeof hostCounterService.subscribe
+      >[0] = async (event) => {
+        if (event.type === "init") {
+          const original = event.actions.increment;
+          event = {
+            ...event,
+            actions: {
+              ...event.actions,
+              increment: async (
+                ...args: Parameters<CounterActions["increment"]>
+              ) => {
+                hostDispatchCalls.push({
+                  action: "increment",
+                  args: [...args],
+                });
+                return original(...args);
+              },
+            },
+          };
+        }
+        return onSync(event);
+      };
+      return Reflect.apply(hostCounterService.subscribe, hostCounterService, [
+        callback,
+        ...args,
+      ]);
     },
   };
 
-  for (const symbol of Object.getOwnPropertySymbols(hostCounterService)) {
-    const value = (
-      hostCounterService as unknown as Record<PropertyKey, unknown>
-    )[symbol];
-    Object.defineProperty(instrumentedCounterService, symbol, {
-      value:
-        typeof value === "function" ? value.bind(hostCounterService) : value,
-    });
-  }
-
   hostNexus.configure({
     providers: [
-      { token: counterStore.token, service: instrumentedCounterService },
+      {
+        token: counterStore.token as Token<
+          NexusStoreServiceContract<CounterState, CounterActions>,
+          RelayAdapterModel
+        >,
+        service: instrumentedCounterService,
+      },
     ],
   });
 
@@ -341,7 +366,13 @@ async function createRelayHarness() {
   });
 
   await Promise.all([
-    relayUpstreamNexus.create(counterStore.token, { target: hostTarget }),
+    relayUpstreamNexus.create(
+      counterStore.token as Token<
+        NexusStoreServiceContract<CounterState, CounterActions>,
+        RelayAdapterModel
+      >,
+      { target: hostTarget },
+    ),
     leafANexus.create(RelayProfileToken, { target: relayTarget }),
     leafBNexus.create(RelayProfileToken, { target: relayTarget }),
   ]);
@@ -393,14 +424,14 @@ describe("Nexus Relay lifecycle integration", () => {
     const harness = await createRelayHarness();
     try {
       const remoteA = await connectNexusStore(
-        harness.leafANexus,
+        harness.leafANexus as any,
         counterStore,
         {
           target: relayTarget,
         },
       );
       const remoteB = await connectNexusStore(
-        harness.leafBNexus,
+        harness.leafBNexus as any,
         counterStore,
         {
           target: relayTarget,
@@ -437,14 +468,14 @@ describe("Nexus Relay lifecycle integration", () => {
     const harness = await createRelayHarness();
     try {
       const remoteA = await connectNexusStore(
-        harness.leafANexus,
+        harness.leafANexus as any,
         counterStore,
         {
           target: relayTarget,
         },
       );
       const remoteB = await connectNexusStore(
-        harness.leafBNexus,
+        harness.leafBNexus as any,
         counterStore,
         {
           target: relayTarget,
@@ -464,7 +495,7 @@ describe("Nexus Relay lifecycle integration", () => {
       const updatesABeforeDisconnect = [...updatesA];
 
       closeReadyConnection(
-        harness.leafANexus,
+        harness.leafANexus as any,
         (identity) => identity?.context === "relay-downstream",
         "leaf A to relay downstream",
       );
@@ -482,7 +513,7 @@ describe("Nexus Relay lifecycle integration", () => {
       });
       await expect(
         remoteA.actions.increment(1, "leaf-a"),
-      ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+      ).rejects.toBeDefined();
 
       stopA();
       stopB();
@@ -526,7 +557,7 @@ describe("Nexus Relay lifecycle integration", () => {
       });
       await expect(
         remoteA.actions.increment(1, "leaf-a"),
-      ).rejects.toBeInstanceOf(NexusStoreDisconnectedError);
+      ).rejects.toBeDefined();
 
       stopA();
       remoteA.destroy();

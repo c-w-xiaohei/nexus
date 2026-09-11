@@ -95,7 +95,6 @@ const chromeNexus = new Nexus<IframeAdapterModel>().configure({
     frameId: "relay",
     parentOrigin: RELAY_HOST_ORIGIN,
     nonce: relayFrameNonce(),
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
 });
 
@@ -109,7 +108,6 @@ const iframeParentNexus = new Nexus<IframeAdapterModel>().configure({
       origin: RELAY_ORIGIN,
       nonce: relayChildNonce(childId),
     })),
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
   }),
   providers: [
     relayService<RelayProfileService, IframeAdapterModel, IframeAdapterModel>(

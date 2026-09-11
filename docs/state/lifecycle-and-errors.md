@@ -27,7 +27,6 @@ The store has:
 Use this when:
 
 - the backing connection closes
-- a new connection attempt fails
 - an operation cannot continue because the transport is gone
 
 The public disconnected status carries:
@@ -45,9 +44,16 @@ Headless core (`connectNexusStore` / `safeConnectNexusStore`):
 - throw-style: `connectNexusStore(...)` rejects with connect-oriented error
 - safe-style: `safeConnectNexusStore(...)` returns `Err`
 
-After a `RemoteStore` exists, later transport loss or replacement-attempt failure transitions that instance to terminal lifecycle (`disconnected` / `stale`) and you rebuild by creating a new instance.
+After a `RemoteStore` exists, later transport loss makes that instance
+`disconnected`. A selected remote identity that no longer matches can make it
+`stale`. Create a new instance rather than trying to revive either terminal handle.
 
-`useRemoteStore()` exposes loading, failure, and replacement state for React.
+`useRemoteStore()` exposes acquisition state (`pending`, `error`, and `store`)
+and a `reconnect()` command. Observe an acquired handle with `useStoreStatus` or
+`Scope.useStatus`; these return `null` while no handle exists. A failed initial or
+replacement attempt sets the acquisition error, not a fabricated disconnected
+status. React destroys the previous handle when replacement begins, regardless
+of whether the new attempt succeeds.
 See the [Nexus State React guide](react.md) for `reconnectKey`, `reconnect()`,
 selector fallback, and target changes. The hook never makes a terminal
 `RemoteStore` handle usable again.
@@ -58,8 +64,11 @@ Use this when the handle itself is no longer the right handle.
 
 Typical causes:
 
-- target change in the React bindings
-- target-semantics drift or handoff (for example, caller-owned tab discovery now selects a different tab)
+- a remote identity update no longer matches the handle's `where` predicate
+- a terminal event reports `target-changed` or `target-replaced`
+
+Changing React targeting props is different: the owner destroys the old handle
+and acquires a replacement; it does not mark the old handle stale.
 
 Do not use `stale` for same-target session replacement.
 
@@ -85,7 +94,19 @@ This is one of the core Nexus State guarantees:
 await remote.actions.increment(1);
 ```
 
-resolves after the local mirror has observed the committed version.
+waits for the caller's targeted snapshot acknowledgement after the ordinary
+Core function call. This is a fixed-window synchronization boundary, not a
+transactional commit receipt.
+
+The init callback carries the actual Core function proxies for actions. State does not
+add an action-name dispatch layer or a second action proxy. Raw action rejections
+therefore retain Core error codes, including `E_CONN_CLOSED`, `E_CALL_TIMEOUT`, and
+`E_RESOURCE_ACCESS_DENIED`. The State safe helper can normalize errors at its public
+`Result` boundary when callers need a State-specific error union.
+
+The State connect `timeout` bounds acquisition and callback-init setup. It does not
+configure Core's later resource-call timeout; action calls retain Core's existing
+runtime defaults.
 
 That means this is safe:
 
@@ -98,13 +119,26 @@ console.log(remote.getState());
 
 If the connection dies during an action, Nexus State does not pretend everything is fine.
 
-The caller gets an explicit disconnect-oriented failure rather than silent ambiguity.
+The caller gets an explicit failure, but the action may already have committed.
+Treat this as an unknown-commit outcome; do not automatically retry
+non-idempotent actions. A source update is not rolled back because its
+acknowledgement failed. There is no draft, rollback, queue, or receipt protocol.
+
+The first source update opens the default 200ms fixed publication window.
+Updates during that window do not extend it, and action completion does not
+force an early flush. `maxPendingSnapshots` defaults to 32 and exceeding it
+terminates that subscription rather than blocking the store.
+
+Only successful actions wait for their publication acknowledgement. A business
+error may reach the caller before its prior state updates arrive through the
+normal window. Catching that error does not imply those writes were discarded.
 
 ## Cleanup Semantics
 
 Cleanup happens in more than one place:
 
-- local listeners are cleaned up on `destroy()`
+- mirror listeners are cleaned up on remote `destroy()`
+- binding `destroy()` stops publication but leaves the original Zustand store usable
 - terminal client states do best-effort `unsubscribe()`
 - host-side disconnect cleanup removes connection-owned subscriptions
 - final multi-context integration test verifies host-side cleanup behavior

@@ -46,7 +46,10 @@ import {
   sanitizeFixtureText,
   validateOffscreenEvent,
 } from "../shared/runtime";
-import { workspaceStateDefinition } from "../shared/workspace-state";
+import {
+  workspaceStateCreator,
+  workspaceStateDefinition,
+} from "../shared/workspace-state";
 import { isPreRouteCommand, type PreRouteCommand } from "../shared/scenario";
 
 const passiveSelectTimeoutMs = 1_000;
@@ -249,7 +252,14 @@ export default defineBackground(() => {
       },
     },
   });
-  const workspaceState = createNexusStore(workspaceStateDefinition);
+  const workspaceState = createNexusStore(
+    workspaceStateDefinition,
+    workspaceStateCreator,
+    {
+      snapshot: (state) => ({ count: state.count }),
+      expose: ["increment"],
+    },
+  );
   nexus.provide(workspaceState.provider);
   nexus.provide(
     WorkspaceToken,

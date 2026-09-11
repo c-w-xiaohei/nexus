@@ -1,7 +1,9 @@
 import React from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { createNexusScope } from "../src";
+import { createNexusScope, useStoreStatus } from "../src";
+import { useStore } from "zustand";
+import { connectNexusStore } from "@nexus-js/core/state";
 import {
   createCounterDefinition,
   createReactNexusHarness,
@@ -22,6 +24,33 @@ const createWrapper = (harness: CounterHarness) => {
 };
 
 describe("react integration", () => {
+  it("selects a real remote handle with Zustand's useStore", async () => {
+    const harness = await createReactNexusHarness({
+      hosts: [{ id: "host-a", initialCount: 0 }],
+    });
+    try {
+      const remote = await connectNexusStore(
+        harness.client.nexus,
+        createCounterDefinition(),
+        {
+          target: { context: "host", hostId: "host-a" },
+        },
+      );
+      const { result, unmount } = renderHook(() =>
+        useStore(remote, (state) => state.count),
+      );
+      expect(result.current).toBe(0);
+      await act(async () => {
+        await remote.actions.increment(2);
+      });
+      expect(result.current).toBe(2);
+      unmount();
+      remote.destroy();
+    } finally {
+      harness.teardown();
+    }
+  });
+
   it("provider + useRemoteStore connects to a real registered store", async () => {
     const harness = await createReactNexusHarness({
       hosts: [{ id: "host-a", initialCount: 0 }],
@@ -39,7 +68,6 @@ describe("react integration", () => {
       );
 
       await waitFor(() => {
-        expect(result.current.status.type).toBe("ready");
         expect(result.current.store).not.toBeNull();
         expect(result.current.store?.getState().count).toBe(0);
       });
@@ -79,7 +107,7 @@ describe("react integration", () => {
       );
 
       await waitFor(() => {
-        expect(result.current.remote.status.type).toBe("ready");
+        expect(result.current.remote.store).not.toBeNull();
       });
 
       await act(async () => {
@@ -103,29 +131,32 @@ describe("react integration", () => {
       const definition = createCounterDefinition();
       const wrapper = createWrapper(harness);
       const { result } = renderHook(
-        () =>
-          ReactNexusScope.useRemoteStore(definition, {
+        () => {
+          const remote = ReactNexusScope.useRemoteStore(definition, {
             target: { context: "host", hostId: "host-a" },
-          }),
+          });
+          const phase = useStoreStatus(remote.store, (status) => status.type);
+          return { remote, phase };
+        },
         { wrapper },
       );
 
       await waitFor(() => {
-        expect(result.current.status.type).toBe("ready");
+        expect(result.current.remote.store).not.toBeNull();
       });
 
       harness.disconnectHost("host-a");
 
       await waitFor(() => {
-        expect(result.current.status.type).toBe("disconnected");
-        expect(result.current.error).toBeNull();
+        expect(result.current.phase).toBe("disconnected");
+        expect(result.current.remote.error).toBeNull();
       });
     } finally {
       harness.teardown();
     }
   });
 
-  it("target change transitions stale/fallback before ready replacement", async () => {
+  it("target change clears acquisition and selector fallback before replacement", async () => {
     const harness = await createReactNexusHarness({
       hosts: [
         { id: "host-a", initialCount: 7 },
@@ -149,17 +180,18 @@ describe("react integration", () => {
         </ReactNexusScope.NexusProvider>
       );
       const { result, rerender } = renderHook(
-        () => ({
-          remote: CounterScope.useRemoteStore(),
-          selected: CounterScope.useSelector((state) => state.count, {
+        () => {
+          const remote = CounterScope.useRemoteStore();
+          const selected = CounterScope.useSelector((state) => state.count, {
             fallback: -1,
-          }),
-        }),
+          });
+          return { remote, selected };
+        },
         { wrapper },
       );
 
       await waitFor(() => {
-        expect(result.current.remote.status.type).toBe("ready");
+        expect(result.current.remote.store).not.toBeNull();
         expect(result.current.selected).toBe(7);
       });
 
@@ -167,13 +199,13 @@ describe("react integration", () => {
       rerender();
 
       await waitFor(() => {
-        expect(result.current.remote.status.type).toBe("initializing");
+        expect(result.current.remote.pending).toBe(true);
         expect(result.current.selected).toBe(-1);
       });
 
       await waitFor(() => {
         expect(harness.getHostSubscriptions("host-a")).toBe(0);
-        expect(result.current.remote.status.type).toBe("ready");
+        expect(result.current.remote.store).not.toBeNull();
         expect(result.current.selected).toBe(100);
       });
     } finally {
@@ -198,7 +230,7 @@ describe("react integration", () => {
       );
 
       await waitFor(() => {
-        expect(result.current.status.type).toBe("ready");
+        expect(result.current.store).not.toBeNull();
       });
 
       await waitFor(() => {

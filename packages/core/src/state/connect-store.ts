@@ -1,8 +1,10 @@
-import type { Asyncified, RuntimeCreateTokenParam } from "@/api/types";
-import type { CreateOptions } from "@/api/types/config";
-import type { AdapterModel } from "@/types/adapter-model";
-import { Result } from "better-result";
-const { err, ok } = Result;
+import type { Asyncified, RuntimeCreateTokenParam } from "../api/types";
+import type { CreateOptions } from "../api/types/config";
+import type { AdapterModel } from "../types/adapter-model";
+import { Result, type InferErr } from "better-result";
+import { TimeoutError, withTimeout } from "es-toolkit";
+import { z } from "zod";
+import { safeParsePayload } from "./protocol";
 import {
   NexusStoreConnectError,
   NexusStoreDisconnectedError,
@@ -10,23 +12,36 @@ import {
   normalizeNexusStoreError,
   NexusStoreActionError,
 } from "./errors";
-import { ConnectNexusStoreOptionsSchema } from "./protocol";
 import type {
   ActionArgs,
+  ActionFunction,
   ActionResult,
-  ConnectNexusStoreOptions,
   NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteStore,
-  RemoteStoreWithInitialState,
-} from "./types";
-import { RemoteStoreEntity } from "./client/remote-store";
+} from "./contract";
+import { createRemoteStore } from "./remote-store";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
 } from "@/types/symbols";
 
-type ActionFunction = (...args: any[]) => any;
+const ConnectNexusStoreOptionsSchema = z.object({
+  target: z
+    .custom<object>(
+      (value) =>
+        typeof value === "object" && value !== null && !Array.isArray(value),
+    )
+    .optional(),
+  where: z.function().optional(),
+  timeout: z.number().nonnegative().optional(),
+});
+
+export type ConnectNexusStoreOptions<M extends AdapterModel = AdapterModel> =
+  Partial<
+    Pick<CreateOptions<M>, keyof z.input<typeof ConnectNexusStoreOptionsSchema>>
+  >;
+
 type SafeCreateNexusLike<M extends AdapterModel> = {
   safeCreate<T extends object>(
     token: RuntimeCreateTokenParam<T, M>,
@@ -40,76 +55,29 @@ type CreateNexusLike<M extends AdapterModel> = {
   ): Promise<Asyncified<T>>;
 };
 
-type SafeActionError =
-  | NexusStoreActionError
-  | NexusStoreDisconnectedError
-  | NexusStoreProtocolError;
-
-const withTimeout = async <T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  onTimeout: () => Error,
-): Promise<T> => {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return promise;
+const normalizeConnectHandshakeError = (error: unknown) => {
+  if (error instanceof TimeoutError || isCallTimeout(error)) {
+    return new NexusStoreConnectError("Store subscribe handshake timed out.", {
+      cause: error,
+    });
   }
-
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(onTimeout());
-    }, timeoutMs);
-
-    void promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-};
-
-const extractSubscriptionId = (baseline: unknown): string | null => {
-  if (typeof baseline !== "object" || baseline === null) {
-    return null;
-  }
-
-  const maybeSubscriptionId = (baseline as { subscriptionId?: unknown })
-    .subscriptionId;
-  return typeof maybeSubscriptionId === "string" ? maybeSubscriptionId : null;
-};
-
-const normalizeConnectHandshakeError = (
-  error: unknown,
-):
-  | NexusStoreConnectError
-  | NexusStoreProtocolError
-  | NexusStoreDisconnectedError => {
-  if (
-    error instanceof NexusStoreConnectError ||
-    error instanceof NexusStoreProtocolError ||
-    error instanceof NexusStoreDisconnectedError
-  ) {
-    return error;
-  }
-
+  if (error instanceof NexusStoreConnectError) return error;
   const normalized = normalizeNexusStoreError(error);
   if (
     normalized instanceof NexusStoreProtocolError ||
     normalized instanceof NexusStoreDisconnectedError
-  ) {
+  )
     return normalized;
-  }
-
   return new NexusStoreConnectError("Store subscribe handshake failed.", {
     cause: normalized,
   });
 };
 
-export const safeConnectNexusStore = <
+/**
+ * Acquires a session-bound service and waits for its init callback to be applied.
+ * Failure destroys the mirror; its callback still reclaims capabilities in a late init.
+ */
+export const safeConnectNexusStore = async <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
   M extends AdapterModel,
@@ -119,319 +87,88 @@ export const safeConnectNexusStore = <
   options: ConnectNexusStoreOptions<M> = {},
 ): Promise<
   Result<
-    RemoteStoreWithInitialState<TState, TActions>,
-    | NexusStoreConnectError
-    | NexusStoreProtocolError
-    | NexusStoreDisconnectedError
+    RemoteStore<TState, TActions>,
+    ReturnType<typeof normalizeConnectHandshakeError>
   >
 > => {
-  const validatedOptions = ConnectNexusStoreOptionsSchema.safeParse(options);
-  if (!validatedOptions.success) {
-    return Promise.resolve(
-      err(
-        new NexusStoreConnectError("Invalid connect store options.", {
-          cause: validatedOptions.error,
-        }),
-      ),
-    );
-  }
-
-  const createOptions: CreateOptions<M> =
-    typeof validatedOptions.data.target === "undefined"
-      ? ({
-          ...(validatedOptions.data.where
-            ? { where: validatedOptions.data.where }
-            : {}),
-          ...(typeof validatedOptions.data.timeout === "number"
-            ? {
-                timeout: validatedOptions.data.timeout,
-                callTimeout: validatedOptions.data.timeout,
-              }
-            : {}),
-        } as CreateOptions<M>)
-      : ({
-          target: validatedOptions.data.target,
-          ...(validatedOptions.data.where
-            ? { where: validatedOptions.data.where }
-            : {}),
-          ...(typeof validatedOptions.data.timeout === "number"
-            ? {
-                timeout: validatedOptions.data.timeout,
-                callTimeout: validatedOptions.data.timeout,
-              }
-            : {}),
-        } as CreateOptions<M>);
-
-  let safeCreateResult: Promise<
-    Result<NexusStoreServiceContract<TState, TActions>, NexusStoreConnectError>
-  >;
-
-  try {
-    safeCreateResult = nexus
-      .safeCreate(definition.token, createOptions)
-      .then((result) =>
-        result.mapError(
-          (error) =>
-            new NexusStoreConnectError("Failed to create store proxy.", {
-              cause: error,
-            }),
-        ),
-      ) as Promise<
-      Result<
-        NexusStoreServiceContract<TState, TActions>,
-        NexusStoreConnectError
-      >
-    >;
-  } catch (error) {
-    return Promise.resolve(
-      err(
-        new NexusStoreConnectError("Failed to create store proxy.", {
-          cause: error,
-        }),
-      ),
-    );
-  }
-
-  return safeCreateResult.then(async (created) =>
-    created.andThenAsync(async (service) => {
-      const remoteResult = Result.try({
-        try: () =>
-          new RemoteStoreEntity<TState, TActions>(
-            service as unknown as NexusStoreServiceContract<TState, TActions>,
-            definition.state(),
-            definition.validation,
-          ),
-        catch: normalizeConnectHandshakeError,
-      });
-      if (remoteResult.isErr()) {
-        return err<
-          RemoteStoreWithInitialState<TState, TActions>,
-          | NexusStoreConnectError
-          | NexusStoreProtocolError
-          | NexusStoreDisconnectedError
-        >(remoteResult.error);
-      }
-
-      const remote = remoteResult.value;
-
-      let handshakeFailed = false;
-      let baselineForFailedHandshakeCleanup: unknown | null = null;
-
-      const cleanupFailedHandshake = (): void => {
-        handshakeFailed = true;
-
-        const subscriptionId = extractSubscriptionId(
-          baselineForFailedHandshakeCleanup,
-        );
-        if (subscriptionId) {
-          try {
-            void Promise.resolve(service.unsubscribe(subscriptionId)).catch(
-              () => undefined,
-            );
-          } catch {
-            // Best-effort cleanup only.
-          }
-        }
-
-        remote.destroy();
-      };
-
-      const subscribeDisconnectResult = Result.try({
-        try: () =>
-          (
-            service as {
-              [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
-                callback: () => void,
-              ) => unknown;
-            }
-          )[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL],
-        catch: normalizeConnectHandshakeError,
-      });
-      if (subscribeDisconnectResult.isErr()) {
-        cleanupFailedHandshake();
-        return err<
-          RemoteStoreWithInitialState<TState, TActions>,
-          | NexusStoreConnectError
-          | NexusStoreProtocolError
-          | NexusStoreDisconnectedError
-        >(subscribeDisconnectResult.error);
-      }
-
-      const subscribeDisconnect = subscribeDisconnectResult.value;
-      if (typeof subscribeDisconnect === "function") {
-        const unsubscribeDisconnectResult = Result.try({
-          try: () =>
-            subscribeDisconnect(() => {
-              remote.onTransportDisconnect(
-                "Remote store connection disconnected.",
-              );
-            }),
-          catch: normalizeConnectHandshakeError,
-        });
-
-        if (unsubscribeDisconnectResult.isErr()) {
-          cleanupFailedHandshake();
-          return err<
-            RemoteStoreWithInitialState<TState, TActions>,
-            | NexusStoreConnectError
-            | NexusStoreProtocolError
-            | NexusStoreDisconnectedError
-          >(unsubscribeDisconnectResult.error);
-        }
-
-        if (typeof unsubscribeDisconnectResult.value === "function") {
-          remote.setDisconnectSubscriptionCleanup(
-            unsubscribeDisconnectResult.value as () => void,
-          );
-        }
-      }
-
-      const subscribeTargetStaleResult = Result.try({
-        try: () =>
-          (
-            service as {
-              [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
-                callback: () => void,
-              ) => unknown;
-            }
-          )[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL],
-        catch: normalizeConnectHandshakeError,
-      });
-      if (subscribeTargetStaleResult.isErr()) {
-        cleanupFailedHandshake();
-        return err<
-          RemoteStoreWithInitialState<TState, TActions>,
-          | NexusStoreConnectError
-          | NexusStoreProtocolError
-          | NexusStoreDisconnectedError
-        >(subscribeTargetStaleResult.error);
-      }
-
-      const subscribeTargetStale = subscribeTargetStaleResult.value;
-      if (typeof subscribeTargetStale === "function") {
-        const unsubscribeTargetStaleResult = Result.try({
-          try: () =>
-            subscribeTargetStale(() => {
-              remote.markStaleByTargetChange();
-            }),
-          catch: normalizeConnectHandshakeError,
-        });
-
-        if (unsubscribeTargetStaleResult.isErr()) {
-          cleanupFailedHandshake();
-          return err<
-            RemoteStoreWithInitialState<TState, TActions>,
-            | NexusStoreConnectError
-            | NexusStoreProtocolError
-            | NexusStoreDisconnectedError
-          >(unsubscribeTargetStaleResult.error);
-        }
-
-        if (typeof unsubscribeTargetStaleResult.value === "function") {
-          remote.setDisconnectSubscriptionCleanup(
-            unsubscribeTargetStaleResult.value as () => void,
-          );
-        }
-      }
-
-      const safeValidateHandshakeStatus = (): Result<
-        RemoteStoreWithInitialState<TState, TActions>,
-        NexusStoreProtocolError | NexusStoreDisconnectedError
-      > => {
-        const status = remote.getStatus();
-        if (status.type === "disconnected") {
-          return err(
-            remote.getTerminalError() ??
-              new NexusStoreDisconnectedError(
-                "Remote store disconnected during initial handshake.",
-              ),
-          );
-        }
-
-        if (status.type === "stale") {
-          return err(
-            remote.getTerminalError() ??
-              new NexusStoreProtocolError(
-                "Remote store became stale during initial handshake.",
-              ),
-          );
-        }
-
-        return ok(remote);
-      };
-
-      let subscribePromise: Promise<unknown>;
-      try {
-        subscribePromise = Promise.resolve(
-          (
-            service as unknown as NexusStoreServiceContract<TState, TActions>
-          ).subscribe((event) => {
-            remote.onSync(event);
-          }),
-        );
-      } catch (error) {
-        cleanupFailedHandshake();
-        return err(normalizeConnectHandshakeError(error));
-      }
-
-      const subscribePromiseWithLateCleanup = subscribePromise.then(
-        (baseline) => {
-          if (handshakeFailed) {
-            const lateSubscriptionId = extractSubscriptionId(baseline);
-            if (lateSubscriptionId) {
-              try {
-                void Promise.resolve(
-                  service.unsubscribe(lateSubscriptionId),
-                ).catch(() => undefined);
-              } catch {
-                // Best-effort cleanup only.
-              }
-            }
-          }
-
-          return baseline;
-        },
-      );
-
-      const handshake = await Result.tryPromise({
-        try: () =>
-          withTimeout(
-            subscribePromiseWithLateCleanup,
-            validatedOptions.data.timeout ?? 0,
-            () =>
-              new NexusStoreConnectError(
-                "Store subscribe handshake timed out.",
-              ),
-          ),
-        catch: normalizeConnectHandshakeError,
-      });
-      return handshake
-        .map((baseline) => {
-          baselineForFailedHandshakeCleanup = baseline;
-          remote.completeHandshake(baseline);
-          return baseline;
-        })
-        .andThen(() => {
-          const validated = safeValidateHandshakeStatus();
-          if (validated.isErr()) {
-            return err(validated.error);
-          }
-
-          return ok(validated.value);
-        })
-        .mapError((error) => {
-          cleanupFailedHandshake();
-          return isCallTimeout(error)
-            ? new NexusStoreConnectError(
-                "Store subscribe handshake timed out.",
-                {
-                  cause: error,
-                },
-              )
-            : error;
-        });
-    }),
+  const createError = (cause: unknown) =>
+    new NexusStoreConnectError("Failed to create store proxy.", { cause });
+  const parsed = safeParsePayload(
+    ConnectNexusStoreOptionsSchema,
+    options,
+    "Invalid connect store options.",
+  ).mapError(
+    (error) =>
+      new NexusStoreConnectError(error.message, { cause: error.cause }),
   );
+  if (parsed.isErr()) return parsed;
+  const { target, where, timeout } = parsed.value;
+  const acquisition = Result.try({
+    try: () => ({
+      pending: nexus.safeCreate(definition.token, {
+        target,
+        where,
+        timeout,
+      } as CreateOptions<M>),
+    }),
+    catch: createError,
+  });
+  if (acquisition.isErr()) return acquisition;
+  // Catch both throw-style implementations and returned Errs without delaying
+  // subscription behind another async composition boundary after acquisition.
+  const created = await acquisition.value.pending.then(
+    (result) => result.mapError(createError),
+    (cause) => Result.err(createError(cause)),
+  );
+  if (created.isErr()) return created;
+  const service = created.value as NexusStoreServiceContract<TState, TActions>;
+
+  const remoteResult = Result.try({
+    try: () => createRemoteStore<TState, TActions>(definition.validation),
+    catch: normalizeConnectHandshakeError,
+  });
+  if (remoteResult.isErr()) return remoteResult;
+  const remote = remoteResult.value;
+
+  // Observe the session before subscribe can deliver init or any update.
+  const handshake = await Result.tryPromise({
+    try: async () => {
+      const hooks = [
+        [
+          NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+          () => remote.disconnect("Remote store connection disconnected."),
+        ],
+        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL, () => remote.stale()],
+      ] as const;
+      for (const [symbol, notify] of hooks) {
+        const subscribe = (
+          service as typeof service & {
+            [key: symbol]: ((callback: () => void) => unknown) | undefined;
+          }
+        )[symbol];
+        if (typeof subscribe !== "function") continue;
+        const cleanup = subscribe(notify);
+        if (typeof cleanup === "function")
+          remote.addCleanup(cleanup as () => void);
+      }
+
+      // Init arrives through the callback, not the response. A successful response
+      // is only useful when init completed and the session is still usable.
+      const subscribed = Promise.resolve(
+        service.subscribe((event) => remote.onSync(event)),
+      );
+      // Zero retains State's existing unbounded-handshake meaning.
+      return timeout && Number.isFinite(timeout)
+        ? withTimeout(() => subscribed, timeout)
+        : subscribed;
+    },
+    catch: normalizeConnectHandshakeError,
+  });
+  // Recheck after the asynchronous boundary: disconnect may follow the init ACK.
+  return handshake
+    .andThen(() => remote.safeReady())
+    .map(() => remote.store)
+    .tapError(() => remote.store.destroy());
 };
 
 export const connectNexusStore = async <
@@ -442,28 +179,25 @@ export const connectNexusStore = async <
   nexus: SafeCreateNexusLike<M> | CreateNexusLike<M>,
   definition: NexusStoreDefinition<TState, TActions, M>,
   options: ConnectNexusStoreOptions<M> = {},
-): Promise<RemoteStoreWithInitialState<TState, TActions>> => {
+): Promise<RemoteStore<TState, TActions>> => {
   const safeNexus: SafeCreateNexusLike<M> =
     "safeCreate" in nexus
-      ? { safeCreate: nexus.safeCreate.bind(nexus) }
+      ? nexus
       : {
-          safeCreate: <T extends object>(
-            token: RuntimeCreateTokenParam<T, M>,
-            createOptions?: CreateOptions<M>,
-          ) =>
+          safeCreate: (token, createOptions) =>
             Result.tryPromise({
-              try: () => nexus.create<T>(token, createOptions),
+              try: () => nexus.create(token, createOptions),
               catch: (error) =>
                 error instanceof Error ? error : new Error(String(error)),
             }),
         };
-
   const result = await safeConnectNexusStore(safeNexus, definition, options);
   if (result.isErr()) throw result.error;
   return result.value;
 };
 
-export const safeInvokeStoreAction = async <
+/** Captures action rejection without changing the underlying core callback's lifecycle. */
+export const safeInvokeStoreAction = <
   TState extends object,
   TActions extends Record<string, ActionFunction>,
   K extends keyof TActions & string,
@@ -471,44 +205,23 @@ export const safeInvokeStoreAction = async <
   remoteStore: RemoteStore<TState, TActions>,
   action: K,
   args: ActionArgs<TActions, K>,
-): Promise<Result<ActionResult<TActions, K>, SafeActionError>> => {
-  try {
-    const actions = remoteStore.actions;
-    const invoke = actions[action] as (
-      ...invokeArgs: ActionArgs<TActions, K>
-    ) => Promise<ActionResult<TActions, K>>;
-    return await Result.tryPromise({
-      try: () => invoke(...args),
-      catch: (error) => {
-        if (error instanceof NexusStoreDisconnectedError) {
-          return error;
-        }
-
-        if (error instanceof NexusStoreProtocolError) {
-          return error;
-        }
-
-        if (error instanceof NexusStoreActionError) {
-          return error;
-        }
-
-        return new NexusStoreActionError("Store action failed.", {
-          cause: error,
-        });
-      },
-    });
-  } catch (error) {
-    return err(
+) =>
+  Result.tryPromise({
+    try: (): Promise<ActionResult<TActions, K>> => {
+      const invoke = remoteStore.actions[action];
+      return invoke(...args);
+    },
+    catch: (error) =>
       error instanceof NexusStoreDisconnectedError ||
-        error instanceof NexusStoreProtocolError ||
-        error instanceof NexusStoreActionError
+      error instanceof NexusStoreProtocolError ||
+      error instanceof NexusStoreActionError
         ? error
         : new NexusStoreActionError("Store action failed.", { cause: error }),
-    );
-  }
-};
+  });
 
-export type SafeInvokeStoreActionError = SafeActionError;
+export type SafeInvokeStoreActionError = InferErr<
+  Awaited<ReturnType<typeof safeInvokeStoreAction>>
+>;
 
 const isCallTimeout = (error: unknown): boolean =>
   error instanceof Error &&

@@ -83,7 +83,6 @@ import { Nexus, Token } from "@nexus-js/core";
 import {
   connectNexusStore,
   createNexusStore,
-  defineNexusStore,
   type NexusStoreServiceContract,
 } from "@nexus-js/core/state";
 import { relayNexusStore } from "@nexus-js/core/relay";
@@ -96,7 +95,7 @@ declare const iframeParentNexus: Nexus<IframeAdapterModel>;
 declare const iframeChildNexus: Nexus<IframeAdapterModel>;
 
 type SessionState = { name: string };
-type SessionActions = { rename(name: string): Promise<void> };
+type SessionActions = { rename(name: string): void };
 type SessionService = NexusStoreServiceContract<SessionState, SessionActions>;
 
 const UpstreamSessionStoreToken = new Token<SessionService, ChromeAdapterModel>(
@@ -106,33 +105,21 @@ const DownstreamSessionStoreToken = new Token<
   SessionService,
   IframeAdapterModel
 >("example:session-store");
-const upstreamSessionStore = defineNexusStore<
-  SessionState,
-  SessionActions,
-  ChromeAdapterModel
->({
-  token: UpstreamSessionStoreToken,
-  state: () => ({ name: "Ada" }),
-  actions: ({ setState }) => ({
-    async rename(name) {
-      setState({ name });
+const upstreamSessionStore = { token: UpstreamSessionStoreToken };
+const downstreamSessionStore = { token: DownstreamSessionStoreToken };
+const { provider: sessionProvider } = createNexusStore(
+  upstreamSessionStore,
+  (set) => ({
+    name: "Ada",
+    rename(name: string) {
+      set({ name });
     },
   }),
-});
-const downstreamSessionStore = defineNexusStore<
-  SessionState,
-  SessionActions,
-  IframeAdapterModel
->({
-  token: DownstreamSessionStoreToken,
-  state: () => ({ name: "Ada" }),
-  actions: ({ setState }) => ({
-    async rename(name) {
-      setState({ name });
-    },
-  }),
-});
-const { provider: sessionProvider } = createNexusStore(upstreamSessionStore);
+  {
+    snapshot: (local) => ({ name: local.name }),
+    expose: ["rename"],
+  },
+);
 chromeNexus.provide(sessionProvider);
 
 iframeParentNexus.provide(
@@ -165,7 +152,13 @@ const store = await connectNexusStore(
 );
 ```
 
-The relay projects the upstream authoritative store. It has its own downstream session and versions, waits for the upstream baseline, and terminalizes downstream subscribers when the upstream session is disconnected or replaced. Create fresh handles after replacement.
+The relay projects the upstream authoritative store. It has its own downstream session identity, preserves upstream versions, waits for each subscription's baseline, and terminalizes downstream subscribers when the upstream session is disconnected or replaced. Create fresh handles after replacement.
+
+Each downstream subscription owns an upstream callback subscription. An action
+waits only for its caller's fixed-window snapshot acknowledgement, not for slow
+sibling subscribers. Relay preserves the upstream snapshot projection and
+allowlist; it does not add a transaction, receipt, retry, or rollback protocol.
+Closing a downstream handle removes that upstream listener and releases its callbacks.
 
 ## Policy Context
 

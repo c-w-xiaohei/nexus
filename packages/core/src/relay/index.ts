@@ -2,6 +2,13 @@ import type { ServiceProvider } from "@/api/types/config";
 import type { NexusInstance } from "@/api/types";
 import { Token } from "@/api/token";
 import { Logger } from "@/logger";
+import { Result } from "better-result";
+import {
+  disposeSubscription,
+  safeParsePayload,
+  safeValidateState,
+  SyncEnvelopeSchema,
+} from "@/state/protocol";
 import {
   SERVICE_INVOKE_END,
   SERVICE_INVOKE_START,
@@ -27,9 +34,10 @@ import {
 import type {
   NexusStoreDefinition,
   NexusStoreServiceContract,
-} from "@/state/types";
+  RemoteActions,
+} from "@/state/contract";
 import type {
-  SnapshotEnvelope,
+  SyncEnvelope,
   TerminalEnvelope,
   TerminalReason,
 } from "@/state/protocol";
@@ -103,34 +111,6 @@ export class RelayError extends Error {
     this.code = code;
     this.context = context;
   }
-}
-
-interface UpstreamStoreHandle<
-  TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
-> {
-  service: NexusStoreServiceContract<TState, TActions> & {
-    [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
-      callback: () => void,
-    ) => (() => void) | void;
-    [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
-      callback: () => void,
-    ) => (() => void) | void;
-  };
-  upstreamStoreInstanceId: string;
-  upstreamVersion: number;
-  latestState: TState;
-}
-
-interface PendingDispatch<T> {
-  committedUpstreamVersion: number;
-  result: T;
-  resolve: (value: {
-    type: "dispatch-result";
-    committedVersion: number;
-    result: T;
-  }) => void;
-  reject: (error: Error) => void;
 }
 
 const SERIALIZABLE_MODE = "serializable" as const;
@@ -258,14 +238,6 @@ const toDisconnectedError = (
     `Relay upstream store became unavailable (${reason}).`,
     typeof cause === "undefined" ? undefined : { cause },
   );
-
-const cloneState = <TState extends object>(state: TState): TState => {
-  if (typeof globalThis.structuredClone === "function") {
-    return globalThis.structuredClone(state);
-  }
-
-  return JSON.parse(JSON.stringify(state)) as TState;
-};
 
 export const relayService = <
   TService extends object,
@@ -395,6 +367,11 @@ export const relayService = <
   };
 };
 
+/**
+ * Projects one upstream State session into the downstream graph. Each subscriber
+ * owns its upstream callbacks, so action acknowledgement remains caller-specific.
+ * Upstream replacement ends this provider; acquire a newly registered relay session.
+ */
 export const relayNexusStore = <
   TState extends object,
   TActions extends Record<string, (...args: any[]) => any>,
@@ -415,212 +392,53 @@ export const relayNexusStore = <
   >(definition.token.id);
   const relayStoreInstanceId = createRelaySessionId();
   const logger = new Logger("L3 -> RelayStore");
-  let downstreamVersion = 0;
-  let latestState: TState | null = null;
-  let upstreamStoreInstanceId: string | null = null;
-  let upstreamVersion: number | null = null;
-  let upstreamHandlePromise: Promise<
-    UpstreamStoreHandle<TState, TActions>
-  > | null = null;
-  let terminalError: Error | null = null;
-  let nextSubscriptionId = 1;
-  let dispatchChain = Promise.resolve();
-
-  const subscriptions = new Map<
-    string,
-    {
-      onSync: (
-        event:
-          | (Omit<SnapshotEnvelope, "state"> & { state: TState })
-          | TerminalEnvelope,
-      ) => void;
-      ownerConnectionId?: string;
-    }
-  >();
-  const subscriptionsByConnection = new Map<string, Set<string>>();
-  const pendingDispatches = new Set<PendingDispatch<any>>();
-
-  const ensureNotTerminal = (): void => {
-    if (terminalError) {
-      throw terminalError;
-    }
+  let identity: string | undefined;
+  let latestVersion = 0;
+  let terminalError: NexusStoreDisconnectedError | null = null;
+  type Subscription = {
+    onSync: Parameters<
+      NexusStoreServiceContract<TState, TActions>["subscribe"]
+    >[0];
+    owner?: string;
+    cleanup: Set<() => void>;
+    stop(): void;
   };
+  const subscriptions = new Set<Subscription>();
+  const contexts = new WeakMap<ServiceInvocationContext, symbol>();
+  const connections = new Map<string, symbol>();
+  const closedError = () =>
+    terminalError ??
+    new NexusStoreDisconnectedError("Relay store subscription closed.");
+  const safeActive = (subscription: Subscription) =>
+    terminalError || !subscriptions.has(subscription)
+      ? Result.err(closedError())
+      : Result.ok(undefined);
 
-  const emitDownstreamSnapshot = (state: TState): number => {
-    downstreamVersion += 1;
-    const snapshot = {
-      type: "snapshot" as const,
-      storeInstanceId: relayStoreInstanceId,
-      version: downstreamVersion,
-      state: cloneState(state),
-    };
-
-    for (const [subscriptionId, subscription] of subscriptions.entries()) {
-      try {
-        // Fanout owns these background calls, not the generic proxy invocation layer.
-        void Promise.resolve(subscription.onSync(snapshot)).catch((error) =>
-          logger.error("Relay snapshot notification failed", error),
-        );
-      } catch {
-        subscriptions.delete(subscriptionId);
-      }
-    }
-
-    return downstreamVersion;
-  };
-
+  // Each downstream subscriber owns an upstream subscription. Its action already
+  // waits for this callback's ACK, so no relay waiter or all-subscriber barrier exists.
   const emitTerminal = (reason: TerminalReason, cause?: unknown): void => {
-    if (terminalError) {
-      return;
-    }
-
+    if (terminalError) return;
     terminalError = toDisconnectedError(reason, cause);
-    const terminalEnvelope: TerminalEnvelope = {
+    const event: TerminalEnvelope = {
       type: "terminal",
       storeInstanceId: relayStoreInstanceId,
-      lastKnownVersion: downstreamVersion,
+      lastKnownVersion: latestVersion,
       reason,
-      ...(typeof cause === "undefined" ? {} : { error: cause }),
+      error: cause,
     };
-
-    for (const subscription of subscriptions.values()) {
-      try {
-        void Promise.resolve(subscription.onSync(terminalEnvelope)).catch(
-          (error) => logger.error("Relay terminal notification failed", error),
-        );
-      } catch {
-        // listener isolation only
-      }
-    }
-
-    for (const pendingDispatch of Array.from(pendingDispatches)) {
-      pendingDispatches.delete(pendingDispatch);
-      pendingDispatch.reject(terminalError);
+    for (const subscription of subscriptions) {
+      void Result.tryPromise({
+        try: async () => {
+          await subscription.onSync(event);
+        },
+        catch: mapRelayUpstreamError,
+      }).then((sent) => {
+        if (sent.isErr())
+          logger.error("Relay terminal notification failed", sent.error);
+      });
+      subscription.stop();
     }
   };
-
-  const removeSubscription = (subscriptionId: string): void => {
-    const existing = subscriptions.get(subscriptionId);
-    if (!existing) {
-      return;
-    }
-
-    subscriptions.delete(subscriptionId);
-    if (!existing.ownerConnectionId) {
-      return;
-    }
-
-    const owned = subscriptionsByConnection.get(existing.ownerConnectionId);
-    if (!owned) {
-      return;
-    }
-
-    owned.delete(subscriptionId);
-    if (owned.size === 0) {
-      subscriptionsByConnection.delete(existing.ownerConnectionId);
-    }
-  };
-
-  const handleUpstreamSnapshot = (event: SnapshotEnvelope): void => {
-    ensureNotTerminal();
-
-    if (
-      upstreamStoreInstanceId &&
-      event.storeInstanceId !== upstreamStoreInstanceId
-    ) {
-      emitTerminal(
-        "target-replaced",
-        new NexusStoreProtocolError("Upstream store instance changed."),
-      );
-      return;
-    }
-
-    if (upstreamVersion !== null && event.version <= upstreamVersion) {
-      return;
-    }
-
-    upstreamStoreInstanceId = event.storeInstanceId;
-    upstreamVersion = event.version;
-    latestState = cloneState(event.state as TState);
-
-    const satisfied = Array.from(pendingDispatches).filter(
-      (pendingDispatch) =>
-        event.version >= pendingDispatch.committedUpstreamVersion,
-    );
-
-    if (satisfied.length > 0) {
-      const committedVersion = emitDownstreamSnapshot(latestState);
-      for (const pendingDispatch of satisfied) {
-        pendingDispatches.delete(pendingDispatch);
-        pendingDispatch.resolve({
-          type: "dispatch-result",
-          committedVersion,
-          result: pendingDispatch.result,
-        });
-      }
-      return;
-    }
-
-    emitDownstreamSnapshot(latestState);
-  };
-
-  const handleUpstreamSync = (event: unknown): void => {
-    if (!event || typeof event !== "object") {
-      emitTerminal(
-        "provider-shutdown",
-        new NexusStoreProtocolError("Invalid upstream sync envelope."),
-      );
-      return;
-    }
-
-    const typedEvent = event as SnapshotEnvelope | TerminalEnvelope;
-    if (typedEvent.type === "terminal") {
-      emitTerminal(typedEvent.reason, typedEvent.error);
-      return;
-    }
-
-    handleUpstreamSnapshot(typedEvent as SnapshotEnvelope);
-  };
-
-  const ensureUpstream = async (): Promise<
-    UpstreamStoreHandle<TState, TActions>
-  > => {
-    if (upstreamHandlePromise) {
-      return upstreamHandlePromise;
-    }
-
-    upstreamHandlePromise = (async () => {
-      try {
-        const service = (await options.forwardThrough.create(upstreamToken, {
-          target: options.forwardTarget,
-        })) as UpstreamStoreHandle<TState, TActions>["service"];
-
-        service[NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?.(() => {
-          emitTerminal("source-disconnected");
-        });
-        service[NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?.(() => {
-          emitTerminal("target-changed");
-        });
-
-        const baseline = await service.subscribe(handleUpstreamSync);
-        latestState = cloneState(baseline.state);
-        upstreamStoreInstanceId = baseline.storeInstanceId;
-        upstreamVersion = baseline.version;
-
-        return {
-          service,
-          upstreamStoreInstanceId: baseline.storeInstanceId,
-          upstreamVersion: baseline.version,
-          latestState,
-        };
-      } catch (error) {
-        throw mapRelayUpstreamError(error);
-      }
-    })();
-
-    return upstreamHandlePromise;
-  };
-
   const buildBaseContext = (
     invocationContext: ServiceInvocationContext,
   ): RelayBaseContext<DownstreamM> => ({
@@ -630,148 +448,297 @@ export const relayNexusStore = <
     tokenId: definition.token.id,
   });
 
-  const service: NexusStoreServiceContract<TState, TActions> & {
-    [SERVICE_INVOKE_START](
-      invocationContext: ServiceInvocationContext,
-    ): ServiceInvocationContext;
-    [SERVICE_INVOKE_END](invocationContext?: ServiceInvocationContext): void;
-    [SERVICE_ON_DISCONNECT](connectionId: string): void;
-  } = {
-    async subscribe(
-      onSync: (
-        event:
-          | (Omit<SnapshotEnvelope, "state"> & { state: TState })
-          | TerminalEnvelope,
-      ) => void,
-      invocationContext?: ServiceInvocationContext,
-    ) {
-      if (invocationContext && options.policy?.canSubscribe) {
-        const allowed = await options.policy.canSubscribe(
-          buildBaseContext(invocationContext),
-        );
-        if (allowed === false) {
-          throw new RelayError(
-            "Relay policy denied store subscription.",
-            "E_RELAY_POLICY_DENIED",
-            { tokenId: definition.token.id },
-          );
-        }
-      }
-
-      const upstream = await ensureUpstream();
-      ensureNotTerminal();
-      const subscriptionId = `relay-subscription:${nextSubscriptionId++}`;
-      const ownerConnectionId = invocationContext?.sourceConnectionId;
-      subscriptions.set(subscriptionId, {
-        onSync,
-        ...(ownerConnectionId ? { ownerConnectionId } : {}),
-      });
-      if (ownerConnectionId) {
-        const owned =
-          subscriptionsByConnection.get(ownerConnectionId) ?? new Set<string>();
-        owned.add(subscriptionId);
-        subscriptionsByConnection.set(ownerConnectionId, owned);
-      }
-
-      return {
-        storeInstanceId: relayStoreInstanceId,
-        subscriptionId,
-        version: 0,
-        state: cloneState(latestState ?? upstream.latestState),
-      };
-    },
-    async unsubscribe(subscriptionId: string) {
-      removeSubscription(subscriptionId);
-    },
-    async dispatch<K extends keyof TActions & string>(
-      action: K,
-      args: TActions[K] extends (...callArgs: infer TArgs) => any
-        ? TArgs
-        : never,
-      invocationContext?: ServiceInvocationContext,
-    ) {
-      if (!invocationContext) {
-        throw new RelayError(
-          "Relay store dispatch requires invocation context.",
-          "E_RELAY_UPSTREAM_FAILURE",
-        );
-      }
-
-      const run = async () => {
-        ensureNotTerminal();
-
-        if (options.policy?.canDispatch) {
-          const allowed = await options.policy.canDispatch({
-            ...buildBaseContext(invocationContext),
-            action,
-          });
-          if (allowed === false) {
-            throw new RelayError(
-              "Relay policy denied store dispatch.",
-              "E_RELAY_POLICY_DENIED",
-              { tokenId: definition.token.id, action },
-            );
-          }
-        }
-
-        const upstream = await ensureUpstream();
-        ensureNotTerminal();
-
-        const upstreamResult = await upstream.service.dispatch(
-          action,
-          args,
-          invocationContext,
-        );
-        ensureNotTerminal();
-
-        if ((upstreamVersion ?? -1) >= upstreamResult.committedVersion) {
-          const committedVersion = emitDownstreamSnapshot(
-            latestState ?? upstream.latestState,
-          );
-          return {
-            type: "dispatch-result" as const,
-            committedVersion,
-            result: upstreamResult.result,
-          };
-        }
-
-        return await new Promise<{
-          type: "dispatch-result";
-          committedVersion: number;
-          result: typeof upstreamResult.result;
-        }>((resolve, reject) => {
-          pendingDispatches.add({
-            committedUpstreamVersion: upstreamResult.committedVersion,
-            result: upstreamResult.result,
-            resolve,
-            reject,
-          });
-        });
-      };
-
-      const currentRun = dispatchChain.then(run, run);
-      dispatchChain = currentRun.then(
-        () => undefined,
-        () => undefined,
+  const safeAuthorize = async (
+    invocation: ServiceInvocationContext | undefined,
+    action?: string,
+  ) => {
+    const policy =
+      action === undefined
+        ? options.policy?.canSubscribe
+        : options.policy?.canDispatch;
+    if (!policy) return Result.ok(undefined);
+    if (!invocation)
+      return Result.err(
+        new RelayError(
+          "Relay policy requires a trusted caller.",
+          "E_RELAY_POLICY_DENIED",
+        ),
       );
-      return currentRun;
-    },
-    [SERVICE_INVOKE_START](invocationContext) {
-      return invocationContext;
-    },
-    [SERVICE_INVOKE_END]() {
-      return undefined;
-    },
-    [SERVICE_ON_DISCONNECT](connectionId) {
-      const owned = subscriptionsByConnection.get(connectionId);
-      if (!owned) {
-        return;
-      }
+    const allowed = await Result.tryPromise({
+      try: async () => {
+        const context = {
+          ...buildBaseContext(invocation),
+          action: action ?? "",
+        };
+        return policy(context);
+      },
+      catch: mapRelayUpstreamError,
+    });
+    return allowed.andThen((value) =>
+      value === false
+        ? Result.err(
+            new RelayError(
+              "Relay policy denied store operation.",
+              "E_RELAY_POLICY_DENIED",
+              { action },
+            ),
+          )
+        : Result.ok(undefined),
+    );
+  };
 
-      for (const subscriptionId of Array.from(owned)) {
-        removeSubscription(subscriptionId);
+  const service = {
+    async subscribe(
+      onSync: Subscription["onSync"],
+      ...args: unknown[]
+    ): Promise<void> {
+      const candidate = args.at(-1) as ServiceInvocationContext | undefined;
+      const invocation =
+        candidate && contexts.has(candidate) ? candidate : undefined;
+      const subscription: Subscription = {
+        onSync,
+        owner: invocation?.sourceConnectionId,
+        cleanup: new Set(),
+        stop() {
+          if (!subscriptions.delete(subscription)) return;
+          for (const stop of subscription.cleanup) {
+            subscription.cleanup.delete(stop);
+            try {
+              stop();
+            } catch {
+              /* Complete all ownership cleanup. */
+            }
+          }
+          if (![...subscriptions].some((other) => other.onSync === onSync)) {
+            try {
+              (
+                onSync as typeof onSync & {
+                  [RELEASE_PROXY_SYMBOL]?: () => void;
+                }
+              )[RELEASE_PROXY_SYMBOL]?.();
+            } catch {
+              /* best effort */
+            }
+          }
+        },
+      };
+      // Register before any async policy/acquisition so disconnect can close it.
+      subscriptions.add(subscription);
+      let initialized = false;
+      let observedVersion: number | undefined;
+      const safeReceive = (input: unknown) =>
+        Result.gen(async function* () {
+          yield* Result.try({
+            try: () => {
+              if (
+                input &&
+                typeof input === "object" &&
+                (input as { type?: unknown }).type === "init"
+              ) {
+                if (!subscriptions.has(subscription))
+                  disposeSubscription(input);
+                else subscription.cleanup.add(() => disposeSubscription(input));
+              }
+            },
+            catch: (cause) =>
+              new NexusStoreProtocolError("Invalid relay state event.", {
+                cause,
+              }),
+          });
+          yield* safeActive(subscription);
+          const event = yield* safeParsePayload(
+            SyncEnvelopeSchema,
+            input,
+            "Invalid relay state event.",
+          );
+          if (identity && identity !== event.storeInstanceId) {
+            emitTerminal("target-replaced");
+            return Result.err(closedError());
+          }
+          if (event.type === "terminal") {
+            emitTerminal(event.reason, event.error);
+            return Result.err(closedError());
+          }
+          if (event.type === "init" && initialized)
+            return Result.err(
+              new NexusStoreProtocolError("Duplicate relay init."),
+            );
+          if (
+            event.type === "snapshot" &&
+            observedVersion !== undefined &&
+            event.version <= observedVersion
+          )
+            return Result.ok(undefined);
+          const state = yield* safeValidateState(
+            event.state,
+            definition.validation?.state,
+            "Invalid relay state.",
+          );
+          if (!identity) {
+            identity = event.storeInstanceId;
+          }
+          observedVersion = Math.max(observedVersion ?? 0, event.version);
+          // Concurrent subscriptions can deliver older baselines after newer
+          // ones. Keep upstream versions rather than subtracting an arrival-order baseline.
+          const version = event.version;
+          latestVersion = Math.max(latestVersion, version);
+          const snapshot = yield* Result.try({
+            try: () => structuredClone(state),
+            catch: (cause) =>
+              new NexusStoreProtocolError("Invalid relay state.", {
+                cause,
+              }),
+          });
+          let projected: SyncEnvelope<TState, TActions> = {
+            type: "snapshot",
+            storeInstanceId: relayStoreInstanceId,
+            version,
+            state: snapshot,
+          };
+          if (event.type === "init") {
+            initialized = true;
+            const actions: Record<
+              string,
+              (...args: unknown[]) => Promise<unknown>
+            > = Object.create(null);
+            for (const name of Object.keys(event.actions)) {
+              actions[name] = async (...callArgs) => {
+                const caller = callArgs.at(-1) as
+                  | ServiceInvocationContext
+                  | undefined;
+                if (caller && contexts.has(caller)) callArgs.pop();
+                const activeCaller =
+                  caller && contexts.has(caller) ? caller : invocation;
+                const called = await Result.gen(async function* () {
+                  yield* safeActive(subscription);
+                  if (activeCaller?.sourceConnectionId !== subscription.owner)
+                    return Result.err(
+                      new RelayError(
+                        "Relay action belongs to another caller.",
+                        "E_RELAY_POLICY_DENIED",
+                      ),
+                    );
+                  yield* Result.await(safeAuthorize(activeCaller, name));
+                  yield* safeActive(subscription);
+                  const value = yield* Result.await(
+                    Result.tryPromise({
+                      try: () => event.actions[name](...callArgs),
+                      catch: (error) =>
+                        error instanceof Error
+                          ? error
+                          : mapRelayUpstreamError(error),
+                    }),
+                  );
+                  yield* safeActive(subscription);
+                  return Result.ok(value);
+                });
+                if (called.isErr()) throw called.error;
+                return called.value;
+              };
+            }
+            projected = {
+              ...projected,
+              type: "init",
+              actions: actions as RemoteActions<TActions>,
+              unsubscribe: subscription.stop,
+            };
+          }
+          // The downstream mirror already buffers updates that arrive before init.
+          // Forward directly so relay delivery does not add another ordering queue.
+          yield* Result.await(
+            Result.tryPromise({
+              try: async () => {
+                await onSync(projected);
+              },
+              catch: mapRelayUpstreamError,
+            }),
+          );
+          return safeActive(subscription);
+        });
+
+      const result = await Result.gen(async function* () {
+        yield* safeActive(subscription);
+        if (
+          invocation &&
+          contexts.get(invocation) !==
+            connections.get(invocation.sourceConnectionId)
+        )
+          return Result.err(closedError());
+        yield* Result.await(safeAuthorize(invocation));
+        yield* safeActive(subscription);
+        const upstream = yield* Result.await(
+          Result.tryPromise({
+            try: () =>
+              options.forwardThrough.create(upstreamToken, {
+                target: options.forwardTarget,
+              }),
+            catch: mapRelayUpstreamError,
+          }),
+        );
+        yield* safeActive(subscription);
+        yield* Result.await(
+          Result.tryPromise({
+            try: async () => {
+              const hooks = [
+                [
+                  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
+                  "source-disconnected",
+                ],
+                [
+                  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
+                  "target-changed",
+                ],
+              ] as const;
+              for (const [symbol, reason] of hooks) {
+                const register = (
+                  upstream as typeof upstream & {
+                    [key: symbol]:
+                      | ((notify: () => void) => (() => void) | void)
+                      | undefined;
+                  }
+                )[symbol];
+                const stop = register?.(() => emitTerminal(reason));
+                if (stop) {
+                  if (!subscriptions.has(subscription)) stop();
+                  else subscription.cleanup.add(stop);
+                }
+              }
+              await upstream.subscribe(async (input) => {
+                const received = await safeReceive(input);
+                if (received.isErr()) {
+                  if (received.error instanceof NexusStoreProtocolError)
+                    emitTerminal("source-disconnected", received.error);
+                  subscription.stop();
+                  throw received.error;
+                }
+              });
+            },
+            catch: mapRelayUpstreamError,
+          }),
+        );
+        yield* safeActive(subscription);
+        return initialized
+          ? Result.ok(undefined)
+          : Result.err(
+              new NexusStoreProtocolError("Relay upstream did not initialize."),
+            );
+      });
+      if (result.isErr()) {
+        subscription.stop();
+        throw result.error;
       }
-      subscriptionsByConnection.delete(connectionId);
+    },
+    [SERVICE_INVOKE_START](context: ServiceInvocationContext) {
+      const connection =
+        connections.get(context.sourceConnectionId) ?? Symbol();
+      connections.set(context.sourceConnectionId, connection);
+      contexts.set(context, connection);
+      return context;
+    },
+    [SERVICE_ON_DISCONNECT](id: string) {
+      connections.delete(id);
+      for (const subscription of subscriptions)
+        if (subscription.owner === id) subscription.stop();
     },
   };
 

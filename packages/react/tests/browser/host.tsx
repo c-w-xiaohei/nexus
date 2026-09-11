@@ -9,6 +9,7 @@ import {
   CHILD_ORIGIN,
   FRAME_IDS,
   iframeCounterStore,
+  createCounterStoreCreator,
   frameNonce,
   type CounterActions,
   type CounterState,
@@ -21,7 +22,9 @@ type StoreImplementation = NexusStoreServiceContract<
 >;
 
 type StoreImplementationWithDisconnectHook = StoreImplementation & {
-  [SERVICE_INVOKE_START]?(connectionId: string): SubscribeInvocationContext;
+  [SERVICE_INVOKE_START]?(
+    context: SubscribeInvocationContext,
+  ): SubscribeInvocationContext;
   [SERVICE_INVOKE_END]?(invocation?: SubscribeInvocationContext): void;
   [SERVICE_ON_DISCONNECT]?(connectionId: string): void;
 };
@@ -47,9 +50,7 @@ const telemetry = {
   unsubscribeCalls: 0,
   dispatchCalls: [] as Array<{ action: string; args: unknown[] }>,
   snapshots: [] as Array<{ version: number; count: number; writes: number }>,
-  subscriptionIds: new Set<string>(),
-  subscriptionOwners: new Map<string, string>(),
-  subscriptionsByFrame: new Map<string, Set<string>>(),
+  activeSubscriptions: new Map<symbol, string | undefined>(),
 };
 
 function getFrame(frameId: string) {
@@ -77,68 +78,58 @@ function instrumentStore(
 
   wrapper.subscribe = async (onSync, ...args) => {
     telemetry.subscribeCalls += 1;
-    const result = await ownerAwareImplementation.subscribe(
-      (event) => {
-        if (event.type !== "snapshot") {
-          onSync(event);
-          return;
-        }
-
-        telemetry.snapshots.push({
-          version: event.version,
-          count: event.state.count,
-          writes: event.state.writes.length,
-        });
-        onSync(event);
-      },
-      ...args,
-    );
-    telemetry.subscriptionIds.add(result.subscriptionId);
+    const key = Symbol("subscription");
     const [invocation] = args as [SubscribeInvocationContext?];
-    const ownerConnectionId = invocation?.sourceConnectionId;
-    if (ownerConnectionId) {
-      telemetry.subscriptionOwners.set(
-        result.subscriptionId,
-        ownerConnectionId,
-      );
-    }
-    const frameId = eventFrameId(invocation, telemetry.subscribeCalls);
-    if (frameId) {
-      const frameSubscriptions =
-        telemetry.subscriptionsByFrame.get(frameId) ?? new Set<string>();
-      frameSubscriptions.add(result.subscriptionId);
-      telemetry.subscriptionsByFrame.set(frameId, frameSubscriptions);
-    }
-    telemetry.snapshots.push({
-      version: result.version,
-      count: result.state.count,
-      writes: result.state.writes.length,
-    });
-    return result;
-  };
-
-  wrapper.unsubscribe = async (subscriptionId) => {
-    telemetry.unsubscribeCalls += 1;
-    telemetry.subscriptionIds.delete(subscriptionId);
-    telemetry.subscriptionOwners.delete(subscriptionId);
-    for (const subscriptions of telemetry.subscriptionsByFrame.values()) {
-      subscriptions.delete(subscriptionId);
-    }
-    return implementation.unsubscribe(subscriptionId);
-  };
-
-  wrapper.dispatch = async (action, args) => {
-    telemetry.dispatchCalls.push({ action, args: [...args] });
-    return implementation.dispatch(action, args);
-  };
-
-  wrapper[SERVICE_INVOKE_START] = (connectionId) => {
-    return (
-      implementationWithHooks[SERVICE_INVOKE_START]?.(connectionId) ??
-      ({
-        sourceConnectionId: connectionId,
-      } as unknown as SubscribeInvocationContext)
+    return ownerAwareImplementation.subscribe(
+      async (event) => {
+        if (event.type === "init") {
+          telemetry.activeSubscriptions.set(
+            key,
+            invocation?.sourceConnectionId,
+          );
+          const originalUnsubscribe = event.unsubscribe;
+          const actions = Object.fromEntries(
+            Object.entries(event.actions).map(([action, invoke]) => [
+              action,
+              async (...invokeArgs: unknown[]) => {
+                telemetry.dispatchCalls.push({
+                  action,
+                  args: [...invokeArgs],
+                });
+                return (invoke as (...args: unknown[]) => unknown)(
+                  ...invokeArgs,
+                );
+              },
+            ]),
+          ) as typeof event.actions;
+          event = {
+            ...event,
+            actions,
+            unsubscribe: async () => {
+              telemetry.unsubscribeCalls += 1;
+              telemetry.activeSubscriptions.delete(key);
+              return originalUnsubscribe();
+            },
+          };
+        }
+        if (event.type === "terminal") {
+          telemetry.activeSubscriptions.delete(key);
+        }
+        if (event.type === "snapshot" || event.type === "init") {
+          telemetry.snapshots.push({
+            version: event.version,
+            count: event.state.count,
+            writes: event.state.writes.length,
+          });
+        }
+        return onSync(event);
+      },
+      ...(args as [SubscribeInvocationContext?]),
     );
+  };
+
+  wrapper[SERVICE_INVOKE_START] = (context) => {
+    return implementationWithHooks[SERVICE_INVOKE_START]?.(context) ?? context;
   };
 
   wrapper[SERVICE_INVOKE_END] = (invocation) => {
@@ -147,40 +138,29 @@ function instrumentStore(
 
   wrapper[SERVICE_ON_DISCONNECT] = (connectionId) => {
     implementationWithHooks[SERVICE_ON_DISCONNECT]?.(connectionId);
-    for (const [
-      subscriptionId,
-      ownerConnectionId,
-    ] of telemetry.subscriptionOwners) {
-      if (ownerConnectionId !== connectionId) continue;
-      telemetry.subscriptionIds.delete(subscriptionId);
-      telemetry.subscriptionOwners.delete(subscriptionId);
-    }
+    for (const [key, owner] of telemetry.activeSubscriptions)
+      if (owner === connectionId) telemetry.activeSubscriptions.delete(key);
   };
 
   return wrapper;
 }
 
-function eventFrameId(
-  invocation: unknown,
-  subscribeCallIndex: number,
-): string | undefined {
-  const connectionId = (invocation as SubscribeInvocationContext | undefined)
-    ?.sourceConnectionId;
-  if (connectionId) {
-    // Connection IDs include the iframe adapter frame id in this browser harness.
-    for (const frameId of FRAME_IDS) {
-      if (connectionId.includes(frameId)) return frameId;
-    }
-  }
-
-  return FRAME_IDS[(subscribeCallIndex - 1) % FRAME_IDS.length];
-}
-
-const { provider } = createNexusStore<
-  CounterState,
-  CounterActions,
-  IframeAdapterModel
->(iframeCounterStore);
+const { provider } = createNexusStore(
+  iframeCounterStore,
+  createCounterStoreCreator(),
+  {
+    snapshot: (state: CounterState) => ({
+      count: state.count,
+      writes: state.writes,
+    }),
+    expose: [
+      "increment",
+      "setCount",
+      "asyncIncrementSlow",
+      "failAfterNoCommit",
+    ],
+  },
+);
 const host = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,
@@ -219,8 +199,7 @@ function getHostTelemetry() {
     readyFrames: [...telemetry.readyFrames],
     subscribeCalls: telemetry.subscribeCalls,
     unsubscribeCalls: telemetry.unsubscribeCalls,
-    activeSubscriptions: telemetry.subscriptionIds.size,
-    subscriptionOwners: Array.from(telemetry.subscriptionOwners.entries()),
+    activeSubscriptions: telemetry.activeSubscriptions.size,
     dispatchCalls: [...telemetry.dispatchCalls],
     snapshots: [...telemetry.snapshots],
   };

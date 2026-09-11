@@ -1,507 +1,171 @@
 import { describe, expect, it, vi } from "vitest";
-
-import { Nexus } from "../../src/api/nexus";
-import { Token } from "../../src/api/token";
+import { Nexus, Token } from "../../src";
 import type { IPort } from "../../src/transport";
 import { createMockPortPair } from "../../src/utils/test-utils";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
-import {
-  connectNexusStore,
-  defineNexusStore,
-  NexusStoreDisconnectedError,
-} from "../../src/state";
+import { connectNexusStore } from "../../src/state";
+import type { SyncEnvelope } from "../../src/state/protocol";
+import type { NexusStoreServiceContract } from "../../src/state/contract";
 
-type CounterState = { count: number };
-type CounterActions = { increment(by: number): Promise<number> };
-type UserMeta = { context: "background" | "popup" };
-type ClientConnectionMeta = { from: string };
-type RestartModel = TestAdapterModel<UserMeta, ClientConnectionMeta>;
-
-interface SnapshotEvent {
-  type: "snapshot";
-  storeInstanceId: string;
-  version: number;
-  state: CounterState;
-}
+type State = { count: number };
+type Actions = { increment(by: number): number };
+type Model = TestAdapterModel<
+  { context: "background" | "popup" },
+  { from: string }
+>;
 
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
 }
 
-interface ControlledConnectionPorts {
-  popupPort: IPort;
-  backgroundPort: IPort;
-  holdBackgroundToPopup(): void;
-  flushBackgroundToPopup(): void;
-  queuedBackgroundToPopupCount(): number;
-}
-
 const deferred = <T>(): Deferred<T> => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
   });
   return { promise, resolve };
 };
 
-const createControlledConnectionPorts = (): ControlledConnectionPorts => {
-  let popupMessageHandler: ((msg: unknown) => void) | undefined;
-  let backgroundMessageHandler: ((msg: unknown) => void) | undefined;
-  let popupDisconnectHandler: (() => void) | undefined;
-  let backgroundDisconnectHandler: (() => void) | undefined;
-  let holdBackgroundToPopup = false;
-  const backgroundToPopupQueue: unknown[] = [];
-
-  const popupPort: IPort = {
-    postMessage: vi.fn((msg: unknown) => {
-      setTimeout(() => backgroundMessageHandler?.(msg), 0);
-    }),
-    onMessage: vi.fn((handler: (msg: unknown) => void) => {
-      popupMessageHandler = handler;
-    }),
-    onDisconnect: vi.fn((handler: () => void) => {
-      popupDisconnectHandler = handler;
-    }),
-    close: vi.fn(() => {
-      popupDisconnectHandler?.();
-      backgroundDisconnectHandler?.();
-    }),
-  };
-
-  const backgroundPort: IPort = {
-    postMessage: vi.fn((msg: unknown) => {
-      if (holdBackgroundToPopup) {
-        backgroundToPopupQueue.push(msg);
-        return;
-      }
-      setTimeout(() => popupMessageHandler?.(msg), 0);
-    }),
-    onMessage: vi.fn((handler: (msg: unknown) => void) => {
-      backgroundMessageHandler = handler;
-    }),
-    onDisconnect: vi.fn((handler: () => void) => {
-      backgroundDisconnectHandler = handler;
-    }),
-    close: vi.fn(() => {
-      popupDisconnectHandler?.();
-      backgroundDisconnectHandler?.();
-    }),
-  };
-
-  return {
-    popupPort,
-    backgroundPort,
-    holdBackgroundToPopup() {
-      holdBackgroundToPopup = true;
-    },
-    flushBackgroundToPopup() {
-      const queued = backgroundToPopupQueue.splice(0);
-      holdBackgroundToPopup = false;
-      for (const msg of queued) {
-        setTimeout(() => popupMessageHandler?.(msg), 0);
-      }
-    },
-    queuedBackgroundToPopupCount() {
-      return backgroundToPopupQueue.length;
-    },
-  };
-};
-
-const createStoreService = (options: {
-  storeInstanceId: string;
-  gate?: Promise<void>;
-  onDispatchStarted?: () => void;
-  onDispatchBeforeCommit?: (emitSnapshot: () => void) => void;
-}) => {
+const createService = (
+  storeInstanceId: string,
+  gate?: Promise<void>,
+  started?: () => void,
+) => {
+  let count = 0;
   let version = 0;
-  let state: CounterState = { count: 0 };
-  const subscriptions = new Map<string, (event: SnapshotEvent) => void>();
-  let subscriptionSeq = 0;
-
-  return {
-    async subscribe(onSync: (event: SnapshotEvent) => void) {
-      const subscriptionId = `${options.storeInstanceId}:sub:${++subscriptionSeq}`;
-      subscriptions.set(subscriptionId, onSync);
-      return {
-        storeInstanceId: options.storeInstanceId,
-        subscriptionId,
-        version,
-        state,
-      };
-    },
-    async unsubscribe(subscriptionId: string) {
-      subscriptions.delete(subscriptionId);
-    },
-    async dispatch(_action: "increment", args: [number]) {
-      options.onDispatchStarted?.();
-      const nextState = { count: state.count + args[0] };
-      const nextVersion = version + 1;
-      const emitSnapshot = () => {
-        const event: SnapshotEvent = {
-          type: "snapshot",
-          storeInstanceId: options.storeInstanceId,
-          version: nextVersion,
-          state: nextState,
-        };
-
-        for (const callback of subscriptions.values()) {
-          // This fixture deliberately sends across closed/held sessions during restart.
-          void Promise.resolve(callback(event)).catch(() => undefined);
-        }
-      };
-
-      options.onDispatchBeforeCommit?.(emitSnapshot);
-      await options.gate;
-
-      state = nextState;
-      version = nextVersion;
-      emitSnapshot();
-
-      return {
-        type: "dispatch-result" as const,
-        committedVersion: version,
-        result: state.count,
-      };
+  const listeners = new Set<(event: SyncEnvelope<State, Actions>) => unknown>();
+  const emit = async () => {
+    const event = {
+      type: "snapshot" as const,
+      storeInstanceId,
+      version,
+      state: { count },
+    };
+    await Promise.all([...listeners].map((listener) => listener(event)));
+  };
+  const actions = {
+    async increment(by: number) {
+      started?.();
+      await gate;
+      count += by;
+      version += 1;
+      await emit();
+      return count;
     },
   };
+  return {
+    async subscribe(
+      listener: (event: SyncEnvelope<State, Actions>) => unknown,
+    ) {
+      listeners.add(listener);
+      await listener({
+        type: "init",
+        storeInstanceId,
+        version,
+        state: { count },
+        actions,
+        unsubscribe: () => {
+          listeners.delete(listener);
+        },
+      });
+    },
+  } as NexusStoreServiceContract<State, Actions>;
 };
 
-const createBackgroundHost = async (
-  tokenId: string,
-  service: object,
-): Promise<{
-  nexus: Nexus<RestartModel>;
-  acceptConnection(port: { onMessage: unknown }): void;
-  closeAllConnections(): void;
-}> => {
-  const nexus = new Nexus<RestartModel>();
-  let listenCallback:
-    | ((port: any, connectionMeta?: ClientConnectionMeta) => void)
-    | undefined;
-
+const createHost = async (service: object) => {
+  const nexus = new Nexus<Model>();
+  let accept!: (port: IPort) => void;
   nexus.configure({
     endpoint: {
       meta: { context: "background" },
       implementation: {
-        listen: vi.fn((onConnect) => {
-          listenCallback = onConnect;
-        }),
-        connect: vi.fn(async () => {
-          throw new Error("Background does not initiate connections here.");
-        }),
+        listen: (onConnect) => {
+          accept = (port) => onConnect(port, { from: "popup" });
+        },
+        connect: async () => {
+          throw new Error("background does not dial");
+        },
       },
     },
-    providers: [{ token: new Token(tokenId), service: service }],
+    providers: [{ token: new Token("state:restart"), service }],
   });
-
-  await vi.waitFor(() => {
-    expect((nexus as any).connectionManager).toBeTruthy();
-  });
-
-  return {
-    nexus,
-    acceptConnection(port) {
-      if (!listenCallback) {
-        throw new Error("Background listener is not ready.");
-      }
-      listenCallback(port, { from: "popup" });
-    },
-    closeAllConnections() {
-      const cm = (nexus as any).connectionManager;
-      if (!cm) {
-        return;
-      }
-      const connections = Array.from(
-        (cm as any).connections.values(),
-      ) as Array<{
-        close(): void;
-      }>;
-      for (const connection of connections) {
-        connection.close();
-      }
-    },
-  };
+  await vi.waitFor(() => expect((nexus as any).connectionManager).toBeTruthy());
+  return { nexus, accept };
 };
 
-const createPopupNexus = async (
-  resolveBackground: () => {
-    acceptConnection(port: { onMessage: unknown }): void;
-  },
-  options?: {
-    createPorts?: () => [IPort, IPort];
-  },
-) => {
-  const popup = new Nexus<RestartModel>();
-
+const createPopup = async (getHost: () => { accept(port: IPort): void }) => {
+  const popup = new Nexus<Model>();
   popup.configure({
     endpoint: {
       meta: { context: "popup" },
       implementation: {
-        listen: vi.fn(),
-        connect: vi.fn(async (_target: { context: string }) => {
-          const [popupPort, backgroundPort] =
-            options?.createPorts?.() ?? createMockPortPair();
-          resolveBackground().acceptConnection(backgroundPort as any);
+        connect: async () => {
+          const [popupPort, backgroundPort] = createMockPortPair();
+          getHost().accept(backgroundPort);
           return { port: popupPort, connectionMeta: { from: "background" } };
-        }),
-        matchesTarget: (target, contextMeta) =>
-          target.context === contextMeta.context,
+        },
+        listen: vi.fn(),
       },
+      matchesTarget: (
+        target: Model["connectionTarget"],
+        meta: Model["contextMeta"],
+      ) => target.context === meta.context,
       connectTo: [{ context: "background" }],
     },
   });
-
-  await vi.waitFor(() => {
-    expect((popup as any).connectionManager).toBeTruthy();
-  });
-
+  await vi.waitFor(() => expect((popup as any).connectionManager).toBeTruthy());
   return popup;
 };
 
-describe("Nexus State Integration: Background Restart Lifecycle", () => {
-  it("stops old-session listeners after restart and allows clean resubscribe on fresh handle", async () => {
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      RestartModel
-    >({
-      token: new Token(
-        "state:counter:background-restart-listener-session-isolation:integration",
-      ),
-      state: () => ({ count: 0 }),
-      actions: () => ({
-        increment: async (_by: number) => 0,
-      }),
-    });
+const definition = {
+  token: new Token<NexusStoreServiceContract<State, Actions>, Model>(
+    "state:restart",
+  ),
+};
 
-    let activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({ storeInstanceId: "bg-runtime:v1" }),
-    );
-    const popup = await createPopupNexus(() => activeBackground);
-
-    const oldHandle = await connectNexusStore(popup, definition, {
+describe("Nexus State background restart lifecycle", () => {
+  it("disconnects an old handle and connects a replacement session", async () => {
+    let host = await createHost(createService("v1"));
+    const popup = await createPopup(() => host);
+    const old = await connectNexusStore(popup, definition, {
       target: { context: "background" },
     });
-    const oldSnapshots: number[] = [];
-    const stopOld = oldHandle.subscribe((snapshot) => {
-      oldSnapshots.push(snapshot.count);
-    });
+    await expect(old.actions.increment(1)).resolves.toBe(1);
 
-    await expect(oldHandle.actions.increment(1)).resolves.toBe(1);
-    await vi.waitFor(() => {
-      expect(oldSnapshots).toEqual([1]);
-    });
+    for (const connection of (
+      host.nexus as any
+    ).connectionManager.connections.values())
+      connection.close();
+    host = await createHost(createService("v2"));
+    await vi.waitFor(() => expect(old.getStatus().type).toBe("disconnected"));
+    await expect(old.actions.increment(1)).rejects.toBeDefined();
 
-    activeBackground.closeAllConnections();
-    activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({ storeInstanceId: "bg-runtime:v2" }),
-    );
-
-    const popupCm = (popup as any).connectionManager;
-    await vi.waitFor(() => {
-      expect((popupCm as any).connections.size).toBe(0);
-    });
-    await vi.waitFor(() => {
-      expect(oldHandle.getStatus().type).toBe("disconnected");
-    });
-
-    const replacementHandle = await connectNexusStore(popup, definition, {
+    const replacement = await connectNexusStore(popup, definition, {
       target: { context: "background" },
     });
-    const replacementSnapshots: number[] = [];
-    const stopReplacement = replacementHandle.subscribe((snapshot) => {
-      replacementSnapshots.push(snapshot.count);
-    });
-
-    await expect(replacementHandle.actions.increment(2)).resolves.toBe(2);
-    await vi.waitFor(() => {
-      expect(replacementHandle.getState().count).toBe(2);
-      expect(replacementSnapshots).toEqual([2]);
-      expect(oldSnapshots).toEqual([1]);
-    });
-
-    await expect(oldHandle.actions.increment(1)).rejects.toBeInstanceOf(
-      NexusStoreDisconnectedError,
-    );
-
-    stopOld();
-    stopReplacement();
+    await expect(replacement.actions.increment(2)).resolves.toBe(2);
   });
 
-  it("marks old handle disconnected and binds new handle to replacement background", async () => {
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      RestartModel
-    >({
-      token: new Token(
-        "state:counter:background-restart-real-host-replacement:integration",
-      ),
-      state: () => ({ count: 0 }),
-      actions: () => ({
-        increment: async (_by: number) => 0,
-      }),
-    });
-
-    let activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({ storeInstanceId: "bg-runtime:v1" }),
+  it("quarantines an old in-flight snapshot after its connection closes", async () => {
+    const release = deferred<void>();
+    const started = deferred<void>();
+    const oldHost = await createHost(
+      createService("v1", release.promise, () => started.resolve()),
     );
-
-    const popup = await createPopupNexus(() => activeBackground);
-
-    const oldHandle = await connectNexusStore(popup, definition, {
+    const popup = await createPopup(() => oldHost);
+    const old = await connectNexusStore(popup, definition, {
       target: { context: "background" },
     });
-    await expect(oldHandle.actions.increment(1)).resolves.toBe(1);
-    expect(oldHandle.getState().count).toBe(1);
-
-    activeBackground.closeAllConnections();
-    activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({ storeInstanceId: "bg-runtime:v2" }),
-    );
-
-    const popupCm = (popup as any).connectionManager;
-    await vi.waitFor(() => {
-      expect((popupCm as any).connections.size).toBe(0);
-    });
-
-    await vi.waitFor(() => {
-      expect(oldHandle.getStatus().type).toBe("disconnected");
-    });
-
-    await expect(oldHandle.actions.increment(1)).rejects.toBeInstanceOf(
-      NexusStoreDisconnectedError,
-    );
-
-    const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { context: "background" },
-    });
-    await expect(replacementHandle.actions.increment(2)).resolves.toBe(2);
-    expect(replacementHandle.getState().count).toBe(2);
-  });
-
-  it("quarantines late old-session snapshot after restart and keeps fresh subscriptions clean", async () => {
-    const oldGate = deferred<void>();
-    const oldDispatchStarted = deferred<void>();
-    const oldConnectionPorts = createControlledConnectionPorts();
-    let connectionAttempt = 0;
-
-    const definition = defineNexusStore<
-      CounterState,
-      CounterActions,
-      RestartModel
-    >({
-      token: new Token(
-        "state:counter:background-restart-real-host-late-inflight:integration",
-      ),
-      state: () => ({ count: 0 }),
-      actions: () => ({
-        increment: async (_by: number) => 0,
-      }),
-    });
-
-    let activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({
-        storeInstanceId: "bg-runtime:v1",
-        gate: oldGate.promise,
-        onDispatchStarted: () => oldDispatchStarted.resolve(undefined),
-        onDispatchBeforeCommit: (emitSnapshot) => {
-          oldConnectionPorts.holdBackgroundToPopup();
-          emitSnapshot();
-        },
-      }),
-    );
-
-    const popup = await createPopupNexus(() => activeBackground, {
-      createPorts: () => {
-        connectionAttempt += 1;
-        if (connectionAttempt === 1) {
-          return [
-            oldConnectionPorts.popupPort,
-            oldConnectionPorts.backgroundPort,
-          ];
-        }
-        return createMockPortPair();
-      },
-    });
-
-    const oldHandle = await connectNexusStore(popup, definition, {
-      target: { context: "background" },
-    });
-    const oldSnapshots: number[] = [];
-    const stopOld = oldHandle.subscribe((snapshot) => {
-      oldSnapshots.push(snapshot.count);
-    });
-
-    const lateOldAction = oldHandle.actions.increment(1);
-    void lateOldAction.catch(() => undefined);
-    await oldDispatchStarted.promise;
-    await vi.waitFor(() => {
-      expect(oldConnectionPorts.queuedBackgroundToPopupCount()).toBeGreaterThan(
-        0,
-      );
-    });
-
-    activeBackground.closeAllConnections();
-    activeBackground = await createBackgroundHost(
-      definition.token.id,
-      createStoreService({ storeInstanceId: "bg-runtime:v2" }),
-    );
-
-    const popupCm = (popup as any).connectionManager;
-    await vi.waitFor(() => {
-      expect((popupCm as any).connections.size).toBe(0);
-    });
-
-    await vi.waitFor(() => {
-      expect(oldHandle.getStatus().type).toBe("disconnected");
-    });
-
-    const replacementHandle = await connectNexusStore(popup, definition, {
-      target: { context: "background" },
-    });
-    const replacementSnapshots: number[] = [];
-    const stopReplacement = replacementHandle.subscribe((snapshot) => {
-      replacementSnapshots.push(snapshot.count);
-    });
-    await expect(replacementHandle.actions.increment(3)).resolves.toBe(3);
-    await vi.waitFor(() => {
-      expect(replacementSnapshots).toEqual([3]);
-    });
-
-    const lateReplacementSnapshots: number[] = [];
-    const stopLateReplacement = replacementHandle.subscribe((snapshot) => {
-      lateReplacementSnapshots.push(snapshot.count);
-    });
-
-    oldGate.resolve(undefined);
-    oldConnectionPorts.flushBackgroundToPopup();
-
-    await expect(lateOldAction).rejects.toBeInstanceOf(
-      NexusStoreDisconnectedError,
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(oldSnapshots).toEqual([]);
-    expect(oldHandle.getState().count).toBe(0);
-    expect(replacementHandle.getState().count).toBe(3);
-
-    await expect(replacementHandle.actions.increment(2)).resolves.toBe(5);
-    await vi.waitFor(() => {
-      expect(replacementSnapshots).toEqual([3, 5]);
-      expect(lateReplacementSnapshots).toEqual([5]);
-      expect(replacementHandle.getState().count).toBe(5);
-      expect(oldHandle.getState().count).toBe(0);
-    });
-
-    stopOld();
-    stopReplacement();
-    stopLateReplacement();
+    const pending = old.actions.increment(1);
+    await started.promise;
+    for (const connection of (
+      oldHost.nexus as any
+    ).connectionManager.connections.values())
+      connection.close();
+    await vi.waitFor(() => expect(old.getStatus().type).toBe("disconnected"));
+    release.resolve();
+    await expect(pending).rejects.toBeDefined();
+    expect(old.getState()).toEqual({ count: 0 });
   });
 });

@@ -90,12 +90,14 @@ replacement rules.
 
 During server rendering the hook returns `null` without reading Core. Hydration
 starts from that same `null` snapshot, then reads and observes the service proxy.
-Supplying a service proxy on the client requires `@nexus-js/core` >= 1.1.0; the
-React package otherwise remains compatible with Core >= 1.0.0 for its existing
-APIs.
+The current React package requires `@nexus-js/core` >= 2.0.0 for both service
+proxy observation and State bindings. Upgrade Core and React together. State
+host stores are ordinary Zustand stores bound with `createNexusStore(...)` or
+`bindNexusStore(...)`; React consumes the remote mirror and does not add a
+`withNexusState` middleware.
 
 ## Nexus State
 
-For `createRemoteStoreScope()`, `useRemoteStore()`, `useStore()`, and
+For `createRemoteStoreScope()`, `useRemoteStore()`, `useStoreStatus()`, Zustand's `useStore()`, and
 State-specific loading, replacement, and selector semantics, use the
 [Nexus State React guide](state/react.md).

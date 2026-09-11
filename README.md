@@ -10,6 +10,10 @@
 
 Nexus connects browser extension contexts, iframes, workers, and local Node processes through one TypeScript service model. Define a contract once, expose it in one context, and create a typed proxy from another context.
 
+> **API stability:** Nexus is under rapid development. Public APIs may change,
+> including breaking changes. Pin your dependency versions and review release
+> notes before upgrading.
+
 ## Install
 
 Install the core runtime and the adapter for the contexts you use:

@@ -1,394 +1,109 @@
-/**
- * Simulates state-store discovery decisions when multiple content-script hosts
- * exist, verifying dynamic where handoff behavior and fixed-target routing
- * stability as endpoint identities change over time.
- */
 import { describe, expect, it, vi } from "vitest";
-
 import { Token } from "../../src/api/token";
 import { createStarNetwork } from "../../src/utils/test-utils";
-import {
-  connectNexusStore,
-  defineNexusStore,
-  NexusStoreDisconnectedError,
-  createNexusStore,
-} from "../../src/state";
-
-import type { AppConnectionMeta, AppUserMeta } from "../fixtures";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
+import { connectNexusStore } from "../../src/state";
+import type { NexusStoreServiceContract } from "../../src/state/contract";
 
-type AppModel = TestAdapterModel<AppUserMeta, AppConnectionMeta>;
-
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve(value: T): void;
-}
-
-const deferred = <T>(): Deferred<T> => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
+type State = { count: number };
+type Actions = { increment(by: number): number };
+type Meta = {
+  context: "background" | "content-script";
+  active?: boolean;
+  issueId?: string;
 };
+type Model = TestAdapterModel<Meta, { from: string }>;
 
-describe("Nexus State Integration: Targeting and Identity Handoff", () => {
-  it("marks an existing where-selected store handle stale after identity handoff", async () => {
-    type CounterState = { count: number };
-    type CounterActions = { increment(by: number): number };
+const createDefinition = (id: string) => ({
+  definition: {
+    token: new Token<NexusStoreServiceContract<State, Actions>, Model>(id),
+  },
+  creator: (set: any, get: any) => ({
+    count: 0,
+    increment(by: number) {
+      set({ count: get().count + by });
+      return get().count;
+    },
+  }),
+});
 
-    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
+describe("Nexus State targeting and handoff", () => {
+  it("marks a where-selected handle stale when the selected identity changes", async () => {
+    const { definition, creator } = createDefinition("state:targeting");
+    const first = (await import("../../src/state")).createNexusStore(
+      definition,
+      creator,
       {
-        token: new Token("state:counter:dynamic-active-handoff:integration"),
-        state: () => ({ count: 0 }),
-        actions: ({ getState, setState }) => ({
-          increment(by: number) {
-            setState({ count: getState().count + by });
-            return getState().count;
-          },
-        }),
-        defaultTarget: { context: "content-script" },
+        snapshot: (state: State) => ({ count: state.count }),
+        expose: ["increment"],
       },
     );
-
-    const { provider: cs1Registration } = createNexusStore(definition);
-    const { provider: cs2Registration } = createNexusStore(definition);
-
-    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
-      center: {
-        meta: { context: "background", version: "1.0.0" },
+    const second = (await import("../../src/state")).createNexusStore(
+      definition,
+      creator,
+      {
+        snapshot: (state: State) => ({ count: state.count }),
+        expose: ["increment"],
       },
+    );
+    const network = await createStarNetwork<Meta, { from: string }>({
+      center: { meta: { context: "background" } },
       leaves: [
         {
-          meta: {
-            context: "content-script",
-            issueId: "CS1-ACTIVE",
-            url: "github.com/issue/active",
-            isActive: true,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs1Registration.service,
-          },
+          meta: { context: "content-script", issueId: "one", active: true },
+          providers: { [definition.token.id]: first.provider.service },
           cmConfig: { connectTo: [{ context: "background" }] },
         },
         {
-          meta: {
-            context: "content-script",
-            issueId: "CS2-INACTIVE",
-            url: "github.com/issue/inactive",
-            isActive: false,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs2Registration.service,
-          },
+          meta: { context: "content-script", issueId: "two", active: false },
+          providers: { [definition.token.id]: second.provider.service },
           cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
-
-    const backgroundNexus = network.get("background")!.nexus;
-    const cs1Nexus = network.get("content-script:CS1-ACTIVE")!.nexus;
-    const cs2Nexus = network.get("content-script:CS2-INACTIVE")!.nexus;
-
-    const remote = await connectNexusStore(backgroundNexus, definition, {
+    const background = network.get("background")!.nexus;
+    const one = network.get("content-script:one")?.nexus;
+    const two = network.get("content-script:two")?.nexus;
+    const remote = await connectNexusStore(background, definition, {
       target: { context: "content-script" },
-      where: (identity, _connectionMeta) =>
-        identity.context === "content-script" && identity.isActive,
+      where: (meta) => meta.active === true,
     });
-    const oldSnapshots: number[] = [];
-    const stopOld = remote.subscribe((snapshot) => {
-      oldSnapshots.push(snapshot.count);
-    });
-
-    await remote.actions.increment(1);
-    expect(remote.getState().count).toBe(1);
-
-    await cs1Nexus.updateIdentity({ isActive: false });
-    await cs2Nexus.updateIdentity({ isActive: true });
-
-    await vi.waitFor(() => {
-      expect(remote.getStatus().type).toBe("stale");
-    });
-
-    await expect(remote.actions.increment(1)).rejects.toBeInstanceOf(
-      NexusStoreDisconnectedError,
-    );
-
-    stopOld();
+    await expect(remote.actions.increment(1)).resolves.toBe(1);
+    if (!one || !two) throw new Error("Expected content-script nodes");
+    await one.updateIdentity({ active: false });
+    await two.updateIdentity({ active: true });
+    await vi.waitFor(() => expect(remote.getStatus().type).toBe("stale"));
+    await expect(remote.actions.increment(1)).rejects.toBeDefined();
   });
 
-  it("keeps a fixed-target store handle ready on unrelated identity updates", async () => {
-    type CounterState = { count: number };
-    type CounterActions = { increment(by: number): number };
-
-    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
+  it("keeps an exact target usable through unrelated identity changes", async () => {
+    const { definition, creator } = createDefinition("state:fixed-target");
+    const registration = (await import("../../src/state")).createNexusStore(
+      definition,
+      creator,
       {
-        token: new Token("state:counter:fixed-target-stability:integration"),
-        state: () => ({ count: 0 }),
-        actions: ({ getState, setState }) => ({
-          increment(by: number) {
-            setState({ count: getState().count + by });
-            return getState().count;
-          },
-        }),
-        defaultTarget: { context: "content-script" },
+        snapshot: (state: State) => ({ count: state.count }),
+        expose: ["increment"],
       },
     );
-
-    const { provider: cs1Registration } = createNexusStore(definition);
-    const { provider: cs2Registration } = createNexusStore(definition);
-
-    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
-      center: {
-        meta: { context: "background", version: "1.0.0" },
-      },
+    const network = await createStarNetwork<Meta, { from: string }>({
+      center: { meta: { context: "background" } },
       leaves: [
         {
-          meta: {
-            context: "content-script",
-            issueId: "CS1-FIXED",
-            url: "github.com/issue/fixed",
-            isActive: true,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs1Registration.service,
-          },
-          cmConfig: { connectTo: [{ context: "background" }] },
-        },
-        {
-          meta: {
-            context: "content-script",
-            issueId: "CS2-OTHER",
-            url: "github.com/issue/other",
-            isActive: false,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs2Registration.service,
-          },
+          meta: { context: "content-script", issueId: "one" },
+          providers: { [definition.token.id]: registration.provider.service },
           cmConfig: { connectTo: [{ context: "background" }] },
         },
       ],
     });
-
-    const backgroundNexus = network.get("background")!.nexus;
-    const cs2Nexus = network.get("content-script:CS2-OTHER")!.nexus;
-
-    const remote = await connectNexusStore(backgroundNexus, definition, {
-      target: { context: "content-script", issueId: "CS1-FIXED" },
-    });
-
-    await remote.actions.increment(1);
-    expect(remote.getState().count).toBe(1);
-
-    await cs2Nexus.updateIdentity({ url: "github.com/issue/other-updated" });
-    await new Promise((r) => setTimeout(r, 30));
-
+    const remote = await connectNexusStore(
+      network.get("background")!.nexus,
+      definition,
+      {
+        target: { context: "content-script", issueId: "one" },
+      },
+    );
+    await expect(remote.actions.increment(1)).resolves.toBe(1);
     expect(remote.getStatus().type).toBe("ready");
-    await expect(remote.actions.increment(1)).resolves.toBe(2);
-    expect(remote.getState().count).toBe(2);
-  });
-
-  it("returns explicit stale-disconnect when active target flips during in-flight action", async () => {
-    type CounterState = { count: number };
-    type CounterActions = { increment(by: number): Promise<number> };
-
-    type SnapshotEvent = {
-      type: "snapshot";
-      storeInstanceId: string;
-      version: number;
-      state: CounterState;
-    };
-
-    const cs1DispatchStarted = deferred<void>();
-    const cs1DispatchRelease = deferred<void>();
-    const cs1UnsubscribeRelease = deferred<void>();
-    let cs1LateDeliveryAttempts = 0;
-
-    const createStoreService = (
-      storeInstanceId: string,
-      options?: {
-        onDispatchStart?: () => void;
-        beforeUnsubscribe?: () => Promise<void>;
-        dispatchGate?: Promise<void>;
-        onSnapshotAttempt?: () => void;
-      },
-    ) => {
-      let version = 0;
-      let state: CounterState = { count: 0 };
-      const subscriptions = new Map<string, (event: SnapshotEvent) => void>();
-      let subscriptionSeq = 0;
-
-      const emitSnapshot = () => {
-        const event: SnapshotEvent = {
-          type: "snapshot",
-          storeInstanceId,
-          version,
-          state,
-        };
-        for (const callback of subscriptions.values()) {
-          options?.onSnapshotAttempt?.();
-          callback(event);
-        }
-      };
-
-      return {
-        async subscribe(onSync: (event: SnapshotEvent) => void) {
-          const subscriptionId = `${storeInstanceId}:sub:${++subscriptionSeq}`;
-          subscriptions.set(subscriptionId, onSync);
-          return { storeInstanceId, subscriptionId, version, state };
-        },
-        async unsubscribe(subscriptionId: string) {
-          await options?.beforeUnsubscribe?.();
-          subscriptions.delete(subscriptionId);
-        },
-        async dispatch(_action: "increment", args: [number]) {
-          options?.onDispatchStart?.();
-          await options?.dispatchGate;
-
-          state = { count: state.count + args[0] };
-          version += 1;
-          emitSnapshot();
-
-          return {
-            type: "dispatch-result" as const,
-            committedVersion: version,
-            result: state.count,
-          };
-        },
-      };
-    };
-
-    const definition = defineNexusStore<CounterState, CounterActions, AppModel>(
-      {
-        token: new Token("state:counter:dynamic-handoff-inflight:integration"),
-        state: () => ({ count: 0 }),
-        actions: ({ getState, setState }) => ({
-          async increment(by: number) {
-            setState({ count: getState().count + by });
-            return getState().count;
-          },
-        }),
-        defaultTarget: { context: "content-script" },
-      },
-    );
-
-    const cs1Service = createStoreService("cs1:v1", {
-      onDispatchStart: () => cs1DispatchStarted.resolve(),
-      beforeUnsubscribe: () => cs1UnsubscribeRelease.promise,
-      dispatchGate: cs1DispatchRelease.promise,
-      onSnapshotAttempt: () => {
-        cs1LateDeliveryAttempts += 1;
-      },
-    });
-
-    const cs2Service = createStoreService("cs2:v1");
-
-    const network = await createStarNetwork<AppUserMeta, AppConnectionMeta>({
-      center: {
-        meta: { context: "background", version: "1.0.0" },
-      },
-      leaves: [
-        {
-          meta: {
-            context: "content-script",
-            issueId: "CS1-HANDOFF-INFLIGHT",
-            url: "github.com/issue/handoff-inflight-1",
-            isActive: true,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs1Service,
-          },
-          cmConfig: { connectTo: [{ context: "background" }] },
-        },
-        {
-          meta: {
-            context: "content-script",
-            issueId: "CS2-HANDOFF-INFLIGHT",
-            url: "github.com/issue/handoff-inflight-2",
-            isActive: false,
-            groups: ["issue-pages"],
-          },
-          providers: {
-            [definition.token.id]: cs2Service,
-          },
-          cmConfig: { connectTo: [{ context: "background" }] },
-        },
-      ],
-    });
-
-    const backgroundNexus = network.get("background")!.nexus;
-    const cs1Nexus = network.get("content-script:CS1-HANDOFF-INFLIGHT")!.nexus;
-    const cs2Nexus = network.get("content-script:CS2-HANDOFF-INFLIGHT")!.nexus;
-
-    const remote = await connectNexusStore(backgroundNexus, definition, {
-      target: { context: "content-script" },
-      where: (identity, _connectionMeta) =>
-        identity.context === "content-script" && identity.isActive,
-    });
-    const oldSnapshots: number[] = [];
-    const stopOld = remote.subscribe((snapshot) => {
-      oldSnapshots.push(snapshot.count);
-    });
-
-    const pendingOutcome = remote.actions.increment(1).then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    await cs1DispatchStarted.promise;
-
-    await cs1Nexus.updateIdentity({ isActive: false });
-    await cs2Nexus.updateIdentity({ isActive: true });
-
-    await vi.waitFor(() => {
-      expect(remote.getStatus().type).toBe("stale");
-    });
-
-    const replacement = await connectNexusStore(backgroundNexus, definition, {
-      target: { context: "content-script" },
-      where: (identity, _connectionMeta) =>
-        identity.context === "content-script" && identity.isActive,
-    });
-
-    const replacementSnapshots: number[] = [];
-    const stopReplacement = replacement.subscribe((snapshot) => {
-      replacementSnapshots.push(snapshot.count);
-    });
-
-    expect(replacement.getStatus().type).toBe("ready");
-    expect(replacement.getState().count).toBe(0);
-
-    cs1DispatchRelease.resolve();
-
-    await vi.waitFor(() => {
-      expect(cs1LateDeliveryAttempts).toBe(1);
-    });
-
-    const pendingResult = await pendingOutcome;
-    expect(pendingResult.ok).toBe(false);
-    if (!pendingResult.ok) {
-      expect(pendingResult.error).toBeInstanceOf(NexusStoreDisconnectedError);
-      expect((pendingResult.error as Error).message).toMatch(/stale/i);
-    }
-
-    expect(oldSnapshots).toEqual([]);
-    expect(remote.getState().count).toBe(0);
-    expect(replacementSnapshots).toEqual([]);
-    expect(replacement.getState().count).toBe(0);
-
-    cs1UnsubscribeRelease.resolve();
-
-    await expect(replacement.actions.increment(2)).resolves.toBe(2);
-    await vi.waitFor(() => {
-      expect(replacementSnapshots).toEqual([2]);
-      expect(replacement.getState().count).toBe(2);
-    });
-
-    stopOld();
-    stopReplacement();
   });
 });

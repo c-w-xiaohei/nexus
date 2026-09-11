@@ -12,7 +12,10 @@ For Nexus State app code, prefer registering the real store service contract fro
 
 ```ts
 const mock = createMockNexus();
-const { provider, store } = createNexusStore(counterStore);
+const { provider, store } = createNexusStore(counterStore, creator, {
+  snapshot: (local) => ({ count: local.count }),
+  expose: ["increment"],
+});
 
 mock.nexus.configure({
   providers: [provider],
@@ -40,31 +43,42 @@ Use focused Nexus State runtime tests when you want to verify:
 - handshake semantics
 - disconnect classification
 - action acknowledgement behavior
+- fixed publication windows and bounded pending snapshots
+- explicit snapshot projections and action allowlists
+- source-store survival after binding destruction
 
 Current examples live in:
 
-- `packages/core/src/state/state-host-runtime.test.ts`
-- `packages/core/src/state/state-create-store.test.ts`
-- `packages/core/src/state/state-client-runtime.test.ts`
-- `packages/core/src/state/state-errors.test.ts`
-- `packages/core/src/state/state.test.ts`
+- `packages/core/src/state/bind-store.test.ts`
+- `packages/core/src/state/bind-store.creation.test.ts`
+- `packages/core/src/state/bind-store.actions.test.ts`
+- `packages/core/src/state/connect-store.test.ts`
+- `packages/core/src/state/remote-store.test.ts`
+- `packages/core/src/state/protocol.test.ts`
+- `packages/core/src/state/errors.test.ts`
 
 ## 3. React Binding Tests
 
 Use React tests when you want to verify:
 
 - remote store scope wiring
-- `useRemoteStore()` lifecycle semantics
+- `useRemoteStore()` acquisition and cleanup semantics
+- explicit lifecycle selection through `useStoreStatus` / `Scope.useStatus`
 - `reconnectKey` changes and stable `reconnect()` commands
 - disposal of a pending acquisition that resolves after a newer request
 - scope sharing, including shared reconnect controls
 - selector fallback behavior
-- fallback plus `disconnected` status/error after a failed same-target replacement
+- fallback plus an acquisition error and null status after a failed replacement
 - fallback during cross-target handoff until the replacement is ready
+- unchanged data/status selections and actions-only consumers do not rerender on snapshots
 
 Current examples live in:
 
 - `packages/react/src/react.test.tsx`
+- `packages/react/src/create-remote-store-scope.test.tsx`
+- `packages/react/src/use-store-status.test.tsx`
+- `packages/react/integration/react.integration.test.tsx` for real handles consumed by Zustand
+- `packages/react/integration/render-isolation.integration.test.tsx` for render counts across separate publications and disconnect
 
 ## 4. Multi-Context Integration Tests
 
@@ -88,6 +102,7 @@ Current examples live in:
 - `packages/core/integration/state/background-restart.integration.test.ts`
 - `packages/core/integration/state/protocol-and-errors.integration.test.ts`
 - `packages/core/integration/state/targeting-and-handoff.integration.test.ts`
+- `packages/core/integration/state/callback-lifecycle.integration.test.ts`
 
 ## A Small Example Test
 

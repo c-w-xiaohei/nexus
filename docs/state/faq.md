@@ -16,7 +16,9 @@ That gives you local-store ergonomics while keeping the remote nature explicit i
 
 Because they execute on the host.
 
-Also, `await action()` gives you a stronger guarantee than "remote call returned": the local mirror has observed the committed version.
+Also, `await action()` waits for the caller's targeted snapshot acknowledgement,
+not just the remote function result. It is not a transactional commit receipt;
+the action may already have mutated the host if synchronization fails.
 
 ## Why does a target change create stale handles instead of auto-rebinding?
 
@@ -50,6 +52,12 @@ Yes. The scope provider accepts `reconnectKey`, and its children share the same
 Not as a public protocol.
 
 Nexus State v1 is snapshot-first.
+
+## Does State use a transaction, draft, or rollback queue?
+
+No. The source is a normal Zustand store. Actions are not serialized or
+automatically rolled back, and State does not ship a draft/rollback/queue
+protocol or `withNexusState` middleware.
 
 ## Does Nexus State v1 include Jotai?
 

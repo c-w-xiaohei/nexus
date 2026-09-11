@@ -33,9 +33,11 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 );
 ```
 
-When React components share one remote Nexus State store across a subtree, prefer testing that component tree with `createRemoteStoreScope(...)`: keep `NexusProvider` at the top, mount the scope provider inside it, and let leaf components call `useSelector` and `useActions`. For direct ownership, render a child only after `remote.store` exists and select with `useStore(remote.store, selector)`.
+When React components share one remote Nexus State store across a subtree, prefer testing that component tree with `createRemoteStoreScope(...)`: keep `NexusProvider` at the top, mount the scope provider inside it, and let leaf components call `useSelector` and `useActions`. For direct ownership, render a child only after `remote.store` exists and select with `useStore(remote.store, selector)` from `zustand`. Use real Zustand stores or faithful stable-snapshot test doubles, not getters that clone state on every read.
 
-For React remote-store replacement, test `reconnectKey` changes, the stable `reconnect()` function reference, disposal of an older pending acquisition after a newer request, and scope sharing of both the store and reconnect command. A failed same-target replacement should expose selector fallback with `disconnected` status/error. A cross-target handoff should expose fallback until the replacement is ready.
+For React remote-store replacement, test `reconnectKey` changes, the stable `reconnect()` function reference, disposal of an older pending acquisition after a newer request, and scope sharing of both the store and reconnect command. A failed replacement exposes selector fallback with an acquisition error and null status, not a synthetic `disconnected` status. A cross-target handoff exposes fallback immediately and destroys the previous handle before the replacement resolves.
+
+Use `useStoreStatus(store, selector?)` or `Scope.useStatus(selector?)` for lifecycle UI; select `status.type` if versions are irrelevant. Verify with separate publications that unchanged selectors and actions/error-only consumers do not rerender. An acquired handle disconnecting should update status observers, not the acquisition result or its `error`.
 
 For passed-proxy status UI, a unit test may mock the static
 `Nexus.getProxyStatus` / `Nexus.subscribeProxyStatus` pair. This can prove UI

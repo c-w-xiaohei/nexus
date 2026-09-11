@@ -4,38 +4,28 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { Nexus, type AdapterModel, type NexusInstance } from "@nexus-js/core";
 import type {
   NexusStoreDefinition,
+  RemoteStore,
   RemoteStoreStatus,
 } from "@nexus-js/core/state";
 import { NexusProvider } from "./provider";
 import { createRemoteStoreScope } from "./create-remote-store-scope";
 import { useNexus } from "./use-nexus";
-import {
-  useRemoteStore,
-  type RemoteStoreWithInitialState,
-} from "./use-remote-store";
-import { useNullableStore } from "./use-store";
+import { useRemoteStore } from "./use-remote-store";
+import { useStoreStatus } from "./use-store-status";
 
 interface CounterState {
   count: number;
 }
 
-interface CounterActions {
-  [key: string]: (...args: any[]) => any;
+type CounterActions = {
   increment(by: number): Promise<number>;
-}
+};
 
-interface FakeRemoteStore<
-  TState extends object,
-> extends RemoteStoreWithInitialState<
+interface FakeRemoteStore<TState extends object> extends RemoteStore<
   TState,
   Record<string, (...args: any[]) => any>
 > {
-  [key: symbol]: unknown;
-  staleMarkerCalls: number;
   statusSubscriptionCalls: number;
-  statusUnsubscriptionCalls: number;
-  stateSubscriptionCalls: number;
-  stateUnsubscriptionCalls: number;
   pushState(nextState: TState): void;
   setStatus(nextStatus: RemoteStoreStatus): void;
 }
@@ -58,38 +48,24 @@ const createFakeRemoteStore = (
   initialState: CounterState,
   initialStatus: RemoteStoreStatus,
 ): FakeRemoteStore<CounterState> => {
-  const markStaleSymbol = Symbol.for("nexus.state.remote-store.mark-stale");
   let state = initialState;
   let status = initialStatus;
-  const listeners = new Set<(snapshot: CounterState) => void>();
+  const listeners = new Set<
+    (snapshot: CounterState, previous: CounterState) => void
+  >();
   const statusListeners = new Set<() => void>();
-  let staleMarkerCalls = 0;
   let statusSubscriptionCalls = 0;
-  let statusUnsubscriptionCalls = 0;
-  let stateSubscriptionCalls = 0;
-  let stateUnsubscriptionCalls = 0;
 
   return {
-    get staleMarkerCalls() {
-      return staleMarkerCalls;
-    },
     get statusSubscriptionCalls() {
       return statusSubscriptionCalls;
     },
-    get statusUnsubscriptionCalls() {
-      return statusUnsubscriptionCalls;
-    },
-    get stateSubscriptionCalls() {
-      return stateSubscriptionCalls;
-    },
-    get stateUnsubscriptionCalls() {
-      return stateUnsubscriptionCalls;
-    },
     actions: {
       async increment(by: number) {
+        const previous = state;
         state = { count: state.count + by };
         for (const listener of listeners) {
-          listener(state);
+          listener(state, previous);
         }
         return state.count;
       },
@@ -107,15 +83,12 @@ const createFakeRemoteStore = (
       statusSubscriptionCalls += 1;
       statusListeners.add(listener);
       return () => {
-        statusUnsubscriptionCalls += 1;
         statusListeners.delete(listener);
       };
     },
     subscribe(listener) {
-      stateSubscriptionCalls += 1;
       listeners.add(listener);
       return () => {
-        stateUnsubscriptionCalls += 1;
         listeners.delete(listener);
       };
     },
@@ -127,9 +100,10 @@ const createFakeRemoteStore = (
       this.destroy();
     },
     pushState(nextState) {
+      const previous = state;
       state = nextState;
       for (const listener of listeners) {
-        listener(state);
+        listener(state, previous);
       }
     },
     setStatus(nextStatus) {
@@ -137,21 +111,6 @@ const createFakeRemoteStore = (
       for (const listener of statusListeners) {
         listener();
       }
-    },
-    [markStaleSymbol]() {
-      staleMarkerCalls += 1;
-      const lastKnownVersion =
-        status.type === "ready"
-          ? status.version
-          : status.type === "disconnected" || status.type === "stale"
-            ? status.lastKnownVersion
-            : null;
-
-      status = {
-        type: "stale",
-        lastKnownVersion,
-        reason: "target-changed",
-      };
     },
   };
 };
@@ -162,16 +121,6 @@ const createWrapper = (nexus: NexusInstance<AdapterModel>) =>
   };
 
 const createTestNexus = (): Nexus<AdapterModel> => new Nexus<AdapterModel>();
-
-const createRemoteResult = (
-  store: FakeRemoteStore<CounterState> | null,
-  status: RemoteStoreStatus,
-) => ({
-  store,
-  status,
-  error: null,
-  reconnect: () => {},
-});
 
 describe("react adapter", () => {
   const getConnectCallsFrom = (startIndex: number) =>
@@ -198,7 +147,6 @@ describe("react adapter", () => {
     expect(typeof entry.createRemoteStoreScope).toBe("function");
     expect(typeof entry.useNexus).toBe("function");
     expect(typeof entry.useRemoteStore).toBe("function");
-    expect(typeof entry.useStore).toBe("function");
   });
 
   it("remote store scope Provider connects once and shares result, actions, and status", async () => {
@@ -244,7 +192,7 @@ describe("react adapter", () => {
       expect(result.current.secondRemote.store).toBe(remote);
       expect(result.current.firstActions).toBe(remote.actions);
       expect(result.current.secondActions).toBe(remote.actions);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.status?.type).toBe("ready");
     });
     expect(getConnectCallsFrom(startCalls)).toBe(1);
   });
@@ -412,7 +360,6 @@ describe("react adapter", () => {
 
   it("NexusProvider exposes nexus instance", () => {
     const nexus = new Nexus<AdapterModel>();
-
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(() => useNexus(), { wrapper });
 
@@ -423,7 +370,7 @@ describe("react adapter", () => {
     expect(() => renderHook(() => useNexus())).toThrowError(/NexusProvider/i);
   });
 
-  it("useRemoteStore returns store/status/error", async () => {
+  it("useRemoteStore returns acquisition state", async () => {
     clearConnectSpy();
     const nexus = new Nexus<AdapterModel>();
     const remote = createFakeRemoteStore(
@@ -435,22 +382,27 @@ describe("react adapter", () => {
 
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        return remote;
+      },
       { wrapper },
     );
 
     expect(result.current.store).toBeNull();
-    expect(result.current.status.type).toBe("initializing");
+    expect(result.current.pending).toBe(true);
     expect(result.current.error).toBeNull();
 
     await waitFor(() => {
       expect(result.current.store).toBe(remote);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
       expect(result.current.error).toBeNull();
     });
   });
 
-  it("reconnect replaces a ready same-target store without marking it stale", async () => {
+  it("reconnect replaces a ready same-target store and destroys the old handle", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const firstStore = createFakeRemoteStore(
@@ -486,7 +438,6 @@ describe("react adapter", () => {
     expect(connectSpy.mock.calls[1]?.[2]).toEqual({
       target: { context: "same-target" },
     });
-    expect(firstStore.staleMarkerCalls).toBe(0);
     expect(firstStore.getStatus().type).toBe("destroyed");
   });
 
@@ -543,7 +494,12 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(replacement);
 
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        return remote;
+      },
       { wrapper: createWrapper(nexus) },
     );
 
@@ -579,7 +535,12 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(replacement);
 
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        return remote;
+      },
       { wrapper: createWrapper(nexus) },
     );
 
@@ -603,6 +564,30 @@ describe("react adapter", () => {
       expect(lateStore.getStatus().type).toBe("destroyed");
       expect(result.current.store).toBe(replacement);
     });
+  });
+
+  it("ignores an old acquisition failure after its replacement is ready", async () => {
+    clearConnectSpy();
+    let rejectOld!: (error: Error) => void;
+    const old = new Promise<never>((_, reject) => {
+      rejectOld = reject;
+    });
+    const replacement = createFakeRemoteStore(
+      { count: 2 },
+      { type: "ready", storeInstanceId: "replacement", version: 2 },
+    );
+    connectSpy.mockReturnValueOnce(old).mockResolvedValueOnce(replacement);
+    const { result } = renderHook(() => useRemoteStore(definition), {
+      wrapper: createWrapper(createTestNexus()),
+    });
+    act(() => result.current.reconnect());
+    await waitFor(() => expect(result.current.store).toBe(replacement));
+    await act(async () => {
+      rejectOld(new Error("obsolete failure"));
+    });
+    expect(result.current.store).toBe(replacement);
+    expect(result.current.store).toBe(replacement);
+    expect(result.current.error).toBeNull();
   });
 
   it("reconnect is stable and inactive after unmount", async () => {
@@ -633,57 +618,7 @@ describe("react adapter", () => {
     expect(connectSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("nullable scoped selection is hook-safe and fallback-aware", async () => {
-    clearConnectSpy();
-    const nexus = createTestNexus();
-    const remote = createFakeRemoteStore(
-      { count: 0 },
-      { type: "initializing" },
-    );
-
-    connectSpy.mockResolvedValueOnce(remote);
-
-    const wrapper = createWrapper(nexus);
-    const { result } = renderHook(
-      () => {
-        const value = useRemoteStore(definition, {
-          target: { context: "bg" },
-        });
-        const selected = useNullableStore(
-          value.store,
-          (state) => state.count,
-          -1,
-        );
-        return { value, selected };
-      },
-      { wrapper },
-    );
-
-    expect(result.current.selected).toBe(-1);
-
-    remote.setStatus({
-      type: "ready",
-      storeInstanceId: "instance:1",
-      version: 0,
-    });
-    remote.pushState({ count: 1 });
-
-    await waitFor(() => {
-      expect(result.current.selected).toBe(-1);
-    });
-
-    remote.setStatus({
-      type: "disconnected",
-      lastKnownVersion: 1,
-    });
-    remote.pushState({ count: 2 });
-
-    await waitFor(() => {
-      expect(result.current.selected).toBe(2);
-    });
-  });
-
-  it("target change marks active store stale before replacement", async () => {
+  it("target change destroys the active store before replacement", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -712,15 +647,15 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(oldStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.store).toBe(oldStore);
     });
 
     rerender({ target: { context: "new" } });
 
     await waitFor(() => {
       expect(result.current.store).toBeNull();
-      expect(result.current.status.type).toBe("initializing");
-      expect(oldStore.getStatus().type).toBe("stale");
+      expect(result.current.pending).toBe(true);
+      expect(oldStore.getStatus().type).toBe("destroyed");
     });
 
     const nextStore = createFakeRemoteStore(
@@ -731,7 +666,6 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(nextStore);
-      expect(result.current.status.type).toBe("ready");
       expect(oldStore.getStatus().type).toBe("destroyed");
     });
   });
@@ -748,27 +682,37 @@ describe("react adapter", () => {
       resolveB = resolve;
     });
     connectSpy.mockResolvedValueOnce(firstStore).mockReturnValueOnce(connectB);
-    const renders: Array<{ target: string; selected: number; status: string }> =
-      [];
+    const renders: Array<{
+      target: string;
+      selected: number;
+      pending: boolean;
+    }> = [];
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTarget = { context: "a" };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider options={{ target: scopeTarget }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
 
     const { result, rerender } = renderHook(
-      ({ target }) => {
-        const remote = useRemoteStore(definition, { target });
-        const selected = useNullableStore(
-          remote.store,
-          (state) => state.count,
-          -1,
-        );
+      () => {
+        const remote = CounterScope.useRemoteStore();
+        const selected = CounterScope.useSelector((state) => state.count, {
+          fallback: -1,
+        });
         renders.push({
-          target: target.context,
+          target: scopeTarget.context,
           selected,
-          status: remote.status.type,
+          pending: remote.pending,
         });
         return { remote, selected };
       },
       {
         initialProps: { target: { context: "a" } },
-        wrapper: createWrapper(nexus),
+        wrapper,
       },
     );
 
@@ -776,12 +720,13 @@ describe("react adapter", () => {
       expect(result.current.selected).toBe(1);
     });
 
-    rerender({ target: { context: "b" } });
+    scopeTarget = { context: "b" };
+    rerender({ target: scopeTarget });
 
     expect(renders.find((render) => render.target === "b")).toEqual({
       target: "b",
       selected: -1,
-      status: "stale",
+      pending: true,
     });
 
     const replacement = createFakeRemoteStore(
@@ -795,7 +740,7 @@ describe("react adapter", () => {
     });
   });
 
-  it("target change replaces store and ignores stale late resolve", async () => {
+  it("target change replaces the store and ignores an obsolete late resolve", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -810,7 +755,6 @@ describe("react adapter", () => {
     );
 
     connectSpy.mockReturnValueOnce(oldConnect).mockResolvedValueOnce(nextStore);
-
     const wrapper = createWrapper(nexus);
     const { result, rerender } = renderHook(
       ({ target }) => useRemoteStore(definition, { target }),
@@ -824,7 +768,7 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(nextStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
     const oldStore = createFakeRemoteStore(
@@ -835,7 +779,7 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(nextStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
     oldStore.pushState({ count: 123 });
@@ -843,6 +787,57 @@ describe("react adapter", () => {
     await waitFor(() => {
       expect(result.current.store).toBe(nextStore);
       expect(result.current.store?.getState().count).toBe(10);
+    });
+  });
+
+  it("accepts only the latest A-B-A acquisition and destroys late handles", async () => {
+    clearConnectSpy();
+    const nexus = createTestNexus();
+    let resolveA1!: (store: FakeRemoteStore<CounterState>) => void;
+    let resolveB!: (store: FakeRemoteStore<CounterState>) => void;
+    const connectA1 = new Promise<FakeRemoteStore<CounterState>>((resolve) => {
+      resolveA1 = resolve;
+    });
+    const connectB = new Promise<FakeRemoteStore<CounterState>>((resolve) => {
+      resolveB = resolve;
+    });
+    const finalA = createFakeRemoteStore(
+      { count: 3 },
+      { type: "ready", storeInstanceId: "instance:a2", version: 3 },
+    );
+    connectSpy
+      .mockReturnValueOnce(connectA1)
+      .mockReturnValueOnce(connectB)
+      .mockResolvedValueOnce(finalA);
+
+    const { result, rerender } = renderHook(
+      ({ target }) => useRemoteStore(definition, { target }),
+      {
+        initialProps: { target: { context: "a" } },
+        wrapper: createWrapper(nexus),
+      },
+    );
+
+    rerender({ target: { context: "b" } });
+    rerender({ target: { context: "a" } });
+
+    await waitFor(() => expect(result.current.store).toBe(finalA));
+
+    const lateA1 = createFakeRemoteStore(
+      { count: 1 },
+      { type: "ready", storeInstanceId: "instance:a1", version: 1 },
+    );
+    resolveA1(lateA1);
+    await waitFor(() => expect(lateA1.getStatus().type).toBe("destroyed"));
+
+    const lateB = createFakeRemoteStore(
+      { count: 2 },
+      { type: "ready", storeInstanceId: "instance:b", version: 2 },
+    );
+    resolveB(lateB);
+    await waitFor(() => {
+      expect(lateB.getStatus().type).toBe("destroyed");
+      expect(result.current.store).toBe(finalA);
     });
   });
 
@@ -867,20 +862,27 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockReturnValueOnce(connectB)
       .mockReturnValueOnce(connectLatest);
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTarget = { context: "a" };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider options={{ target: scopeTarget }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
 
     const { result, rerender } = renderHook(
-      ({ target }) => {
-        const remote = useRemoteStore(definition, { target });
-        const selected = useNullableStore(
-          remote.store,
-          (state) => state.count,
-          -1,
-        );
+      () => {
+        const remote = CounterScope.useRemoteStore();
+        const selected = CounterScope.useSelector((state) => state.count, {
+          fallback: -1,
+        });
         return { remote, selected };
       },
       {
         initialProps: { target: { context: "a" } },
-        wrapper: createWrapper(nexus),
+        wrapper,
       },
     );
 
@@ -888,10 +890,11 @@ describe("react adapter", () => {
       expect(result.current.selected).toBe(1);
     });
 
-    rerender({ target: { context: "b" } });
+    scopeTarget = { context: "b" };
+    rerender({ target: scopeTarget });
 
     await waitFor(() => {
-      expect(result.current.remote.status.type).toBe("initializing");
+      expect(result.current.remote.pending).toBe(true);
       expect(result.current.selected).toBe(-1);
     });
 
@@ -931,7 +934,7 @@ describe("react adapter", () => {
     });
   });
 
-  it("failed latest cross-target reconnect destroys the stale handle without restoring its selector value", async () => {
+  it("failed latest cross-target reconnect destroys the old handle without restoring its selector value", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const firstStore = createFakeRemoteStore(
@@ -951,20 +954,27 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockReturnValueOnce(connectB)
       .mockRejectedValueOnce(new Error("latest-connect-failed"));
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTarget = { context: "a" };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider options={{ target: scopeTarget }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
 
     const { result, rerender } = renderHook(
-      ({ target }) => {
-        const remote = useRemoteStore(definition, { target });
-        const selected = useNullableStore(
-          remote.store,
-          (state) => state.count,
-          -1,
-        );
+      () => {
+        const remote = CounterScope.useRemoteStore();
+        const selected = CounterScope.useSelector((state) => state.count, {
+          fallback: -1,
+        });
         return { remote, selected };
       },
       {
         initialProps: { target: { context: "a" } },
-        wrapper: createWrapper(nexus),
+        wrapper,
       },
     );
 
@@ -972,7 +982,8 @@ describe("react adapter", () => {
       expect(result.current.selected).toBe(1);
     });
 
-    rerender({ target: { context: "b" } });
+    scopeTarget = { context: "b" };
+    rerender({ target: scopeTarget });
 
     await waitFor(() => {
       expect(result.current.selected).toBe(-1);
@@ -983,7 +994,6 @@ describe("react adapter", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.remote.status.type).toBe("disconnected");
       expect(result.current.remote.error?.message).toBe(
         "latest-connect-failed",
       );
@@ -1026,27 +1036,37 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockRejectedValueOnce(new Error("same-target-connect-failed"))
       .mockReturnValueOnce(connectB);
-    const renders: Array<{ target: string; selected: number; status: string }> =
-      [];
+    const renders: Array<{
+      target: string;
+      selected: number;
+      pending: boolean;
+    }> = [];
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTarget = { context: "a" };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider options={{ target: scopeTarget }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
 
     const { result, rerender } = renderHook(
       ({ target }) => {
-        const remote = useRemoteStore(definition, { target });
-        const selected = useNullableStore(
-          remote.store,
-          (state) => state.count,
-          -1,
-        );
+        const remote = CounterScope.useRemoteStore();
+        const selected = CounterScope.useSelector((state) => state.count, {
+          fallback: -1,
+        });
         renders.push({
           target: target.context,
           selected,
-          status: remote.status.type,
+          pending: remote.pending,
         });
         return { remote, selected };
       },
       {
         initialProps: { target: { context: "a" } },
-        wrapper: createWrapper(nexus),
+        wrapper,
       },
     );
 
@@ -1059,23 +1079,23 @@ describe("react adapter", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.remote.status.type).toBe("disconnected");
       expect(result.current.remote.error?.message).toBe(
         "same-target-connect-failed",
       );
       expect(result.current.selected).toBe(-1);
     });
 
-    rerender({ target: { context: "b" } });
+    scopeTarget = { context: "b" };
+    rerender({ target: scopeTarget });
 
     expect(renders.find((render) => render.target === "b")).toEqual({
       target: "b",
       selected: -1,
-      status: "stale",
+      pending: true,
     });
 
     await waitFor(() => {
-      expect(result.current.remote.status.type).toBe("initializing");
+      expect(result.current.remote.pending).toBe(true);
       expect(result.current.selected).toBe(-1);
     });
 
@@ -1114,13 +1134,22 @@ describe("react adapter", () => {
 
     const startCalls = connectSpy.mock.calls.length;
 
-    const wrapper = createWrapper(nexus);
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTimeout = 100;
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider
+          options={{
+            target: { context: "same-target" },
+            timeout: scopeTimeout,
+          }}
+        >
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
     const { result, rerender } = renderHook(
-      ({ timeout }) =>
-        useRemoteStore(definition, {
-          target: { context: "same-target" },
-          timeout,
-        }),
+      () => CounterScope.useRemoteStore(),
       {
         initialProps: { timeout: 100 },
         wrapper,
@@ -1129,14 +1158,15 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(firstStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
+    scopeTimeout = 200;
     rerender({ timeout: 200 });
 
     await waitFor(() => {
       expect(result.current.store).toBe(secondStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
     expect(getConnectCallsFrom(startCalls)).toBe(2);
@@ -1213,7 +1243,6 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockResolvedValueOnce(secondStore);
 
-    const wrapper = createWrapper(nexus);
     const { result, rerender } = renderHook(
       ({ reconnectKey }) =>
         useRemoteStore(definition, {
@@ -1222,13 +1251,13 @@ describe("react adapter", () => {
         }),
       {
         initialProps: { reconnectKey: 0 },
-        wrapper,
+        wrapper: createWrapper(nexus),
       },
     );
 
     await waitFor(() => {
       expect(result.current.store).toBe(firstStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
     expect(connectSpy).toHaveBeenCalledTimes(1);
@@ -1239,37 +1268,35 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(result.current.store).toBe(secondStore);
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.pending).toBe(false);
     });
 
     expect(connectSpy).toHaveBeenCalledTimes(2);
     expect(connectSpy.mock.calls[1]?.[2]).toEqual({
       target: { context: "same-target" },
     });
-    expect(firstStore.staleMarkerCalls).toBe(0);
     expect(firstStore.getStatus().type).toBe("destroyed");
   });
 
-  it("initial connect failure reports disconnected status instead of initializing", async () => {
+  it("initial connect failure reports an acquisition error", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
     connectSpy.mockRejectedValueOnce(new Error("initial-connect-failed"));
-
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        return remote;
+      },
       { wrapper },
     );
 
     await waitFor(() => {
       expect(result.current.store).toBeNull();
-      expect(result.current.status.type).toBe("disconnected");
       expect(result.current.error?.message).toBe("initial-connect-failed");
-      if (result.current.status.type === "disconnected") {
-        expect(result.current.status.lastKnownVersion).toBeNull();
-        expect(result.current.status.cause).toBeInstanceOf(Error);
-      }
     });
   });
 
@@ -1281,17 +1308,18 @@ describe("react adapter", () => {
 
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        return remote;
+      },
       { wrapper },
     );
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("disconnected");
       expect(result.current.error).toBeInstanceOf(Error);
       expect(result.current.error?.message).toBe("plain-failure");
-      if (result.current.status.type === "disconnected") {
-        expect(result.current.status.cause).toBeInstanceOf(Error);
-      }
     });
   });
 
@@ -1313,7 +1341,6 @@ describe("react adapter", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("ready");
       expect(result.current.store).toBe(remote);
     });
 
@@ -1323,7 +1350,7 @@ describe("react adapter", () => {
     expect(remote.getStatus().type).toBe("destroyed");
   });
 
-  it("uses store-bound stale marker during target handoff", async () => {
+  it("destroys the old store during target handoff", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -1331,9 +1358,6 @@ describe("react adapter", () => {
       { count: 1 },
       { type: "ready", storeInstanceId: "instance:marker-old", version: 1 },
     );
-
-    const markerSymbol = Symbol.for("nexus.state.remote-store.mark-stale");
-    markerStore[markerSymbol] = vi.fn(markerStore[markerSymbol] as () => void);
 
     const nextStore = createFakeRemoteStore(
       { count: 2 },
@@ -1354,21 +1378,19 @@ describe("react adapter", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("ready");
       expect(result.current.store).toBe(markerStore);
     });
 
     rerender({ target: { context: "new" } });
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("ready");
       expect(result.current.store).toBe(nextStore);
     });
 
-    expect(markerStore[markerSymbol]).toHaveBeenCalledTimes(1);
+    expect(markerStore.getStatus().type).toBe("destroyed");
   });
 
-  it("failed reconnect reports disconnected and renders selector fallback", async () => {
+  it("failed reconnect reports an acquisition error and renders selector fallback", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -1381,18 +1403,23 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockRejectedValueOnce(new Error("reconnect-failed"));
 
-    const wrapper = createWrapper(nexus);
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTimeout = 100;
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider
+          options={{ target: { context: "bg" }, timeout: scopeTimeout }}
+        >
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
+    );
     const { result, rerender } = renderHook(
-      ({ timeout }) => {
-        const remote = useRemoteStore(definition, {
-          target: { context: "bg" },
-          timeout,
+      () => {
+        const remote = CounterScope.useRemoteStore();
+        const selected = CounterScope.useSelector((state) => state.count, {
+          fallback: -1,
         });
-        const selected = useNullableStore(
-          remote.store,
-          (state) => state.count,
-          -1,
-        );
         return { remote, selected };
       },
       {
@@ -1402,21 +1429,17 @@ describe("react adapter", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.remote.status.type).toBe("ready");
+      expect(result.current.remote.store).toBe(firstStore);
       expect(result.current.selected).toBe(7);
     });
 
+    scopeTimeout = 200;
     rerender({ timeout: 200 });
 
     await waitFor(() => {
       expect(result.current.remote.store).toBeNull();
-      expect(result.current.remote.status.type).toBe("disconnected");
       expect(result.current.remote.error?.message).toBe("reconnect-failed");
       expect(result.current.selected).toBe(-1);
-      if (result.current.remote.status.type === "disconnected") {
-        expect(result.current.remote.status.lastKnownVersion).toBe(7);
-        expect(result.current.remote.status.cause).toBeInstanceOf(Error);
-      }
     });
   });
 
@@ -1467,7 +1490,7 @@ describe("react adapter", () => {
     });
   });
 
-  it("updates lifecycle status without requiring snapshot events", async () => {
+  it("updates lifecycle status through the explicit status hook", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -1480,12 +1503,18 @@ describe("react adapter", () => {
 
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
+      () => {
+        const remote = useRemoteStore(definition, {
+          target: { context: "bg" },
+        });
+        const phase = useStoreStatus(remote.store, (status) => status.type);
+        return { remote, phase };
+      },
       { wrapper },
     );
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("ready");
+      expect(result.current.remote.store).toBe(remote);
     });
 
     remote.setStatus({
@@ -1494,12 +1523,12 @@ describe("react adapter", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.status.type).toBe("disconnected");
+      expect(result.current.phase).toBe("disconnected");
     });
     expect(remote.statusSubscriptionCalls).toBe(1);
   });
 
-  it("uses a store status subscription without creating the polling timer", async () => {
+  it("acquires without subscribing to status or starting a polling timer", async () => {
     clearConnectSpy();
     const remote = createFakeRemoteStore(
       { count: 0 },
@@ -1515,63 +1544,12 @@ describe("react adapter", () => {
 
     await waitFor(() => expect(result.current.store).toBe(remote));
 
-    expect(remote.statusSubscriptionCalls).toBe(1);
+    expect(remote.statusSubscriptionCalls).toBe(0);
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 25);
     setIntervalSpy.mockRestore();
   });
 
-  it("cleans up the status subscription on unmount", async () => {
-    clearConnectSpy();
-    const remote = createFakeRemoteStore(
-      { count: 0 },
-      { type: "ready", storeInstanceId: "instance:status-unmount", version: 0 },
-    );
-    connectSpy.mockResolvedValueOnce(remote);
-
-    const { result, unmount } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
-      { wrapper: createWrapper(createTestNexus()) },
-    );
-
-    await waitFor(() => expect(result.current.store).toBe(remote));
-    unmount();
-
-    expect(remote.statusSubscriptionCalls).toBe(1);
-    expect(remote.statusUnsubscriptionCalls).toBe(1);
-  });
-
-  it("cleans up the old status subscription when the store switches", async () => {
-    clearConnectSpy();
-    const firstStore = createFakeRemoteStore(
-      { count: 0 },
-      { type: "ready", storeInstanceId: "instance:status-old", version: 0 },
-    );
-    const secondStore = createFakeRemoteStore(
-      { count: 1 },
-      { type: "ready", storeInstanceId: "instance:status-new", version: 1 },
-    );
-    connectSpy
-      .mockResolvedValueOnce(firstStore)
-      .mockResolvedValueOnce(secondStore);
-
-    const { result, rerender } = renderHook(
-      ({ timeout }) =>
-        useRemoteStore(definition, { target: { context: "bg" }, timeout }),
-      {
-        initialProps: { timeout: 1 },
-        wrapper: createWrapper(createTestNexus()),
-      },
-    );
-
-    await waitFor(() => expect(result.current.store).toBe(firstStore));
-    rerender({ timeout: 2 });
-    await waitFor(() => expect(result.current.store).toBe(secondStore));
-
-    expect(firstStore.statusSubscriptionCalls).toBe(1);
-    expect(firstStore.statusUnsubscriptionCalls).toBe(1);
-  });
-
-  it("balances status subscriptions across the StrictMode lifecycle probe", async () => {
+  it("destroys every acquired handle across the StrictMode lifecycle probe", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
     const stores: FakeRemoteStore<CounterState>[] = [];
@@ -1603,45 +1581,15 @@ describe("react adapter", () => {
     unmount();
 
     expect(stores.length).toBeGreaterThan(0);
+    expect(stores.every((store) => store.statusSubscriptionCalls === 0)).toBe(
+      true,
+    );
     expect(
-      stores.every(
-        (store) =>
-          store.statusSubscriptionCalls === store.statusUnsubscriptionCalls,
-      ),
+      stores.every((store) => store.getStatus().type === "destroyed"),
     ).toBe(true);
   });
 
-  it("retains status polling for a legacy store without subscribeStatus", async () => {
-    clearConnectSpy();
-    const remote = createFakeRemoteStore(
-      { count: 0 },
-      { type: "ready", storeInstanceId: "instance:legacy", version: 0 },
-    );
-    delete remote.subscribeStatus;
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-    connectSpy.mockResolvedValueOnce(remote);
-
-    const { result, unmount } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "bg" } }),
-      { wrapper: createWrapper(createTestNexus()) },
-    );
-
-    await waitFor(() => expect(result.current.store).toBe(remote));
-
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25);
-    expect(remote.stateSubscriptionCalls).toBe(1);
-    const clearIntervalCallsBeforeUnmount = clearIntervalSpy.mock.calls.length;
-    unmount();
-    expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(
-      clearIntervalCallsBeforeUnmount,
-    );
-    expect(remote.stateUnsubscriptionCalls).toBe(1);
-    setIntervalSpy.mockRestore();
-    clearIntervalSpy.mockRestore();
-  });
-
-  it("target change after disconnected state marks adapter stale immediately", async () => {
+  it("target change after disconnect destroys the old store immediately", async () => {
     clearConnectSpy();
     const nexus = createTestNexus();
 
@@ -1658,20 +1606,25 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockResolvedValueOnce(secondStore);
 
-    const wrapper = createWrapper(nexus);
-    const { result, rerender } = renderHook(
-      ({ remote }) =>
-        useNullableStore(remote.store, (state) => state.count, -1),
-      {
-        initialProps: {
-          remote: createRemoteResult(null, { type: "initializing" }),
-        },
-        wrapper,
-      },
+    const CounterScope = createRemoteStoreScope(definition);
+    let scopeTarget = { context: "old" };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <NexusProvider nexus={nexus}>
+        <CounterScope.Provider options={{ target: scopeTarget }}>
+          {children}
+        </CounterScope.Provider>
+      </NexusProvider>
     );
-
     const { result: remoteResult, rerender: rerenderRemote } = renderHook(
-      ({ target }) => useRemoteStore(definition, { target }),
+      () => {
+        const remote = CounterScope.useRemoteStore();
+        return {
+          ...remote,
+          selected: CounterScope.useSelector((state) => state.count, {
+            fallback: -1,
+          }),
+        };
+      },
       {
         initialProps: { target: { context: "old" } },
         wrapper,
@@ -1680,31 +1633,30 @@ describe("react adapter", () => {
 
     await waitFor(() => {
       expect(remoteResult.current.store).toBe(firstStore);
-      expect(remoteResult.current.status.type).toBe("ready");
+      expect(remoteResult.current.store).toBe(firstStore);
     });
 
-    rerender({ remote: remoteResult.current as any });
-    expect(result.current).toBe(7);
+    expect(remoteResult.current.selected).toBe(7);
 
     firstStore.setStatus({ type: "disconnected", lastKnownVersion: 7 });
-    rerender({ remote: remoteResult.current as any });
 
     await waitFor(() => {
-      expect(result.current).toBe(7);
+      expect(remoteResult.current.selected).toBe(7);
     });
 
-    rerenderRemote({ target: { context: "new" } });
-    rerender({ remote: remoteResult.current as any });
+    scopeTarget = { context: "new" };
+    rerenderRemote();
 
     await waitFor(() => {
-      expect(result.current).toBe(-1);
-      expect(remoteResult.current.status.type).toBe("initializing");
-      expect(firstStore.getStatus().type).toBe("stale");
+      expect(remoteResult.current.selected).toBe(-1);
+      expect(remoteResult.current.pending).toBe(true);
+      expect(firstStore.getStatus().type).toBe("destroyed");
     });
 
     await waitFor(() => {
       expect(remoteResult.current.store).toBe(secondStore);
-      expect(remoteResult.current.status.type).toBe("ready");
+      expect(remoteResult.current.store).toBe(secondStore);
+      expect(remoteResult.current.selected).toBe(9);
     });
   });
 });

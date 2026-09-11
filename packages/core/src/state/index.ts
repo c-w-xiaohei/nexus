@@ -1,6 +1,36 @@
-export * from "./types.js";
-export * from "./errors.js";
-export * from "./define-store.js";
-export * from "./create-store.js";
-export * from "./connect-store.js";
+export type {
+  ActionFunction,
+  ActionArgs,
+  ActionResult,
+  RemoteActions,
+  NexusStoreValidationSchemas,
+  NexusStoreServiceContract,
+  NexusStoreDefinition,
+  RemoteStoreStatus,
+  RemoteStore,
+  StoreHandle,
+} from "./contract.js";
+export {
+  NexusStoreError,
+  NexusStoreConnectError,
+  NexusStoreDisconnectedError,
+  NexusStoreActionError,
+  NexusStoreProtocolError,
+  normalizeNexusStoreError,
+  type NexusStoreErrorCode,
+  type NexusStoreErrorOptions,
+} from "./errors.js";
+export {
+  bindNexusStore,
+  createNexusStore,
+  type BindNexusStoreOptions,
+  type NexusStoreBinding,
+} from "./bind-store.js";
+export {
+  connectNexusStore,
+  safeConnectNexusStore,
+  safeInvokeStoreAction,
+  type ConnectNexusStoreOptions,
+  type SafeInvokeStoreActionError,
+} from "./connect-store.js";
 export { relayNexusStore } from "../relay/index.js";

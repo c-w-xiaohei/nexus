@@ -65,7 +65,7 @@ If you proxy a store directly, users naturally assume:
 
 None of those are true across contexts.
 
-Nexus State makes the remote nature explicit without forcing you to hand-write subscribe/dispatch protocol boilerplate each time.
+Nexus State makes the remote nature explicit without forcing you to hand-write subscription and action protocol boilerplate each time.
 
 ## Status Model
 
@@ -84,7 +84,7 @@ The important point is that `disconnected` and `stale` are not silent. They are 
 Keep these two layers separate:
 
 - headless core (`connectNexusStore` / `RemoteStore`)
-- React hook orchestration (`useRemoteStore`, `useStore`, and scoped selection)
+- React ownership (`useRemoteStore` and scoped selection), with direct selection through Zustand's `useStore`
 
 Headless core behavior:
 
@@ -94,7 +94,7 @@ Headless core behavior:
 
 Hook-level behavior:
 
-- hooks expose `status`, `store`, and `error` during initial load and replacement
+- the owner hook exposes `pending`, `store`, and acquisition `error`; lifecycle status is observed separately with `useStoreStatus` or `Scope.useStatus`
 - hooks may create a replacement `RemoteStore` handle, but they do not make a terminal handle usable again
 
 See the [Nexus State React guide](react.md) for `reconnectKey`, `reconnect()`,
@@ -106,7 +106,8 @@ These are different failures in Nexus State.
 
 ### `disconnected`
 
-Use this when the underlying transport/connection is gone, or a new connection attempt fails.
+Use this when an acquired handle's underlying transport/connection is gone.
+An acquisition failure returns an error without a handle.
 
 ### `stale`
 
@@ -114,13 +115,16 @@ Use this when the handle itself no longer matches the target you meant to talk t
 
 Typical example:
 
-- you connect to a caller-discovered tab target
-- the caller chooses a different tab target
-- your old remote store is now stale, not magically rebound
+- you acquire a handle with a `where` predicate
+- the remote identity changes and no longer matches that predicate
+- your old remote store becomes stale, not magically rebound
 
-## Snapshot-Only v1
+Changing React target props instead destroys the previous handle and starts
+a new acquisition; the owner does not retain a stale handle during replacement.
 
-Nexus State v1 synchronizes full snapshots, not public patch streams.
+## Full Snapshots
+
+Nexus State synchronizes full snapshots, not public patch streams.
 
 That means:
 
@@ -131,7 +135,7 @@ That means:
 
 The implementation keeps room for future patch-like optimization, but the public model is snapshot-based today.
 
-## Why Actions Wait For Observed Commit
+## Why Actions Wait For Publication
 
 When you call:
 
@@ -139,13 +143,15 @@ When you call:
 await remoteStore.actions.increment(1);
 ```
 
-the promise does not resolve just because the host said "I handled it".
+the promise waits for the caller's ordinary Core function call and its fixed
+publication-window acknowledgement. It is not a receipt or waiter protocol.
+The action may already have mutated the host if the call later fails; do not
+automatically retry non-idempotent actions.
 
-It resolves after the client mirror has observed the committed version.
-
-That gives you a stronger guarantee:
-
-- after the `await`, `getState()` is already consistent with that action's committed update
+After a successful await, the caller's mirror has acknowledged the targeted
+snapshot, but later host updates may already have been published or may still
+be pending. Snapshots are complete projections, may skip intermediate
+versions, and the client ignores older versions.
 
 This is one of the most important semantics in the system.
 
