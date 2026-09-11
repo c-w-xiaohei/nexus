@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { StateCreator } from "zustand/vanilla";
-import { Token } from "../api/token";
 import { createL3Endpoints } from "../utils/test-utils";
 import { createNexusStore } from "./bind-store";
 import { NexusStoreProtocolError } from "./errors";
-import type { ActionFunction, NexusStoreServiceContract } from "./contract";
+import {
+  createStoreToken,
+  type NexusStoreServiceContract,
+  type StoreData,
+} from "./contract";
 import type { SyncEnvelope } from "./protocol";
 
 type State = { count: number };
 type Actions = { increment(by: number): number };
 
-const createDefinition = (id: string) => ({
-  token: new Token<NexusStoreServiceContract<State, Actions>>(`state:${id}`),
-});
+const createDefinition = (id: string) =>
+  createStoreToken<State & Actions>(`state:${id}`);
 
 const createCreator = (): StateCreator<State & Actions> => (set, get) => ({
   count: 0,
@@ -23,11 +25,12 @@ const createCreator = (): StateCreator<State & Actions> => (set, get) => ({
   },
 });
 
-const subscribe = async <A extends Record<string, ActionFunction>>(
-  service: NexusStoreServiceContract<State, A>,
-  onSync: (event: SyncEnvelope<State, A>) => unknown = () => undefined,
+const subscribe = async <Store extends State & object>(
+  service: NexusStoreServiceContract<Store>,
+  onSync: (event: SyncEnvelope<StoreData<Store>, Store>) => unknown = () =>
+    undefined,
 ) => {
-  let init!: Extract<SyncEnvelope<State, A>, { type: "init" }>;
+  let init!: Extract<SyncEnvelope<StoreData<Store>, Store>, { type: "init" }>;
   await service.subscribe(async (event) => {
     if (event.type === "init") init = event;
     await onSync(event);
@@ -44,7 +47,7 @@ describe("createNexusStore", () => {
       { snapshot: ({ count }) => ({ count }), expose: ["increment"] },
     );
 
-    expect(provider.token).toBe(definition.token);
+    expect(provider.token).toBe(definition);
     expect(store.getState()).toMatchObject({ count: 0 });
     const init = await subscribe(provider.service);
     expect(init.state).toEqual({ count: 0 });
@@ -95,11 +98,9 @@ describe("createNexusStore", () => {
   });
 
   it("keeps failed-action writes and other listeners alive", async () => {
-    const definition = {
-      token: new Token<
-        NexusStoreServiceContract<State, Actions & { fail(): never }>
-      >("state:failed-write"),
-    };
+    const definition = createStoreToken<State & Actions & { fail(): never }>(
+      "state:failed-write",
+    );
     const { provider, store, destroy } = createNexusStore(
       definition,
       (set, get) => ({
@@ -134,12 +135,9 @@ describe("createNexusStore", () => {
   });
 
   it("validates committed state before publishing it", async () => {
-    const definition = {
-      token: new Token<NexusStoreServiceContract<State, Actions>>(
-        "state:validation",
-      ),
+    const definition = createStoreToken<State & Actions>("state:validation", {
       validation: { state: z.object({ count: z.number().max(1) }) },
-    };
+    });
     const { store, destroy } = createNexusStore(definition, createCreator(), {
       snapshot: ({ count }) => ({ count }),
       expose: ["increment"],
@@ -171,13 +169,13 @@ describe("createNexusStore", () => {
     const setup = await createL3Endpoints(
       {
         meta: { id: "host" },
-        providers: { [definition.token.id]: provider.service },
+        providers: { [definition.id]: provider.service },
       },
       { meta: { id: "client" }, connectTo: [{ context: "host" }] },
     );
     const service = setup.clientEngine.createServiceProxy<
-      NexusStoreServiceContract<State, Actions>
-    >(definition.token.id, {
+      NexusStoreServiceContract<State & Actions>
+    >(definition.id, {
       strategy: "one",
       timeout: 5000,
       target: { connectionId: (setup.clientConnection as any).connectionId },

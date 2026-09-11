@@ -2,10 +2,9 @@ import { useEffect, useMemo, useReducer, useState } from "react";
 import type { AdapterModel, NexusInstance } from "@nexus-js/core";
 import {
   connectNexusStore,
-  type ActionFunction,
   type ConnectNexusStoreOptions,
-  type NexusStoreDefinition,
   type RemoteStore,
+  type StoreToken,
 } from "@nexus-js/core/state";
 import { useNexus } from "./use-nexus.js";
 
@@ -15,14 +14,11 @@ export type NexusStoreNexus<M extends AdapterModel> = Pick<
 >;
 
 /** Acquisition only. Observe the acquired handle with useStoreStatus or Zustand. */
-export type UseRemoteStoreResult<
-  S extends object,
-  A extends Record<string, ActionFunction>,
-> = (
+export type UseRemoteStoreResult<Store extends object> = (
   | { readonly pending: true; readonly store: null; readonly error: null }
   | {
       readonly pending: false;
-      readonly store: RemoteStore<S, A>;
+      readonly store: RemoteStore<Store>;
       readonly error: null;
     }
   | { readonly pending: false; readonly store: null; readonly error: Error }
@@ -34,25 +30,21 @@ export type UseRemoteStoreOptions<M extends AdapterModel = AdapterModel> =
   };
 
 /** Owns one session-bound handle; replacement and unmount release it immediately. */
-export function useRemoteStore<
-  S extends object,
-  A extends Record<string, ActionFunction>,
->(
-  definition: NexusStoreDefinition<S, A, AdapterModel>,
+export function useRemoteStore<Store extends object>(
+  token: StoreToken<Store, AdapterModel>,
   options: UseRemoteStoreOptions<AdapterModel> = {},
-): UseRemoteStoreResult<S, A> {
-  return useRemoteStoreWithNexus(useNexus(), definition, options);
+): UseRemoteStoreResult<Store> {
+  return useRemoteStoreWithNexus(useNexus(), token, options);
 }
 
 export function useRemoteStoreWithNexus<
-  S extends object,
-  A extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
 >(
   nexus: NexusStoreNexus<M>,
-  definition: NexusStoreDefinition<S, A, M>,
+  token: StoreToken<Store, M>,
   options: UseRemoteStoreOptions<M> = {},
-): UseRemoteStoreResult<S, A> {
+): UseRemoteStoreResult<Store> {
   const { reconnectKey = null, ...connectOptions } = options;
   const [revision, reconnect] = useReducer((value: number) => value + 1, 0);
   const targetKey = JSON.stringify(connectOptions.target ?? null);
@@ -60,22 +52,22 @@ export function useRemoteStoreWithNexus<
   // Associate the result with all acquisition inputs, including A -> B -> A.
   const request = useMemo(
     () => Symbol(),
-    [nexus, definition, targetKey, timeout, reconnectKey, revision],
+    [nexus, token, targetKey, timeout, reconnectKey, revision],
   );
   const [result, setResult] = useState<{
     request: typeof request;
-    value: UseRemoteStoreResult<S, A>;
+    value: UseRemoteStoreResult<Store>;
   }>();
-  const pending = useMemo<UseRemoteStoreResult<S, A>>(
+  const pending = useMemo<UseRemoteStoreResult<Store>>(
     () => ({ pending: true, store: null, error: null, reconnect }),
     [reconnect],
   );
 
   useEffect(() => {
     let cancelled = false;
-    let store: RemoteStore<S, A> | undefined;
+    let store: RemoteStore<Store> | undefined;
     // Use the current predicate on acquisition, not its changing inline identity.
-    void connectNexusStore(nexus, definition, connectOptions).then(
+    void connectNexusStore(nexus, token, connectOptions).then(
       (remote) => {
         if (cancelled) {
           remote.destroy();

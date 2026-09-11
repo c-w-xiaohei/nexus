@@ -1,8 +1,5 @@
 import { Nexus } from "@nexus-js/core";
-import {
-  createNexusStore,
-  type NexusStoreServiceContract,
-} from "@nexus-js/core/state";
+import { createNexusStore } from "@nexus-js/core/state";
 import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 import {
   APP_ID,
@@ -11,15 +8,11 @@ import {
   iframeCounterStore,
   createCounterStoreCreator,
   frameNonce,
-  type CounterActions,
-  type CounterState,
+  type CounterStore,
   type FrameId,
 } from "./shared";
 
-type StoreImplementation = NexusStoreServiceContract<
-  CounterState,
-  CounterActions
->;
+type StoreImplementation = typeof provider.service;
 
 type StoreImplementationWithDisconnectHook = StoreImplementation & {
   [SERVICE_INVOKE_START]?(
@@ -149,7 +142,7 @@ const { provider } = createNexusStore(
   iframeCounterStore,
   createCounterStoreCreator(),
   {
-    snapshot: (state: CounterState) => ({
+    snapshot: (state: CounterStore) => ({
       count: state.count,
       writes: state.writes,
     }),

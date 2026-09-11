@@ -127,8 +127,7 @@ const iframeParentNexus = new Nexus<IframeAdapterModel>().configure({
       },
     ),
     relayNexusStore<
-      CounterState,
-      CounterActions,
+      CounterState & CounterActions,
       IframeAdapterModel,
       IframeAdapterModel
     >(iframeCounterStore, {

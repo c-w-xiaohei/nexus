@@ -1,31 +1,30 @@
-import { Nexus, Token } from "@/index";
-import type { StateCreator } from "zustand/vanilla";
-import { expectTypeOf } from "vitest";
+import { Nexus } from "@/index";
 import type { CreateOptions } from "@/api/types/config";
+import { expectTypeOf } from "vitest";
 import { z } from "zod";
-import type { Result } from "better-result";
+import type { StateCreator } from "zustand/vanilla";
 import {
   connectNexusStore,
   createNexusStore,
+  createStoreToken,
   safeConnectNexusStore,
   safeInvokeStoreAction,
-  type SafeInvokeStoreActionError,
-  type NexusStoreServiceContract,
-  type RemoteStore,
-  type ActionArgs,
-  type ActionResult,
   type ConnectNexusStoreOptions,
-  type NexusStoreDefinition,
   type RemoteActions,
+  type RemoteStore,
+  type StoreData,
 } from "./index.js";
 
-interface CounterState {
+interface CounterStore {
   count: number;
+  increment(by: number): number;
 }
 
-type CounterActions = {
-  increment(by: number): number;
-};
+interface AsyncStore {
+  count: number;
+  increment(by: number, label?: string): Promise<{ value: number }>;
+  reset(): void;
+}
 
 type ChromeMeta = { runtime: "background" };
 type ChromeConnection = { platform: "chrome" };
@@ -35,42 +34,35 @@ type ChromeModel = {
   connectionTarget: { context: "background" };
 };
 
-const token = new Token<
-  NexusStoreServiceContract<CounterState, CounterActions>,
-  ChromeModel
->("state:chrome-counter", { defaultTarget: { context: "background" } });
-
-const definition = { token };
-
-const validatedDefinition = {
-  token,
-  validation: { state: z.object({ count: z.number() }) },
-} satisfies NexusStoreDefinition<CounterState, CounterActions, ChromeModel>;
-expectTypeOf(validatedDefinition.token).toEqualTypeOf<typeof token>();
-expectTypeOf<RemoteActions<CounterActions>>().toEqualTypeOf<{
+const token = createStoreToken<CounterStore, ChromeModel>(
+  "state:chrome-counter",
+  {
+    defaultTarget: { context: "background" },
+    validation: { state: z.object({ count: z.number() }) },
+  },
+);
+expectTypeOf(token.validation).toEqualTypeOf<
+  | {
+      state?: z.ZodType<{ count: number }>;
+      actionResults?: { increment?: z.ZodType<number> };
+    }
+  | undefined
+>();
+expectTypeOf<StoreData<CounterStore>>().toEqualTypeOf<{ count: number }>();
+expectTypeOf<RemoteActions<CounterStore>>().toEqualTypeOf<{
   increment(by: number): Promise<number>;
 }>();
-expectTypeOf<
-  RemoteStore<CounterState, CounterActions>["actions"]
->().toEqualTypeOf<RemoteActions<CounterActions>>();
-type AsyncActions = {
-  increment(by: number, label?: string): Promise<{ value: number }>;
-  reset(): void;
-};
-expectTypeOf<ActionArgs<AsyncActions, "increment">>().toEqualTypeOf<
-  [number, label?: string]
+expectTypeOf<RemoteStore<CounterStore>["actions"]>().toEqualTypeOf<
+  RemoteActions<CounterStore>
 >();
-expectTypeOf<ActionResult<AsyncActions, "increment">>().toEqualTypeOf<{
-  value: number;
-}>();
-expectTypeOf<RemoteActions<AsyncActions>["reset"]>().toEqualTypeOf<
+expectTypeOf<RemoteActions<AsyncStore>["reset"]>().toEqualTypeOf<
   () => Promise<void>
 >();
 expectTypeOf<ConnectNexusStoreOptions<ChromeModel>>().toEqualTypeOf<
   Pick<CreateOptions<ChromeModel>, "target" | "where" | "timeout">
 >();
 
-const creator: StateCreator<CounterState & CounterActions> = (set, get) => ({
+const creator: StateCreator<CounterStore> = (set, get) => ({
   count: 0,
   increment(by: number) {
     set({ count: get().count + by });
@@ -79,53 +71,57 @@ const creator: StateCreator<CounterState & CounterActions> = (set, get) => ({
 });
 
 const chromeNexus = new Nexus<ChromeModel>();
-const localBinding = createNexusStore(definition, creator, {
+const localBinding = createNexusStore(token, creator, {
   snapshot: ({ count }) => ({ count }),
   expose: ["increment"],
 });
-const local = localBinding.store;
-const remotePromise = connectNexusStore(chromeNexus, definition);
-const safeRemotePromise = safeConnectNexusStore(chromeNexus, definition);
-expectTypeOf(remotePromise).toEqualTypeOf<
-  Promise<RemoteStore<CounterState, CounterActions>>
->();
+const remotePromise = connectNexusStore(chromeNexus, token);
+const safeRemotePromise = safeConnectNexusStore(chromeNexus, token);
+expectTypeOf(remotePromise).toEqualTypeOf<Promise<RemoteStore<CounterStore>>>();
 
-const portableDefinition = {
-  token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
-    "state:portable-counter",
-  ),
-};
-const portableRemote = connectNexusStore(chromeNexus, portableDefinition);
+const portableToken = createStoreToken<CounterStore>("state:portable-counter");
+const portableRemote = connectNexusStore(chromeNexus, portableToken);
 expectTypeOf(portableRemote).toEqualTypeOf<
-  Promise<RemoteStore<CounterState, CounterActions>>
+  Promise<RemoteStore<CounterStore>>
 >();
 if (false) {
-  const remote = {} as RemoteStore<CounterState, AsyncActions>;
-  expectTypeOf(safeInvokeStoreAction(remote, "increment", [1])).toEqualTypeOf<
-    Promise<Result<{ value: number }, SafeInvokeStoreActionError>>
-  >();
-  expectTypeOf(safeInvokeStoreAction(remote, "reset", [])).toEqualTypeOf<
-    Promise<Result<void, SafeInvokeStoreActionError>>
-  >();
-  // @ts-expect-error Each action retains its own argument tuple.
+  createStoreToken<CounterStore>("state:invalid-validation", {
+    validation: {
+      // @ts-expect-error State validation accepts only data fields, not methods.
+      state: z.object({ count: z.string() }),
+      actionResults: {
+        // @ts-expect-error Action validation derives the method return type.
+        increment: z.string(),
+      },
+    },
+  });
+  createNexusStore(token, creator, {
+    // @ts-expect-error Snapshots must include every Store data field.
+    snapshot: () => ({}),
+    expose: ["increment"],
+  });
+  createNexusStore(token, creator, {
+    snapshot: ({ count }) => ({ count }),
+    // @ts-expect-error Exposed action keys must be Store methods.
+    expose: ["count"],
+  });
+  const remote = {} as RemoteStore<AsyncStore>;
+  const increment = safeInvokeStoreAction(remote, "increment", [1]);
+  const reset = safeInvokeStoreAction(remote, "reset", []);
+  void increment;
+  void reset;
+  // @ts-expect-error Action arguments derive from the Store method.
   safeInvokeStoreAction(remote, "increment", ["one"]);
-
-  const invalidDefinition = {
-    token,
-    // @ts-expect-error A plain definition must retain the Token's state contract.
-    validation: { state: z.object({ count: z.string() }) },
-  } satisfies NexusStoreDefinition<CounterState, CounterActions, ChromeModel>;
-  void invalidDefinition;
 }
 
-const assertRemote = (remote: RemoteStore<CounterState, CounterActions>) => {
+const assertRemote = (remote: RemoteStore<CounterStore>) => {
   remote.getState();
   remote.getInitialState();
   remote.subscribeStatus(() => undefined);
   remote[Symbol.dispose]();
 };
 
-local.getInitialState();
+localBinding.store.getInitialState();
 localBinding.destroy();
 void remotePromise.then(assertRemote);
 void safeRemotePromise.then((result) => {

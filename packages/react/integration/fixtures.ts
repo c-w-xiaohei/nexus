@@ -1,15 +1,11 @@
 import {
   Nexus,
-  Token,
   type AdapterModel,
   type ConnectionTargetOf,
   type IEndpoint,
   type IPort,
 } from "@nexus-js/core";
-import {
-  createNexusStore,
-  type NexusStoreServiceContract,
-} from "@nexus-js/core/state";
+import { createNexusStore, createStoreToken } from "@nexus-js/core/state";
 
 type Meta =
   | { context: "client"; id: "react-client" }
@@ -274,12 +270,11 @@ const closePortState = (state: PortState): void => {
   }
 };
 
-type CounterState = { count: number };
-type CounterActions = { increment(by: number): number };
+type CounterStore = { count: number; increment(by: number): number };
 
 const createCounterStoreCreator =
   (initialCount: number) =>
-  (set: (state: Partial<CounterState>) => void, get: () => CounterState) => ({
+  (set: (state: Partial<CounterStore>) => void, get: () => CounterStore) => ({
     count: initialCount,
     increment(by: number) {
       const next = get().count + by;
@@ -288,11 +283,8 @@ const createCounterStoreCreator =
     },
   });
 
-export const createCounterDefinition = () => ({
-  token: new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
-    "state:react:integration:counter",
-  ),
-});
+export const createCounterDefinition = () =>
+  createStoreToken<CounterStore>("state:react:integration:counter");
 
 export const createReactNexusHarness = async (
   options: HarnessOptions,
@@ -338,7 +330,7 @@ export const createReactNexusHarness = async (
       definition,
       createCounterStoreCreator(host.initialCount ?? 0),
       {
-        snapshot: (state: CounterState) => ({ count: state.count }),
+        snapshot: (state: CounterStore) => ({ count: state.count }),
         expose: ["increment"],
       },
     );

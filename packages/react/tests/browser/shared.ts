@@ -1,5 +1,5 @@
 import { Token } from "@nexus-js/core";
-import type { NexusStoreServiceContract } from "@nexus-js/core/state";
+import { createStoreToken } from "@nexus-js/core/state";
 
 export const APP_ID = "react-state-star-browser";
 export const HOST_ORIGIN = "http://127.0.0.1:3310";
@@ -47,15 +47,17 @@ export type CounterActions = {
   failAfterNoCommit(actor: string): Promise<void>;
 };
 
-export const CounterStoreToken = new Token<
-  NexusStoreServiceContract<CounterState, CounterActions>
->("react.browser.counter-store");
+export type CounterStore = CounterState & CounterActions;
 
-export const counterStore = { token: CounterStoreToken };
+export const CounterStoreToken = createStoreToken<CounterStore>(
+  "react.browser.counter-store",
+);
+
+export const counterStore = CounterStoreToken;
 
 export const createCounterStoreCreator =
   (initialCount = 0) =>
-  (set: (state: Partial<CounterState>) => void, get: () => CounterState) => ({
+  (set: (state: Partial<CounterStore>) => void, get: () => CounterStore) => ({
     count: initialCount,
     writes: [] as CounterWrite[],
     increment(actor: string, by: number) {

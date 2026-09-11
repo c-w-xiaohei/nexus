@@ -1,10 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { RemoteStore, RemoteStoreStatus } from "@nexus-js/core/state";
 
-type StatusSource = Pick<
-  RemoteStore<object, Record<string, never>>,
-  "getStatus" | "subscribeStatus"
->;
+type StatusSource = Pick<RemoteStore<object>, "getStatus" | "subscribeStatus">;
 const subscribeNone = () => () => {};
 
 /**

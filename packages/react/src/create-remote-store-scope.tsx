@@ -6,10 +6,10 @@ import {
 } from "react";
 import type { AdapterModel } from "@nexus-js/core";
 import type {
-  ActionFunction,
-  NexusStoreDefinition,
   RemoteActions,
   RemoteStoreStatus,
+  StoreData,
+  StoreToken,
 } from "@nexus-js/core/state";
 import {
   useRemoteStore,
@@ -21,29 +21,25 @@ import { useStoreStatus } from "./use-store-status.js";
 const subscribeNone = () => () => {};
 
 export interface RemoteStoreScope<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
+  Store extends object,
   U extends AdapterModel,
 > {
   readonly Provider: (props: RemoteStoreScopeProviderProps<U>) => ReactNode;
-  useRemoteStore(): UseRemoteStoreResult<TState, TActions>;
+  useRemoteStore(): UseRemoteStoreResult<Store>;
   useSelector<TResult>(
-    selector: (state: TState) => TResult,
+    selector: (state: StoreData<Store>) => TResult,
     options: { readonly fallback: TResult },
   ): TResult;
-  useActions(): RemoteActions<TActions> | null;
+  useActions(): RemoteActions<Store> | null;
   useStatus(): RemoteStoreStatus | null;
   useStatus<T>(selector: (status: RemoteStoreStatus) => T): T | null;
   useError(): Error | null;
 }
 
-export type RemoteStoreHook<M extends AdapterModel> = <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
->(
-  definition: NexusStoreDefinition<TState, TActions, M>,
+export type RemoteStoreHook<M extends AdapterModel> = <Store extends object>(
+  token: StoreToken<Store, M>,
   options?: UseRemoteStoreOptions<M>,
-) => UseRemoteStoreResult<TState, TActions>;
+) => UseRemoteStoreResult<Store>;
 
 export interface RemoteStoreScopeProviderProps<
   U extends AdapterModel = AdapterModel,
@@ -53,19 +49,17 @@ export interface RemoteStoreScopeProviderProps<
 }
 
 export const createRemoteStoreScopeWithNexus = <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
 >(
-  definition: NexusStoreDefinition<TState, TActions, M>,
+  token: StoreToken<Store, M>,
   useBoundRemoteStore: RemoteStoreHook<M>,
-): RemoteStoreScope<TState, TActions, M> => {
-  const RemoteStoreContext = createContext<UseRemoteStoreResult<
-    TState,
-    TActions
-  > | null>(null);
+): RemoteStoreScope<Store, M> => {
+  const RemoteStoreContext = createContext<UseRemoteStoreResult<Store> | null>(
+    null,
+  );
 
-  const useScopedRemoteStore = (): UseRemoteStoreResult<TState, TActions> => {
+  const useScopedRemoteStore = (): UseRemoteStoreResult<Store> => {
     const remote = useContext(RemoteStoreContext);
     if (!remote) {
       throw new Error(
@@ -80,7 +74,7 @@ export const createRemoteStoreScopeWithNexus = <
     options = {},
     children,
   }: RemoteStoreScopeProviderProps<M>): ReactNode => {
-    const remote = useBoundRemoteStore(definition, options);
+    const remote = useBoundRemoteStore(token, options);
 
     return (
       <RemoteStoreContext.Provider value={remote}>
@@ -90,7 +84,7 @@ export const createRemoteStoreScopeWithNexus = <
   };
 
   const useSelector = <TResult,>(
-    selector: (state: TState) => TResult,
+    selector: (state: StoreData<Store>) => TResult,
     options: { readonly fallback: TResult },
   ): TResult => {
     const { store } = useScopedRemoteStore();
@@ -101,7 +95,7 @@ export const createRemoteStoreScopeWithNexus = <
     );
   };
 
-  const useActions = (): RemoteActions<TActions> | null => {
+  const useActions = (): RemoteActions<Store> | null => {
     const remote = useScopedRemoteStore();
     return remote.store?.actions ?? null;
   };
@@ -130,11 +124,8 @@ export const createRemoteStoreScopeWithNexus = <
   };
 };
 
-export const createRemoteStoreScope = <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
->(
-  definition: NexusStoreDefinition<TState, TActions, AdapterModel>,
-): RemoteStoreScope<TState, TActions, AdapterModel> => {
-  return createRemoteStoreScopeWithNexus(definition, useRemoteStore);
+export const createRemoteStoreScope = <Store extends object>(
+  token: StoreToken<Store, AdapterModel>,
+): RemoteStoreScope<Store, AdapterModel> => {
+  return createRemoteStoreScopeWithNexus(token, useRemoteStore);
 };

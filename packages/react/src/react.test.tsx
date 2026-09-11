@@ -2,10 +2,11 @@ import React, { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { Nexus, type AdapterModel, type NexusInstance } from "@nexus-js/core";
-import type {
-  NexusStoreDefinition,
-  RemoteStore,
-  RemoteStoreStatus,
+import {
+  createStoreToken,
+  type RemoteStore,
+  type RemoteStoreStatus,
+  type StoreData,
 } from "@nexus-js/core/state";
 import { NexusProvider } from "./provider";
 import { createRemoteStoreScope } from "./create-remote-store-scope";
@@ -13,20 +14,16 @@ import { useNexus } from "./use-nexus";
 import { useRemoteStore } from "./use-remote-store";
 import { useStoreStatus } from "./use-store-status";
 
-interface CounterState {
+interface CounterStore {
   count: number;
+  increment(by: number): Promise<number>;
 }
 
-type CounterActions = {
-  increment(by: number): Promise<number>;
-};
+type CounterState = Pick<CounterStore, "count">;
 
-interface FakeRemoteStore<TState extends object> extends RemoteStore<
-  TState,
-  Record<string, (...args: any[]) => any>
-> {
+interface FakeRemoteStore<Store extends object> extends RemoteStore<Store> {
   statusSubscriptionCalls: number;
-  pushState(nextState: TState): void;
+  pushState(nextState: StoreData<Store>): void;
   setStatus(nextStatus: RemoteStoreStatus): void;
 }
 
@@ -40,18 +37,20 @@ vi.mock("@nexus-js/core/state", async () => {
   };
 });
 
-const definition = {
-  token: { id: "state:counter:react" },
-} as unknown as NexusStoreDefinition<CounterState, CounterActions>;
+const token = createStoreToken<CounterStore>("state:counter:react");
+const definition = token;
 
 const createFakeRemoteStore = (
-  initialState: CounterState,
+  initialState: Pick<CounterStore, "count">,
   initialStatus: RemoteStoreStatus,
-): FakeRemoteStore<CounterState> => {
+): FakeRemoteStore<CounterStore> => {
   let state = initialState;
   let status = initialStatus;
   const listeners = new Set<
-    (snapshot: CounterState, previous: CounterState) => void
+    (
+      snapshot: Pick<CounterStore, "count">,
+      previous: Pick<CounterStore, "count">,
+    ) => void
   >();
   const statusListeners = new Set<() => void>();
   let statusSubscriptionCalls = 0;
@@ -99,7 +98,7 @@ const createFakeRemoteStore = (
     [Symbol.dispose]() {
       this.destroy();
     },
-    pushState(nextState) {
+    pushState(nextState: CounterState) {
       const previous = state;
       state = nextState;
       for (const listener of listeners) {
@@ -158,7 +157,7 @@ describe("react adapter", () => {
     );
     connectSpy.mockResolvedValueOnce(remote);
 
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
     const startCalls = connectSpy.mock.calls.length;
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <NexusProvider nexus={nexus}>
@@ -206,7 +205,7 @@ describe("react adapter", () => {
     );
     connectSpy.mockResolvedValueOnce(remote);
 
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <NexusProvider nexus={nexus}>
         <CounterScope.Provider options={{ target: { context: "bg" } }}>
@@ -240,7 +239,7 @@ describe("react adapter", () => {
     );
     connectSpy.mockResolvedValueOnce(remote);
 
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <NexusProvider nexus={nexus}>
         <CounterScope.Provider options={{ target: { context: "bg" } }}>
@@ -281,7 +280,7 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(firstStore)
       .mockResolvedValueOnce(secondStore);
 
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
     let reconnectKey = 0;
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <NexusProvider nexus={nexus}>
@@ -326,7 +325,7 @@ describe("react adapter", () => {
   });
 
   it("remote store scope hooks fail fast outside scope Provider", () => {
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
 
     expect(() => renderHook(() => CounterScope.useRemoteStore())).toThrowError(
       /RemoteStoreScope\.Provider/i,
@@ -348,7 +347,7 @@ describe("react adapter", () => {
   });
 
   it("remote store scope Provider requires NexusProvider through useRemoteStore", () => {
-    const CounterScope = createRemoteStoreScope(definition);
+    const CounterScope = createRemoteStoreScope(token);
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <CounterScope.Provider>{children}</CounterScope.Provider>
     );
@@ -383,7 +382,7 @@ describe("react adapter", () => {
     const wrapper = createWrapper(nexus);
     const { result } = renderHook(
       () => {
-        const remote = useRemoteStore(definition, {
+        const remote = useRemoteStore(token, {
           target: { context: "bg" },
         });
         return remote;
@@ -418,7 +417,7 @@ describe("react adapter", () => {
       .mockResolvedValueOnce(secondStore);
 
     const { result } = renderHook(
-      () => useRemoteStore(definition, { target: { context: "same-target" } }),
+      () => useRemoteStore(token, { target: { context: "same-target" } }),
       { wrapper: createWrapper(nexus) },
     );
 

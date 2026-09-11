@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { Nexus, Token } from "../../src";
+import { Nexus } from "../../src";
 import type { IPort } from "../../src/transport";
 import { createMockPortPair } from "../../src/utils/test-utils";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
-import { connectNexusStore } from "../../src/state";
+import { connectNexusStore, createStoreToken } from "../../src/state";
 import type { SyncEnvelope } from "../../src/state/protocol";
 import type { NexusStoreServiceContract } from "../../src/state/contract";
 
@@ -34,7 +34,9 @@ const createService = (
 ) => {
   let count = 0;
   let version = 0;
-  const listeners = new Set<(event: SyncEnvelope<State, Actions>) => unknown>();
+  const listeners = new Set<
+    (event: SyncEnvelope<State, State & Actions>) => unknown
+  >();
   const emit = async () => {
     const event = {
       type: "snapshot" as const,
@@ -56,7 +58,7 @@ const createService = (
   };
   return {
     async subscribe(
-      listener: (event: SyncEnvelope<State, Actions>) => unknown,
+      listener: (event: SyncEnvelope<State, State & Actions>) => unknown,
     ) {
       listeners.add(listener);
       await listener({
@@ -70,7 +72,7 @@ const createService = (
         },
       });
     },
-  } as NexusStoreServiceContract<State, Actions>;
+  } as NexusStoreServiceContract<State & Actions>;
 };
 
 const createHost = async (service: object) => {
@@ -88,7 +90,7 @@ const createHost = async (service: object) => {
         },
       },
     },
-    providers: [{ token: new Token("state:restart"), service }],
+    providers: [{ token: definition, service }],
   });
   await vi.waitFor(() => expect((nexus as any).connectionManager).toBeTruthy());
   return { nexus, accept };
@@ -118,11 +120,7 @@ const createPopup = async (getHost: () => { accept(port: IPort): void }) => {
   return popup;
 };
 
-const definition = {
-  token: new Token<NexusStoreServiceContract<State, Actions>, Model>(
-    "state:restart",
-  ),
-};
+const definition = createStoreToken<State & Actions, Model>("state:restart");
 
 describe("Nexus State background restart lifecycle", () => {
   it("disconnects an old handle and connects a replacement session", async () => {

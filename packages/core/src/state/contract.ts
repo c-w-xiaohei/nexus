@@ -1,100 +1,89 @@
-import type { Token } from "../api/token";
+import { Token, type TokenOptions } from "../api/token";
 import type { AdapterModel } from "../types/adapter-model";
 import type { ZodType } from "zod";
 import type { StoreApi } from "zustand/vanilla";
 import type { SyncEnvelope, TerminalReason } from "./protocol";
 
-export type ActionFunction = (...args: any[]) => any;
+type ActionFunction = (...args: any[]) => any;
 
-export type ActionArgs<
-  TActions extends Record<string, ActionFunction>,
-  K extends keyof TActions,
-> = Parameters<TActions[K]>;
+export type StoreActionKeys<Store extends object> = {
+  [K in keyof Store]-?: Store[K] extends ActionFunction ? K : never;
+}[keyof Store] &
+  string;
 
-export type ActionResult<
-  TActions extends Record<string, ActionFunction>,
-  K extends keyof TActions,
-> = Awaited<ReturnType<TActions[K]>>;
-
-export type RemoteActions<TActions extends Record<string, ActionFunction>> = {
-  [K in keyof TActions]: (
-    ...args: ActionArgs<TActions, K>
-  ) => Promise<ActionResult<TActions, K>>;
+export type StoreData<Store extends object> = {
+  [K in keyof Store as Store[K] extends ActionFunction ? never : K]: Store[K];
 };
 
-export type NexusStoreValidationSchemas<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-> = {
-  state?: ZodType<TState>;
+export type RemoteActions<Store extends object> = {
+  [K in StoreActionKeys<Store>]: Store[K] extends ActionFunction
+    ? (...args: Parameters<Store[K]>) => Promise<Awaited<ReturnType<Store[K]>>>
+    : never;
+};
+
+export type StoreValidationSchemas<Store extends object> = {
+  state?: ZodType<StoreData<Store>>;
   actionResults?: {
-    [K in keyof TActions]?: ZodType<ActionResult<TActions, K>>;
+    [K in StoreActionKeys<Store>]?: Store[K] extends ActionFunction
+      ? ZodType<Awaited<ReturnType<Store[K]>>>
+      : never;
   };
 };
 
-/**
- * One callback channel carries initialization, published snapshots and termination.
- * Resolving the callback acknowledges receipt/application; rejecting init stops the
- * subscription. The init event supplies actions and an idempotent unsubscribe.
- */
-export type NexusStoreServiceContract<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-> = {
+/** One callback carries initialization, snapshots, and terminal state. */
+export type NexusStoreServiceContract<Store extends object> = {
   subscribe(
-    onSync: (event: SyncEnvelope<TState, TActions>) => void | Promise<void>,
+    onSync: (
+      event: SyncEnvelope<StoreData<Store>, Store>,
+    ) => void | Promise<void>,
   ): Promise<void>;
 };
 
-/** Shared contract and validation only; the Zustand creator stays in the host. */
-export interface NexusStoreDefinition<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-  M extends AdapterModel = AdapterModel,
-> {
-  token:
-    | Token<NexusStoreServiceContract<TState, TActions>, M>
-    | Token<NexusStoreServiceContract<TState, TActions>>;
-  validation?: NexusStoreValidationSchemas<TState, TActions>;
+/** A State token carries shared wire validation while retaining Core Token targeting. */
+export class StoreToken<
+  Store extends object,
+  M extends AdapterModel | never = never,
+> extends Token<NexusStoreServiceContract<Store>, M> {
+  readonly validation?: StoreValidationSchemas<Store>;
+
+  constructor(
+    id: string,
+    options?: TokenOptions<M & AdapterModel> & {
+      validation?: StoreValidationSchemas<Store>;
+    },
+  ) {
+    super(id, options);
+    this.validation = options?.validation;
+  }
 }
+
+export const createStoreToken = <
+  Store extends object,
+  M extends AdapterModel | never = never,
+>(
+  id: string,
+  options?: TokenOptions<M & AdapterModel> & {
+    validation?: StoreValidationSchemas<Store>;
+  },
+): StoreToken<Store, M> => new StoreToken(id, options);
 
 export type RemoteStoreStatus =
   | { type: "initializing" }
   | { type: "ready"; storeInstanceId: string; version: number }
-  | {
-      type: "disconnected";
-      lastKnownVersion: number | null;
-      cause?: Error;
-    }
-  | {
-      type: "stale";
-      lastKnownVersion: number | null;
-      reason: TerminalReason;
-    }
+  | { type: "disconnected"; lastKnownVersion: number | null; cause?: Error }
+  | { type: "stale"; lastKnownVersion: number | null; reason: TerminalReason }
   | { type: "destroyed" };
 
-export interface RemoteStore<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-> extends StoreHandle<TState, TActions> {
+export interface RemoteStore<Store extends object> extends StoreHandle<Store> {
   getStatus(): RemoteStoreStatus;
-  /** Observes lifecycle and version changes with atomically visible state/status. */
   subscribeStatus(listener: () => void): () => void;
 }
 
-/** Session-bound mirror interface; local hosts expose their original Zustand API. */
-export interface StoreHandle<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-> extends Disposable {
-  /** Reads committed data. The remote mirror remains synchronous for local consumers. */
-  getState(): TState;
-  /** Stable initial snapshot for this session. Treat it as immutable. */
-  getInitialState(): TState;
-  /** Zustand-compatible changes; init observers receive the baseline as both values. */
-  subscribe: StoreApi<TState>["subscribe"];
-  /** Stops observation and releases subscription capabilities; safe to call repeatedly. */
+/** Session-bound mirror interface; local hosts retain their native Zustand API. */
+export interface StoreHandle<Store extends object> extends Disposable {
+  getState(): StoreData<Store>;
+  getInitialState(): StoreData<Store>;
+  subscribe: StoreApi<StoreData<Store>>["subscribe"];
   destroy(): void;
-  /** Successful remote actions wait for this handle's captured publication batch. */
-  readonly actions: RemoteActions<TActions>;
+  readonly actions: RemoteActions<Store>;
 }

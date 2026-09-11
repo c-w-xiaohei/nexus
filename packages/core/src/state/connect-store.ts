@@ -13,12 +13,10 @@ import {
   NexusStoreActionError,
 } from "./errors";
 import type {
-  ActionArgs,
-  ActionFunction,
-  ActionResult,
-  NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteStore,
+  StoreActionKeys,
+  StoreToken,
 } from "./contract";
 import { createRemoteStore } from "./remote-store";
 import {
@@ -78,18 +76,14 @@ const normalizeConnectHandshakeError = (error: unknown) => {
  * Failure destroys the mirror; its callback still reclaims capabilities in a late init.
  */
 export const safeConnectNexusStore = async <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
 >(
   nexus: SafeCreateNexusLike<M>,
-  definition: NexusStoreDefinition<TState, TActions, M>,
+  token: StoreToken<Store, M>,
   options: ConnectNexusStoreOptions<M> = {},
 ): Promise<
-  Result<
-    RemoteStore<TState, TActions>,
-    ReturnType<typeof normalizeConnectHandshakeError>
-  >
+  Result<RemoteStore<Store>, ReturnType<typeof normalizeConnectHandshakeError>>
 > => {
   const createError = (cause: unknown) =>
     new NexusStoreConnectError("Failed to create store proxy.", { cause });
@@ -105,7 +99,7 @@ export const safeConnectNexusStore = async <
   const { target, where, timeout } = parsed.value;
   const acquisition = Result.try({
     try: () => ({
-      pending: nexus.safeCreate(definition.token, {
+      pending: nexus.safeCreate(token, {
         target,
         where,
         timeout,
@@ -121,10 +115,10 @@ export const safeConnectNexusStore = async <
     (cause) => Result.err(createError(cause)),
   );
   if (created.isErr()) return created;
-  const service = created.value as NexusStoreServiceContract<TState, TActions>;
+  const service = created.value as NexusStoreServiceContract<Store>;
 
   const remoteResult = Result.try({
-    try: () => createRemoteStore<TState, TActions>(definition.validation),
+    try: () => createRemoteStore<Store>(token.validation),
     catch: normalizeConnectHandshakeError,
   });
   if (remoteResult.isErr()) return remoteResult;
@@ -172,14 +166,13 @@ export const safeConnectNexusStore = async <
 };
 
 export const connectNexusStore = async <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
 >(
   nexus: SafeCreateNexusLike<M> | CreateNexusLike<M>,
-  definition: NexusStoreDefinition<TState, TActions, M>,
+  token: StoreToken<Store, M>,
   options: ConnectNexusStoreOptions<M> = {},
-): Promise<RemoteStore<TState, TActions>> => {
+): Promise<RemoteStore<Store>> => {
   const safeNexus: SafeCreateNexusLike<M> =
     "safeCreate" in nexus
       ? nexus
@@ -191,25 +184,26 @@ export const connectNexusStore = async <
                 error instanceof Error ? error : new Error(String(error)),
             }),
         };
-  const result = await safeConnectNexusStore(safeNexus, definition, options);
+  const result = await safeConnectNexusStore(safeNexus, token, options);
   if (result.isErr()) throw result.error;
   return result.value;
 };
 
 /** Captures action rejection without changing the underlying core callback's lifecycle. */
 export const safeInvokeStoreAction = <
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
-  K extends keyof TActions & string,
+  Store extends object,
+  K extends StoreActionKeys<Store>,
 >(
-  remoteStore: RemoteStore<TState, TActions>,
+  remoteStore: RemoteStore<Store>,
   action: K,
-  args: ActionArgs<TActions, K>,
+  args: Store[K] extends (...args: infer Args) => unknown ? Args : never,
 ) =>
   Result.tryPromise({
-    try: (): Promise<ActionResult<TActions, K>> => {
+    try: () => {
       const invoke = remoteStore.actions[action];
-      return invoke(...args);
+      return (
+        invoke as unknown as (...values: typeof args) => Promise<unknown>
+      )(...args);
     },
     catch: (error) =>
       error instanceof NexusStoreDisconnectedError ||

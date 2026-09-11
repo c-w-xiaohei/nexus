@@ -12,7 +12,7 @@ type Actions = { increment(by: number): number };
 
 describe("State mirror", () => {
   it("applies init and snapshots through onSync", () => {
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     const unsubscribe = vi.fn();
     const increment = vi.fn(async (by: number) => by);
     const changes = vi.fn();
@@ -41,7 +41,7 @@ describe("State mirror", () => {
   });
 
   it("buffers early snapshots and freezes a handle after instance replacement", () => {
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     remote.onSync({
       type: "snapshot",
       storeInstanceId: "one",
@@ -76,7 +76,7 @@ describe("State mirror", () => {
     const action = vi.fn(async () => {
       throw coreError;
     });
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     remote.onSync({
       type: "init",
       storeInstanceId: "one",
@@ -91,7 +91,7 @@ describe("State mirror", () => {
   });
 
   it("safely invokes the original action and preserves structured failures", async () => {
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     const increment = vi.fn(async (by: number) => by * 2);
     remote.onSync({
       type: "init",
@@ -129,7 +129,7 @@ describe("State mirror", () => {
   });
 
   it("transitions status and rejects state access before init", () => {
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     expect(() => remote.store.getState()).toThrowError(
       NexusStoreDisconnectedError,
     );
@@ -145,7 +145,7 @@ describe("State mirror", () => {
   });
 
   it("rejects an uncloneable init as a protocol error and reclaims its capabilities", () => {
-    const remote = createRemoteStore<State, Actions>();
+    const remote = createRemoteStore<State & Actions>();
     const unsubscribe = vi.fn();
     expect(() =>
       remote.onSync({

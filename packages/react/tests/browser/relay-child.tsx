@@ -16,8 +16,7 @@ import {
   iframeCounterStore,
   relayChildNonce,
   relayFrameTarget,
-  type CounterActions,
-  type CounterState,
+  type CounterStore,
   type RelayProfileService,
 } from "./shared";
 
@@ -43,12 +42,11 @@ const childNexus = new Nexus<IframeAdapterModel>().configure({
 const telemetry = {
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
+  oldHandle: null as RemoteStore<CounterStore> | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
-let latestRemote: UseRemoteStoreResult<CounterState, CounterActions> | null =
-  null;
+let latestRemote: UseRemoteStoreResult<CounterStore> | null = null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
@@ -86,11 +84,7 @@ function RelayChildApp() {
   );
 }
 
-function StoreView({
-  store,
-}: {
-  store: RemoteStore<CounterState, CounterActions>;
-}) {
+function StoreView({ store }: { store: RemoteStore<CounterStore> }) {
   const snapshot = useStore(store);
   return (
     <>

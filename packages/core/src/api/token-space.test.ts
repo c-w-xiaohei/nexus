@@ -38,4 +38,15 @@ describe("TokenSpace defaultTarget", () => {
       new Token<Model>("service", { defaultTarget: { id: "host" } } as never),
     ).toBeDefined();
   });
+
+  it("creates State tokens from the inherited namespace and target", () => {
+    const space = new TokenSpace<Model>({
+      name: "app",
+      defaultTarget: { id: "host" },
+    });
+    const token = space.space("state").storeToken<{ count: number }>("counter");
+
+    expect(token.id).toBe("app:state:counter");
+    expect(token.defaultTarget).toEqual({ id: "host" });
+  });
 });

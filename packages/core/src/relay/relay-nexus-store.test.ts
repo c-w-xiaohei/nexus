@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { Token } from "@/api/token";
 import { Result } from "better-result";
 import {
   SERVICE_INVOKE_START,
@@ -12,6 +11,7 @@ import type {
   NexusStoreServiceContract,
   RemoteActions,
 } from "@/state/contract";
+import { createStoreToken } from "@/state/contract";
 import {
   NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
   NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
@@ -23,13 +23,9 @@ import { createRemoteStore } from "@/state/remote-store";
 
 type State = { count: number };
 type Actions = { increment(by: number): number };
-type Event = SyncEnvelope<State, Actions>;
+type Event = SyncEnvelope<State, State & Actions>;
 
-const definition = {
-  token: new Token<NexusStoreServiceContract<State, Actions>>(
-    "relay:test-store",
-  ),
-};
+const definition = createStoreToken<State & Actions>("relay:test-store");
 
 const context = (connectionId: string): ServiceInvocationContext => ({
   sourceConnectionId: connectionId,
@@ -78,7 +74,7 @@ const makeUpstream = (
     },
     [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: options.onDisconnect,
     [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: options.onStale,
-  } as unknown as NexusStoreServiceContract<State, Actions> & {
+  } as unknown as NexusStoreServiceContract<State & Actions> & {
     [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
       callback: () => void,
     ) => void;
@@ -108,7 +104,7 @@ const initOf = (events: Event[]) => {
 };
 
 const subscribeRelay = (
-  service: NexusStoreServiceContract<State, Actions>,
+  service: NexusStoreServiceContract<State & Actions>,
   listener: (event: Event) => unknown,
   caller: ServiceInvocationContext,
 ) => {
@@ -312,7 +308,7 @@ describe("relayNexusStore", () => {
     };
     const first: Event[] = [];
     const second: Event[] = [];
-    const mirror = createRemoteStore<State, Actions>();
+    const mirror = createRemoteStore<State & Actions>();
     const firstPending = subscribeRelay(
       relay.service,
       (event) => {

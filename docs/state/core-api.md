@@ -8,6 +8,7 @@ Current public entrypoint:
 
 ```ts
 import {
+  createStoreToken,
   createNexusStore,
   bindNexusStore,
   connectNexusStore,
@@ -20,36 +21,43 @@ Types and errors are also exported from the same subpath.
 
 `relayNexusStore` is available from `@nexus-js/core/relay` and re-exported from `@nexus-js/core/state` for store-focused code. Use it only when a bridge context needs to project an upstream authoritative store into a downstream Nexus graph. See `docs/relay.md` for relay semantics.
 
-## Shared Definition
+## Shared Store Token
 
-Declare a plain shared object containing a typed service Token and optional
-validation schemas. No definition factory or registration step is needed.
+Declare one shared store type containing data and methods. The token derives
+snapshot and remote-action types internally; callers do not describe the wire service.
 
 ```ts
-const counterStore = {
-  token,
-};
+interface CounterStore {
+  count: number;
+  increment(by?: number): number;
+}
+
+const counterStore = createStoreToken<CounterStore>("app:counter");
 ```
 
 ### Responsibilities
 
-The object groups:
+The StoreToken carries:
 
-- the store identity via `token`
+- the store identity
 - optional state and action validation through `validation`
 - optional convenience targeting through the store token's `defaultTarget`
 
 ### Notes
 
-- `token` remains the real identity source
+- pass the StoreToken directly to State APIs, without a `{ token }` wrapper
 - store default targeting comes from the token's `defaultTarget`; Nexus State does not define a second store-level default target source
 - host-side state and actions are supplied separately to `createNexusStore()` as a native Zustand `StateCreator`
 - store actions must use serializable arguments/results
 - synchronization publishes full snapshots
 
-The typed Token supplies state, action, and adapter-model inference. Use
-`satisfies NexusStoreDefinition<State, Actions, Model>` when a shared declaration
-needs an explicit compatibility check; do not repeat those types at every call.
+`RemoteStore<CounterStore>` derives data-only reads and asynchronous methods from
+the same contract. `createStoreToken<Store, Model>(id, options)` supports typed
+`defaultTarget` and optional `validation: { state, actionResults }` schemas.
+Use `space.storeToken<Store>(name, options?)` or `space.safeStoreToken<Store>(...)`
+with TokenSpace to inherit namespaced IDs and default targets. Without a model,
+the token is portable across adapters. A local store may contain additional
+private fields; `snapshot` and `expose` still define the runtime sharing boundary.
 
 ## `createNexusStore()`
 
@@ -101,7 +109,7 @@ not installed into the source or remote store.
 
 ### `bindNexusStore()`
 
-Use `bindNexusStore(definition, existingStore, options)` for an already-created
+Use `bindNexusStore(token, existingStore, options)` for an already-created
 Zustand store, including one composed with `persist`, `immer`, `devtools`, or
 `subscribeWithSelector`. The same options apply to both creation paths.
 

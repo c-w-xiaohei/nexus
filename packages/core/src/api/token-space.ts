@@ -1,6 +1,7 @@
 import type { AdapterModel, ConnectionTargetOf } from "@/types/adapter-model";
 import { NexusUsageError } from "@/errors";
 import { isPlainTarget, Token, type TokenOptions } from "./token";
+import { StoreToken, type StoreValidationSchemas } from "../state/contract";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
@@ -60,6 +61,48 @@ export class TokenSpace<M extends AdapterModel> {
         throw error;
       },
     });
+  }
+
+  /** Creates a State token in this namespace with its inherited target. */
+  public storeToken<Store extends object>(
+    serviceName: string,
+    options?: {
+      defaultTarget?: ConnectionTargetOf<M>;
+      validation?: StoreValidationSchemas<Store>;
+    },
+  ): StoreToken<Store, M> {
+    return this.safeStoreToken(serviceName, options).match({
+      ok: (token) => token,
+      err: (error) => {
+        throw error;
+      },
+    });
+  }
+
+  public safeStoreToken<Store extends object>(
+    serviceName: string,
+    options?: {
+      defaultTarget?: ConnectionTargetOf<M>;
+      validation?: StoreValidationSchemas<Store>;
+    },
+  ): Result<StoreToken<Store, M>, Error> {
+    if (!serviceName.trim() || serviceName.includes(":")) {
+      return err(
+        new NexusUsageError(
+          "Token name must be non-empty and cannot contain ':'.",
+        ),
+      );
+    }
+    try {
+      return ok(
+        new StoreToken<Store, M>(`${this.fullPathValue}:${serviceName}`, {
+          defaultTarget: options?.defaultTarget ?? this.defaultTargetValue,
+          validation: options?.validation,
+        }),
+      );
+    } catch (error) {
+      return err(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   public safeToken<T>(

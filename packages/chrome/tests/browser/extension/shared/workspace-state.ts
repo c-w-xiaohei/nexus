@@ -1,5 +1,4 @@
-import { Token } from "@nexus-js/core";
-import type { NexusStoreServiceContract } from "@nexus-js/core/state";
+import { createStoreToken } from "@nexus-js/core/state";
 
 export interface WorkspaceState {
   readonly count: number;
@@ -9,13 +8,11 @@ export type WorkspaceStateActions = {
   increment(): Promise<number>;
 };
 
-export const WorkspaceStateToken = new Token<
-  NexusStoreServiceContract<WorkspaceState, WorkspaceStateActions>
+export const WorkspaceStateToken = createStoreToken<
+  WorkspaceState & WorkspaceStateActions
 >("nexus-e2e:workspace-state");
 
-export const workspaceStateDefinition = {
-  token: WorkspaceStateToken,
-};
+export const workspaceStateDefinition = WorkspaceStateToken;
 
 export const workspaceStateCreator = (
   set: (state: Partial<WorkspaceState>) => void,

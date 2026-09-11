@@ -25,10 +25,11 @@ import {
 import { safeParsePayload, safeValidateState } from "./protocol";
 import type { SyncEnvelope, TerminalReason } from "./protocol";
 import type {
-  ActionFunction,
-  NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteActions,
+  StoreActionKeys,
+  StoreData,
+  StoreToken,
 } from "./contract";
 
 const PublicationOptionsSchema = z.object({
@@ -39,24 +40,24 @@ const PublicationOptionsSchema = z.object({
 });
 
 export interface BindNexusStoreOptions<
-  T,
-  S,
-  A,
-  Keys extends readonly (keyof A & string)[] = readonly (keyof A & string)[],
+  Store extends object,
+  Keys extends readonly StoreActionKeys<Store>[] =
+    readonly StoreActionKeys<Store>[],
 > extends z.input<typeof PublicationOptionsSchema> {
   /** Pure projection of the data this provider may share. */
-  snapshot(state: T): S;
+  snapshot(state: Store): StoreData<Store>;
   /** Only these local action keys become remote capabilities. */
   expose: Keys &
-    (Exclude<keyof A, Keys[number]> extends never ? unknown : never);
+    (Exclude<StoreActionKeys<Store>, Keys[number]> extends never
+      ? unknown
+      : never);
 }
 
 export interface NexusStoreBinding<
-  S extends object,
-  A extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
 > extends Disposable {
-  provider: ServiceProvider<NexusStoreServiceContract<S, A>, M>;
+  provider: ServiceProvider<NexusStoreServiceContract<Store>, M>;
   /** Stops this binding and its remote sessions; the original store remains usable. */
   destroy(): void;
 }
@@ -72,18 +73,19 @@ function unwrapResultOrThrow<T>(result: Result<T, unknown>): T {
  * Remote actions wait for their caller's fixed publication batch, without transactions.
  */
 export function bindNexusStore<
-  T extends A,
-  S extends object,
-  A extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
-  const Keys extends readonly (keyof A & string)[],
+  const Keys extends readonly StoreActionKeys<Store>[],
 >(
-  definition: NexusStoreDefinition<S, A, M>,
-  store: { getState(): T; subscribe: StoreApi<NoInfer<T>>["subscribe"] },
-  options: BindNexusStoreOptions<NoInfer<T>, S, A, Keys>,
-): NexusStoreBinding<S, A, M> {
+  token: StoreToken<Store, M>,
+  store: {
+    getState(): Store;
+    subscribe: StoreApi<NoInfer<Store>>["subscribe"];
+  },
+  options: BindNexusStoreOptions<NoInfer<Store>, Keys>,
+): NexusStoreBinding<Store, M> {
   type Subscription = {
-    callback: Parameters<NexusStoreServiceContract<S, A>["subscribe"]>[0];
+    callback: Parameters<NexusStoreServiceContract<Store>["subscribe"]>[0];
     owner?: string;
     delivery: ReturnType<typeof createDelivery>;
     inFlight: Set<ReturnType<typeof createDelivery>>;
@@ -152,7 +154,7 @@ export function bindNexusStore<
       .andThen(({ state }) =>
         safeValidateState(
           state,
-          definition.validation?.state,
+          token.validation?.state,
           "Invalid State snapshot.",
         ),
       )
@@ -185,7 +187,7 @@ export function bindNexusStore<
 
   const safeNotify = (
     callback: Subscription["callback"],
-    event: SyncEnvelope<S, A>,
+    event: SyncEnvelope<StoreData<Store>, Store>,
   ) =>
     Result.tryPromise({
       // Direct callbacks need the same finite boundary and isolated data as RPC callbacks.
@@ -243,7 +245,7 @@ export function bindNexusStore<
     subscription: Subscription,
     delivery: ReturnType<typeof createDelivery>,
     event: Result<
-      Exclude<SyncEnvelope<S, A>, { type: "terminal" }>,
+      Exclude<SyncEnvelope<StoreData<Store>, Store>, { type: "terminal" }>,
       InferErr<DeliveryResult>
     >,
   ) => {
@@ -302,7 +304,7 @@ export function bindNexusStore<
 
   const safeInvoke = async (
     subscription: Subscription,
-    name: keyof A & string,
+    name: StoreActionKeys<Store>,
     values: unknown[],
   ) => {
     if (contexts.has(values.at(-1) as ServiceInvocationContext)) values.pop();
@@ -312,13 +314,17 @@ export function bindNexusStore<
     const execution = await Result.tryPromise({
       try: async () => {
         const current = store.getState();
-        return Reflect.apply(current[name], current, values);
+        return Reflect.apply(
+          current[name] as (...args: unknown[]) => unknown,
+          current,
+          values,
+        );
       },
       catch: (cause) =>
         new NexusStoreActionError("Store action failed.", { cause }),
     });
     if (execution.isErr()) return execution;
-    const schema = definition.validation?.actionResults?.[name];
+    const schema = token.validation?.actionResults?.[name];
     if (schema) {
       const validated = safeParsePayload(
         schema,
@@ -357,13 +363,14 @@ export function bindNexusStore<
       inFlight: new Set(),
     };
     subscriptions.add(subscription);
-    const actions: Record<string, ActionFunction> = Object.fromEntries(
-      names.map((name) => [
-        name,
-        (...values: unknown[]) =>
-          safeInvoke(subscription, name, values).then(unwrapResultOrThrow),
-      ]),
-    );
+    const actions: Record<string, (...args: unknown[]) => Promise<unknown>> =
+      Object.fromEntries(
+        names.map((name) => [
+          name,
+          (...values: unknown[]) =>
+            safeInvoke(subscription, name, values).then(unwrapResultOrThrow),
+        ]),
+      );
     // Reserve init before invoking the callback: its reentrant writes own a new delivery.
     deliver(
       subscription,
@@ -371,7 +378,7 @@ export function bindNexusStore<
       Result.ok({
         type: "init",
         ...snapshot.value,
-        actions: actions as RemoteActions<A>,
+        actions: actions as unknown as RemoteActions<Store>,
         unsubscribe: () => closeSubscription(subscription),
       }),
     );
@@ -407,7 +414,7 @@ export function bindNexusStore<
     connections.clear();
   };
   return {
-    provider: { token: definition.token, service },
+    provider: { token, service },
     destroy,
     [Symbol.dispose]: destroy,
   };
@@ -415,17 +422,16 @@ export function bindNexusStore<
 
 /** Convenience creation; returns the original Zustand API, including middleware mutators. */
 export function createNexusStore<
-  S extends object,
-  A extends Record<string, ActionFunction>,
+  Store extends object,
   M extends AdapterModel,
   Mos extends [StoreMutatorIdentifier, unknown][] = [],
-  const Keys extends readonly (keyof A & string)[] = readonly (keyof A &
-    string)[],
+  const Keys extends readonly StoreActionKeys<Store>[] =
+    readonly StoreActionKeys<Store>[],
 >(
-  definition: NexusStoreDefinition<S, A, M>,
-  creator: StateCreator<S & A, [], Mos>,
-  options: BindNexusStoreOptions<S & A, S, A, Keys>,
-): NexusStoreBinding<S, A, M> & { store: Mutate<StoreApi<S & A>, Mos> } {
-  const store = createStore<S & A>()(creator);
-  return { store, ...bindNexusStore(definition, store, options) };
+  token: StoreToken<Store, M>,
+  creator: StateCreator<Store, [], Mos>,
+  options: BindNexusStoreOptions<NoInfer<Store>, Keys>,
+): NexusStoreBinding<Store, M> & { store: Mutate<StoreApi<Store>, Mos> } {
+  const store = createStore<Store>()(creator);
+  return { store, ...bindNexusStore(token, store, options) };
 }

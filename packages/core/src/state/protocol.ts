@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Result } from "better-result";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { NexusStoreProtocolError } from "./errors";
-import type { ActionFunction, RemoteActions } from "./contract";
+import type { RemoteActions } from "./contract";
 
 const snapshot = z.object({
   storeInstanceId: z.string(),
@@ -50,18 +50,18 @@ export type SnapshotEnvelope<S = unknown> = Omit<
 > & { state: S };
 export type TerminalEnvelope = z.infer<typeof TerminalEnvelopeSchema>;
 export type TerminalReason = TerminalEnvelope["reason"];
-export type InitEnvelope<S, A extends Record<string, ActionFunction>> = Omit<
+export type InitEnvelope<S, Store extends object> = Omit<
   z.infer<typeof InitEnvelopeSchema>,
   "state" | "actions" | "unsubscribe"
 > & {
   state: S;
-  actions: RemoteActions<A>;
+  actions: RemoteActions<Store>;
   unsubscribe(): void | Promise<void>;
 };
-export type SyncEnvelope<
-  S = unknown,
-  A extends Record<string, ActionFunction> = Record<string, ActionFunction>,
-> = InitEnvelope<S, A> | SnapshotEnvelope<S> | TerminalEnvelope;
+export type SyncEnvelope<S = unknown, Store extends object = object> =
+  | InitEnvelope<S, Store>
+  | SnapshotEnvelope<S>
+  | TerminalEnvelope;
 
 /** Preserves schema output and converts validation/getter throws at the boundary. */
 export const safeParsePayload = <T>(

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { Token } from "../api/token";
 import { createNexusStore } from "./bind-store";
+import { createStoreToken } from "./contract";
 import { NexusStoreActionError } from "./errors";
 import type { NexusStoreServiceContract } from "./contract";
 import type { SyncEnvelope } from "./protocol";
@@ -13,13 +13,13 @@ type CounterActions = {
 };
 
 const token = () =>
-  new Token<NexusStoreServiceContract<CounterState, CounterActions>>(
+  createStoreToken<CounterState & CounterActions>(
     `state:host-runtime:${Math.random()}`,
   );
 
 const createCounter = () =>
   createNexusStore(
-    { token: token() },
+    token(),
     (set, get) => ({
       count: 0,
       increment(by: number) {
@@ -35,12 +35,13 @@ const createCounter = () =>
   );
 
 const subscribe = async (
-  service: NexusStoreServiceContract<CounterState, CounterActions>,
-  onSync: (event: SyncEnvelope<CounterState, CounterActions>) => unknown = () =>
-    undefined,
+  service: NexusStoreServiceContract<CounterState & CounterActions>,
+  onSync: (
+    event: SyncEnvelope<CounterState, CounterState & CounterActions>,
+  ) => unknown = () => undefined,
 ) => {
   let init!: Extract<
-    SyncEnvelope<CounterState, CounterActions>,
+    SyncEnvelope<CounterState, CounterState & CounterActions>,
     { type: "init" }
   >;
   await service.subscribe(async (event) => {
@@ -92,11 +93,7 @@ describe("native State provider runtime", () => {
       addAfter(by: number, wait: Promise<void>): Promise<number>;
     };
     const { store, destroy } = createNexusStore(
-      {
-        token: new Token<NexusStoreServiceContract<CounterState, Actions>>(
-          "state:serial",
-        ),
-      },
+      createStoreToken<CounterState & Actions>("state:serial"),
       (set, get) => ({
         count: 0,
         async addAfter(by: number, wait: Promise<void>) {
@@ -134,15 +131,10 @@ describe("native State provider runtime", () => {
 
   it("allows invalid local state while rejecting its remote publication", async () => {
     const { store, destroy } = createNexusStore(
-      {
-        token: new Token<
-          NexusStoreServiceContract<
-            CounterState,
-            Pick<CounterActions, "increment">
-          >
-        >("state:validate"),
-        validation: { state: z.object({ count: z.number().max(1) }) },
-      },
+      createStoreToken<CounterState & Pick<CounterActions, "increment">>(
+        "state:validate",
+        { validation: { state: z.object({ count: z.number().max(1) }) } },
+      ),
       (set, get) => ({
         count: 0,
         increment(by: number) {

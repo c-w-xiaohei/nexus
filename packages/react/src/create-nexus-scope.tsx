@@ -1,9 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { AdapterModel, NexusInstance } from "@nexus-js/core";
-import type {
-  ActionFunction,
-  NexusStoreDefinition,
-} from "@nexus-js/core/state";
+import type { StoreToken } from "@nexus-js/core/state";
 import {
   useRemoteStoreWithNexus,
   type UseRemoteStoreOptions,
@@ -17,19 +14,13 @@ import {
 export interface NexusScope<M extends AdapterModel> {
   readonly NexusProvider: (props: NexusProviderProps<M>) => ReactNode;
   useNexus(): NexusInstance<M>;
-  useRemoteStore<
-    TState extends object,
-    TActions extends Record<string, ActionFunction>,
-  >(
-    definition: NexusStoreDefinition<TState, TActions, M>,
+  useRemoteStore<Store extends object>(
+    token: StoreToken<Store, M>,
     options?: UseRemoteStoreOptions<M>,
-  ): UseRemoteStoreResult<TState, TActions>;
-  createRemoteStoreScope<
-    TState extends object,
-    TActions extends Record<string, ActionFunction>,
-  >(
-    definition: NexusStoreDefinition<TState, TActions, M>,
-  ): RemoteStoreScope<TState, TActions, M>;
+  ): UseRemoteStoreResult<Store>;
+  createRemoteStoreScope<Store extends object>(
+    token: StoreToken<Store, M>,
+  ): RemoteStoreScope<Store, M>;
 }
 
 export interface NexusProviderProps<M extends AdapterModel = AdapterModel> {
@@ -58,23 +49,17 @@ export const createNexusScope = <M extends AdapterModel>(): NexusScope<M> => {
     return nexus;
   };
 
-  const useRemoteStore = <
-    TState extends object,
-    TActions extends Record<string, ActionFunction>,
-  >(
-    definition: NexusStoreDefinition<TState, TActions, M>,
+  const useRemoteStore = <Store extends object>(
+    token: StoreToken<Store, M>,
     options: UseRemoteStoreOptions<M> = {},
-  ): UseRemoteStoreResult<TState, TActions> => {
-    return useRemoteStoreWithNexus(useNexus(), definition, options);
+  ): UseRemoteStoreResult<Store> => {
+    return useRemoteStoreWithNexus(useNexus(), token, options);
   };
 
-  const createRemoteStoreScope = <
-    TState extends object,
-    TActions extends Record<string, ActionFunction>,
-  >(
-    definition: NexusStoreDefinition<TState, TActions, M>,
-  ): RemoteStoreScope<TState, TActions, M> => {
-    return createRemoteStoreScopeWithNexus(definition, useRemoteStore);
+  const createRemoteStoreScope = <Store extends object>(
+    token: StoreToken<Store, M>,
+  ): RemoteStoreScope<Store, M> => {
+    return createRemoteStoreScopeWithNexus(token, useRemoteStore);
   };
 
   return { NexusProvider, useNexus, useRemoteStore, createRemoteStoreScope };

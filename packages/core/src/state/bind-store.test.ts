@@ -8,7 +8,6 @@ import {
 } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import { z } from "zod";
-import { Token } from "../api/token";
 import { createStarNetwork } from "../utils/test-utils";
 import {
   SERVICE_INVOKE_START,
@@ -21,12 +20,11 @@ import { connectNexusStore } from "./connect-store";
 import { Result } from "better-result";
 import type { InitEnvelope, SyncEnvelope } from "./protocol";
 import type { NexusStoreServiceContract } from "./contract";
+import { createStoreToken } from "./contract";
 
 type Data = { count: number };
 type Actions = { increment(by: number): number };
-const definition = {
-  token: new Token<NexusStoreServiceContract<Data, Actions>>("state:buffered"),
-};
+const definition = createStoreToken<Data & Actions>("state:buffered");
 const options = {
   snapshot: (state: Data) => ({ count: state.count }),
   expose: ["increment"] as const,
@@ -52,10 +50,11 @@ function setup() {
   return { store, ...binding };
 }
 async function subscribe(
-  service: NexusStoreServiceContract<Data, Actions>,
-  callback: (event: SyncEnvelope<Data, Actions>) => unknown = () => undefined,
+  service: NexusStoreServiceContract<Data & Actions>,
+  callback: (event: SyncEnvelope<Data, Data & Actions>) => unknown = () =>
+    undefined,
 ) {
-  let init!: InitEnvelope<Data, Actions>;
+  let init!: InitEnvelope<Data, Data & Actions>;
   await service.subscribe(async (event) => {
     if (event.type === "init") init = event;
     await callback(event);
@@ -319,7 +318,7 @@ describe("buffered Zustand binding", () => {
   });
 
   it("finishes mirror status notifications after reentrant destruction without reviving it", () => {
-    const mirror = createRemoteStore<Data, Actions>();
+    const mirror = createRemoteStore<Data & Actions>();
     const changes: string[] = [];
     mirror.onSync({
       type: "init",
@@ -475,7 +474,7 @@ describe("buffered Zustand binding", () => {
     >({
       center: {
         meta: { context: "host" },
-        providers: { [definition.token.id]: binding.provider.service },
+        providers: { [definition.id]: binding.provider.service },
       },
       leaves: ["a", "b"].map((context) => ({
         meta: { context },
@@ -641,7 +640,7 @@ describe("buffered Zustand binding", () => {
       options,
     );
     cleanup.push(binding.destroy);
-    const remote = createRemoteStore<Data, Actions>();
+    const remote = createRemoteStore<Data & Actions>();
     cleanup.push(() => remote.store.destroy());
     await binding.provider.service.subscribe(remote.onSync);
     const failed = remote.store.actions
@@ -728,14 +727,9 @@ describe("buffered Zustand binding", () => {
   it("does not serialize async actions or roll back completed Zustand sets", async () => {
     const started = deferred();
     const release = deferred();
-    const contract = {
-      token: new Token<
-        NexusStoreServiceContract<
-          Data,
-          { slow(): Promise<void>; fast(): void; fail(): void }
-        >
-      >("state:interleaving"),
-    };
+    const contract = createStoreToken<
+      Data & { slow(): Promise<void>; fast(): void; fail(): void }
+    >("state:interleaving");
     const { store, destroy } = createNexusStore(
       contract,
       (set) => ({
@@ -809,7 +803,7 @@ describe("buffered Zustand binding", () => {
     const { store, provider } = setup();
     await subscribe(provider.service);
     store.getState().increment(1);
-    const remote = createRemoteStore<Data, Actions>();
+    const remote = createRemoteStore<Data & Actions>();
     cleanup.push(() => remote.store.destroy());
     await provider.service.subscribe(remote.onSync);
     expect(remote.store.getState()).toEqual({ count: 1 });
@@ -958,7 +952,7 @@ describe("buffered Zustand binding", () => {
       options,
     );
     cleanup.push(binding.destroy);
-    const remote = createRemoteStore<Data, Actions>(validation);
+    const remote = createRemoteStore<Data & Actions>(validation);
     cleanup.push(() => remote.store.destroy());
     await binding.provider.service.subscribe(remote.onSync);
     expect(store.getState().count).toBe(1);

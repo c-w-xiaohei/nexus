@@ -100,11 +100,13 @@ backgroundNexus.provide(SettingsToken, settingsService, {
 
 Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation files should expose providers through `@xxNexus.Expose(...)` or `xxNexus.provide(...)`, not configure endpoints.
 
-For Nexus State, keep a plain shared `{ token, validation? }` definition separate
-from the host's Zustand creator. The typed Token supplies state, action, and model
-inference; use `satisfies NexusStoreDefinition<...>` only when an explicit check
-is useful. Use `createNexusStore(definition, creator, options)`
-for a new store or `bindNexusStore(definition, existingStore, options)` for an
+For Nexus State, declare one shared Store type containing data and methods and
+create its contract with `createStoreToken<Store>(id, { validation? })`, separate
+from the host's Zustand creator. Use `TokenSpace.storeToken<Store>(...)` to inherit
+namespace IDs and default targets. Pass this token directly; do not create a
+definition wrapper or describe the internal wire service. Use
+`createNexusStore(token, creator, options)`
+for a new store or `bindNexusStore(token, existingStore, options)` for an
 existing one. The required options are a pure `snapshot` projection and an
 explicit `expose` action allowlist; include the contract's action keys in that
 runtime list. The returned `store` is the original Zustand API, so local calls

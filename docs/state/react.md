@@ -16,7 +16,7 @@ import type { RemoteStore } from "@nexus-js/core/state";
 import { useStore } from "zustand";
 ```
 
-The examples reuse `counterStore`, `CounterState`, and `CounterActions` from
+The examples reuse `counterStore` and its `CounterStore` contract from
 shared contract code, plus an already configured `nexus` instance.
 
 ## Shared Subtree Ownership
@@ -75,7 +75,7 @@ Store should share a scope rather than each calling `useRemoteStore()`.
 
 ## Direct Handle Selection
 
-`useRemoteStore(definition, options)` owns async IPC acquisition, replacement,
+`useRemoteStore(token, options)` owns async IPC acquisition, replacement,
 latest-wins behavior, and cleanup. It returns `{ store, pending, error, reconnect }`
 and does not subscribe to data or lifecycle updates. While acquiring, `pending`
 is true and `store`/`error` are null. An attempt finishes with either a store or
@@ -115,11 +115,7 @@ function CounterRemote() {
   return <CounterValue store={remote.store} />;
 }
 
-function CounterValue({
-  store,
-}: {
-  store: RemoteStore<CounterState, CounterActions>;
-}) {
+function CounterValue({ store }: { store: RemoteStore<CounterStore> }) {
   const count = useStore(store, (state) => state.count);
   const phase = useStoreStatus(store, (status) => status.type);
   if (phase !== "ready") return <span>{phase}</span>;
@@ -139,9 +135,9 @@ or timer to request replacement. Both create a new RemoteStore handle using the
 latest inputs; neither revives a terminal handle, replays actions, nor
 guarantees availability. Overlapping attempts are latest-wins.
 
-Changing the target value, definition, Nexus instance, or timeout also starts a
+Changing the target value, token, Nexus instance, or timeout also starts a
 new attempt. A new inline `where` function alone does not reconnect; the next
-attempt uses the current predicate. Keep shared definitions outside render.
+attempt uses the current predicate. Keep shared tokens outside render.
 
 Replacement immediately hides the previous handle and shows selector fallback.
 Effect cleanup destroys that handle without waiting for the next attempt to

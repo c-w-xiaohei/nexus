@@ -8,7 +8,7 @@ For general `createMockNexus()` setup and React provider examples, see the
 [application testing guide](../testing/README.md). This page covers the parts
 specific to Nexus State.
 
-For Nexus State app code, prefer registering the real store service contract from `createNexusStore(...)` instead of hand-writing `NexusStoreServiceContract` objects:
+For Nexus State app code, prefer registering the real provider from `createNexusStore(...)` with a shared `createStoreToken<Store>(...)` token instead of hand-writing wire service objects:
 
 ```ts
 const mock = createMockNexus();

@@ -32,9 +32,10 @@ import {
   NexusStoreProtocolError,
 } from "@/state/errors";
 import type {
-  NexusStoreDefinition,
   NexusStoreServiceContract,
   RemoteActions,
+  StoreData,
+  StoreToken,
 } from "@/state/contract";
 import type {
   SyncEnvelope,
@@ -373,32 +374,23 @@ export const relayService = <
  * Upstream replacement ends this provider; acquire a newly registered relay session.
  */
 export const relayNexusStore = <
-  TState extends object,
-  TActions extends Record<string, (...args: any[]) => any>,
+  Store extends object,
   DownstreamM extends AdapterModel,
   UpstreamM extends AdapterModel,
 >(
-  definition:
-    | NexusStoreDefinition<TState, TActions, DownstreamM>
-    | NexusStoreDefinition<TState, TActions>,
+  token: StoreToken<Store, DownstreamM> | StoreToken<Store>,
   options: RelayNexusStoreOptions<DownstreamM, UpstreamM>,
-): ServiceProvider<
-  NexusStoreServiceContract<TState, TActions>,
-  DownstreamM
-> => {
-  const upstreamToken = new Token<
-    NexusStoreServiceContract<TState, TActions>,
-    UpstreamM
-  >(definition.token.id);
+): ServiceProvider<NexusStoreServiceContract<Store>, DownstreamM> => {
+  const upstreamToken = new Token<NexusStoreServiceContract<Store>, UpstreamM>(
+    token.id,
+  );
   const relayStoreInstanceId = createRelaySessionId();
   const logger = new Logger("L3 -> RelayStore");
   let identity: string | undefined;
   let latestVersion = 0;
   let terminalError: NexusStoreDisconnectedError | null = null;
   type Subscription = {
-    onSync: Parameters<
-      NexusStoreServiceContract<TState, TActions>["subscribe"]
-    >[0];
+    onSync: Parameters<NexusStoreServiceContract<Store>["subscribe"]>[0];
     owner?: string;
     cleanup: Set<() => void>;
     stop(): void;
@@ -445,7 +437,7 @@ export const relayNexusStore = <
     origin: invocationContext.sourceIdentity as ContextMetaOf<DownstreamM>,
     relay: invocationContext.localIdentity as ContextMetaOf<DownstreamM>,
     connection: invocationContext.platform as ConnectionMetaOf<DownstreamM>,
-    tokenId: definition.token.id,
+    tokenId: token.id,
   });
 
   const safeAuthorize = async (
@@ -571,7 +563,7 @@ export const relayNexusStore = <
             return Result.ok(undefined);
           const state = yield* safeValidateState(
             event.state,
-            definition.validation?.state,
+            token.validation?.state,
             "Invalid relay state.",
           );
           if (!identity) {
@@ -583,17 +575,17 @@ export const relayNexusStore = <
           const version = event.version;
           latestVersion = Math.max(latestVersion, version);
           const snapshot = yield* Result.try({
-            try: () => structuredClone(state),
+            try: () => structuredClone(state) as object,
             catch: (cause) =>
               new NexusStoreProtocolError("Invalid relay state.", {
                 cause,
               }),
           });
-          let projected: SyncEnvelope<TState, TActions> = {
+          let projected: SyncEnvelope<StoreData<Store>, Store> = {
             type: "snapshot",
             storeInstanceId: relayStoreInstanceId,
             version,
-            state: snapshot,
+            state: snapshot as StoreData<Store>,
           };
           if (event.type === "init") {
             initialized = true;
@@ -639,7 +631,7 @@ export const relayNexusStore = <
             projected = {
               ...projected,
               type: "init",
-              actions: actions as RemoteActions<TActions>,
+              actions: actions as unknown as RemoteActions<Store>,
               unsubscribe: subscription.stop,
             };
           }
@@ -743,10 +735,7 @@ export const relayNexusStore = <
   };
 
   return {
-    token: definition.token as Token<
-      NexusStoreServiceContract<TState, TActions>,
-      DownstreamM
-    >,
+    token,
     service,
   };
 };

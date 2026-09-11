@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { Token } from "../../src/api/token";
 import { RELEASE_PROXY_SYMBOL } from "../../src/types/symbols";
 import { createStarNetwork } from "../../src/utils/test-utils";
 import { createNexusStore } from "../../src/state/bind-store";
+import { createStoreToken } from "../../src/state/contract";
 import { connectNexusStore } from "../../src/state/connect-store";
 import { createRemoteStore } from "../../src/state/remote-store";
 import {
@@ -13,16 +13,14 @@ import {
 } from "../../src/service/service-invocation-hooks";
 import { z } from "zod";
 import type {
-  ActionFunction,
   NexusStoreServiceContract,
+  StoreData,
 } from "../../src/state/contract";
 import type { InitEnvelope, SyncEnvelope } from "../../src/state/protocol";
 
 type Data = { count: number; nested: { value: number } };
 type Actions = { add(by: number): number; fail(): void };
-const token = new Token<NexusStoreServiceContract<Data, Actions>>(
-  "state:clean",
-);
+const token = createStoreToken<Data & Actions>("state:clean");
 const disposals: Array<() => void> = [];
 afterEach(() => {
   for (const dispose of disposals.splice(0)) dispose();
@@ -30,7 +28,7 @@ afterEach(() => {
 
 const createHost = () => {
   const host = createNexusStore(
-    { token },
+    token,
     (set, get) => ({
       count: 0,
       nested: { value: 0 },
@@ -62,14 +60,12 @@ const deferred = <T = void>() => {
   return { promise, resolve };
 };
 
-async function subscribe<
-  TState extends object,
-  TActions extends Record<string, ActionFunction>,
->(
-  service: NexusStoreServiceContract<TState, TActions>,
-  onSync: (event: SyncEnvelope<TState, TActions>) => unknown = () => undefined,
-): Promise<InitEnvelope<TState, TActions>> {
-  let initial!: InitEnvelope<TState, TActions>;
+async function subscribe<Store extends object>(
+  service: NexusStoreServiceContract<Store>,
+  onSync: (event: SyncEnvelope<StoreData<Store>, Store>) => unknown = () =>
+    undefined,
+): Promise<InitEnvelope<StoreData<Store>, Store>> {
+  let initial!: InitEnvelope<StoreData<Store>, Store>;
   await service.subscribe(async (event) => {
     if (event.type === "init") initial = event;
     await onSync(event);
@@ -97,22 +93,19 @@ describe("State callback lifecycle across host and mirror", () => {
 
   it("validates action results without applying schema transforms", async () => {
     const { provider, store, destroy } = createNexusStore(
-      {
-        token: new Token<
-          NexusStoreServiceContract<
-            { count: number },
-            { add(by: number): string }
-          >
-        >("state:result-validation"),
-        validation: {
-          actionResults: {
-            add: z
-              .string()
-              .min(2)
-              .transform((value) => value.toUpperCase()),
+      createStoreToken<{ count: number } & { add(by: number): string }>(
+        "state:result-validation",
+        {
+          validation: {
+            actionResults: {
+              add: z
+                .string()
+                .min(2)
+                .transform((value) => value.toUpperCase()),
+            },
           },
         },
-      },
+      ),
       (set, get) => ({
         count: 0,
         add(by) {
@@ -135,7 +128,7 @@ describe("State callback lifecycle across host and mirror", () => {
   });
 
   it("lets an early terminal win over init and reclaims late capabilities", () => {
-    const remote = createRemoteStore<Data, Actions>();
+    const remote = createRemoteStore<Data & Actions>();
     const unsubscribe = Object.assign(vi.fn(), {
       [RELEASE_PROXY_SYMBOL]: vi.fn(),
     });
@@ -170,7 +163,7 @@ describe("State callback lifecycle across host and mirror", () => {
   });
 
   it("terminalizes malformed event getters and releases the active subscription", () => {
-    const client = createRemoteStore<Data, Actions>();
+    const client = createRemoteStore<Data & Actions>();
     const unsubscribe = vi.fn();
     client.onSync({
       type: "init",
@@ -194,7 +187,7 @@ describe("State callback lifecycle across host and mirror", () => {
   it("rejects init delivery and removes the host listener when baseline validation fails", async () => {
     const { provider, store } = createHost();
     const callback = vi.fn();
-    const client = createRemoteStore<Data, Actions>({
+    const client = createRemoteStore<Data & Actions>({
       state: z.object({
         count: z.number().min(1),
         nested: z.object({ value: z.number() }),
@@ -217,14 +210,9 @@ describe("State callback lifecycle across host and mirror", () => {
     const started = deferred();
     const complete = deferred();
     const { store, destroy } = createNexusStore(
-      {
-        token: new Token<
-          NexusStoreServiceContract<
-            { count: number },
-            { delayed(): Promise<void> }
-          >
-        >("state:destroy-draft"),
-      },
+      createStoreToken<{ count: number } & { delayed(): Promise<void> }>(
+        "state:destroy-draft",
+      ),
       (set) => ({
         count: 0,
         async delayed() {
@@ -245,7 +233,7 @@ describe("State callback lifecycle across host and mirror", () => {
   });
 
   it("keeps status and snapshot notifications consistent when a listener destroys the mirror", () => {
-    const client = createRemoteStore<Data, Actions>();
+    const client = createRemoteStore<Data & Actions>();
     const unsubscribe = vi.fn();
     client.onSync({
       type: "init",
@@ -367,11 +355,10 @@ describe("State callback lifecycle across host and mirror", () => {
         },
       ],
     });
-    const failed = connectNexusStore(
-      network.get("client")!.nexus,
-      { token },
-      { target: { context: "host" }, timeout: 100 },
-    ).catch((error) => error);
+    const failed = connectNexusStore(network.get("client")!.nexus, token, {
+      target: { context: "host" },
+      timeout: 100,
+    }).catch((error) => error);
     await subscribed.promise;
     expect(await failed).toMatchObject({ code: "E_STORE_CONNECT" });
     reply.resolve();
@@ -414,11 +401,7 @@ describe("State callback lifecycle across host and mirror", () => {
     const gate = deferred();
     const started = deferred();
     const { store, destroy } = createNexusStore(
-      {
-        token: new Token<NexusStoreServiceContract<State, Methods>>(
-          "state:drafts",
-        ),
-      },
+      createStoreToken<State & Methods>("state:drafts"),
       (set, get) => ({
         count: 0,
         obsolete: true,
@@ -466,17 +449,17 @@ describe("State callback lifecycle across host and mirror", () => {
 
   it("keeps raw local data while validating outgoing snapshots", async () => {
     type State = { count: number; map: Map<string, bigint> };
-    const contract = {
-      token: new Token<
-        NexusStoreServiceContract<State, { add(by: number): void }>
-      >("state:rich"),
-      validation: {
-        state: z.object({
-          count: z.number().max(2),
-          map: z.map(z.string(), z.bigint()),
-        }),
+    const contract = createStoreToken<State & { add(by: number): void }>(
+      "state:rich",
+      {
+        validation: {
+          state: z.object({
+            count: z.number().max(2),
+            map: z.map(z.string(), z.bigint()),
+          }),
+        },
       },
-    };
+    );
     const { store, destroy } = createNexusStore(
       contract,
       (set, get) => ({
@@ -496,7 +479,7 @@ describe("State callback lifecycle across host and mirror", () => {
   });
 
   it("applies early updates after baseline, deduplicates versions, and freezes a stale handle", () => {
-    const remote = createRemoteStore<Data, Actions>();
+    const remote = createRemoteStore<Data & Actions>();
     const unsubscribe = vi.fn();
     const snapshot = (version: number, storeInstanceId = "one") => ({
       type: "snapshot",
@@ -587,7 +570,7 @@ describe("State callback lifecycle across host and mirror", () => {
     });
     const remote = await connectNexusStore(
       network.get("client")!.nexus,
-      { token },
+      token,
       { target: { context: "host" } },
     );
     disposals.push(() => remote.destroy());
@@ -622,10 +605,10 @@ describe("State callback lifecycle across host and mirror", () => {
           actions,
         });
       }),
-    } as unknown as NexusStoreServiceContract<Data, Actions>;
+    } as unknown as NexusStoreServiceContract<Data & Actions>;
     const remote = await connectNexusStore(
       { create: async () => service } as any,
-      { token },
+      token,
     );
     remote.destroy();
     expect(unsubscribe).toHaveBeenCalledOnce();
@@ -662,11 +645,11 @@ describe("State callback lifecycle across host and mirror", () => {
           actions: {},
         });
       },
-    } as unknown as NexusStoreServiceContract<Data, Actions>;
+    } as unknown as NexusStoreServiceContract<Data & Actions>;
     try {
       const connected = connectNexusStore(
         { create: async () => service } as any,
-        { token },
+        token,
         { timeout: 10 },
       );
       const rejected = connected.catch((error) => error);

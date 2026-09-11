@@ -1,15 +1,11 @@
 import {
   Nexus,
-  Token,
   type AdapterModel,
   type ConnectionMetaOf,
   type ContextMetaOf,
   type ProxyStatus,
 } from "@nexus-js/core";
-import type {
-  NexusStoreServiceContract,
-  RemoteStoreStatus,
-} from "@nexus-js/core/state";
+import { createStoreToken, type RemoteStoreStatus } from "@nexus-js/core/state";
 import { createNexusScope } from "./create-nexus-scope.js";
 import { NexusProvider } from "./provider.js";
 import { useNexus } from "./use-nexus.js";
@@ -30,19 +26,17 @@ interface IframeModel extends AdapterModel {
   connectionTarget: { context: "iframe"; origin: string };
 }
 
-const chromeStore = {
-  token: new Token<
-    NexusStoreServiceContract<{ count: number }, { increment(): void }>,
-    ChromeModel
-  >("state:react:model-binding:chrome"),
-};
+interface CounterStore {
+  count: number;
+  increment(): void;
+}
 
-const iframeStore = {
-  token: new Token<
-    NexusStoreServiceContract<{ count: number }, { increment(): void }>,
-    IframeModel
-  >("state:react:model-binding:iframe"),
-};
+const chromeStore = createStoreToken<CounterStore, ChromeModel>(
+  "state:react:model-binding:chrome",
+);
+const iframeStore = createStoreToken<CounterStore, IframeModel>(
+  "state:react:model-binding:iframe",
+);
 
 const ChromeScope = createNexusScope<ChromeModel>();
 const IframeScope = createNexusScope<IframeModel>();
@@ -62,8 +56,8 @@ useProxyStatus(
 );
 
 const ChromeApp = () => {
-  ChromeScope.useNexus().safeCreate(chromeStore.token);
-  ChromeScope.useNexus().select(chromeStore.token, {
+  ChromeScope.useNexus().safeCreate(chromeStore);
+  ChromeScope.useNexus().select(chromeStore, {
     where: (
       context: ContextMetaOf<ChromeModel>,
       connection: ConnectionMetaOf<ChromeModel>,
@@ -92,10 +86,10 @@ const ChromeApp = () => {
 };
 
 const IframeApp = () => {
-  IframeScope.useNexus().safeCreate(iframeStore.token);
+  IframeScope.useNexus().safeCreate(iframeStore);
 
   // @ts-expect-error broadcast was replaced by selectMulticast().
-  IframeScope.useNexus().broadcast(iframeStore.token);
+  IframeScope.useNexus().broadcast(iframeStore);
 
   // @ts-expect-error An Iframe Nexus instance cannot provide a Chrome Context.
   return <ChromeScope.NexusProvider nexus={iframeNexus} />;
@@ -107,10 +101,7 @@ const DefaultApp = () => {
   return <NexusProvider nexus={new Nexus()} />;
 };
 
-declare const remoteStoreResult: UseRemoteStoreResult<
-  { count: number },
-  { increment(): void }
->;
+declare const remoteStoreResult: UseRemoteStoreResult<CounterStore>;
 
 // @ts-expect-error useStore accepts a concrete Store, not an acquisition result.
 useStore(remoteStoreResult);

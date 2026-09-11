@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { Token } from "../../src/api/token";
 import { createStarNetwork } from "../../src/utils/test-utils";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
 import {
   connectNexusStore,
+  createStoreToken,
   NexusStoreConnectError,
   NexusStoreProtocolError,
 } from "../../src/state";
@@ -16,10 +16,7 @@ type Model = TestAdapterModel<
   { from: string }
 >;
 
-const token = new Token<NexusStoreServiceContract<State, Actions>, Model>(
-  "state:protocol",
-);
-const definition = { token };
+const token = createStoreToken<State & Actions, Model>("state:protocol");
 
 describe("Nexus State protocol and errors", () => {
   it("classifies malformed callback init and handshake timeout", async () => {
@@ -43,7 +40,7 @@ describe("Nexus State protocol and errors", () => {
       ],
     });
     await expect(
-      connectNexusStore(network.get("popup")!.nexus, definition, {
+      connectNexusStore(network.get("popup")!.nexus, token, {
         target: { context: "background" },
       }),
     ).rejects.toBeInstanceOf(NexusStoreProtocolError);
@@ -67,7 +64,7 @@ describe("Nexus State protocol and errors", () => {
       ],
     });
     await expect(
-      connectNexusStore(timeoutNetwork.get("popup")!.nexus, definition, {
+      connectNexusStore(timeoutNetwork.get("popup")!.nexus, token, {
         target: { context: "background" },
         timeout: 20,
       }),
@@ -93,7 +90,7 @@ describe("Nexus State protocol and errors", () => {
           },
           unsubscribe: () => undefined,
         }),
-    } as unknown as NexusStoreServiceContract<State, Actions>;
+    } as unknown as NexusStoreServiceContract<State & Actions>;
     const network = await createStarNetwork<
       { context: "background" | "popup" },
       { from: string }
@@ -115,7 +112,7 @@ describe("Nexus State protocol and errors", () => {
       resolveStarted = resolve;
     });
     started = resolveStarted;
-    const remote = await connectNexusStore(popup, definition, {
+    const remote = await connectNexusStore(popup, token, {
       target: { context: "background" },
     });
     const pending = remote.actions.noop();

@@ -1,8 +1,5 @@
 import { Nexus } from "@nexus-js/core";
-import {
-  createNexusStore,
-  type NexusStoreServiceContract,
-} from "@nexus-js/core/state";
+import { createNexusStore } from "@nexus-js/core/state";
 import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 import {
   RelayProfileToken,
@@ -11,15 +8,9 @@ import {
   iframeCounterStore,
   createCounterStoreCreator,
   relayFrameNonce,
-  type CounterActions,
-  type CounterState,
+  type CounterStore,
   type RelayProfileService,
 } from "./shared";
-
-type StoreImplementation = NexusStoreServiceContract<
-  CounterState,
-  CounterActions
->;
 
 const telemetry = {
   relayReady: false,
@@ -86,7 +77,7 @@ const { provider } = createNexusStore(
   iframeCounterStore,
   createCounterStoreCreator(),
   {
-    snapshot: (state: CounterState) => ({
+    snapshot: (state: CounterStore) => ({
       count: state.count,
       writes: state.writes,
     }),
@@ -98,6 +89,7 @@ const { provider } = createNexusStore(
     ],
   },
 );
+type StoreImplementation = typeof provider.service;
 const hostNexus = new Nexus<IframeAdapterModel>().configure({
   ...usingIframeParent({
     configure: false,

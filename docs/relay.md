@@ -83,7 +83,7 @@ import { Nexus, Token } from "@nexus-js/core";
 import {
   connectNexusStore,
   createNexusStore,
-  type NexusStoreServiceContract,
+  createStoreToken,
 } from "@nexus-js/core/state";
 import { relayNexusStore } from "@nexus-js/core/relay";
 import { chromeTarget } from "@nexus-js/chrome";
@@ -94,19 +94,18 @@ declare const chromeNexus: Nexus<ChromeAdapterModel>;
 declare const iframeParentNexus: Nexus<IframeAdapterModel>;
 declare const iframeChildNexus: Nexus<IframeAdapterModel>;
 
-type SessionState = { name: string };
-type SessionActions = { rename(name: string): void };
-type SessionService = NexusStoreServiceContract<SessionState, SessionActions>;
+interface SessionStore {
+  name: string;
+  rename(name: string): void;
+}
 
-const UpstreamSessionStoreToken = new Token<SessionService, ChromeAdapterModel>(
+const upstreamSessionStore = createStoreToken<SessionStore, ChromeAdapterModel>(
   "example:session-store",
 );
-const DownstreamSessionStoreToken = new Token<
-  SessionService,
+const downstreamSessionStore = createStoreToken<
+  SessionStore,
   IframeAdapterModel
 >("example:session-store");
-const upstreamSessionStore = { token: UpstreamSessionStoreToken };
-const downstreamSessionStore = { token: DownstreamSessionStoreToken };
 const { provider: sessionProvider } = createNexusStore(
   upstreamSessionStore,
   (set) => ({
@@ -123,15 +122,13 @@ const { provider: sessionProvider } = createNexusStore(
 chromeNexus.provide(sessionProvider);
 
 iframeParentNexus.provide(
-  relayNexusStore<
-    SessionState,
-    SessionActions,
-    IframeAdapterModel,
-    ChromeAdapterModel
-  >(downstreamSessionStore, {
-    forwardThrough: chromeNexus,
-    forwardTarget: chromeTarget.background(),
-  }),
+  relayNexusStore<SessionStore, IframeAdapterModel, ChromeAdapterModel>(
+    downstreamSessionStore,
+    {
+      forwardThrough: chromeNexus,
+      forwardTarget: chromeTarget.background(),
+    },
+  ),
 );
 ```
 

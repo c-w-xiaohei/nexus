@@ -10,11 +10,11 @@ import {
   type SyncEnvelope,
 } from "./protocol";
 import type {
-  ActionFunction,
-  NexusStoreValidationSchemas,
   RemoteActions,
   RemoteStore,
   RemoteStoreStatus,
+  StoreData,
+  StoreValidationSchemas,
 } from "./contract";
 
 type Failure = NexusStoreDisconnectedError | NexusStoreProtocolError;
@@ -24,19 +24,19 @@ type Failure = NexusStoreDisconnectedError | NexusStoreProtocolError;
  * proxies; this adapter only orders snapshots and releases subscription capabilities.
  * Returning from onSync acknowledges application, including local listener delivery.
  */
-export function createRemoteStore<
-  S extends object,
-  A extends Record<string, ActionFunction>,
->(validation?: NexusStoreValidationSchemas<S, A>) {
+export function createRemoteStore<Store extends object>(
+  validation?: StoreValidationSchemas<Store>,
+) {
   const logger = new Logger("StateMirror");
-  const mirror = createStore<{ state: S | null; status: RemoteStoreStatus }>(
-    () => ({ state: null, status: { type: "initializing" } }),
-  );
-  const buffered: SyncEnvelope<S, A>[] = [];
+  const mirror = createStore<{
+    state: StoreData<Store> | null;
+    status: RemoteStoreStatus;
+  }>(() => ({ state: null, status: { type: "initializing" } }));
+  const buffered: SyncEnvelope<StoreData<Store>, Store>[] = [];
   const cleanup = new Set<() => void>();
   const localUnsubscribers = new Set<() => void>();
-  let initialState: S | null = null;
-  let actions = {} as RemoteActions<A>;
+  let initialState: StoreData<Store> | null = null;
+  let actions = {} as RemoteActions<Store>;
   let failure: Failure | null = null;
   const isTerminal = () => {
     const { type } = mirror.getState().status;
@@ -102,7 +102,7 @@ export function createRemoteStore<
 
   // ===== Callback validation and snapshot ordering =====
 
-  const safeApplyEvent = (event: SyncEnvelope<S, A>) => {
+  const safeApplyEvent = (event: SyncEnvelope<StoreData<Store>, Store>) => {
     const { status } = mirror.getState();
     if (isTerminal()) return safeReady();
     if (
@@ -172,7 +172,7 @@ export function createRemoteStore<
           validation?.state,
           "Invalid snapshot state.",
         );
-      const event = parsed as SyncEnvelope<S, A>;
+      const event = parsed as SyncEnvelope<StoreData<Store>, Store>;
       if (event.type !== "init" && initialState === null) {
         buffered.push(event);
         return Result.ok(undefined);
@@ -209,7 +209,7 @@ export function createRemoteStore<
 
   // ===== Public synchronous read handle =====
 
-  const store: RemoteStore<S, A> = {
+  const store: RemoteStore<Store> = {
     get actions() {
       return actions;
     },

@@ -7,7 +7,7 @@ import {
   connectNexusStore,
   NexusStoreDisconnectedError,
   createNexusStore,
-  type NexusStoreServiceContract,
+  createStoreToken,
 } from "../../src/state";
 import type { IEndpoint } from "../../src/transport/types/endpoint";
 import type { IPort } from "../../src/transport/types/port";
@@ -62,12 +62,12 @@ const RelayProfileToken = new Token<RelayProfileService>(
   "core.integration.relay.profile",
 );
 
-const CounterStoreToken = new Token<
-  NexusStoreServiceContract<CounterState, CounterActions>,
+const CounterStoreToken = createStoreToken<
+  CounterState & CounterActions,
   RelayAdapterModel
 >("core.integration.relay.counter-store");
 
-const counterStore = { token: CounterStoreToken };
+const counterStore = CounterStoreToken;
 
 const counterCreator: StateCreator<CounterState & CounterActions> = (
   set,
@@ -298,10 +298,7 @@ async function createRelayHarness() {
   hostNexus.configure({
     providers: [
       {
-        token: counterStore.token as Token<
-          NexusStoreServiceContract<CounterState, CounterActions>,
-          RelayAdapterModel
-        >,
+        token: counterStore,
         service: instrumentedCounterService,
       },
     ],
@@ -338,8 +335,7 @@ async function createRelayHarness() {
         },
       ),
       relayNexusStore<
-        CounterState,
-        CounterActions,
+        CounterState & CounterActions,
         RelayAdapterModel,
         RelayAdapterModel
       >(counterStore, {
@@ -366,13 +362,7 @@ async function createRelayHarness() {
   });
 
   await Promise.all([
-    relayUpstreamNexus.create(
-      counterStore.token as Token<
-        NexusStoreServiceContract<CounterState, CounterActions>,
-        RelayAdapterModel
-      >,
-      { target: hostTarget },
-    ),
+    relayUpstreamNexus.create(counterStore, { target: hostTarget }),
     leafANexus.create(RelayProfileToken, { target: relayTarget }),
     leafBNexus.create(RelayProfileToken, { target: relayTarget }),
   ]);

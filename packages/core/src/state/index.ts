@@ -1,11 +1,9 @@
+export { createStoreToken, StoreToken } from "./contract.js";
 export type {
-  ActionFunction,
-  ActionArgs,
-  ActionResult,
   RemoteActions,
-  NexusStoreValidationSchemas,
-  NexusStoreServiceContract,
-  NexusStoreDefinition,
+  StoreActionKeys,
+  StoreData,
+  StoreValidationSchemas,
   RemoteStoreStatus,
   RemoteStore,
   StoreHandle,

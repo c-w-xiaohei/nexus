@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { Token } from "../../src/api/token";
 import { createStarNetwork } from "../../src/utils/test-utils";
 import type { TestAdapterModel } from "../../src/utils/test-utils";
-import { connectNexusStore, createNexusStore } from "../../src/state";
-import type { NexusStoreServiceContract } from "../../src/state/contract";
+import {
+  connectNexusStore,
+  createNexusStore,
+  createStoreToken,
+} from "../../src/state";
 
 type State = { count: number };
 type Actions = { increment(by: number): number };
@@ -13,10 +15,9 @@ type Model = TestAdapterModel<
 >;
 
 const makeStore = (id: string) => {
-  const token = new Token<NexusStoreServiceContract<State, Actions>, Model>(id);
-  const definition = { token };
+  const token = createStoreToken<State & Actions, Model>(id);
   const registration = createNexusStore(
-    definition,
+    token,
     (set, get) => ({
       count: 0,
       increment(by: number) {
@@ -29,19 +30,19 @@ const makeStore = (id: string) => {
       expose: ["increment"],
     },
   );
-  return { definition, registration };
+  return { token, registration };
 };
 
 describe("Nexus State lifecycle and cleanup", () => {
   it("synchronizes a native store and reports transport disconnect", async () => {
-    const { definition, registration } = makeStore("state:lifecycle:single");
+    const { token, registration } = makeStore("state:lifecycle:single");
     const network = await createStarNetwork<
       { context: "background" | "popup-a" },
       { from: string }
     >({
       center: {
         meta: { context: "background" },
-        providers: { [definition.token.id]: registration.provider.service },
+        providers: { [token.id]: registration.provider.service },
       },
       leaves: [
         {
@@ -51,7 +52,7 @@ describe("Nexus State lifecycle and cleanup", () => {
       ],
     });
     const popup = network.get("popup-a")!.nexus;
-    const remote = await connectNexusStore(popup as any, definition, {
+    const remote = await connectNexusStore(popup as any, token, {
       target: { context: "background" },
     });
     await expect(remote.actions.increment(1)).resolves.toBe(1);
@@ -70,14 +71,14 @@ describe("Nexus State lifecycle and cleanup", () => {
   });
 
   it("fans out committed snapshots and removes only the disconnected client", async () => {
-    const { definition, registration } = makeStore("state:lifecycle:fanout");
+    const { token, registration } = makeStore("state:lifecycle:fanout");
     const network = await createStarNetwork<
       { context: "background" | "popup-a" | "popup-b" },
       { from: string }
     >({
       center: {
         meta: { context: "background" },
-        providers: { [definition.token.id]: registration.provider.service },
+        providers: { [token.id]: registration.provider.service },
       },
       leaves: [
         {
@@ -92,14 +93,14 @@ describe("Nexus State lifecycle and cleanup", () => {
     });
     const remoteA = await connectNexusStore(
       network.get("popup-a")!.nexus,
-      definition,
+      token,
       {
         target: { context: "background" },
       },
     );
     const remoteB = await connectNexusStore(
       network.get("popup-b")!.nexus,
-      definition,
+      token,
       {
         target: { context: "background" },
       },

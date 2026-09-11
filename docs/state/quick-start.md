@@ -35,23 +35,17 @@ You will:
 ## 1. Define A Store
 
 ```ts
-import { Token } from "@nexus-js/core";
-import type { NexusStoreServiceContract } from "@nexus-js/core/state";
+import { createStoreToken } from "@nexus-js/core/state";
 
-type CounterState = { count: number };
-
-type CounterActions = {
+export interface CounterStore {
+  count: number;
   increment(by?: number): number;
   reset(): void;
-};
+}
 
-const CounterStoreToken = new Token<
-  NexusStoreServiceContract<CounterState, CounterActions>
->("example:counter-store");
-
-export const counterStore = {
-  token: CounterStoreToken,
-};
+export const counterStore = createStoreToken<CounterStore>(
+  "example:counter-store",
+);
 ```
 
 The contract is separate from the host's native Zustand creator. The binding

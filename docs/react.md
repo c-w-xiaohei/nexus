@@ -33,7 +33,7 @@ fails fast outside a provider.
 ## `createNexusScope()`
 
 Use a typed React scope when one application uses more than one adapter. The
-scope prevents a target or State definition for one adapter from being used
+scope prevents a target or State StoreToken for one adapter from being used
 with another adapter's Nexus instance:
 
 ```tsx

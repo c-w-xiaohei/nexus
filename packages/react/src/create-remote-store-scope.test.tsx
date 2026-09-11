@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
 import type { StoreApi } from "zustand/vanilla";
-import type { NexusStoreDefinition, RemoteStore } from "@nexus-js/core/state";
+import { createStoreToken, type RemoteStore } from "@nexus-js/core/state";
 import type { AdapterModel } from "@nexus-js/core";
 import {
   createRemoteStoreScopeWithNexus,
@@ -17,14 +17,11 @@ interface State {
   label?: string;
 }
 
-type Actions = Record<string, (...args: any[]) => any>;
 type Store = StoreApi<State>;
 
-const definition = {
-  token: { id: "state:scope-selection" },
-} as unknown as NexusStoreDefinition<State, Actions>;
+const token = createStoreToken<State>("state:scope-selection");
 
-const toRemoteStore = (store: Store): RemoteStore<State, Actions> => ({
+const toRemoteStore = (store: Store): RemoteStore<State> => ({
   actions: {},
   getState: store.getState,
   getInitialState: store.getInitialState,
@@ -85,7 +82,7 @@ describe("remote store scope selection", () => {
       };
     };
     const owner = createOwner(createRemote(null));
-    const Scope = createRemoteStoreScopeWithNexus(definition, owner.useOwner);
+    const Scope = createRemoteStoreScopeWithNexus(token, owner.useOwner);
     const { result } = renderHook(
       () => Scope.useSelector((state) => state.count, { fallback: -1 }),
       { wrapper: wrapperFor(Scope) },
@@ -107,7 +104,7 @@ describe("remote store scope selection", () => {
     const fallback = { count: -1 };
     const store = createStore(() => ({ count: 1, label: "one" }));
     const owner = createOwner(createRemote(null));
-    const Scope = createRemoteStoreScopeWithNexus(definition, owner.useOwner);
+    const Scope = createRemoteStoreScopeWithNexus(token, owner.useOwner);
     const { result } = renderHook(
       () =>
         Scope.useSelector(
@@ -131,7 +128,7 @@ describe("remote store scope selection", () => {
     const read = vi.spyOn(store, "getState");
     const subscribe = vi.spyOn(store, "subscribe");
     const owner = createOwner(createRemote(store));
-    const Scope = createRemoteStoreScopeWithNexus(definition, owner.useOwner);
+    const Scope = createRemoteStoreScopeWithNexus(token, owner.useOwner);
     const Selection = () => (
       <output>
         {Scope.useSelector((state) => state.count, { fallback: -1 })}

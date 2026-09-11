@@ -14,8 +14,8 @@ import {
   HOST_ORIGIN,
   iframeCounterStore,
   frameNonce,
-  type CounterActions,
   type CounterState,
+  type CounterStore,
 } from "./shared";
 
 const frameId = getRequiredFrameId();
@@ -83,12 +83,11 @@ const telemetry = {
   commits: [] as CounterState[],
   statuses: [] as string[],
   errors: [] as string[],
-  oldHandle: null as RemoteStore<CounterState, CounterActions> | null,
+  oldHandle: null as RemoteStore<CounterStore> | null,
 };
 
 const IframeNexusScope = createNexusScope<IframeAdapterModel>();
-let latestRemote: UseRemoteStoreResult<CounterState, CounterActions> | null =
-  null;
+let latestRemote: UseRemoteStoreResult<CounterStore> | null = null;
 
 function saveCurrentHandle() {
   telemetry.oldHandle = latestRemote?.store ?? null;
@@ -119,11 +118,7 @@ function CounterApp() {
   );
 }
 
-function StoreView({
-  store,
-}: {
-  store: RemoteStore<CounterState, CounterActions>;
-}) {
+function StoreView({ store }: { store: RemoteStore<CounterStore> }) {
   const snapshot = useStore(store);
   useEffect(() => {
     telemetry.commits.push(snapshot);

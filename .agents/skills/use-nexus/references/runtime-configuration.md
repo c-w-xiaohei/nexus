@@ -84,7 +84,7 @@ Bridge instances with gateway services. For example, expose a broker-facing serv
 
 Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when the gateway should forward an existing service contract or Nexus State store into another adjacent graph. Configure the relay provider on the downstream-facing instance and pass the upstream-facing instance as `forwardThrough` with an explicit `forwardTarget`.
 
-For a local Nexus State provider, create the authoritative store once with `createNexusStore(definition, creator, { snapshot, expose, publishWindowMs?, maxPendingSnapshots? })`, or bind an existing native Zustand store with `bindNexusStore(...)`. Register the provider with `nexus.provide(provider)`; use the returned original `store` only in that same hosting context for local reads, subscriptions, and synchronous actions. The defaults are a fixed 200ms publication window and 32 pending snapshots.
+For a local Nexus State provider, create a StoreToken first, then create the authoritative store with `createNexusStore(token, creator, { snapshot, expose, publishWindowMs?, maxPendingSnapshots? })`, or bind an existing native Zustand store with `bindNexusStore(token, existingStore, options)`. Register the provider with `nexus.provide(provider)`; use the returned original `store` only in that same hosting context for local reads, subscriptions, and synchronous actions. The defaults are a fixed 200ms publication window and 32 pending snapshots.
 
 Do not model Relay as `target.via`, raw message forwarding, or automatic graph merging. The bridge runtime still owns both configured `Nexus` instances and decides exactly which providers are forwarded.
 

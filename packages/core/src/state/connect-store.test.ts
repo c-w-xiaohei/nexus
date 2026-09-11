@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { Result } from "better-result";
-import { Token } from "../api/token";
 import type { Asyncified } from "../api/types";
 import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "../types/symbols";
 import { createStarNetwork } from "../utils/test-utils";
@@ -8,16 +7,15 @@ import { createNexusStore } from "./bind-store";
 import { connectNexusStore, safeConnectNexusStore } from "./connect-store";
 import { NexusStoreConnectError } from "./errors";
 import type { NexusStoreServiceContract } from "./contract";
+import { createStoreToken } from "./contract";
 
 type State = { count: number };
 type Actions = { increment(by: number): number };
-const token = new Token<NexusStoreServiceContract<State, Actions>>(
-  "state:client",
-);
+const token = createStoreToken<State & Actions>("state:client");
 
 const createHost = () =>
   createNexusStore(
-    { token },
+    token,
     (set, get) => ({
       count: 0,
       increment(by: number) {
@@ -48,7 +46,7 @@ describe("State connection acquisition and handshake", () => {
     });
     const remote = await connectNexusStore(
       network.get("client")!.nexus,
-      { token },
+      token,
       { target: { context: "host" } },
     );
     const order: string[] = [];
@@ -78,13 +76,13 @@ describe("State connection acquisition and handshake", () => {
           unsubscribe,
         });
       },
-    } as unknown as NexusStoreServiceContract<State, Actions>;
+    } as unknown as NexusStoreServiceContract<State & Actions>;
     const result = await safeConnectNexusStore(
       {
         safeCreate: async <T extends object>() =>
           Result.ok(service as Asyncified<T>),
       },
-      { token },
+      token,
       { timeout: 10 },
     );
     expect(result.isErr()).toBe(true);
@@ -97,7 +95,7 @@ describe("State connection acquisition and handshake", () => {
   it("keeps safe acquisition errors separate from protocol errors", async () => {
     const result = await safeConnectNexusStore(
       { safeCreate: async () => Result.err(new Error("no provider")) },
-      { token },
+      token,
     );
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
@@ -118,7 +116,7 @@ describe("State connection acquisition and handshake", () => {
             return Promise.resolve(Result.err(cause));
           },
         },
-        { token },
+        token,
       );
       expect(result.isErr()).toBe(true);
       if (result.isErr()) {
@@ -154,7 +152,7 @@ describe("State connection acquisition and handshake", () => {
         safeCreate: async <T extends object>() =>
           Result.ok(service as Asyncified<T>),
       },
-      { token },
+      token,
     );
     expect(result.isErr()).toBe(true);
     if (result.isErr()) expect(result.error.code).toBe("E_STORE_DISCONNECTED");
