@@ -35,15 +35,14 @@ import {
 import { parseBridgeCommand } from "../../protocol";
 import {
   workspaceStateDefinition,
-  type WorkspaceState,
-  type WorkspaceStateActions,
+  type WorkspaceStore,
 } from "../shared/workspace-state";
 
 type FixtureChromeModel = ChromeAdapterModel<FixtureAppMeta>;
 type FixtureWhere = ConnectionWhere<FixtureChromeModel>;
 type FixtureContext = Parameters<FixtureWhere>[0];
 type FixtureNexus = NexusInstance<FixtureChromeModel>;
-type ContentStateClient = RemoteStore<WorkspaceState, WorkspaceStateActions>;
+type ContentStateClient = RemoteStore<WorkspaceStore>;
 type WorkspaceProxy = Asyncified<WorkspaceService>;
 type ContentReporter = ReturnType<typeof createReporter>;
 type ContentCommandReporter = Pick<

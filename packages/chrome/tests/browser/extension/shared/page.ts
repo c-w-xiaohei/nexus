@@ -18,8 +18,7 @@ import {
 } from "./runtime";
 import {
   workspaceStateDefinition,
-  type WorkspaceState,
-  type WorkspaceStateActions,
+  type WorkspaceStore,
 } from "./workspace-state";
 
 export async function startPage(
@@ -209,7 +208,7 @@ async function runPageCommand(
   sessionId: string,
   runId: string,
   sessionProvider: { readonly session: () => Promise<string> },
-  state: RemoteStore<WorkspaceState, WorkspaceStateActions> | undefined,
+  state: RemoteStore<WorkspaceStore> | undefined,
   handles: {
     relay: DocumentRelayService | undefined;
     freshRelay: DocumentRelayService | undefined;

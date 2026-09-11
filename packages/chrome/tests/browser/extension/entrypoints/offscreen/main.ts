@@ -1,5 +1,9 @@
 import { usingOffscreenDocument } from "@nexus-js/chrome";
-import { SessionToken, WorkspaceToken } from "../../shared/contracts";
+import {
+  type FixtureAppMeta,
+  SessionToken,
+  WorkspaceToken,
+} from "../../shared/contracts";
 import {
   createReporter,
   isFixtureRunId,
@@ -43,7 +47,7 @@ async function bootstrap(): Promise<void> {
       await reporter.error("offscreen-init-rejected");
       return;
     }
-    const nexus = usingOffscreenDocument({
+    const nexus = usingOffscreenDocument<FixtureAppMeta>({
       reason: "fixture export",
       app: { fixture: true, sessionId, runId },
     });

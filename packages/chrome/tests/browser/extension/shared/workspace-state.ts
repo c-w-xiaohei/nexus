@@ -1,22 +1,22 @@
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
 import { createStoreToken } from "@nexus-js/core/state";
+import type { FixtureAppMeta } from "./contracts";
 
-export interface WorkspaceState {
+export interface WorkspaceStore {
   readonly count: number;
+  increment(): Promise<number>;
 }
 
-export type WorkspaceStateActions = {
-  increment(): Promise<number>;
-};
-
 export const WorkspaceStateToken = createStoreToken<
-  WorkspaceState & WorkspaceStateActions
+  WorkspaceStore,
+  ChromeAdapterModel<FixtureAppMeta>
 >("nexus-e2e:workspace-state");
 
 export const workspaceStateDefinition = WorkspaceStateToken;
 
 export const workspaceStateCreator = (
-  set: (state: Partial<WorkspaceState>) => void,
-  get: () => WorkspaceState,
+  set: (state: Partial<WorkspaceStore>) => void,
+  get: () => WorkspaceStore,
 ) => ({
   count: 0,
   async increment() {
