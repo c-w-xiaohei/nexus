@@ -47,7 +47,7 @@
     "typecheck:browser": "tsc --noEmit -p tsconfig.browser.json"
   },
   "peerDependencies": {
-    "@nexus-js/core": ">=2.0.0",
+    "@nexus-js/core": "~1.2.0",
     "react": "^18.3.1 || ^19.0.0",
     "react-dom": "^18.3.1 || ^19.0.0"
   },

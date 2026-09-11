@@ -206,10 +206,11 @@ pnpm dev
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
 - Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
-- While packages are still in `0.x`, use `minor` for breaking public API cleanup unless the supported runtime/install compatibility matrix is actually narrowed.
-- Use `minor` for new public APIs, new subpath exports, optional capabilities, backward-compatible behavior, and first-party packages following compatible `core` capabilities.
-- Use `major` only when users must change code, a public contract is removed or changed, a supported runtime/install combination is truly dropped, or wire protocol/interoperability becomes incompatible.
-- Do not treat `peerDependencies` range edits as major by themselves; bump major only when the supported compatibility matrix is actually narrowed.
+- During the explicitly documented rapid-iteration phase, use `minor` for features and breaking API, protocol, or compatibility changes, including Core 1.x. This is an intentional exception to stable SemVer; do not describe these releases as backward-compatible.
+- Keep `patch` backward-compatible. Clearly list breaking changes and migration steps against the last published version, not intermediate unshipped implementations.
+- Reserve `major` for an explicitly agreed release milestone or version-policy change; do not automatically promote 0.x adapters or React to 1.0 because Core changes.
+- Derive dependency ranges from tested compatibility. Bind version-sensitive consumers to the supported Core minor and do not claim untested future-major compatibility.
+- Write concise package-specific changesets; combine repeated internal cleanup notes and keep detailed migration examples in docs. Never renumber published versions.
 - Do not let a `core` minor automatically force downstream majors; version adapters and React bindings by their own public API and real compatibility impact.
 - PR titles should follow `<type>(<scope>): <description>` when a conventional-commit style title fits the change.
 - PR descriptions should include `Why`, `What`, `How verified`, and `Risks`; link related issues, proposals, or docs when available.

@@ -91,7 +91,7 @@ from `zustand/react/shallow` when a selector constructs an object or array whose
 shallow-equal output should remain stable. Structural stores must return stable
 state references between updates, not clone state on every read.
 
-The current React bindings require Core >=2.0.0 and the callback-based State
+The current React bindings require Core ~1.2.0 and the callback-based State
 contract. Upgrade both packages and all State endpoints together. Acquired
 `RemoteStore` handles include `getInitialState`, `getStatus`, and `subscribeStatus`.
 Use `useStoreStatus(store, selector?)` for explicit lifecycle observation, not
