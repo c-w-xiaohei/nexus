@@ -23,5 +23,5 @@ snapshot/action types. TokenSpace provides `storeToken` and `safeStoreToken` to
 preserve namespace IDs and inherited targeting. Use `RemoteStore<Store>` rather
 than separate State/Actions generics or public wire-service utility types.
 
-See the [1.2 migration guide](https://github.com/c-w-xiaohei/nexus/blob/main/docs/migrations/1.2.md)
+See the [1.2 migration guide](https://c-w-xiaohei.github.io/nexus/docs/migrations/1.2/)
 for changed signatures, action semantics, and package compatibility.

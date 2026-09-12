@@ -1,0 +1,184 @@
+---
+title: Nexus State Lifecycle And Errors
+description: Understand Nexus State status, disconnect, replacement, and errors.
+---
+
+This Nexus State guide explains the most important runtime semantics.
+
+## Status States
+
+Nexus State `RemoteStoreStatus` is a discriminated union.
+
+Main states:
+
+- `initializing`
+- `ready`
+- `disconnected`
+- `stale`
+- `destroyed`
+
+## `ready`
+
+The store has:
+
+- completed the subscribe handshake
+- initialized the local mirror
+- begun normal update processing
+
+## `disconnected`
+
+Use this when:
+
+- the backing connection closes
+- an operation cannot continue because the transport is gone
+
+The public disconnected status carries:
+
+- `lastKnownVersion`
+- optional `cause`
+
+## Initial Connect Failure vs Reconnect Failure
+
+Distinguish headless core semantics from hook-level behavior.
+
+Headless core (`connectNexusStore` / `safeConnectNexusStore`):
+
+- initial connect failure happens before a usable `RemoteStore` exists
+- throw-style: `connectNexusStore(...)` rejects with connect-oriented error
+- safe-style: `safeConnectNexusStore(...)` returns `Err`
+
+After a `RemoteStore` exists, later transport loss makes that instance
+`disconnected`. A selected remote identity that no longer matches can make it
+`stale`. Create a new instance rather than trying to revive either terminal handle.
+
+`useRemoteStore()` exposes acquisition state (`pending`, `error`, and `store`)
+and a `reconnect()` command. Observe an acquired handle with `useStoreStatus` or
+`Scope.useStatus`; these return `null` while no handle exists. A failed initial or
+replacement attempt sets the acquisition error, not a fabricated disconnected
+status. React destroys the previous handle when replacement begins, regardless
+of whether the new attempt succeeds.
+See the [Nexus State React guide](/nexus/docs/state/react/) for `reconnectKey`, `reconnect()`,
+selector fallback, and target changes. The hook never makes a terminal
+`RemoteStore` handle usable again.
+
+## `stale`
+
+Use this when the handle itself is no longer the right handle.
+
+Typical causes:
+
+- a remote identity update no longer matches the handle's `where` predicate
+- a terminal event reports `target-changed` or `target-replaced`
+
+Changing React targeting props is different: the owner destroys the old handle
+and acquires a replacement; it does not mark the old handle stale.
+
+Do not use `stale` for same-target session replacement.
+
+If the same target gets a new connection session and the old `RemoteStore` handle loses its connection, that handle is `disconnected`.
+
+Stale is not the same thing as disconnected.
+
+## `destroyed`
+
+The caller intentionally ended the handle's lifecycle.
+
+After this:
+
+- no more updates should be processed
+- actions should fail
+- local subscriptions should be cleaned up
+
+## Action Semantics
+
+This is one of the core Nexus State guarantees:
+
+```ts
+await remote.actions.increment(1);
+```
+
+waits for the caller's targeted snapshot acknowledgement after the ordinary
+Core function call. This is a fixed-window synchronization boundary, not a
+transactional commit receipt.
+
+The init callback carries the actual Core function proxies for actions. State does not
+add an action-name dispatch layer or a second action proxy. Raw action rejections
+therefore retain Core error codes, including `E_CONN_CLOSED`, `E_CALL_TIMEOUT`, and
+`E_RESOURCE_ACCESS_DENIED`. The State safe helper can normalize errors at its public
+`Result` boundary when callers need a State-specific error union.
+
+The State connect `timeout` bounds acquisition and callback-init setup. It does not
+configure Core's later resource-call timeout; action calls retain Core's existing
+runtime defaults.
+
+That means this is safe:
+
+```ts
+await remote.actions.increment(1);
+console.log(remote.getState());
+```
+
+## Disconnect During In-Flight Action
+
+If the connection dies during an action, Nexus State does not pretend everything is fine.
+
+The caller gets an explicit failure, but the action may already have committed.
+Treat this as an unknown-commit outcome; do not automatically retry
+non-idempotent actions. A source update is not rolled back because its
+acknowledgement failed. There is no draft, rollback, queue, or receipt protocol.
+
+The first source update opens the default 200ms fixed publication window.
+Updates during that window do not extend it, and action completion does not
+force an early flush. `maxPendingSnapshots` defaults to 32 and exceeding it
+terminates that subscription rather than blocking the store.
+
+Only successful actions wait for their publication acknowledgement. A business
+error may reach the caller before its prior state updates arrive through the
+normal window. Catching that error does not imply those writes were discarded.
+
+## Cleanup Semantics
+
+Cleanup happens in more than one place:
+
+- mirror listeners are cleaned up on remote `destroy()`
+- binding `destroy()` stops publication but leaves the original Zustand store usable
+- terminal client states do best-effort `unsubscribe()`
+- host-side disconnect cleanup removes connection-owned subscriptions
+- final multi-context integration test verifies host-side cleanup behavior
+
+## Replacement vs Recovery
+
+These are different ideas:
+
+- replacement: a new handle is created for a new attempt or new target input
+- recovery: an old terminal handle becomes usable again
+
+Nexus State supports replacement.
+
+It does not treat a terminal `RemoteStore` instance as something that silently recovers in place.
+
+React replacement controls do not add a Core retry policy or replay actions. See
+the [Nexus State React guide](/nexus/docs/state/react/) for their exact behavior.
+
+The same distinction applies to Core handles:
+
+- a service proxy is tied to one connection session
+- a remote resource is tied to the connection that created it
+
+When a connection session changes, create a new service proxy or remote resource instead of reusing the old one.
+
+## Error Types
+
+Use these Nexus State errors to distinguish failure classes:
+
+- `NexusStoreConnectError`
+- `NexusStoreDisconnectedError`
+- `NexusStoreActionError`
+- `NexusStoreProtocolError`
+
+Rule of thumb:
+
+- connect/setup problem -> `NexusStoreConnectError`
+- backing connection lost -> `NexusStoreDisconnectedError`
+- remote action failed -> `NexusStoreActionError`
+- malformed protocol payload/order issue -> `NexusStoreProtocolError`

@@ -22,7 +22,7 @@ No Cursor rules (`.cursor/rules/`, `.cursorrules`) or Copilot instructions
 - `packages/iframe` - iframe parent/child adapter over `postMessage`.
 - `packages/react` - React bindings for Nexus instances, service proxy status, and Nexus State.
 - `packages/node-ipc` - Node IPC adapter for daemon/client runtimes.
-- `docs` - public documentation.
+- `apps/docs/content/docs` - canonical public documentation source; published at https://c-w-xiaohei.github.io/nexus/docs/.
 - `.doc` - internal proposals, plans, and mandatory style guidance.
 - `.agents/skills` - project-level agent skills, including `use-nexus` for external usage style.
 
@@ -199,7 +199,7 @@ pnpm dev
 
 ## Documentation And Git
 
-- Public docs live in `docs/`; internal proposals and style notes live in `.doc/`.
+- Public docs source lives in `apps/docs/content/docs/`; internal proposals and style notes live in `.doc/`.
 - Keep adapter docs focused on adapter-specific setup; do not redefine shared service contracts in every adapter guide.
 - Prefer minimal, type-correct examples with adapter-exported exact targets first, then explain Token and endpoint `defaultTarget`.
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.

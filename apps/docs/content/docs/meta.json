@@ -1,0 +1,26 @@
+{
+  "pages": [
+    "index",
+    "--- Core guides ---",
+    "getting-started",
+    "concepts",
+    "identity-and-metadata",
+    "packages",
+    "auth-and-policy",
+    "proxy-lifecycle",
+    "--- Integrations ---",
+    "react",
+    "relay",
+    "--- Adapters ---",
+    "platforms",
+    "chrome",
+    "...iframe",
+    "node-ipc",
+    "--- State ---",
+    "...state",
+    "--- Testing ---",
+    "...testing",
+    "--- Migrations ---",
+    "...migrations"
+  ]
+}

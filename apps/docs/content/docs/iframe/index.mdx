@@ -1,0 +1,207 @@
+---
+title: Iframe
+description: Configure Nexus parent and child iframe communication.
+---
+
+`@nexus-js/iframe` connects a parent browser window and iframe children through Nexus RPC over `postMessage`. Use it for browser pages that own one or more frames and need typed service calls across that boundary.
+
+Install both in parent and child bundles:
+
+<InstallCommand packages="@nexus-js/core @nexus-js/iframe" />
+
+## When To Use It
+
+Use this adapter when the parent owns the iframe elements and knows their exact
+origins. For other runtime boundaries, [choose another adapter](/nexus/docs/platforms/).
+
+## Shared Contracts
+
+Import the same service contracts and Tokens in both bundles; see
+[Getting started](/nexus/docs/getting-started/) for the shared contract pattern.
+
+When repeated iframe calls target the same child, a TokenSpace `defaultTarget` can keep the route close to the Token:
+
+```ts
+import { TokenSpace } from "@nexus-js/core";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+import type { GreetingService } from "./service-contract";
+
+const appSpace = new TokenSpace<IframeAdapterModel>({
+  name: "iframe-demo",
+});
+
+const childServices = appSpace.space("child-services", {
+  defaultTarget: {
+    context: "iframe-child",
+    appId: "iframe-demo",
+    frameId: "preview",
+    origin: "https://child.example.com",
+  },
+});
+
+export const GreetingToken = childServices.token<GreetingService>("greeting");
+```
+
+For multiple children, use `createMulticast` with exact targets or
+`selectMulticast` for already available providers. See
+[Core acquisition semantics](/nexus/docs/concepts/#resolution-and-fallbacks)
+for timeouts and result behavior. The setup below uses an explicit target.
+
+## Parent Setup
+
+Configure the parent with each iframe element and its exact expected child origin before creating proxies.
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { usingIframeParent } from "@nexus-js/iframe";
+import { GreetingToken } from "./shared";
+
+const iframe = document.querySelector<HTMLIFrameElement>("#preview");
+if (!iframe) throw new Error("Missing #preview iframe");
+
+usingIframeParent({
+  appId: "iframe-demo",
+  frames: [
+    {
+      frameId: "preview",
+      iframe,
+      origin: "https://child.example.com",
+      nonce: "session-nonce",
+    },
+  ],
+});
+
+const greeting = await nexus.create(GreetingToken, {
+  target: {
+    context: "iframe-child",
+    appId: "iframe-demo",
+    frameId: "preview",
+    origin: "https://child.example.com",
+  },
+});
+
+await greeting.greet("parent");
+```
+
+The parent helper does not register named targets. Keep exact `IframeConnectionTarget` values in application code, or use a Token `defaultTarget` when one route is stable.
+
+## Child Setup
+
+Configure the child with the exact expected parent origin. Class services should bind to the configured Nexus instance with `@childNexus.Expose(...)`; object, State, and Relay providers should use `provide(...)`.
+
+```ts
+import { usingIframeChild } from "@nexus-js/iframe";
+import { GreetingToken } from "./shared";
+
+const childNexus = usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
+});
+
+@childNexus.Expose(GreetingToken)
+class GreetingServiceImpl {
+  async greet(name) {
+    return `hello ${name}`;
+  }
+}
+```
+
+For an already-constructed object implementation, use:
+
+```ts
+usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
+}).provide(GreetingToken, greetingService);
+```
+
+## Startup Connections
+
+Alternatively, the parent can start listening, create the child context, and call
+`select(GreetingToken, { where, wait: { timeout: 10_000 } })` before the child is
+ready. Give the child helper explicit startup targets:
+`connectTo: [{ context: "iframe-parent", appId: "iframe-demo", origin: "https://parent.example.com" }]`.
+The child then connects without calling any parent service. Select the intended
+child using its identity and validated frame facts. Startup dialing is one-shot,
+does not block child `ready()`, and is separate from its `defaultTarget`.
+
+Child-originated connections wait for document load, then defer to a later task
+to allow the parent's iframe navigation cleanup to run before dialing, including
+when the child starts inside a load handler. Load-blocking subresources delay the
+dial; close or unload cancels it. No application-level readiness handshake is
+required.
+
+## Configuration Composition
+
+Use `configure: false` only when composing adapter config with policy, custom endpoints, bootstrap bulk providers, or custom Nexus instances. Without `configure: false`, `usingIframeChild(...)` and `usingIframeParent(...)` configure the shared `nexus` instance directly and return that instance.
+
+For composition, use `composeNexusConfig([...])` instead of raw object spreading:
+
+```ts
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingIframeParent } from "@nexus-js/iframe";
+
+nexus.configure(
+  composeNexusConfig([
+    usingIframeParent({
+      appId: "iframe-demo",
+      frames: [
+        { frameId: "preview", iframe, origin: "https://child.example.com" },
+      ],
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ remoteIdentity }) {
+          return remoteIdentity.context === "iframe-child";
+        },
+      },
+    },
+  ]),
+);
+```
+
+Layers apply left-to-right, and later layers win for the same domain.
+
+Compose structural configuration before the runtime bootstrap snapshot. After a Nexus instance is ready, structural `configure(...)` calls are rejected; live provider registration or replacement after ready goes through `provide(...)`, not `configure({ providers })`.
+
+Config composition is domain-aware:
+
+- omitted fields keep previous layers
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.defaultTarget` are whole-field replacements when explicitly provided
+- `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
+- `policy: undefined` clears inherited policy when callers intentionally need to remove it
+- `providers` replace by `token.id`; the later provider replaces both service and policy
+
+## Security Notes
+
+- Use exact origins for parent `frames[].origin` and child `parentOrigin` whenever possible.
+- `origin` and `parentOrigin` must match the browser `MessageEvent.origin` exactly, including scheme, host, and port.
+- `allowAnyOrigin: true` permits wildcard origin matching and should only be used for intentionally public frames.
+- Use `nonce` when a parent page may host multiple frame sessions or when an extra channel binding is useful.
+- Source, origin, app id, channel, and nonce checks are adapter transport gates.
+- Application authorization still belongs in core `policy.canConnect` and `policy.canCall`; do not treat adapter gates as a replacement for app-level policy.
+
+## Lifecycle
+
+The browser `postMessage` bus does not guarantee a native disconnect signal. The iframe adapter uses the core virtual-port heartbeat to detect unresponsive links; its defaults come from core (5000ms interval / 3 misses unless core exposes different values). Override `heartbeat` only for tests or environments that need faster or slower disconnect detection.
+
+Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...)` proxies and refs are session-bound, so recreate proxies and pass fresh refs after an iframe reload, reconnect, or session replacement.
+
+If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.
+
+## Testing Boundary
+
+Use [application mocks](/nexus/docs/testing/) for consumers of iframe-targeted
+services. Use browser integration tests for `postMessage` validation, security
+gates, heartbeat, reload, and element replacement.
+
+## Binary Transport Packets
+
+Iframe endpoints advertise binary Nexus transport packets and transferable support by default. This lets core serialize internal transport packets to `ArrayBuffer` and pass that buffer in the browser `postMessage` transfer list when both sides support it.
+
+This only affects Nexus internal transport packets. It does not transfer, move, or detach user RPC payload objects by API contract. Set `binaryPackets: false` on both parent and child endpoint options only when an environment cannot handle binary packet transport.

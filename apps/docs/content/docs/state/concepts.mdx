@@ -1,0 +1,134 @@
+---
+title: Nexus State Concepts
+description: Understand the model and semantics behind Nexus State.
+---
+
+This Nexus State guide explains the mental model behind synchronized remote state.
+
+## Remote Store, Not Fake Local Store
+
+Nexus State is not pretending that remote state is local memory.
+
+Instead, Nexus State gives you a model with explicit rules:
+
+- the host owns the authoritative state
+- the client owns a mirrored local snapshot
+- reads are synchronous from the mirror
+- writes execute remotely on the host
+- updates arrive through subscription events
+
+That is why `getState()` is sync on the client, while actions are async.
+
+## Host And Client
+
+There are always two sides in Nexus State.
+
+### Host
+
+The host:
+
+- owns the real store state
+- executes actions
+- advances versions
+- publishes snapshot updates to subscribed clients
+- cleans up connection-owned subscriptions on disconnect
+
+### Client
+
+The client:
+
+- connects through ordinary Nexus targeting
+- receives an atomic subscribe baseline
+- receives an initial snapshot and a live subscription in one setup step
+- maintains a local mirror
+- exposes `getState()` and `subscribe()` like a local store
+- turns connection loss into explicit lifecycle status
+
+## One Concrete Flow
+
+The smallest useful Nexus State end-to-end flow is:
+
+1. define a store contract
+2. host it in one Nexus context
+3. connect to it from another context
+4. receive an initial snapshot and create a local mirror
+5. read from the mirror synchronously with `getState()`
+6. call actions asynchronously on the host
+7. receive later snapshots through subscription updates
+
+## Why Not Just Proxy A Store Object?
+
+Because a raw remote object proxy gives the wrong mental model.
+
+If you proxy a store directly, users naturally assume:
+
+- reads are local
+- writes are immediate
+- lifecycle is invisible
+
+None of those are true across contexts.
+
+Nexus State makes the remote nature explicit without forcing you to hand-write subscription and action protocol boilerplate each time.
+
+## Status Model
+
+`RemoteStore` exposes observable `initializing`, `ready`, `disconnected`,
+`stale`, and `destroyed` states. See [Lifecycle and errors](/nexus/docs/state/lifecycle-and-errors/)
+for the state meanings and failure behavior.
+
+## Headless Core vs Hook-Level Lifecycle
+
+Keep these two layers separate:
+
+- headless core (`connectNexusStore` / `RemoteStore`)
+- React ownership (`useRemoteStore` and scoped selection), with direct selection through Zustand's `useStore`
+
+Headless core behavior:
+
+- initial connect failure means `connectNexusStore(...)` rejects (or safe API returns `Err`)
+- no `RemoteStore` instance exists from that failed attempt
+- once a `RemoteStore` reaches a terminal state (`disconnected`, `stale`, `destroyed`), replacement means creating a new instance
+
+Hook-level behavior:
+
+- the owner hook exposes `pending`, `store`, and acquisition `error`; lifecycle status is observed separately with `useStoreStatus` or `Scope.useStatus`
+- hooks may create a replacement `RemoteStore` handle, but they do not make a terminal handle usable again
+
+See the [Nexus State React guide](/nexus/docs/state/react/) for `reconnectKey`, `reconnect()`,
+selector fallback, and target changes.
+
+## Full Snapshots
+
+Nexus State synchronizes full snapshots, not public patch streams.
+
+That means:
+
+- simpler semantics
+- easier validation
+- stronger correctness story
+- fewer protocol edge cases
+
+The implementation keeps room for future patch-like optimization, but the public model is snapshot-based today.
+
+## Why Actions Wait For Publication
+
+When you call:
+
+```ts
+await remoteStore.actions.increment(1);
+```
+
+the promise waits for the caller's ordinary Core function call and its fixed
+publication-window acknowledgement. It is not a receipt or waiter protocol.
+The action may already have mutated the host if the call later fails; do not
+automatically retry non-idempotent actions.
+
+After a successful await, the caller's mirror has acknowledged the targeted
+snapshot, but later host updates may already have been published or may still
+be pending. Snapshots are complete projections, may skip intermediate
+versions, and the client ignores older versions.
+
+This is one of the most important semantics in the system.
+
+For terminal handles, replacement, and session-bound Core handles, see
+[Lifecycle and errors](/nexus/docs/state/lifecycle-and-errors/).

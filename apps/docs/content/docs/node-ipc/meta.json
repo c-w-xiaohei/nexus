@@ -1,0 +1,14 @@
+{
+  "title": "Node IPC",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "quick-start",
+    "concepts",
+    "addressing",
+    "auth",
+    "lifecycle-and-errors",
+    "runtime-compatibility",
+    "testing"
+  ]
+}

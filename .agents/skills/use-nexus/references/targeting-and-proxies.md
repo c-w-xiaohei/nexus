@@ -135,7 +135,7 @@ calls. Resource property assignment remains fire-and-forget with configured
 framework error logging, and does not expose completion even when the assignment
 expression is awaited. `Asyncified` property types are unchanged. Release is
 local and idempotent with best-effort host notification; `safeRelease` does not
-acknowledge remote cleanup. See the error/lifetime contracts in `docs/concepts.md`.
+acknowledge remote cleanup. See the error/lifetime contracts in https://c-w-xiaohei.github.io/nexus/docs/concepts/.
 
 Raw core handles are lifecycle-scoped.
 

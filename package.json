@@ -10,9 +10,9 @@
     "lint": "turbo run lint",
     "lint:force": "turbo run lint --force",
     "typecheck": "turbo run typecheck",
-    "format:check": "oxfmt --check .",
+    "format:check": "oxfmt --check . && pnpm --filter @nexus-js/docs format:check",
     "prepare": "husky",
-    "format": "oxfmt --write \"**/*.{ts,tsx,md}\"",
+    "format": "oxfmt --write \"**/*.{ts,tsx,md,mdx}\" && pnpm --filter @nexus-js/docs format",
     "release": "turbo run build && changeset publish"
   },
   "devDependencies": {

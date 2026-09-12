@@ -2,6 +2,8 @@
 
 Chrome extension adapter for the Nexus framework, providing seamless cross-context communication for Chrome extensions.
 
+For the product guide, see the [published Nexus documentation](https://c-w-xiaohei.github.io/nexus/docs/).
+
 ## Installation
 
 ```bash

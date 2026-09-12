@@ -25,6 +25,7 @@ test-results/
 
 # Turborepo artifacts
 .turbo/
+.astro/
 
 # Environment variables
 .env

@@ -1,0 +1,58 @@
+---
+title: Choose An Adapter
+description: Select an adapter for Chrome extensions, iframes, or local Node processes.
+---
+
+Install `@nexus-js/core` in each context, then choose the adapter for the connection
+between them. Your application owns context startup and target discovery.
+
+| Runtime boundary                                | Package              | Guide                                   |
+| ----------------------------------------------- | -------------------- | --------------------------------------- |
+| Chrome extension contexts                       | `@nexus-js/chrome`   | [Chrome extension](/nexus/docs/chrome/) |
+| Parent page and browser iframe                  | `@nexus-js/iframe`   | [Iframe](/nexus/docs/iframe/)           |
+| Local daemon and Node clients over Unix sockets | `@nexus-js/node-ipc` | [Node IPC](/nexus/docs/node-ipc/)       |
+
+Adapters provide setup helpers, exact target types, platform channels, and
+connection metadata. Shared targeting and provider behavior is defined in
+[Core concepts](/nexus/docs/concepts/).
+
+## Worker And Custom Runtime
+
+For other runtimes, implement `IEndpoint<M>` with a matching `AdapterModel`.
+The following sketch assumes an application-supplied `createWorkerEndpoint()`:
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { AdapterModel, IEndpoint } from "@nexus-js/core";
+
+interface WorkerModel extends AdapterModel {
+  contextMeta: { context: "worker" | "host" };
+  connectionMeta: { readonly transport: "worker-port" };
+  connectionTarget: { context: "worker"; workerId: string };
+}
+
+const workerNexus = new Nexus<WorkerModel>();
+const endpoint: IEndpoint<WorkerModel> = createWorkerEndpoint();
+
+workerNexus.configure({
+  endpoint: {
+    implementation: endpoint,
+    meta: { context: "host" },
+  },
+});
+```
+
+The driver accepts ports, connects and matches exact targets, and closes platform
+resources. Core owns service calls, policy, and session lifecycle.
+
+## Multiple Graphs
+
+Use separate named `Nexus<M>` instances for independent transport graphs.
+[Relay](/nexus/docs/relay/) forwards explicitly selected services or State providers
+between adjacent graphs without merging them.
+
+## Testing Boundary
+
+Use [application mocks](/nexus/docs/testing/) for code consuming `NexusInstance`.
+Use adapter integration tests for real channels, authorization, reload, and
+disconnect behavior.

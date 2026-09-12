@@ -1,0 +1,91 @@
+---
+title: Quick Start
+description: Set up a Nexus daemon and client over local Unix sockets.
+---
+
+Configure a daemon that exposes an echo service, then call it from a client process.
+
+## 1. Install Packages
+
+<InstallCommand packages="@nexus-js/core @nexus-js/node-ipc" />
+
+<Callout type="info" title="Authentication is optional">
+  The quick start uses the default local socket setup without a shared secret.
+  Add the adapter's pre-auth configuration before exposing services when local
+  clients are not already trusted.
+</Callout>
+
+## 2. Start From A Shared Contract
+
+Both processes import `EchoToken` from shared code using the
+[shared contract pattern](/nexus/docs/getting-started/#define-a-shared-contract).
+Its service exposes `echo(input: string): Promise<string>`.
+
+## 3. Configure The Daemon
+
+The daemon owns the listening endpoint and service implementation.
+
+```ts
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+import { EchoToken } from "./shared";
+
+usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
+  async echo(input) {
+    return `echo:${input}`;
+  },
+});
+```
+
+The daemon's peer identity is `NodeIpcContextMeta`; the client connects with an exact `NodeIpcConnectionTarget` containing `appId` and optional `instance`.
+
+## 4. Configure The Client
+
+The client owns an outgoing endpoint. `defaultTarget` gives `create` an optional default daemon address.
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { usingNodeIpcClient } from "@nexus-js/node-ipc";
+import { EchoToken } from "./shared";
+
+usingNodeIpcClient({
+  appId: "example-app",
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
+});
+
+const echo = await nexus.create(EchoToken);
+
+console.log(await echo.echo("hello"));
+```
+
+`create(EchoToken)` uses the Token default and then client endpoint `defaultTarget`. If neither exists, it returns `E_TARGET_REQUIRED`. Keep an exact target while debugging or when several daemons are reachable:
+
+```ts
+const echo = await nexus.create(EchoToken, {
+  target: {
+    context: "node-ipc-daemon",
+    appId: "example-app",
+  },
+  timeout: 30_000,
+  callTimeout: 5_000,
+});
+```
+
+## Optional Workflows
+
+- For a client that provides services to a daemon and uses one-shot startup
+  dialing, see [Node IPC concepts](/nexus/docs/node-ipc/concepts/).
+- For shared-secret pre-auth and its optional combination with core policy, see
+  [Authentication](/nexus/docs/node-ipc/auth/) and [Authorization and
+  policy](/nexus/docs/auth-and-policy/).
+
+## First Failure Checklist
+
+If the first call fails, check these in order:
+
+1. Is the daemon process still running?
+2. Are daemon and client using the same `appId` and `instance`?
+3. Does the socket path resolve where you expect? See [Addressing](/nexus/docs/node-ipc/addressing/).
+4. If `authToken` is configured, do both sides use the same non-empty token?
+5. Does `policy.canConnect` allow the client?
+6. Does `policy.canCall` allow the service name and operation?
+7. Are you reusing an old proxy after daemon restart? Create a fresh proxy.

@@ -21,4 +21,4 @@ Use `ContextMeta` for peer identity and `where`. Use `ConnectionMeta` for adapte
 - Use `updateIdentity(...)` only for changes that affect targeting, policy, diagnostics, or lifecycle behavior; keep ordinary app data out of identity.
 - Recreate raw `nexus.create(...)` proxies and refs after session replacement, connection loss, or identity replacement that should retarget future calls.
 
-For the full public guide, see `docs/identity-and-metadata.md`.
+For the full public guide, see https://c-w-xiaohei.github.io/nexus/docs/identity-and-metadata/.

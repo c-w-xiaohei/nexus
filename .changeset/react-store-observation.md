@@ -12,4 +12,4 @@ Breaking changes: import `useStore` from Zustand, remove
 `RemoteStoreWithInitialState` usage, and replace `remote.status` reads with status
 selectors. Replacement destroys the old handle without retaining a stale session.
 Requires Core ~1.2.0. See the
-[migration guide](https://github.com/c-w-xiaohei/nexus/blob/main/docs/migrations/1.2.md).
+[migration guide](https://c-w-xiaohei.github.io/nexus/docs/migrations/1.2/).

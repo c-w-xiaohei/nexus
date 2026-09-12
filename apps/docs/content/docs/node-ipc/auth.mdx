@@ -1,0 +1,126 @@
+---
+title: Authentication
+description: Configure pre-authentication for Node IPC connections.
+---
+
+Node-ipc has an adapter-specific shared-secret pre-auth step. Core authorization policy is documented separately in [Authorization and policy](/nexus/docs/auth-and-policy/) because it applies to all adapters.
+
+## What Shared-Secret Pre-Auth Does
+
+Shared-secret pre-auth runs before the socket is handed to Nexus core.
+
+The client sends an auth message. The daemon validates the token. If the token is correct, both sides continue into the Nexus handshake.
+
+Protocol shape:
+
+```json
+{ "type": "nexus-ipc-auth", "version": 1, "token": "..." }
+```
+
+Success response:
+
+```json
+{ "type": "nexus-ipc-auth-ok" }
+```
+
+The implementation treats the auth exchange as newline-delimited JSON and buffers split socket chunks until a newline arrives.
+
+## Configure Tokens
+
+Daemon:
+
+```ts
+usingNodeIpcDaemon({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
+});
+```
+
+Client:
+
+```ts
+usingNodeIpcClient({
+  appId: "example-app",
+  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
+  authToken: process.env.NEXUS_IPC_TOKEN,
+});
+```
+
+Empty tokens are invalid. If the daemon requires a token and the client sends the wrong token, connection fails with `E_IPC_AUTH_FAILED`.
+
+## Timeouts And Limits
+
+The auth exchange has a timeout so silent peers do not hang forever.
+
+The auth line also has a maximum size. Oversized or malformed auth input fails instead of buffering indefinitely.
+
+Common failures:
+
+- wrong token: `E_IPC_AUTH_FAILED`
+- no auth message before timeout: `E_IPC_AUTH_FAILED`
+- malformed JSON or wrong protocol shape: `E_IPC_PROTOCOL_ERROR`
+- oversized auth line: `E_IPC_PROTOCOL_ERROR`
+
+## ConnectionMeta
+
+After pre-auth, node-ipc provides connection metadata to Nexus core:
+
+```ts
+{
+  observed: {
+    socket: { kind: "path", path: "..." },
+    authenticated: true,
+    authMethod: "shared-secret"
+  }
+}
+```
+
+If no shared secret is configured, `observed.authenticated` is `false` and `observed.authMethod` is `"none"`.
+
+This metadata is the bridge from adapter pre-auth into core policy.
+
+## Combine With Core Policy
+
+Use `canConnect` to require successful pre-auth and `canCall` to restrict service
+operations. Compose both policies before configuring the daemon:
+
+```ts
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
+        },
+        canCall({ serviceName, operation }) {
+          return serviceName === "example:admin" && operation === "APPLY";
+        },
+      },
+    },
+  ]),
+);
+```
+
+For `canConnect`, `canCall`, service-level policy, and metadata trust boundaries, read [Authorization and policy](/nexus/docs/auth-and-policy/).
+
+## What Pre-Auth Does Not Prove
+
+Shared-secret pre-auth proves only that the peer knows the configured token.
+
+It does not prove:
+
+- the peer process executable
+- OS user id
+- OS group id
+- process id authenticity
+- user intent
+
+Do not use self-declared `pid` or application-defined identity labels as a security boundary unless your application authenticates those claims separately.

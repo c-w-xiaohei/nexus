@@ -40,6 +40,11 @@
   },
   "overrides": [
     {
+      "files": ["apps/docs/**/*.{ts,tsx,astro}"],
+      "env": { "browser": true, "node": true },
+      "globals": { "Astro": "readonly" }
+    },
+    {
       "files": ["packages/core/**/*.ts"],
       "env": {
         "browser": true,

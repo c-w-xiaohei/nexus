@@ -1,0 +1,60 @@
+---
+import { render, type CollectionEntry } from "astro:content";
+import defaultMdxComponents from "fumadocs-ui/mdx";
+import CodeBlock from "../../components/code-block.astro";
+import InstallCommand from "../../components/install-command.astro";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+import Layout from "../../components/layout.astro";
+import { Docs } from "../../components/docs";
+import { source } from "../../lib/source";
+
+interface Props {
+  entry: CollectionEntry<"docs">;
+}
+
+export function getStaticPaths() {
+  return source.getPages().map((page) => ({
+    params: { slug: page.slugs.join("/") || undefined },
+    props: { entry: page.data.entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+const slugs = Astro.params.slug?.split("/") ?? [];
+const toc = headings.map((heading) => ({
+  depth: heading.depth,
+  title: heading.text,
+  url: `#${heading.slug}`,
+}));
+---
+
+<Layout title={entry.data.title} description={entry.data.description}>
+  <Docs
+    tree={source.getPageTree()}
+    pathname={Astro.url.pathname}
+    slugs={slugs}
+    toc={toc}
+    client:load
+  >
+    <h1 class="doc-title">{entry.data.title}</h1>
+    <p class="doc-description">{entry.data.description}</p>
+    <div class="prose flex-1 min-w-0">
+      <Content
+        components={{
+          ...defaultMdxComponents,
+          pre: CodeBlock,
+          InstallCommand,
+          Steps,
+          Step,
+        }}
+      />
+    </div>
+    <a
+      class="edit-link"
+      href={`https://github.com/c-w-xiaohei/nexus/edit/main/apps/docs/${entry.filePath}`}
+    >
+      Edit this page on GitHub
+    </a>
+  </Docs>
+</Layout>

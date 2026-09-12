@@ -1,0 +1,175 @@
+---
+title: Nexus State Quick Start
+description: Build a synchronized remote state store with Nexus.
+---
+
+## Before You Start
+
+Configure two communicating Nexus contexts first; see
+[Getting started](/nexus/docs/getting-started/). One hosts the authoritative store;
+the other reads a local mirror and invokes remote actions.
+
+## What To Install
+
+The headless API is included in `@nexus-js/core/state`. Add `@nexus-js/react`
+only for React bindings; `@nexus-js/core/state` is an import path, not a package.
+
+## 1. Define A Store
+
+```ts
+import { createStoreToken } from "@nexus-js/core/state";
+
+export interface CounterStore {
+  count: number;
+  increment(by?: number): number;
+  reset(): void;
+}
+
+export const counterStore = createStoreToken<CounterStore>(
+  "example:counter-store",
+);
+```
+
+## 2. Host The Store
+
+Register the Nexus State store like any other Nexus service.
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { createNexusStore } from "@nexus-js/core/state";
+import { counterStore } from "./counter-store";
+
+const { provider, store } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
+    },
+    reset() {
+      set({ count: 0 });
+    },
+  }),
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment", "reset"],
+  },
+);
+
+nexus.configure({
+  providers: [provider],
+});
+
+console.log(store.getState().count);
+```
+
+`provider` registers the remote service; `store` is the original local Zustand
+store. Use `bindNexusStore(...)` when the Zustand store already exists.
+
+For native-store lifecycle, `defaultTarget`, and safe `Result` APIs, see the
+[Core API](/nexus/docs/state/core-api/).
+
+## 3. Connect From Another Context
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { connectNexusStore } from "@nexus-js/core/state";
+import { counterStore } from "./counter-store";
+
+const remoteCounter = await connectNexusStore(nexus, counterStore, {
+  target: { context: "background" },
+});
+```
+
+The returned `RemoteStore` holds a local mirror. After session replacement,
+create a new handle with `connectNexusStore(...)`.
+
+## 4. Read, Subscribe, And Invoke Actions
+
+```ts
+console.log(remoteCounter.getState().count);
+
+const stop = remoteCounter.subscribe((state) => {
+  console.log("count changed", state.count);
+});
+
+await remoteCounter.actions.increment(2);
+
+stop();
+remoteCounter.destroy();
+```
+
+## Headless Lifecycle And Cleanup Recipe
+
+Use this pattern in non-React services, workers, or scripts:
+
+```ts
+const remote = await connectNexusStore(nexus, counterStore, options);
+
+const unsubscribe = remote.subscribe((state) => {
+  // Process remote updates.
+  console.log(state);
+});
+
+try {
+  await remote.actions.increment(1);
+  const snapshot = remote.getState();
+  console.log(snapshot.count);
+} finally {
+  // Always unsubscribe the listener and destroy the handle.
+  unsubscribe();
+  remote.destroy();
+}
+```
+
+If a `RemoteStore` handle becomes terminal, create a new handle instead of
+reusing it. Do not retry an action automatically after a disconnect because the
+action may already have completed on the host. See [Lifecycle and
+errors](/nexus/docs/state/lifecycle-and-errors/) for the full rules.
+
+## 5. React Usage
+
+For React, wrap your tree with `NexusProvider` and share a remote handle through a scope:
+
+```tsx
+import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
+
+const CounterScope = createRemoteStoreScope(counterStore);
+
+function App({ sessionEpoch }: { sessionEpoch: number }) {
+  return (
+    <NexusProvider nexus={nexus}>
+      <CounterScope.Provider
+        options={{
+          target: { context: "background" },
+          reconnectKey: sessionEpoch,
+        }}
+      >
+        <CounterView />
+      </CounterScope.Provider>
+    </NexusProvider>
+  );
+}
+
+function CounterView() {
+  const { pending, reconnect } = CounterScope.useRemoteStore();
+  const count = CounterScope.useSelector((state) => state.count, {
+    fallback: 0,
+  });
+  const actions = CounterScope.useActions();
+  const phase = CounterScope.useStatus((status) => status.type);
+
+  if (pending) return <span>Connecting</span>;
+  if (!actions || phase !== "ready") {
+    return <button onClick={reconnect}>Reconnect</button>;
+  }
+
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
+}
+```
+
+The scope provider manages one shared `RemoteStore` handle for the subtree. Leaf components use `useSelector`, `useActions`, and `useStatus` from that scope instead of each calling `useRemoteStore(...)` separately. For a direct owner, render a child after `remote.store` exists and select it with `useStore(remote.store, selector)` imported from `zustand`.
+
+See [Nexus State React](/nexus/docs/state/react/) for `reconnectKey`, `reconnect()`, replacement, and selector fallback.

@@ -2,7 +2,7 @@
 
 User-level unit testing utilities for Nexus applications.
 
-For the full guide, read `docs/testing/README.md` from the repository root.
+For the full guide, read the [testing documentation](https://c-w-xiaohei.github.io/nexus/docs/testing/).
 
 ## Install
 

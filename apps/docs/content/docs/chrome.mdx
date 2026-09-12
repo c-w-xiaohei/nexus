@@ -1,0 +1,80 @@
+---
+title: Chrome Extension
+description: Configure extension contexts and target background scripts or content documents.
+---
+
+`@nexus-js/chrome` connects Chrome extension contexts. Configure each participating
+context with its helper: `usingBackgroundScript()`, `usingContentScript()`,
+`usingPopup()`, or another exported context helper.
+
+<InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
+
+The [getting started guide](/nexus/docs/getting-started/) walks through a shared
+contract, background provider, and content-script caller.
+
+## Exact Targets
+
+Use `chromeTarget` to address a background script, frame, or document:
+
+```ts
+import { chromeTarget } from "@nexus-js/chrome";
+
+const exactBackground = chromeTarget.background();
+const exactContent = chromeTarget.contentDocument({
+  tabId: 42,
+  documentId: "document-1",
+});
+```
+
+For example, after application code identifies the document, a configured
+background context can acquire its provider:
+
+```ts
+import { chromeTarget, usingBackgroundScript } from "@nexus-js/chrome";
+import { CaptureToken } from "./shared-contracts";
+
+const backgroundNexus = usingBackgroundScript();
+const tabId = 42;
+const documentId = "document-1";
+
+const capture = await backgroundNexus.create(CaptureToken, {
+  target: chromeTarget.contentDocument({ tabId, documentId }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    contextMeta.isVisible === true &&
+    connectionMeta.observed.documentId === documentId,
+});
+```
+
+The application owns active-tab selection and content-script injection. Pass the
+resulting address to Nexus. `tabId`, `frameId`, and `documentId` are platform
+addresses; verified sender facts are exposed through `ChromeConnectionMeta`,
+separately from peer-declared identity.
+
+The content-script helper supplies `chromeTarget.background()` as its endpoint
+`defaultTarget`, so `contentNexus.create(Token)` can omit the target when the Token
+does not supply a different default.
+
+## Multiple Providers
+
+Use `selectMulticast` for a snapshot of already available providers:
+
+```ts
+const captures = await backgroundNexus.selectMulticast(CaptureToken, {
+  where: (contextMeta, _connectionMeta) =>
+    contextMeta.context === "content-script" && contextMeta.isVisible === true,
+});
+```
+
+Use `createMulticast` with an explicit `targets` array when Nexus must acquire
+the connections. Shared acquisition, timeout, and settled-result behavior is
+described in [resolution and fallbacks](/nexus/docs/concepts/#resolution-and-fallbacks).
+
+Breaking from an `expects: "stream"` iteration cancels the local wait, not methods
+already executing remotely.
+
+## Session Lifecycle
+
+Navigation or context teardown invalidates the associated proxies and refs.
+Acquire replacements after the new context is ready; see
+[proxy lifecycle](/nexus/docs/proxy-lifecycle/).

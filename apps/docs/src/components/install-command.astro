@@ -1,0 +1,30 @@
+---
+import { highlight } from "fumadocs-core/highlight";
+import { renderToStaticMarkup } from "react-dom/server";
+import { InstallCommand } from "./install-command";
+
+interface Props {
+  packages: string;
+  dev?: boolean;
+}
+const { packages, dev = false } = Astro.props;
+const commands = await Promise.all(
+  [
+    ["pnpm", `pnpm add ${dev ? "-D " : ""}${packages}`],
+    ["npm", `npm install ${dev ? "-D " : ""}${packages}`],
+    ["yarn", `yarn add ${dev ? "-D " : ""}${packages}`],
+    ["bun", `bun add ${dev ? "-d " : ""}${packages}`],
+  ].map(async ([manager, command]) => ({
+    manager,
+    html: renderToStaticMarkup(
+      await highlight(command, {
+        lang: "bash",
+        defaultColor: false,
+        themes: { light: "github-light", dark: "github-dark" },
+      }),
+    ),
+  })),
+);
+---
+
+<InstallCommand commands={commands} client:load />

@@ -1,0 +1,145 @@
+---
+title: Getting Started With Nexus
+description: Set up your first typed Nexus service across JavaScript contexts.
+---
+
+Call a background service from a Chrome extension content script using a shared
+TypeScript contract. This guide assumes an existing extension project with both
+bundles registered in its manifest.
+
+<Callout type="warn" title="Configure both sides">
+  The background context and content script each need their own Nexus setup.
+</Callout>
+
+<Steps>
+<Step>
+
+## Install The Core Package
+
+<InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
+
+For other package combinations, see [Packages](/nexus/docs/packages/). For
+adapter-specific setup, see [Platforms](/nexus/docs/platforms/).
+
+</Step>
+<Step>
+
+## Define A Shared Contract
+
+Put the token in code that both the background and content-script bundles can
+import. If the service type already exists, import it instead of redefining it.
+
+```ts title="service-contract.ts"
+export interface PingService {
+  ping(input: string): Promise<string>;
+}
+```
+
+```ts
+import { Token } from "@nexus-js/core";
+import type { PingService } from "./service-contract";
+
+export const PingToken = new Token<PingService>("example:ping-service");
+```
+
+`Token<T>` connects the compile-time service shape to its runtime identity.
+
+</Step>
+<Step>
+
+## Publish A Provider
+
+Use the Chrome helper in the background bundle and expose the provider there:
+
+```ts
+import { usingBackgroundScript } from "@nexus-js/chrome";
+import { PingToken } from "./shared";
+import type { PingService } from "./service-contract";
+
+const backgroundNexus = usingBackgroundScript();
+
+@backgroundNexus.Expose(PingToken)
+class PingServiceImpl implements PingService {
+  async ping(input: string): Promise<string> {
+    return `pong:${input}`;
+  }
+}
+```
+
+An already-created object can be registered instead:
+
+```ts
+backgroundNexus.provide(PingToken, {
+  async ping(input) {
+    return `pong:${input}`;
+  },
+});
+```
+
+Use the instance-bound decorator for classes and `provide(...)` for object
+providers or live registration.
+
+</Step>
+<Step>
+
+## Acquire A Proxy From Another Context
+
+Configure the content script and acquire the background provider:
+
+```ts
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
+import { PingToken } from "./shared";
+
+const contentNexus = usingContentScript();
+const remote = await contentNexus.create(PingToken, {
+  target: chromeTarget.background(),
+});
+
+console.log(await remote.ping("hello")); // "pong:hello"
+```
+
+The content-script helper also supplies this target as its default, so
+`contentNexus.create(PingToken)` is equivalent here.
+
+The throw-style `create(...)` rejects if acquisition fails. The safe-style form
+returns `Promise<Result<T, E>>` for acquisition:
+
+```ts
+const result = await contentNexus.safeCreate(PingToken, {
+  target: chromeTarget.background(),
+});
+
+if (result.isErr()) {
+  console.error(result.error.code, result.error.message);
+} else {
+  console.log(await result.value.ping("hello"));
+}
+```
+
+`safeCreate` makes acquisition safe, not calls on the returned proxy. A remote
+method can still reject, so handle that call with `try/catch` or an explicit
+Promise catch.
+
+<Callout type="warn" title="Proxies are session-bound">
+
+- A raw `nexus.create()` proxy is bound to the resolved remote session.
+- Disconnect, reload, daemon restart, or session replacement invalidates it.
+- Recreate the proxy with `nexus.create(...)`; it does not silently retarget or
+  reconnect in place.
+
+</Callout>
+
+</Step>
+</Steps>
+
+## Know What "Working" Means
+
+The content script should print `pong:hello`. If it fails, check that both helpers ran in the intended bundles, the provider
+uses the same `Token`, and the target resolves to the expected destination.
+
+## What To Read Next
+
+- Product mental model: [Concepts](/nexus/docs/concepts/)
+- Platform and adapter overview: [Platforms](/nexus/docs/platforms/)
+- Package map: [Packages](/nexus/docs/packages/)
+- Synchronized state: [State quick start](/nexus/docs/state/quick-start/)

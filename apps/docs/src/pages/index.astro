@@ -1,0 +1,82 @@
+---
+import Layout from "../components/layout.astro";
+
+const features = [
+  {
+    title: "Typed services",
+    description:
+      "Share a contract between contexts and call remote methods through a typed proxy.",
+    href: "getting-started",
+    label: "Get started",
+  },
+  {
+    title: "Synchronized state",
+    description:
+      "Connect native Zustand stores to remote mirrors, with React bindings when you need them.",
+    href: "state",
+    label: "Explore Nexus State",
+  },
+  {
+    title: "Your runtime",
+    description:
+      "Connect Chrome extensions, iframes, and Node.js processes with purpose-built adapters.",
+    href: "platforms",
+    label: "Choose an adapter",
+  },
+];
+---
+
+<Layout
+  title="Connecting contexts"
+  description="Type-safe communication across JavaScript runtimes. Connect services and synchronize state with Nexus."
+>
+  <div class="home-shell">
+    <header class="home-nav">
+      <a href="/nexus/" class="brand" aria-label="Nexus home">
+        <img src="/nexus/nexus-logo.png" width="32" height="32" alt="" />
+        <span>nexus</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="/nexus/docs/">Documentation</a>
+        <a href="https://github.com/c-w-xiaohei/nexus">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <h1>
+          Connecting contexts.
+          <br />
+          <span>Powering services.</span>
+        </h1>
+        <p class="hero-description">
+          Type-safe communication across JavaScript runtimes.
+          <br class="desktop-break" /> Connect services and keep state in sync,
+          without the messaging boilerplate.
+        </p>
+        <div class="hero-actions">
+          <a class="primary-action" href="/nexus/docs/getting-started/">
+            Get started
+          </a>
+          <a class="secondary-action" href="/nexus/docs/concepts/">
+            How Nexus works
+          </a>
+        </div>
+      </section>
+      <section class="features" aria-label="What you can build with Nexus">
+        {features.map((feature) => (
+          <article>
+            <h2>{feature.title}</h2>
+            <p>{feature.description}</p>
+            <a href={`/nexus/docs/${feature.href}/`}>
+              {feature.label} <span aria-hidden="true">→</span>
+            </a>
+          </article>
+        ))}
+      </section>
+    </main>
+    <footer class="home-footer">
+      <span>Nexus · Open source under MIT</span>
+      <a href="https://github.com/c-w-xiaohei/nexus">GitHub</a>
+    </footer>
+  </div>
+</Layout>

@@ -24,7 +24,7 @@ Install the core runtime and the adapter for the contexts you use:
 pnpm add @nexus-js/core @nexus-js/chrome
 ```
 
-Use `@nexus-js/iframe` or `@nexus-js/node-ipc` for those runtimes. See [the package map](docs/packages.md) for all packages and subpath exports.
+Use `@nexus-js/iframe` or `@nexus-js/node-ipc` for those runtimes. See [the package map](https://c-w-xiaohei.github.io/nexus/docs/packages/) for all packages and subpath exports.
 
 ## Quick Start
 
@@ -114,15 +114,15 @@ Raw proxies and remote references are session-bound. After disconnect, reload, r
 
 ## Choose Your Setup
 
-| Use case                   | Install                                 | Start here                                           |
-| -------------------------- | --------------------------------------- | ---------------------------------------------------- |
-| Chrome extension contexts  | `@nexus-js/core` + `@nexus-js/chrome`   | [Chrome adapter](docs/platforms.md#chrome-extension) |
-| Parent page and iframe     | `@nexus-js/core` + `@nexus-js/iframe`   | [Iframe guide](docs/iframe/README.md)                |
-| Local daemon and clients   | `@nexus-js/core` + `@nexus-js/node-ipc` | [Node IPC guide](docs/node-ipc/README.md)            |
-| Worker or custom transport | `@nexus-js/core`                        | [Platform guide](docs/platforms.md)                  |
-| Remote synchronized state  | `@nexus-js/core`                        | [Nexus State](docs/state/README.md)                  |
-| React integration          | `@nexus-js/core` + `@nexus-js/react`    | [React guide](docs/react.md)                         |
-| Application unit tests     | `@nexus-js/testing`                     | [Testing guide](docs/testing/README.md)              |
+| Use case                   | Install                                 | Start here                                                            |
+| -------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| Chrome extension contexts  | `@nexus-js/core` + `@nexus-js/chrome`   | [Chrome adapter](https://c-w-xiaohei.github.io/nexus/docs/chrome/)    |
+| Parent page and iframe     | `@nexus-js/core` + `@nexus-js/iframe`   | [Iframe guide](https://c-w-xiaohei.github.io/nexus/docs/iframe/)      |
+| Local daemon and clients   | `@nexus-js/core` + `@nexus-js/node-ipc` | [Node IPC guide](https://c-w-xiaohei.github.io/nexus/docs/node-ipc/)  |
+| Worker or custom transport | `@nexus-js/core`                        | [Platform guide](https://c-w-xiaohei.github.io/nexus/docs/platforms/) |
+| Remote synchronized state  | `@nexus-js/core`                        | [Nexus State](https://c-w-xiaohei.github.io/nexus/docs/state/)        |
+| React integration          | `@nexus-js/core` + `@nexus-js/react`    | [React guide](https://c-w-xiaohei.github.io/nexus/docs/react/)        |
+| Application unit tests     | `@nexus-js/testing`                     | [Testing guide](https://c-w-xiaohei.github.io/nexus/docs/testing/)    |
 
 ## Capabilities
 
@@ -136,16 +136,16 @@ Nexus does not start browser contexts, inject content scripts, create iframes, s
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md)
-- [Core concepts](docs/concepts.md)
-- [Identity and connection metadata](docs/identity-and-metadata.md)
-- [Platforms and adapters](docs/platforms.md)
-- [Authorization and policy](docs/auth-and-policy.md)
-- [React integration](docs/react.md)
-- [Nexus Relay](docs/relay.md)
-- [Nexus State](docs/state/README.md)
-- [Testing](docs/testing/README.md)
-- [Documentation home](docs/README.md)
+- [Getting started](https://c-w-xiaohei.github.io/nexus/docs/getting-started/)
+- [Core concepts](https://c-w-xiaohei.github.io/nexus/docs/concepts/)
+- [Identity and connection metadata](https://c-w-xiaohei.github.io/nexus/docs/identity-and-metadata/)
+- [Platforms and adapters](https://c-w-xiaohei.github.io/nexus/docs/platforms/)
+- [Authorization and policy](https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/)
+- [React integration](https://c-w-xiaohei.github.io/nexus/docs/react/)
+- [Nexus Relay](https://c-w-xiaohei.github.io/nexus/docs/relay/)
+- [Nexus State](https://c-w-xiaohei.github.io/nexus/docs/state/)
+- [Testing](https://c-w-xiaohei.github.io/nexus/docs/testing/)
+- [Documentation home](https://c-w-xiaohei.github.io/nexus/docs/)
 
 ## Repository Development
 

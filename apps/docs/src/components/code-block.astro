@@ -1,0 +1,29 @@
+---
+import { CodeExample } from "./code-example";
+
+const { className, class: classValue, style, ...props } = Astro.props;
+const html = await Astro.slots.render("default");
+const styles =
+  typeof style === "string"
+    ? Object.fromEntries(
+        style
+          .split(";")
+          .filter(Boolean)
+          .map((value) => {
+            const colon = value.indexOf(":");
+            return [
+              value.slice(0, colon).trim(),
+              value.slice(colon + 1).trim(),
+            ];
+          }),
+      )
+    : style;
+---
+
+<CodeExample
+  {...props}
+  className={className ?? classValue}
+  style={styles}
+  html={html}
+  client:load
+/>

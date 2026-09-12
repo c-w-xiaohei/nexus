@@ -9,7 +9,7 @@ Use this entry point for application code that consumes Nexus from the outside. 
 5. explicit Relay only when a bridge context forwards selected services or stores across adjacent Nexus graphs
 6. user-level unit tests with an injectable mock `NexusInstance`
 
-Use this reference as a compact style guide, not as a substitute for the full docs. For deeper architecture, adapter, lifecycle, policy, or state semantics, direct readers to the GitHub documentation at https://github.com/c-w-xiaohei/nexus/tree/main/docs.
+Use this reference as a compact style guide, not as a substitute for the full docs. For deeper architecture, adapter, lifecycle, policy, or state semantics, direct readers to the published documentation at https://c-w-xiaohei.github.io/nexus/docs/.
 
 Keep adapter docs focused on adapter-specific setup. Do not redefine the full service contract pattern unless the topic is shared contracts.
 
@@ -62,15 +62,15 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 
 ## GitHub Documentation
 
-Point readers to the public GitHub docs when they need more context. Prefer exact links over vague repository references:
+Point readers to the published docs when they need more context. Prefer exact links over vague repository references:
 
-- Getting started: https://github.com/c-w-xiaohei/nexus/blob/main/docs/getting-started.md
-- Core concepts and architecture layers: https://github.com/c-w-xiaohei/nexus/blob/main/docs/concepts.md
-- Platform and adapter strategy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/platforms.md
-- Nexus Relay: https://github.com/c-w-xiaohei/nexus/blob/main/docs/relay.md
-- Authorization and policy: https://github.com/c-w-xiaohei/nexus/blob/main/docs/auth-and-policy.md
-- Node IPC adapter: https://github.com/c-w-xiaohei/nexus/blob/main/docs/node-ipc/README.md
-- Nexus State subsystem: https://github.com/c-w-xiaohei/nexus/blob/main/docs/state/README.md
-- Testing Nexus applications: https://github.com/c-w-xiaohei/nexus/blob/main/docs/testing/README.md
+- Getting started: https://c-w-xiaohei.github.io/nexus/docs/getting-started/
+- Core concepts and architecture layers: https://c-w-xiaohei.github.io/nexus/docs/concepts/
+- Platform and adapter strategy: https://c-w-xiaohei.github.io/nexus/docs/platforms/
+- Nexus Relay: https://c-w-xiaohei.github.io/nexus/docs/relay/
+- Authorization and policy: https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/
+- Node IPC adapter: https://c-w-xiaohei.github.io/nexus/docs/node-ipc/
+- Nexus State subsystem: https://c-w-xiaohei.github.io/nexus/docs/state/
+- Testing Nexus applications: https://c-w-xiaohei.github.io/nexus/docs/testing/
 
 Set the expectation that the skill is a compact usage guide, not a replacement for the docs. For non-trivial adapter design, lifecycle behavior, policy decisions, or state synchronization, explicitly tell readers to consult the linked docs first and then apply this skill's usage rules.

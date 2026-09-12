@@ -1,6 +1,6 @@
 # Iframe Adapter
 
-For iframe integrations, keep contracts shared and keep parent/child setup focused on iframe wiring. Full adapter docs should point to `docs/getting-started.md` for the shared contract pattern instead of redefining it repeatedly.
+For iframe integrations, keep contracts shared and keep parent/child setup focused on iframe wiring. Full adapter docs should point to https://c-w-xiaohei.github.io/nexus/docs/getting-started/ for the shared contract pattern instead of redefining it repeatedly.
 
 ## Shared Contract Shape
 
