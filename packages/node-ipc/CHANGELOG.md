@@ -1,5 +1,17 @@
 # @nexus-js/node-ipc
 
+## 0.6.1
+
+### Patch Changes
+
+- 6d398f1: Move the public Nexus documentation to the Astro site published at the GitHub Pages URL; this is a documentation-only change with no API changes.
+
+  Group platform guides under Adapters and shorten onboarding by moving optional
+  configuration into reference pages and removing repeated explanations.
+
+- Updated dependencies [6d398f1]
+  - @nexus-js/core@1.2.1
+
 ## 0.6.0
 
 ### Minor Changes
