@@ -205,6 +205,7 @@ pnpm dev
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
+- Changes confined to the private documentation site, documentation migration, navigation, styling, or documentation links do not require a package changeset. Do not bump runtime packages solely for these changes.
 - Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
 - During the explicitly documented rapid-iteration phase, use `minor` for features and breaking API, protocol, or compatibility changes, including Core 1.x. This is an intentional exception to stable SemVer; do not describe these releases as backward-compatible.
 - Keep `patch` backward-compatible. Clearly list breaking changes and migration steps against the last published version, not intermediate unshipped implementations.
