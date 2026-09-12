@@ -1,5 +1,22 @@
 # @nexus-js/chrome
 
+## 0.5.0
+
+### Minor Changes
+
+- 5026b21: Support optional exact `connectTo` startup targets in Chrome helpers.
+  Custom page helpers accept startup options separately from metadata:
+  `usingExtensionPage(meta, { connectTo })` and
+  `createExtensionPageConfig(meta, { connectTo })`. Existing metadata-only calls
+  are unchanged. Startup dialing requires Core 1.2. The existing declared Core
+  range is unchanged; this release was verified with the matching Core source.
+
+### Patch Changes
+
+- Updated dependencies [5026b21]
+- Updated dependencies [5026b21]
+  - @nexus-js/core@1.2.0
+
 ## 0.4.1
 
 ### Patch Changes
