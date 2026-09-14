@@ -5,8 +5,7 @@
  */
 
 /**
- * The prefix for all Nexus placeholders. Chosen from the "private use"
- * unicode block to minimize collision with user data.
+ * Control-character prefix; matching user strings are escaped before transport.
  */
 export const PLACEHOLDER_PREFIX = "\u0003";
 
@@ -31,92 +30,15 @@ export enum PlaceholderType {
   MAP = "M",
   SET = "S",
   BIGINT = "N",
-  // The following are not yet in the spec, but good to have placeholders for
-  // DATE = 'D',
-  // REGEXP = 'X',
 }
 
-import {
-  LocalResourceType,
-  type ReviveContext,
-  type SanitizeContext,
-  ValueType,
-} from "../types";
-import { Placeholder } from "./placeholder";
-import type { PayloadProcessor } from "./payload-processor";
-
-type SanitizeHandler = (
-  processor: PayloadProcessor,
-  value: any,
-  context: SanitizeContext,
-) => Placeholder;
-
-type ReviveHandler = (
-  processor: PayloadProcessor,
-  placeholder: Placeholder,
-  context: ReviveContext,
-) => any;
-
-export const SANITIZER_TABLE_CONFIG = new Map<ValueType, SanitizeHandler>([
-  [
-    ValueType.FUNCTION,
-    (processor, value, context) => {
-      const resourceId = context.serviceName
-        ? processor.resourceManager.registerLocalResource(
-            value,
-            context.targetConnectionId,
-            LocalResourceType.FUNCTION,
-            context.serviceName,
-            context.servicePolicy,
-          )
-        : processor.resourceManager.registerLocalResource(
-            value,
-            context.targetConnectionId,
-            LocalResourceType.FUNCTION,
-          );
-      context.createdResourceIds?.push(resourceId);
-      return new Placeholder(PlaceholderType.RESOURCE, resourceId);
-    },
-  ],
-  [
-    ValueType.MAP,
-    (_, value) =>
-      new Placeholder(
-        PlaceholderType.MAP,
-        JSON.stringify(Array.from(value.entries())),
-      ),
-  ],
-  [
-    ValueType.SET,
-    (_, value) =>
-      new Placeholder(
-        PlaceholderType.SET,
-        JSON.stringify(Array.from(value.values())),
-      ),
-  ],
-  [
-    ValueType.BIGINT,
-    (_, value) => new Placeholder(PlaceholderType.BIGINT, value.toString()),
-  ],
-]);
-
-export const REVIVER_TABLE_CONFIG = new Map<PlaceholderType, ReviveHandler>([
-  [
-    PlaceholderType.RESOURCE,
-    (processor, placeholder, context) =>
-      processor.proxyFactory.createRemoteResourceProxy(
-        placeholder.payload!,
-        context.sourceConnectionId,
-      ),
-  ],
-  [
-    PlaceholderType.MAP,
-    (_, placeholder) => new Map(JSON.parse(placeholder.payload!)),
-  ],
-  [
-    PlaceholderType.SET,
-    (_, placeholder) => new Set(JSON.parse(placeholder.payload!)),
-  ],
-  [PlaceholderType.BIGINT, (_, placeholder) => BigInt(placeholder.payload!)],
+// Pure value decoders; resource revival belongs to the owning payload transaction.
+export const REVIVER_TABLE_CONFIG = new Map<
+  string,
+  (payload: string) => unknown
+>([
+  [PlaceholderType.MAP, (payload) => new Map(JSON.parse(payload))],
+  [PlaceholderType.SET, (payload) => new Set(JSON.parse(payload))],
+  [PlaceholderType.BIGINT, (payload) => BigInt(payload)],
   [PlaceholderType.UNDEFINED, () => undefined],
 ]);

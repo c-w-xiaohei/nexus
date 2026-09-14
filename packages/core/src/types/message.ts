@@ -15,7 +15,18 @@ export interface SerializedError {
   name: string;
   code: string;
   message: string;
+  /** Present only for errors produced by a Nexus framework boundary. */
+  origin?: "framework";
   cause?: SerializedError;
+  /** Allowlisted diagnostics only; arbitrary application context never crosses the wire. */
+  context?: {
+    originalError?: SerializedError;
+    connectionId?: string;
+    sourceConnectionId?: string;
+    resourceId?: string | null;
+    serviceName?: string;
+    path?: (string | number)[];
+  };
   stack?: string;
 }
 

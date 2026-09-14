@@ -69,7 +69,7 @@ describe("State mirror", () => {
     remote.store.destroy();
   });
 
-  it("keeps init action capabilities and their Core errors unchanged", async () => {
+  it("wraps init actions as native Promises and preserves Core errors", async () => {
     const coreError = Object.assign(new Error("released resource"), {
       code: "E_RESOURCE_ACCESS_DENIED",
     });
@@ -85,8 +85,9 @@ describe("State mirror", () => {
       actions: { increment: action },
       unsubscribe: vi.fn(),
     });
-    expect(remote.store.actions.increment).toBe(action);
-    await expect(remote.store.actions.increment(1)).rejects.toBe(coreError);
+    const result = remote.store.actions.increment(1);
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).rejects.toBe(coreError);
     remote.store.destroy();
   });
 

@@ -24,7 +24,7 @@ The `ConnectionManager` class serves as the facade for this layer. It provides t
 
 - **`safeInitialize()`**: Starts listening, then launches optional exact `connectTo` startup dials once. It does not await the dials or any remote Token; failures are logged without failing local readiness. Demand acquisition shares the same in-flight target slot.
 - **`resolveConnection(options)`**: The primary method for L3 to acquire a connection. For an exact `target`, it reuses a ready matching connection or creates one through the adapter. An optional `where` predicate filters peer-declared context and immutable connection metadata after target selection; it does not discover or create a connection by itself. This is the foundation for `nexus.create()`.
-- **`sendMessage(target, message)`**: Routes a `NexusMessage` to its destination. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details. A `MessageTarget` names exact connection IDs or a dynamic `where` filter over the ready connection graph.
+- **`safeSendMessage(connectionId, message)`**: Routes a `NexusMessage` to one published connection. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details.
 
 ### Handlers (L2 -> L3)
 

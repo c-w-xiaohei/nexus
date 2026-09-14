@@ -1,5 +1,6 @@
-import type { NexusInstance } from "@nexus-js/core";
+import type { Asyncified, NexusInstance } from "@nexus-js/core";
 import { connectNexusStore, type RemoteStore } from "@nexus-js/core/state";
+import { chromeTarget } from "@nexus-js/chrome";
 import {
   DocumentRelayToken,
   DocumentToolToken,
@@ -58,7 +59,9 @@ export async function startPage(
   }
   // Offscreen is selected by the background after its ready acknowledgement.
   if (capability !== "offscreen") {
-    const workspace = await nexus.create(WorkspaceToken);
+    const workspace = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(WorkspaceToken));
     if (capability === "popup") {
       // This lifecycle probe records which replacement worker the popup reached.
       await reporter.result(JSON.stringify(await workspace.summary()));
@@ -68,21 +71,31 @@ export async function startPage(
     capability === "popup" ||
     (capability === "workspace" &&
       hasStateClientFlag(window.location, identity.runId))
-      ? await connectNexusStore(nexus, workspaceStateDefinition)
+      ? await connectNexusStore(nexus, workspaceStateDefinition, {
+          target: chromeTarget.background(),
+        })
       : undefined;
   const handles: {
-    relay: DocumentRelayService | undefined;
-    freshRelay: DocumentRelayService | undefined;
+    relay: Asyncified<DocumentRelayService> | undefined;
+    freshRelay: Asyncified<DocumentRelayService> | undefined;
   } = {
     relay: undefined,
     freshRelay: undefined,
   };
   let unsubscribe: (() => void) | undefined;
   if (capability === "popup" || capability === "workspace") {
-    const relayAdmin = await nexus.create(RelayAdminToken);
+    const relayAdmin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(RelayAdminToken));
     const registration = await relayAdmin.registerCurrentDocument();
     if (registration.result.ok) {
-      const selected = await nexus.safeCreate(DocumentRelayToken);
+      const selected = await nexus
+        .safeConnect({ target: chromeTarget.background() })
+        .then((result) =>
+          result.andThen((connection) =>
+            connection.safeGet(DocumentRelayToken),
+          ),
+        );
       if (!selected.isErr()) handles.relay = selected.value;
     }
   }
@@ -210,8 +223,8 @@ async function runPageCommand(
   sessionProvider: { readonly session: () => Promise<string> },
   state: RemoteStore<WorkspaceStore> | undefined,
   handles: {
-    relay: DocumentRelayService | undefined;
-    freshRelay: DocumentRelayService | undefined;
+    relay: Asyncified<DocumentRelayService> | undefined;
+    freshRelay: Asyncified<DocumentRelayService> | undefined;
   },
   capability: "popup" | "options" | "workspace" | "offscreen",
   unsubscribe: (() => void) | undefined,
@@ -286,7 +299,9 @@ async function runPageCommand(
       return;
     }
     if (command === "relay-local-call") {
-      const workspace = await nexus.create(WorkspaceToken);
+      const workspace = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(WorkspaceToken));
       await reporter.result(
         JSON.stringify({
           result: "relay-local-result",
@@ -318,7 +333,13 @@ async function runPageCommand(
           return;
         }
       }
-      const fresh = await nexus.safeCreate(DocumentRelayToken);
+      const fresh = await nexus
+        .safeConnect({ target: chromeTarget.background() })
+        .then((result) =>
+          result.andThen((connection) =>
+            connection.safeGet(DocumentRelayToken),
+          ),
+        );
       if (fresh.isErr()) throw fresh.error;
       handles.freshRelay = fresh.value;
     }
@@ -387,7 +408,9 @@ async function runPageCommand(
         );
         return;
       }
-      const relayAdmin = await nexus.create(RelayAdminToken);
+      const relayAdmin = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(RelayAdminToken));
       const response =
         command === "relay-register"
           ? await relayAdmin.registerCurrentDocument()
@@ -412,7 +435,13 @@ async function runPageCommand(
             return;
           }
         }
-        const selected = await nexus.safeCreate(DocumentRelayToken);
+        const selected = await nexus
+          .safeConnect({ target: chromeTarget.background() })
+          .then((result) =>
+            result.andThen((connection) =>
+              connection.safeGet(DocumentRelayToken),
+            ),
+          );
         if (selected.isErr()) {
           await reporter.result(
             JSON.stringify({
@@ -432,14 +461,18 @@ async function runPageCommand(
       return;
     }
     if (command === "setting") {
-      const workspace = await nexus.create(WorkspaceToken);
+      const workspace = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(WorkspaceToken));
       const value = await workspace.setting();
       status && (status.textContent = value);
       await reporter.result(`setting:${value}`);
       return;
     }
     if (command === "set-setting") {
-      const workspace = await nexus.create(WorkspaceToken);
+      const workspace = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(WorkspaceToken));
       const value = await workspace.setSetting("options-updated");
       status && (status.textContent = value);
       await reporter.result(`setting:${value}`);

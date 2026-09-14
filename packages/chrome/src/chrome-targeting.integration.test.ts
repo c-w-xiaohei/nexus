@@ -137,7 +137,6 @@ describe("Chrome exact content-script targets", () => {
           origin: "https://example.test",
         },
         implementation: new ContentScriptEndpoint(),
-        defaultTarget: chromeTarget.background(),
       },
       providers: [
         { token: ContentToken, service: { identity: () => "tab-7-frame-2" } },
@@ -145,12 +144,18 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await background.ready();
-    const backgroundProxy = await content.create(BackgroundToken);
+    const backgroundProxy = await content
+      .connect({
+        target: chromeTarget.background(),
+      })
+      .then((connection) => connection.get(BackgroundToken));
     await expect(backgroundProxy.ready()).resolves.toBe("background");
 
-    const contentProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
-    });
+    const contentProxy = await background
+      .connect({
+        target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
+      })
+      .then((connection) => connection.get(ContentToken));
 
     await expect(contentProxy.identity()).resolves.toBe("tab-7-frame-2");
     expect(runtimeConnect).toHaveBeenCalledOnce();
@@ -186,14 +191,18 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await content.ready();
-    const contentProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentFrame({ tabId: 8, frameId: 0 }),
-    });
+    const contentProxy = await background
+      .connect({
+        target: chromeTarget.contentFrame({ tabId: 8, frameId: 0 }),
+      })
+      .then((connection) => connection.get(ContentToken));
 
     await expect(contentProxy.identity()).resolves.toBe("tab-8-frame-0");
-    const reusedProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentFrame({ tabId: 8, frameId: 0 }),
-    });
+    const reusedProxy = await background
+      .connect({
+        target: chromeTarget.contentFrame({ tabId: 8, frameId: 0 }),
+      })
+      .then((connection) => connection.get(ContentToken));
     await expect(reusedProxy.identity()).resolves.toBe("tab-8-frame-0");
     expect(tabsConnect).toHaveBeenCalledWith(8, { frameId: 0 });
     expect(tabsConnect).toHaveBeenCalledOnce();
@@ -218,7 +227,6 @@ describe("Chrome exact content-script targets", () => {
           origin: "https://example.test",
         },
         implementation: new ContentScriptEndpoint(),
-        defaultTarget: chromeTarget.background(),
       },
       providers: [
         { token: ContentToken, service: { identity: () => "content" } },
@@ -226,12 +234,18 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await background.ready();
-    const backgroundProxy = await content.create(BackgroundToken);
+    const backgroundProxy = await content
+      .connect({
+        target: chromeTarget.background(),
+      })
+      .then((connection) => connection.get(BackgroundToken));
     await backgroundProxy.ready();
 
-    const contentProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentFrame({ tabId: 7, frameId: 3 }),
-    });
+    const contentProxy = await background
+      .connect({
+        target: chromeTarget.contentFrame({ tabId: 7, frameId: 3 }),
+      })
+      .then((connection) => connection.get(ContentToken));
 
     await expect(contentProxy.identity()).resolves.toBe("content");
     expect(tabsConnect).toHaveBeenCalledWith(7, { frameId: 3 });
@@ -250,9 +264,14 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await expect(
-      background.create(ContentToken, {
-        target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
-      }),
+      background
+        .connect({
+          target: chromeTarget.contentDocument({
+            tabId: 7,
+            documentId: "doc-7",
+          }),
+        })
+        .then((connection) => connection.get(ContentToken)),
     ).rejects.toMatchObject({ code: "E_ENDPOINT_CAPABILITY_MISMATCH" });
   });
 
@@ -273,10 +292,12 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await expect(
-      background.create(ContentToken, {
-        target: chromeTarget.contentFrame({ tabId: 7, frameId: 2 }),
-        timeout: 100,
-      }),
+      background
+        .connect({
+          target: chromeTarget.contentFrame({ tabId: 7, frameId: 2 }),
+          timeout: 100,
+        })
+        .then((connection) => connection.get(ContentToken)),
     ).rejects.toMatchObject({ code: "E_HANDSHAKE_FAILED" });
   });
 
@@ -298,7 +319,6 @@ describe("Chrome exact content-script targets", () => {
           origin: "https://example.test",
         },
         implementation: new ContentScriptEndpoint(),
-        defaultTarget: chromeTarget.background(),
       },
       providers: [
         { token: ContentToken, service: { identity: () => "content" } },
@@ -306,11 +326,17 @@ describe("Chrome exact content-script targets", () => {
     });
 
     await background.ready();
-    const backgroundProxy = await content.create(BackgroundToken);
+    const backgroundProxy = await content
+      .connect({
+        target: chromeTarget.background(),
+      })
+      .then((connection) => connection.get(BackgroundToken));
     await backgroundProxy.ready();
-    const oldProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
-    });
+    const oldProxy = await background
+      .connect({
+        target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
+      })
+      .then((connection) => connection.get(ContentToken));
     await oldProxy.identity();
 
     connectedPorts[0]?.disconnect();
@@ -318,9 +344,11 @@ describe("Chrome exact content-script targets", () => {
     await expect(oldProxy.identity()).rejects.toMatchObject({
       code: "E_CONN_CLOSED",
     });
-    const freshProxy = await background.create(ContentToken, {
-      target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
-    });
+    const freshProxy = await background
+      .connect({
+        target: chromeTarget.contentDocument({ tabId: 7, documentId: "doc-7" }),
+      })
+      .then((connection) => connection.get(ContentToken));
     await expect(freshProxy.identity()).resolves.toBe("content");
     expect(tabsConnect).toHaveBeenCalledWith(7, {
       documentId: "doc-7",

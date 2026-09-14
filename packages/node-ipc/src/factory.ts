@@ -12,6 +12,7 @@ import type {
 import type { NodeIpcAdapterModel } from "./types/meta.js";
 import { NodeIpcError } from "./errors.js";
 
+/** Configure or build a Node IPC daemon endpoint. */
 export function usingNodeIpcDaemon(
   options: NodeIpcDaemonConfigOptions,
 ): NexusConfig<NodeIpcAdapterModel>;
@@ -49,6 +50,7 @@ export function usingNodeIpcDaemon(
       ) as unknown as NexusInstance<NodeIpcAdapterModel>);
 }
 
+/** Validate and normalize a daemon socket address before endpoint construction. */
 function validateDaemonAddress(
   address: NodeIpcSocketAddress,
 ): NodeIpcSocketAddress {
@@ -57,6 +59,7 @@ function validateDaemonAddress(
   return NodeIpcAddress.normalize(result.value);
 }
 
+/** Derive the default daemon socket address from its application identity. */
 function resolveDaemonAddress(
   appId: string,
   instance: string,
@@ -70,6 +73,7 @@ function resolveDaemonAddress(
   return result.value;
 }
 
+/** Configure or build a Node IPC client endpoint. */
 export function usingNodeIpcClient(
   options: NodeIpcClientConfigOptions,
 ): NexusConfig<NodeIpcAdapterModel>;
@@ -97,7 +101,6 @@ export function usingNodeIpcClient(
           maxAuthLineBytes: options.maxAuthLineBytes,
         },
       ),
-      defaultTarget: options.defaultTarget,
       ...(connectTo ? { connectTo } : {}),
     },
   };
@@ -109,6 +112,7 @@ export function usingNodeIpcClient(
       ) as unknown as NexusInstance<NodeIpcAdapterModel>);
 }
 
+/** Reject an explicitly empty token before opening an IPC endpoint. */
 function validateAuthToken(authToken: string | undefined): void {
   if (authToken === "") {
     throw new NodeIpcError(

@@ -7,37 +7,46 @@ For the product guide, see the [published Nexus documentation](https://c-w-xiaoh
 ## Installation
 
 ```bash
-npm install @nexus-js/chrome @nexus-js/core
+pnpm add @nexus-js/chrome @nexus-js/core
 ```
 
 ## Quick Start
 
-### Background Script
+### Shared Contract (`shared/tokens.ts`)
 
 ```typescript
 import { Token } from "@nexus-js/core";
-import { usingBackgroundScript } from "@nexus-js/chrome";
 
-// Define service interface and token
-type Settings = {
+export type Settings = {
   theme: "light" | "dark";
 };
 
-interface IBackgroundService {
+export interface BackgroundService {
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
 }
 
-const BackgroundServiceToken = new Token<IBackgroundService>(
+export const BackgroundServiceToken = new Token<BackgroundService>(
   "background-service",
 );
+```
+
+### Background Script
+
+```typescript
+import { usingBackgroundScript } from "@nexus-js/chrome";
+import {
+  BackgroundServiceToken,
+  type BackgroundService,
+  type Settings,
+} from "./shared/tokens";
 
 // Configure Nexus for background context
 const backgroundNexus = usingBackgroundScript();
 
 // Expose a class service on the configured background instance
 @backgroundNexus.Expose(BackgroundServiceToken)
-class BackgroundService implements IBackgroundService {
+class BackgroundServiceImpl implements BackgroundService {
   async getSettings() {
     const result = await chrome.storage.sync.get("settings");
     return (result.settings as Settings | undefined) ?? { theme: "light" };
@@ -52,16 +61,18 @@ class BackgroundService implements IBackgroundService {
 ### Content Script
 
 ```typescript
-import { nexus } from "@nexus-js/core";
-import { usingContentScript } from "@nexus-js/chrome";
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for content script context
-usingContentScript();
+const contentNexus = usingContentScript();
 
 // Use background service
 async function main() {
-  const backgroundService = await nexus.create(BackgroundServiceToken);
+  const connection = await contentNexus.connect({
+    target: chromeTarget.background(),
+  });
+  const backgroundService = connection.get(BackgroundServiceToken);
 
   const settings = await backgroundService.getSettings();
   console.log("Settings:", settings);
@@ -73,15 +84,17 @@ main();
 ### Popup
 
 ```typescript
-import { nexus } from "@nexus-js/core";
-import { usingPopup } from "@nexus-js/chrome";
+import { chromeTarget, usingPopup } from "@nexus-js/chrome";
 import { BackgroundServiceToken } from "./shared/tokens";
 
 // Configure Nexus for popup context
 async function initPopup() {
-  usingPopup();
+  const popupNexus = usingPopup();
 
-  const backgroundService = await nexus.create(BackgroundServiceToken);
+  const connection = await popupNexus.connect({
+    target: chromeTarget.background(),
+  });
+  const backgroundService = connection.get(BackgroundServiceToken);
 
   // Use the service
   const settings = await backgroundService.getSettings();
@@ -99,9 +112,21 @@ initPopup();
 - **Zero-configuration setup** for standard use cases
 - **Full TypeScript support** with discriminated union types
 
-Content scripts, popups, and options pages receive `chromeTarget.background()` as their endpoint `defaultTarget`, so `nexus.create(Token)` acquires a background provider by default. Background-to-content calls use an exact `chromeTarget.contentFrame(...)` or `chromeTarget.contentDocument(...)`. Use `select` with a `where...` predicate only for already available providers; it never connects. `selectMulticast` binds a snapshot, not a changing set of tabs. Application code owns tab/window discovery and decides when identity changes require new handles. Raw proxies and refs are session-bound: after disconnect, service worker restart, or other session replacement, application code should recreate handles and decide any retry or rebuild policy explicitly.
+Content scripts, popups, and options pages acquire the background with the exact
+`chromeTarget.background()` target. Background-to-content calls use an exact
+`chromeTarget.contentFrame(...)` or `chromeTarget.contentDocument(...)` target.
+Application code owns tab/window discovery and decides when identity changes
+require new handles. Raw proxies and refs are session-bound: after disconnect,
+service worker restart, or other session replacement, application code should
+reconnect and get fresh handles.
 
-`createMulticast` requires a non-empty array of exact `chromeTarget` values and fails all acquisition if any target fails. Both multicast methods support `expects: "all"` (default) and `expects: "stream"`; calls return settled `{ status, value }` or `{ status, reason }` entries without connection IDs or `from` metadata. Connection IDs are not acquisition inputs, selection keys, or routing targets. `selectMulticast` has no `wait` and may return an empty snapshot. Acquisition `timeout`/`signal` apply before `create` or `createMulticast`; `callTimeout` applies to proxy calls. Invalid option keys, timeout values, aborts, and incompatible provider-catalog protocols return structured errors.
+`connectMulticast` accepts an explicit target array for strict multi-target
+acquisition, or no targets for a current ready-connection snapshot. Call
+`collection.get(Token)` to receive one `{ connection, result }` item per member.
+Each successful result is an ordinary proxy; failed members remain visible.
+Acquisition `timeout`/`signal` apply to connection acquisition, while
+`callTimeout` applies to proxy calls. Invalid option keys, timeout values, aborts,
+and incompatible provider-catalog protocols return structured errors.
 
 For object services, Nexus State stores, or Relay providers, configure the runtime and call `provide(...)` instead of using class decorators:
 
@@ -146,7 +171,8 @@ usingExtensionPage(
 );
 ```
 
-Startup targets are independent of `defaultTarget`; omitting them does not dial.
+Startup targets are explicit `connectTo` entries and are independent of service
+acquisition; omitting them does not dial.
 
 ### Target Constructors And Predicates
 
@@ -169,7 +195,7 @@ Startup targets are independent of `defaultTarget`; omitting them does not dial.
 
 ## Advanced Usage
 
-### Exact Acquisition And Provider Selection
+### Exact Acquisition And Connection Filtering
 
 ```typescript
 import { nexus } from "@nexus-js/core";
@@ -180,14 +206,16 @@ const tabId = 42;
 
 // The snippet runs in a previously configured consumer context.
 // Select one known tab/frame with an exact target.
-const tabService = await nexus.create(ServiceToken, {
+const tabConnection = await nexus.connect({
   target: chromeTarget.contentFrame({ tabId, frameId: 0 }),
 });
+const tabService = tabConnection.get(ServiceToken);
 
 // Dynamically fan out to matching ready content-script sessions.
-const githubContentScripts = await nexus.selectMulticast(ServiceToken, {
+const githubContentScripts = await nexus.connectMulticast({
   where: whereContentScriptByUrl("github.com"),
 });
+const githubServices = githubContentScripts.get(ServiceToken);
 
 const whereSpecialPage = (contextMeta: ChromeContextMeta) =>
   contextMeta.context === "content-script" &&
@@ -236,7 +264,32 @@ build the WXT fixture and run Playwright with persistent Chromium and a fresh
 profile for each test case. This is contributor-only test infrastructure and
 does not change published package behavior or public APIs.
 
-### New Context Support
+### Fixture Scenarios
+
+`tests/browser/extension/entrypoints/background.ts` runs the fixture's providers,
+control-message boundary, retained handles, and lifecycle barriers. It is the
+extension entrypoint; assertions live in `tests/browser/normal/*.spec.ts`.
+
+- Routing checks passive connection waiting, empty snapshots, and exact targets.
+- Capability checks retain session-bound proxies and refs across navigation,
+  combine per-connection calls, and distinguish reference release from disconnect.
+- Relay and UI checks cover authorization, document replacement, State fan-out,
+  storage persistence, and offscreen creation/closure.
+
+Some command and barrier names retain historical `select` or `create` wording.
+Their implementations use `connect`, `connectMulticast`, and `connection.get`.
+An empty connection snapshot is valid; an expiring passive wait reports
+`E_SERVICE_ACQUISITION_TIMEOUT`. Policy denial reports `E_AUTH_CALL_DENIED`.
+
+For a focused edit to the entrypoint, build the fixture before invoking Playwright:
+
+```bash
+pnpm --filter @nexus-js/chrome build:test-extension
+pnpm --filter @nexus-js/chrome exec playwright test --project=normal normal/routing.spec.ts normal/capabilities.spec.ts
+pnpm --filter @nexus-js/chrome typecheck:browser
+```
+
+## Other Contexts
 
 ```typescript
 // Options page
@@ -249,8 +302,12 @@ usingDevToolsPage();
 
 // Offscreen document
 import { usingOffscreenDocument } from "@nexus-js/chrome";
-usingOffscreenDocument("audio-processing");
+usingOffscreenDocument({ reason: "audio-processing" });
 ```
+
+These helpers configure the current context. They neither create the page nor
+implicitly dial the background. Supply `chromeTarget.background()` to `connect`
+or list it explicitly in `connectTo`.
 
 ## License
 

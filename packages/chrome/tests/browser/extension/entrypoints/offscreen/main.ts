@@ -1,4 +1,4 @@
-import { usingOffscreenDocument } from "@nexus-js/chrome";
+import { chromeTarget, usingOffscreenDocument } from "@nexus-js/chrome";
 import {
   type FixtureAppMeta,
   SessionToken,
@@ -14,6 +14,7 @@ const sessionId = crypto.randomUUID();
 const requestedRunId = new URLSearchParams(location.search).get("runId");
 void bootstrap();
 
+/** Publishes the offscreen provider over an explicit background connection before acknowledging readiness. */
 async function bootstrap(): Promise<void> {
   const runId = isFixtureRunId(requestedRunId) ? requestedRunId : undefined;
   if (!isFixtureRunId(runId)) {
@@ -56,7 +57,10 @@ async function bootstrap(): Promise<void> {
     });
     await nexus.ready();
     // UIClientEndpoint publishes static providers over this public background route.
-    await nexus.create(WorkspaceToken);
+    const connection = await nexus.connect({
+      target: chromeTarget.background(),
+    });
+    connection.get(WorkspaceToken);
     await reporter.barrier("provider-live");
     const ready = await chrome.runtime.sendMessage({
       kind: "ui-ready",

@@ -171,7 +171,6 @@ describe("Chrome Factory Functions", () => {
       });
 
       expect(config.endpoint?.connectTo).toEqual([]);
-      expect(config.endpoint?.defaultTarget).toEqual({ kind: "background" });
       expect(config.endpoint?.meta).toEqual({
         context: "popup",
         tabId: 123,
@@ -197,7 +196,6 @@ describe("Chrome Factory Functions", () => {
         context: "extension-page",
         page: "settings.html",
       });
-      expect(config.endpoint?.defaultTarget).toEqual({ kind: "background" });
       expect(sidePanel.getOptions).not.toHaveBeenCalled();
     });
 

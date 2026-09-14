@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Result } from "better-result";
-import type { Asyncified } from "../api/types";
-import { NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL } from "../types/symbols";
+import type { Connection } from "../api/connection";
 import { createStarNetwork } from "../utils/test-utils";
 import { createNexusStore } from "./bind-store";
 import { connectNexusStore, safeConnectNexusStore } from "./connect-store";
@@ -78,10 +77,7 @@ describe("State connection acquisition and handshake", () => {
       },
     } as unknown as NexusStoreServiceContract<State & Actions>;
     const result = await safeConnectNexusStore(
-      {
-        safeCreate: async <T extends object>() =>
-          Result.ok(service as Asyncified<T>),
-      },
+      { safeConnect: async () => Result.ok(connectionFor(service)) },
       token,
       { timeout: 10 },
     );
@@ -94,7 +90,7 @@ describe("State connection acquisition and handshake", () => {
 
   it("keeps safe acquisition errors separate from protocol errors", async () => {
     const result = await safeConnectNexusStore(
-      { safeCreate: async () => Result.err(new Error("no provider")) },
+      { safeConnect: async () => Result.err(new Error("no provider")) },
       token,
     );
     expect(result.isErr()).toBe(true);
@@ -104,13 +100,23 @@ describe("State connection acquisition and handshake", () => {
     }
   });
 
+  it("rejects a zero State timeout before connection acquisition", async () => {
+    const safeConnect = vi.fn();
+    const result = await safeConnectNexusStore({ safeConnect }, token, {
+      timeout: 0,
+    });
+
+    expect(result).toMatchObject({ error: { code: "E_STORE_CONNECT" } });
+    expect(safeConnect).not.toHaveBeenCalled();
+  });
+
   it.each(["throw", "reject", "result"] as const)(
     "preserves the cause of a %s acquisition failure",
     async (mode) => {
       const cause = new Error("acquisition failed");
       const result = await safeConnectNexusStore(
         {
-          safeCreate: (): Promise<Result<never, Error>> => {
+          safeConnect: (): Promise<Result<never, Error>> => {
             if (mode === "throw") throw cause;
             if (mode === "reject") return Promise.reject(cause);
             return Promise.resolve(Result.err(cause));
@@ -131,10 +137,6 @@ describe("State connection acquisition and handshake", () => {
     let disconnect!: () => void;
     const stopObserving = vi.fn();
     const service = {
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL](notify: () => void) {
-        disconnect = notify;
-        return stopObserving;
-      },
       async subscribe(onSync: (event: unknown) => void) {
         onSync({
           type: "init",
@@ -146,11 +148,18 @@ describe("State connection acquisition and handshake", () => {
         });
         queueMicrotask(disconnect);
       },
-    };
+    } as NexusStoreServiceContract<State & Actions>;
     const result = await safeConnectNexusStore(
       {
-        safeCreate: async <T extends object>() =>
-          Result.ok(service as Asyncified<T>),
+        safeConnect: async () =>
+          Result.ok(
+            connectionFor(service, {
+              onDisconnected: (notify) => {
+                disconnect = notify;
+                return stopObserving;
+              },
+            }),
+          ),
       },
       token,
     );
@@ -159,4 +168,111 @@ describe("State connection acquisition and handshake", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(stopObserving).toHaveBeenCalledOnce();
   });
+
+  it("marks a State mirror stale when its where identity observation stops matching", async () => {
+    let updateIdentity!: (meta: object) => void;
+    const service = {
+      async subscribe(onSync: (event: unknown) => void) {
+        onSync({
+          type: "init",
+          storeInstanceId: "where",
+          version: 0,
+          state: { count: 0 },
+          actions: {},
+          unsubscribe: vi.fn(),
+        });
+      },
+    } as NexusStoreServiceContract<State & Actions>;
+    const result = await safeConnectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok(
+            connectionFor(service, {
+              subscribeIdentity: (listener) => {
+                updateIdentity = listener;
+                listener({ active: true });
+                return () => undefined;
+              },
+            }),
+          ),
+      },
+      token,
+      {
+        where: ((meta: object) =>
+          (meta as { active?: boolean }).active === true) as never,
+      },
+    );
+
+    expect(result.isOk()).toBe(true);
+    if (result.isOk()) {
+      updateIdentity({ active: false });
+      expect(result.value.getStatus().type).toBe("stale");
+      result.value.destroy();
+    }
+  });
+
+  it("does not subscribe after an immediate identity mismatch", async () => {
+    const subscribe = vi.fn();
+    const service = { subscribe } as unknown as NexusStoreServiceContract<
+      State & Actions
+    >;
+    const result = await safeConnectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok(
+            connectionFor(service, {
+              subscribeIdentity: (listener) => {
+                listener({ active: false });
+                return () => undefined;
+              },
+            }),
+          ),
+      },
+      token,
+      {
+        where: ((meta: object) =>
+          (meta as { active?: boolean }).active === true) as never,
+      },
+    );
+
+    expect(result).toMatchObject({ error: { code: "E_STORE_DISCONNECTED" } });
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it("does not subscribe after an immediate connection terminal event", async () => {
+    const subscribe = vi.fn();
+    const service = { subscribe } as unknown as NexusStoreServiceContract<
+      State & Actions
+    >;
+    const result = await safeConnectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok(
+            connectionFor(service, {
+              onDisconnected: (listener) => {
+                listener();
+                return () => undefined;
+              },
+            }),
+          ),
+      },
+      token,
+    );
+
+    expect(result).toMatchObject({ error: { code: "E_STORE_DISCONNECTED" } });
+    expect(subscribe).not.toHaveBeenCalled();
+  });
 });
+
+const connectionFor = (
+  service: object,
+  options: {
+    onDisconnected?: (listener: () => void) => () => void;
+    subscribeIdentity?: (listener: (meta: object) => void) => () => void;
+  } = {},
+): Connection =>
+  ({
+    safeGet: () => Result.ok(service),
+    onDisconnected: options.onDisconnected ?? (() => () => undefined),
+    subscribeIdentity: options.subscribeIdentity ?? (() => () => undefined),
+  }) as Connection;

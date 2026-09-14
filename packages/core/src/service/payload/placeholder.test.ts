@@ -7,19 +7,17 @@ import {
 } from "./protocol";
 
 describe("Placeholder", () => {
-  describe("toString()", () => {
+  describe("encode()", () => {
     it("should create a string with payload", () => {
-      const p = new Placeholder(PlaceholderType.RESOURCE, "res-123");
-      expect(p.toString()).toBe(
+      const p = Placeholder.encode(PlaceholderType.RESOURCE, "res-123");
+      expect(p).toBe(
         `${PLACEHOLDER_PREFIX}${PlaceholderType.RESOURCE}${PAYLOAD_SEPARATOR}res-123`,
       );
     });
 
     it("should create a string without payload", () => {
-      const p = new Placeholder(PlaceholderType.UNDEFINED);
-      expect(p.toString()).toBe(
-        `${PLACEHOLDER_PREFIX}${PlaceholderType.UNDEFINED}`,
-      );
+      const p = Placeholder.encode(PlaceholderType.UNDEFINED);
+      expect(p).toBe(`${PLACEHOLDER_PREFIX}${PlaceholderType.UNDEFINED}`);
     });
   });
 
@@ -27,7 +25,6 @@ describe("Placeholder", () => {
     it("should parse a string with payload", () => {
       const str = `${PLACEHOLDER_PREFIX}${PlaceholderType.RESOURCE}${PAYLOAD_SEPARATOR}res-123`;
       const p = Placeholder.fromString(str);
-      expect(p).toBeInstanceOf(Placeholder);
       expect(p?.type).toBe(PlaceholderType.RESOURCE);
       expect(p?.payload).toBe("res-123");
     });
@@ -35,7 +32,6 @@ describe("Placeholder", () => {
     it("should parse a string without payload", () => {
       const str = `${PLACEHOLDER_PREFIX}${PlaceholderType.UNDEFINED}`;
       const p = Placeholder.fromString(str);
-      expect(p).toBeInstanceOf(Placeholder);
       expect(p?.type).toBe(PlaceholderType.UNDEFINED);
       expect(p?.payload).toBeUndefined();
     });
@@ -54,7 +50,6 @@ describe("Placeholder", () => {
     it("should parse correctly even if payload contains separator", () => {
       const str = `${PLACEHOLDER_PREFIX}${PlaceholderType.MAP}${PAYLOAD_SEPARATOR}{"key":"val:ue"}`;
       const p = Placeholder.fromString(str);
-      expect(p).toBeInstanceOf(Placeholder);
       expect(p?.type).toBe(PlaceholderType.MAP);
       expect(p?.payload).toBe('{"key":"val:ue"}');
     });

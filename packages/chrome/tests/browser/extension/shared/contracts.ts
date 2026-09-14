@@ -16,7 +16,7 @@ export interface WorkspaceService {
   pending(): Promise<string>;
   worker(): Promise<WorkerFacts>;
   createCapability(): Promise<RefWrapper<WorkspaceCapability>>;
-  acceptCallback(callback: () => Promise<string>): Promise<string>;
+  acceptCallback(callback: () => PromiseLike<string>): Promise<string>;
 }
 
 export interface WorkspaceCapability {
@@ -28,7 +28,7 @@ export interface DocumentToolService {
   echo(value: string): Promise<string>;
   fail(): Promise<never>;
   hold(): Promise<string>;
-  acceptCallback(callback: () => Promise<string>): Promise<string>;
+  acceptCallback(callback: () => PromiseLike<string>): Promise<string>;
   createReference(): Promise<RefWrapper<DocumentReference>>;
   useReference(reference: DocumentReference): Promise<string>;
 }

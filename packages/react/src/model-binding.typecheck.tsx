@@ -1,10 +1,4 @@
-import {
-  Nexus,
-  type AdapterModel,
-  type ConnectionMetaOf,
-  type ContextMetaOf,
-  type ProxyStatus,
-} from "@nexus-js/core";
+import { Nexus, type AdapterModel, type ProxyStatus } from "@nexus-js/core";
 import { createStoreToken, type RemoteStoreStatus } from "@nexus-js/core/state";
 import { createNexusScope } from "./create-nexus-scope.js";
 import { NexusProvider } from "./provider.js";
@@ -37,6 +31,7 @@ const chromeStore = createStoreToken<CounterStore, ChromeModel>(
 const iframeStore = createStoreToken<CounterStore, IframeModel>(
   "state:react:model-binding:iframe",
 );
+void iframeStore;
 
 const ChromeScope = createNexusScope<ChromeModel>();
 const IframeScope = createNexusScope<IframeModel>();
@@ -56,14 +51,9 @@ useProxyStatus(
 );
 
 const ChromeApp = () => {
-  ChromeScope.useNexus().safeCreate(chromeStore);
-  ChromeScope.useNexus().select(chromeStore, {
-    where: (
-      context: ContextMetaOf<ChromeModel>,
-      connection: ConnectionMetaOf<ChromeModel>,
-    ) => context.context === "chrome" && connection.tabId === 1,
-    wait: { timeout: 1_000 },
-    callTimeout: 500,
+  ChromeScope.useNexus().safeConnect({
+    target: { context: "chrome", tabId: 1 },
+    timeout: 1_000,
   });
   ChromeScope.useNexus().ready();
   ChromeScope.useRemoteStore(chromeStore, {
@@ -86,10 +76,9 @@ const ChromeApp = () => {
 };
 
 const IframeApp = () => {
-  IframeScope.useNexus().safeCreate(iframeStore);
-
-  // @ts-expect-error broadcast was replaced by selectMulticast().
-  IframeScope.useNexus().broadcast(iframeStore);
+  IframeScope.useNexus().safeConnect({
+    target: { context: "iframe", origin: "https://example.test" },
+  });
 
   // @ts-expect-error An Iframe Nexus instance cannot provide a Chrome Context.
   return <ChromeScope.NexusProvider nexus={iframeNexus} />;

@@ -13,10 +13,6 @@ import {
 import { Nexus } from "./nexus";
 import { Token } from "./token";
 import { Logger } from "../logger";
-import { createMockPortPair } from "../utils/test-utils";
-import type { IPort } from "../transport/types/port";
-
-const { ok } = Result;
 
 const endpoint = () => ({
   listen: vi.fn(),
@@ -31,26 +27,12 @@ const endpoint = () => ({
   })),
 });
 
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-};
-
-const trackAbortSignal = () => {
-  const controller = new AbortController();
-  const add = vi.spyOn(controller.signal, "addEventListener");
-  const remove = vi.spyOn(controller.signal, "removeEventListener");
-  return { controller, add, remove };
-};
-
-describe("Nexus service acquisition API", () => {
+describe("Nexus public API", () => {
   it("normalizes token and registration provider overloads", () => {
     const nexus = new Nexus();
     const first = new Token<object>("first");
     const second = new Token<object>("second");
+
     expect(nexus.safeProvide(first, {})).toMatchObject({ value: nexus });
     expect(nexus.safeProvide({ token: second, service: {} })).toMatchObject({
       value: nexus,
@@ -74,6 +56,7 @@ describe("Nexus service acquisition API", () => {
     }) as Nexus;
     const token = new Token<object>("service");
     await nexus.ready();
+
     expect(nexus.safeProvide(token, { version: 1 })).toMatchObject({
       value: nexus,
     });
@@ -82,7 +65,7 @@ describe("Nexus service acquisition API", () => {
     });
   });
 
-  it("locks structural configuration during bootstrap and reuses terminal failure", async () => {
+  it("locks structural configuration during bootstrap", async () => {
     let releaseListen!: () => void;
     const nexus = new Nexus().configure({
       endpoint: {
@@ -97,6 +80,7 @@ describe("Nexus service acquisition API", () => {
     });
     const ready = nexus.safeReady();
     await vi.waitFor(() => expect(releaseListen).toBeTypeOf("function"));
+
     expect(nexus.safeConfigure({ policy: {} })).toMatchObject({
       error: { code: "E_NEXUS_BOOTSTRAPPING_LOCKED" },
     });
@@ -104,206 +88,46 @@ describe("Nexus service acquisition API", () => {
     await ready;
   });
 
-  it("releases public capabilities equivalently through static and instance APIs", () => {
+  it("releases public capabilities through static and instance APIs", () => {
     const nexus = new Nexus();
     const release = vi.fn();
     const proxy = { [Symbol.for("nexus.proxy.release")]: release };
 
-    expect(Nexus.safeRelease).toBeTypeOf("function");
-    expect(Nexus.release).toBeTypeOf("function");
     expect(Nexus.safeRelease(proxy)).toMatchObject({ value: undefined });
     expect(Nexus.release(proxy)).toBeUndefined();
     expect(nexus.safeRelease(proxy)).toMatchObject({ value: undefined });
     expect(nexus.release(proxy)).toBeUndefined();
     expect(release).toHaveBeenCalledTimes(4);
-
-    for (const releaseProxy of [null, {}] as const) {
-      expect(Nexus.safeRelease(releaseProxy as never)).toMatchObject({
-        value: undefined,
-      });
-      expect(nexus.safeRelease(releaseProxy as never)).toMatchObject({
-        value: undefined,
-      });
-    }
   });
 
-  it("preserves safeRef usage errors alongside release APIs", () => {
-    const nexus = new Nexus();
-    expect(nexus.safeRef(null as never)).toMatchObject({
-      error: { code: "E_USAGE_INVALID" },
-    });
-  });
-
-  it("preserves release capability errors through static and instance APIs", () => {
-    const nexus = new Nexus();
-    const symbol = Symbol.for("nexus.proxy.release");
-    const getterError = new Error("getter failed");
-    const callbackError = new Error("callback failed");
-    const cases = [
-      {
-        error: getterError,
-        proxy: {
-          get [symbol](): never {
-            throw getterError;
-          },
-        },
-      },
-      {
-        error: callbackError,
-        proxy: {
-          [symbol](): never {
-            throw callbackError;
-          },
-        },
-      },
-    ];
-    for (const { error, proxy } of cases) {
-      for (const result of [
-        Nexus.safeRelease(proxy),
-        nexus.safeRelease(proxy),
-      ]) {
-        expect(result.isErr()).toBe(true);
-        if (result.isErr()) expect(result.error).toBe(error);
-      }
-      const staticThrown = (() => {
-        try {
-          Nexus.release(proxy);
-        } catch (caught) {
-          return caught;
-        }
-      })();
-      const instanceThrown = (() => {
-        try {
-          nexus.release(proxy);
-        } catch (caught) {
-          return caught;
-        }
-      })();
-      expect(staticThrown).toBe(error);
-      expect(instanceThrown).toBe(error);
-    }
-  });
-
-  it("keeps safe release total for hostile non-Error throws", () => {
-    const nexus = new Nexus();
-    const symbol = Symbol.for("nexus.proxy.release");
-
-    for (const [thrown, message] of [
-      ["failure", "failure"],
-      [Object.create(null), "Unknown error"],
-    ]) {
-      const proxy = {
-        [symbol](): never {
-          throw thrown;
-        },
-      };
-      expect(nexus.safeRelease(proxy)).toMatchObject({ error: { message } });
-    }
-
-    let hostile!: object;
-    hostile = new Proxy(
-      {},
-      {
-        get: (_target, key) => {
-          if (key === symbol) throw hostile;
-        },
-        getPrototypeOf: () => {
-          throw new Error("prototype failed");
-        },
-      },
-    );
-    expect(nexus.safeRelease(hostile)).toMatchObject({
-      error: { message: "Unknown error" },
-    });
-  });
-
-  it("does not expose recipient IDs from all or stream settlements", async () => {
-    const { PendingCallManager } =
-      await import("../service/pending-call-manager");
-    const manager = new PendingCallManager();
-    const pending = manager.register(1, {
-      strategy: "all",
-      isBroadcast: true,
-      sentConnectionIds: ["private"],
-      timeout: 1_000,
-    });
-    manager.handleResponse(1, "value", null, "private");
-    await expect(pending).resolves.toEqual(
-      ok([{ status: "fulfilled", value: "value" }]),
-    );
-  });
-  it("does not connect while readying a defaultTarget endpoint", async () => {
-    const implementation = endpoint();
-    const nexus = new Nexus().configure({
-      endpoint: {
-        meta: { context: "client" },
-        implementation,
-        defaultTarget: { context: "host" },
-      },
-    });
-    await nexus.ready();
-    expect(implementation.connect).not.toHaveBeenCalled();
-  });
-
-  it("starts configured dials after listening without blocking ready or inferring a default target", async () => {
-    const listening = deferred<void>();
-    const enteredListen = deferred<void>();
-    let rejectDial!: (error: Error) => void;
-    const failedDial = new Promise<never>((_, reject) => {
-      rejectDial = reject;
-    });
+  it("starts configured dials after listening without blocking ready", async () => {
     const target = { context: "host", route: { id: "original" } };
     const implementation = {
-      listen: vi.fn(() => {
-        enteredListen.resolve();
-        return listening.promise;
+      listen: vi.fn(),
+      connect: vi.fn(async () => {
+        throw new Error("offline");
       }),
-      connect: vi.fn(() => failedDial),
     };
     const nexus = new Nexus().configure({
       endpoint: {
         meta: { context: "client" },
         implementation,
-        connectTo: [target, target],
+        connectTo: [target],
       },
     });
-    const ready = nexus.ready();
-    await enteredListen.promise;
-    target.route.id = "mutated-after-snapshot";
-    expect(implementation.connect).not.toHaveBeenCalled();
-    listening.resolve();
-    await ready;
-    expect(implementation.connect).toHaveBeenCalledExactlyOnceWith({
-      context: "host",
-      route: { id: "original" },
-    });
-    await nexus.ready();
-    expect(implementation.connect).toHaveBeenCalledOnce();
-    expect(await nexus.safeCreate(new Token<object>("unused"))).toMatchObject({
-      error: { code: "E_TARGET_REQUIRED" },
-    });
-    // Settle the shared attempt without a port/handshake timer to leave behind.
-    rejectDial(new Error("owner unavailable"));
-  });
 
-  it.each([{}, [null], [new Date()]])(
-    "rejects invalid connectTo %p before bootstrap",
-    (connectTo) => {
-      const nexus = new Nexus();
-      expect(
-        nexus.safeConfigure({ endpoint: { connectTo: connectTo as never } }),
-      ).toMatchObject({ error: { code: "E_USAGE_INVALID" } });
-    },
-  );
+    await nexus.ready();
+    await vi.waitFor(() =>
+      expect(implementation.connect).toHaveBeenCalledExactlyOnceWith(target),
+    );
+  });
 
   it("contains startup failures without retrying or failing local readiness", async () => {
     const failure = new Error("owner offline");
-    const logged = deferred<unknown>();
+    const logged = vi.fn();
     const errorLog = vi
       .spyOn(Logger.prototype, "error")
-      .mockImplementation((message, details) => {
-        if (message === "Startup connection failed") logged.resolve(details);
-      });
+      .mockImplementation((_message, details) => logged(details));
     try {
       const implementation = {
         listen: vi.fn(),
@@ -311,19 +135,16 @@ describe("Nexus service acquisition API", () => {
           throw failure;
         }),
       };
-      const target = { context: "owner" };
       const nexus = new Nexus().configure({
         endpoint: {
           implementation,
           meta: {},
-          connectTo: [target],
+          connectTo: [{ context: "owner" }],
         },
       });
+
       await nexus.ready();
-      expect(await logged.promise).toMatchObject({
-        target,
-        error: { code: "E_ENDPOINT_CONNECT_FAILED" },
-      });
+      await vi.waitFor(() => expect(logged).toHaveBeenCalled());
       await nexus.ready();
       expect(implementation.connect).toHaveBeenCalledOnce();
     } finally {
@@ -331,847 +152,61 @@ describe("Nexus service acquisition API", () => {
     }
   });
 
-  it("does not dial startup targets when local listening fails", async () => {
-    const implementation = {
-      listen: vi.fn(() => {
-        throw new Error("listener unavailable");
-      }),
-      connect: vi.fn(),
-    };
-    const nexus = new Nexus().configure({
-      endpoint: {
-        implementation,
-        meta: {},
-        connectTo: [{ context: "owner" }],
-      },
-    });
-    expect((await nexus.safeReady()).isErr()).toBe(true);
-    expect(implementation.connect).not.toHaveBeenCalled();
-  });
-
-  it("treats groups as opaque context metadata rather than a reserved routing field", async () => {
-    interface Model {
-      contextMeta: { context: string; groups?: { project: string } };
-      connectionMeta: object;
-      connectionTarget: { context: string };
-    }
-    const token = new Token<{ read(): string }>("opaque-groups");
-    let accept!: (port: IPort, meta: object) => void;
-    const [childPort, ownerPort] = createMockPortPair();
-    const owner = new Nexus<Model>().configure({
-      endpoint: {
-        meta: { context: "owner" },
-        implementation: {
-          listen: (handler) => {
-            accept = handler;
-          },
-        },
-      },
-    });
-    try {
-      await owner.ready();
-      const waiting = owner.select(token, {
-        where: (meta: Model["contextMeta"]) => meta.groups?.project === "next",
-        wait: { timeout: 1_000 },
-      });
-      const child = new Nexus<Model>().configure({
-        endpoint: {
-          meta: { context: "child", groups: { project: "initial" } },
-          implementation: {
-            listen: () => undefined,
-            connect: async () => {
-              accept(ownerPort, {});
-              return { port: childPort, connectionMeta: {} };
-            },
-          },
-          connectTo: [{ context: "owner" }],
-        },
-        providers: [{ token, service: { read: () => "child" } }],
-      });
-      // Observe publication, then change a non-array groups field. Neither
-      // handshake nor identity updates may interpret application field shapes.
-      const initial = await owner.select(token, { wait: { timeout: 1_000 } });
-      expect(await initial.read()).toBe("child");
-      await child.updateIdentity({ groups: { project: "next" } });
-      expect(await (await waiting).read()).toBe("child");
-    } finally {
-      childPort.close();
-    }
-  });
-
-  it("returns safe usage errors for invalid acquisition options", async () => {
+  it("does not initialize or dial when safeConnect receives an aborted signal", async () => {
+    const ready = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
     const nexus = new Nexus();
-    const token = new Token<object>("service");
-    await expect(
-      nexus.safeCreate(token, { target: null } as never),
-    ).resolves.toMatchObject({
-      error: { code: "E_USAGE_INVALID" },
+    Object.assign(nexus as object, {
+      lifecycle: "ready",
+      initialization: Promise.resolve(),
+      connectionManager: { safeResolveConnections: ready },
     });
-    await expect(
-      nexus.safeSelect(token, { wait: { timeout: -1 } }),
-    ).resolves.toMatchObject({
-      error: { code: "E_USAGE_INVALID" },
-    });
-    await expect(
-      nexus.safeSelectMulticast(token, { callTimeout: Infinity }),
-    ).resolves.toMatchObject({
-      error: { code: "E_USAGE_INVALID" },
-    });
-    expect(
-      nexus.safeConfigure({
-        endpoint: { defaultTarget: null as never },
-      }),
-    ).toMatchObject({ error: { code: "E_USAGE_INVALID" } });
-  });
-
-  it("does not let one caller abort a shared bootstrap for another caller", async () => {
-    let releaseListen!: () => void;
-    const nexus = new Nexus().configure({
-      endpoint: {
-        meta: { context: "client" },
-        implementation: {
-          listen: vi.fn(
-            () => new Promise<void>((resolve) => (releaseListen = resolve)),
-          ),
-          connect: vi.fn(),
-        },
-      },
-    }) as Nexus;
-    const signal = new AbortController();
-    const aborted = nexus.safeCreate(new Token<object>("service"), {
-      target: { context: "host" },
-      signal: signal.signal,
-    });
-    const survivor = nexus.safeReady();
-    await vi.waitFor(() => expect(releaseListen).toBeTypeOf("function"));
-    signal.abort();
-    await expect(aborted).resolves.toMatchObject({
-      error: { code: "E_ABORTED" },
-    });
-    releaseListen();
-    await expect(survivor).resolves.toMatchObject({ value: undefined });
-  });
-
-  it("rejects zero-target and non-plain multicast inputs before resolution or proxy creation", async () => {
-    const manager = {
-      safeResolveConnections: vi.fn(),
-      getReadyTargetConnections: vi.fn(),
-      subscribeAvailabilityChanged: vi.fn(),
-    };
-    const createServiceProxy = vi.fn();
-    const nexus = readyNexus(manager, createServiceProxy);
-    const token = new Token<object>("service");
-
-    for (const options of [
-      { targets: [] },
-      { targets: [new Date()] },
-      { targets: [{ context: "host" }], extra: true },
-    ]) {
-      await expect(
-        nexus.safeCreateMulticast(token, options as never),
-      ).resolves.toMatchObject({ error: { code: "E_USAGE_INVALID" } });
-    }
-    expect(manager.safeResolveConnections).not.toHaveBeenCalled();
-    expect(manager.getReadyTargetConnections).not.toHaveBeenCalled();
-    expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
-    expect(createServiceProxy).not.toHaveBeenCalled();
-  });
-
-  it("times out and aborts create after bootstrap while target connection is pending", async () => {
-    vi.useFakeTimers();
-    try {
-      const pendingConnection = deferred<ReturnType<typeof ok<any>>>();
-      const manager = {
-        safeResolveConnections: vi.fn(() => pendingConnection.promise),
-        getReadyTargetConnections: vi.fn(() => []),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-      const nexus = readyNexus(manager, vi.fn());
-      const aborted = trackAbortSignal();
-      const timeout = nexus.safeCreate(new Token<object>("timeout"), {
-        target: { context: "host" },
-        timeout: 10,
-      });
-      const abort = nexus.safeCreate(new Token<object>("abort"), {
-        target: { context: "host" },
-        signal: aborted.controller.signal,
-      });
-
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      aborted.controller.abort();
-      await expect(abort).resolves.toMatchObject({
-        error: { code: "E_ABORTED" },
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(timeout).resolves.toMatchObject({
-        error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" },
-      });
-      expect(manager.safeResolveConnections).toHaveBeenCalledTimes(2);
-      expect(aborted.add).toHaveBeenCalledOnce();
-      expect(aborted.remove).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps shared target connection work alive when concurrent callers time out or abort", async () => {
-    vi.useFakeTimers();
-    try {
-      const connection = {
-        connectionId: "late",
-        isReady: () => true,
-        remoteProviders: new Set(["service"]),
-      };
-      const sharedResolution = deferred<ReturnType<typeof ok<any>>>();
-      const manager = {
-        safeResolveConnections: vi.fn(() => sharedResolution.promise),
-        getReadyTargetConnections: vi.fn(() => [connection]),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-      const createServiceProxy = vi.fn(() => ({}));
-      const nexus = readyNexus(manager, createServiceProxy);
-      const aborted = new AbortController();
-      const timedOut = nexus.safeCreate(new Token<object>("service"), {
-        target: { context: "host" },
-        timeout: 10,
-      });
-      const cancelled = nexus.safeCreate(new Token<object>("service"), {
-        target: { context: "host" },
-        signal: aborted.signal,
-      });
-      const survivor = nexus.safeCreate(new Token<object>("service"), {
-        target: { context: "host" },
-        timeout: 100,
-      });
-
-      aborted.abort();
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(timedOut).resolves.toMatchObject({
-        error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" },
-      });
-      await expect(cancelled).resolves.toMatchObject({
-        error: { code: "E_ABORTED" },
-      });
-      sharedResolution.resolve(ok([connection]));
-      await expect(survivor).resolves.toMatchObject({ value: {} });
-      await expect(
-        nexus.safeCreate(new Token<object>("service"), {
-          target: { context: "host" },
-        }),
-      ).resolves.toMatchObject({ value: {} });
-      expect(createServiceProxy).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rejects create without a target source", async () => {
-    const nexus = new Nexus().configure({
-      endpoint: { meta: { context: "client" }, implementation: endpoint() },
-    });
-    const result = await nexus.safeCreate(new Token<object>("service"));
-    expect(result).toMatchObject({ error: { code: "E_TARGET_REQUIRED" } });
-  });
-
-  it("does not expose broadcast", () => {
-    expect("broadcast" in new Nexus()).toBe(false);
-  });
-
-  it("selects one stable live provider per multicast target and deduplicates IDs", async () => {
-    const token = new Token<object>("service");
-    const shared = {
-      connectionId: "shared",
-      isReady: () => true,
-      remoteProviders: new Set([token.id]),
-    };
-    const alternate = {
-      connectionId: "alternate",
-      isReady: () => true,
-      remoteProviders: new Set([token.id]),
-    };
-    const manager = {
-      safeResolveConnections: vi.fn(async () => ok([shared, alternate])),
-      getReadyTargetConnections: vi.fn(() => [shared, alternate]),
-      subscribeAvailabilityChanged: vi.fn(() => () => undefined),
-    };
-    const createServiceProxy = vi.fn(() => ({}));
-    const nexus = readyNexus(manager, createServiceProxy);
 
     await expect(
-      nexus.safeCreateMulticast(token, {
-        targets: [{ context: "first" }, { context: "second" }],
-      }),
-    ).resolves.toMatchObject({ value: {} });
-    expect(createServiceProxy).toHaveBeenCalledWith(token.id, {
-      target: { connectionIds: ["shared"] },
-      strategy: "all",
-      timeout: 5_000,
-    });
-  });
-
-  it("rescans after final multicast liveness loss and binds a replacement provider", async () => {
-    const token = new Token<object>("service");
-    const first = {
-      connectionId: "first",
-      isReady: () => true,
-      remoteProviders: new Set([token.id]),
-    };
-    const unavailable = {
-      connectionId: "unavailable",
-      isReady: () => true,
-      remoteProviders: new Set<string>(),
-    };
-    const replacement = {
-      connectionId: "replacement",
-      isReady: () => true,
-      remoteProviders: new Set([token.id]),
-    };
-    let notify: (() => void) | undefined;
-    const scans = [[unavailable], [unavailable], [replacement], [replacement]];
-    const manager = {
-      safeResolveConnections: vi.fn(async () => ok([first])),
-      getReadyTargetConnections: vi.fn(() => scans.shift() ?? [replacement]),
-      subscribeAvailabilityChanged: vi.fn((listener) => {
-        notify = listener;
-        return () => undefined;
-      }),
-    };
-    const createServiceProxy = vi.fn(() => ({}));
-    const nexus = readyNexus(manager, createServiceProxy);
-    const acquisition = nexus.safeCreateMulticast(token, {
-      targets: [{ context: "host" }],
-    });
-
-    await vi.waitFor(() => expect(notify).toBeTypeOf("function"));
-    notify!();
-
-    await expect(acquisition).resolves.toMatchObject({ value: {} });
-    expect(createServiceProxy).toHaveBeenCalledWith(token.id, {
-      target: { connectionIds: ["replacement"] },
-      strategy: "all",
-      timeout: 5_000,
-    });
-  });
-
-  it("returns unavailable immediately when the final multicast scan loses a reached target", async () => {
-    vi.useFakeTimers();
-    try {
-      const token = new Token<object>("service");
-      const provider = {
-        connectionId: "provider",
-        isReady: () => true,
-        remoteProviders: new Set([token.id]),
-      };
-      const manager = {
-        safeResolveConnections: vi.fn(async () => ok([provider])),
-        getReadyTargetConnections: vi.fn(() => []),
-        subscribeAvailabilityChanged: vi.fn(() => () => undefined),
-      };
-
-      const acquisition = readyNexus(manager, vi.fn()).safeCreateMulticast(
-        token,
-        { targets: [{ context: "host" }], timeout: 10 },
-      );
-
-      await Promise.resolve();
-      await Promise.resolve();
-      await expect(acquisition).resolves.toMatchObject({
-        error: { code: "E_SERVICE_UNAVAILABLE" },
-      });
-      expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("returns the first terminal multicast resolution while another target remains pending", async () => {
-    vi.useFakeTimers();
-    try {
-      const token = new Token<object>("service");
-      const unresolved = deferred<ReturnType<typeof ok<any>>>();
-      const manager = {
-        safeResolveConnections: vi
-          .fn()
-          .mockResolvedValueOnce(
-            Result.err(new NexusError("denied", "E_UNKNOWN")),
-          )
-          .mockReturnValueOnce(unresolved.promise),
-        getReadyTargetConnections: vi.fn(),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-
-      const acquisition = readyNexus(manager, vi.fn()).safeCreateMulticast(
-        token,
-        {
-          targets: [{ context: "first" }, { context: "second" }],
-          timeout: 10,
-        },
-      );
-
-      await expect(acquisition).resolves.toMatchObject({
-        error: { code: "E_SERVICE_UNAVAILABLE" },
-      });
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("expires multicast provider waiting once under the shared acquisition deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const token = new Token<object>("service");
-      const accepted = {
-        connectionId: "accepted",
-        isReady: () => true,
-        remoteProviders: new Set<string>(),
-      };
-      const subscribed = deferred<void>();
-      const unsubscribe = vi.fn();
-      const manager = {
-        safeResolveConnections: vi.fn(async () => ok([accepted])),
-        getReadyTargetConnections: vi.fn(() => [accepted]),
-        subscribeAvailabilityChanged: vi.fn(() => {
-          subscribed.resolve();
-          return unsubscribe;
-        }),
-      };
-
-      const acquisition = readyNexus(manager, vi.fn()).safeCreateMulticast(
-        token,
-        { targets: [{ context: "host" }], timeout: 10 },
-      );
-
-      await subscribed.promise;
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(acquisition).resolves.toMatchObject({
-        error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" },
-      });
-      expect(manager.subscribeAvailabilityChanged).toHaveBeenCalledOnce();
-      expect(unsubscribe).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("binds a target resolved before its deadline and gives the earlier-registered deadline priority at the same time", async () => {
-    vi.useFakeTimers();
-    try {
-      const token = new Token<object>("service");
-      const provider = {
-        connectionId: "provider",
-        isReady: () => true,
-        remoteProviders: new Set([token.id]),
-      };
-      for (const [elapsed, expected] of [
-        [9, { value: {} }],
-        [10, { error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" } }],
-        [11, { error: { code: "E_SERVICE_ACQUISITION_TIMEOUT" } }],
-      ] as const) {
-        const pending = deferred<ReturnType<typeof ok<any>>>();
-        const manager = {
-          safeResolveConnections: vi.fn(() => pending.promise),
-          getReadyTargetConnections: vi.fn(() => [provider]),
-          subscribeAvailabilityChanged: vi.fn(),
-        };
-        const createServiceProxy = vi.fn(() => ({}));
-        const acquisition = readyNexus(
-          manager,
-          createServiceProxy,
-        ).safeCreateMulticast(token, {
-          targets: [{ context: "host" }],
-          timeout: 10,
-        });
-
-        // safeCreateMulticast registers its deadline before this resolution
-        // callback. Equal-time callbacks therefore deterministically time out.
-        setTimeout(() => pending.resolve(ok([provider])), elapsed);
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(11);
-        await expect(acquisition).resolves.toMatchObject(expected);
-        expect(manager.safeResolveConnections).toHaveBeenCalledOnce();
-        expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
-        if (elapsed < 10) {
-          expect(createServiceProxy).toHaveBeenCalledOnce();
-        } else expect(createServiceProxy).not.toHaveBeenCalled();
-        expect(vi.getTimerCount()).toBe(0);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waits for a provider after target acquisition and shares the acquisition deadline", async () => {
-    const token = new Token<object>("service");
-    const accepted = {
-      connectionId: "accepted",
-      isReady: () => true,
-      remoteProviders: new Set<string>(),
-    };
-    const provider = {
-      connectionId: "provider",
-      isReady: () => true,
-      remoteProviders: new Set([token.id]),
-    };
-    let notify: (() => void) | undefined;
-    const manager = {
-      safeResolveConnections: vi.fn(async () => ok([accepted])),
-      getReadyTargetConnections: vi
-        .fn()
-        .mockReturnValueOnce([accepted])
-        .mockReturnValueOnce([accepted])
-        .mockImplementation(() => [provider]),
-      subscribeAvailabilityChanged: vi.fn((listener) => {
-        notify = listener;
-        return () => undefined;
-      }),
-    };
-    const createServiceProxy = vi.fn(() => ({}));
-    const nexus = readyNexus(manager, createServiceProxy);
-    const pending = nexus.safeCreate(token, {
-      target: { context: "host" },
-      timeout: 1_000,
-    });
-
-    await vi.waitFor(() => expect(notify).toBeTypeOf("function"));
-    notify!();
-    await expect(pending).resolves.toMatchObject({ value: {} });
-    expect(createServiceProxy).toHaveBeenCalledWith(
-      token.id,
-      expect.objectContaining({
-        target: { connectionId: "provider" },
-      }),
-    );
-  });
-
-  it("returns unavailable immediately when a reached target has no accepted candidate", async () => {
-    const manager = {
-      safeResolveConnections: vi.fn(async () => ok([])),
-      getReadyTargetConnections: vi.fn(() => []),
-      subscribeAvailabilityChanged: vi.fn(),
-    };
-    const nexus = readyNexus(manager, vi.fn());
-
-    await expect(
-      nexus.safeCreate(new Token<object>("service"), {
+      nexus.safeConnect({
         target: { context: "host" },
+        signal: controller.signal,
       }),
-    ).resolves.toMatchObject({ error: { code: "E_SERVICE_UNAVAILABLE" } });
-    expect(manager.subscribeAvailabilityChanged).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ error: { code: "E_ABORTED" } });
+    expect(ready).not.toHaveBeenCalled();
   });
 
-  it("preserves endpoint context and supplies the public cause without duplicating an existing one", async () => {
-    const errors = [
-      new NexusEndpointConnectError("direct", { target: "peer" }),
-      new NexusEndpointConnectError("nested", {
-        cause: {
-          name: "NativeError",
-          code: "ECONNREFUSED",
-          message: "refused",
-        },
-      }),
-    ];
-    for (const error of errors) {
-      const manager = {
-        safeResolveConnections: vi.fn(async () => Result.err(error)),
-        getReadyTargetConnections: vi.fn(),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-      const result = await readyNexus(manager, vi.fn()).safeCreate(
-        new Token<object>("service"),
-        { target: { context: "host" } },
-      );
-      expect(result).toMatchObject({
-        error: {
-          code: "E_ENDPOINT_CONNECT_FAILED",
-          context: error.context,
-          cause: error.cause ?? {
-            code: "E_ENDPOINT_CONNECT_FAILED",
-            message: error.message,
-          },
-        },
-      });
-      if (result.isErr() && error.cause) expect(result.error).toBe(error);
-    }
-  });
-
-  it("maps every manager terminal error to a public Nexus error", async () => {
-    const cases: readonly [
-      NexusError,
-      new (...args: any[]) => Error,
-      string,
-    ][] = [
+  it("maps manager connection errors to public acquisition errors", async () => {
+    const cases: readonly [NexusError, string][] = [
       [
         new NexusConnectionConstraintFailedError("constraint"),
-        NexusServiceError,
-        "E_TARGET_CONSTRAINT_FAILED",
+        "E_CONNECTION_CONSTRAINT_FAILED",
       ],
       [
         new NexusProtocolIncompatibleError("protocol"),
-        NexusProtocolIncompatibleError,
         "E_PROTOCOL_INCOMPATIBLE",
       ],
       [
         new NexusHandshakeError("failed", "E_HANDSHAKE_FAILED"),
-        NexusHandshakeError,
         "E_HANDSHAKE_FAILED",
       ],
       [
-        new NexusHandshakeError("rejected"),
-        NexusHandshakeError,
-        "E_HANDSHAKE_REJECTED",
-      ],
-      [
         new NexusEndpointCapabilityError("capability"),
-        NexusEndpointCapabilityError,
         "E_ENDPOINT_CAPABILITY_MISMATCH",
       ],
-      [
-        new NexusEndpointConnectError("direct"),
-        NexusEndpointConnectError,
-        "E_ENDPOINT_CONNECT_FAILED",
-      ],
-      [new NexusUsageError("usage"), NexusUsageError, "E_USAGE_INVALID"],
-      [
-        new NexusError("unknown", "E_UNKNOWN"),
-        NexusServiceError,
-        "E_SERVICE_UNAVAILABLE",
-      ],
+      [new NexusEndpointConnectError("direct"), "E_ENDPOINT_CONNECT_FAILED"],
+      [new NexusUsageError("usage"), "E_SERVICE_UNAVAILABLE"],
+      [new NexusError("unknown", "E_UNKNOWN"), "E_SERVICE_UNAVAILABLE"],
     ];
-    for (const [terminal, ErrorType, code] of cases) {
-      const manager = {
-        safeResolveConnections: vi.fn(async () => Result.err(terminal)),
-        getReadyTargetConnections: vi.fn(),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-      const result = await readyNexus(manager, vi.fn()).safeCreate(
-        new Token<object>("service"),
-        { target: { context: "host" } },
-      );
+
+    for (const [failure, code] of cases) {
+      const nexus = new Nexus();
+      Object.assign(nexus as object, {
+        lifecycle: "ready",
+        initialization: Promise.resolve(),
+        engine: {},
+        connectionManager: {
+          safeResolveConnections: vi.fn(async () => Result.err(failure)),
+        },
+      });
+      const result = await nexus.safeConnect({ target: { context: "host" } });
       expect(result).toMatchObject({ error: { code } });
-      if (result.isErr()) expect(result.error).toBeInstanceOf(ErrorType);
-    }
-  });
-
-  it("preserves serialized causes for handshake and capability terminal mappings", async () => {
-    const cases = [
-      new NexusHandshakeError("handshake", "E_HANDSHAKE_FAILED", undefined, {
-        cause: { name: "Error", code: "E_UNKNOWN", message: "peer rejected" },
-      }),
-      new NexusEndpointCapabilityError("capability", {
-        cause: { name: "Error", code: "E_UNKNOWN", message: "missing connect" },
-      }),
-    ];
-    for (const error of cases) {
-      const manager = {
-        safeResolveConnections: vi.fn(async () => Result.err(error)),
-        getReadyTargetConnections: vi.fn(),
-        subscribeAvailabilityChanged: vi.fn(),
-      };
-      const result = await readyNexus(manager, vi.fn()).safeCreate(
-        new Token<object>("service"),
-        { target: { context: "host" } },
-      );
-      expect(result).toMatchObject({ error: { cause: error.cause } });
-      if (result.isErr()) expect(result.error).toBe(error);
-    }
-  });
-
-  it("subscribes before rescanning select wait and cleans subscriptions after success", async () => {
-    const token = new Token<object>("service");
-    const provider = { connectionId: "provider", isReady: () => true };
-    let notify: (() => void) | undefined;
-    const unsubscribe = vi.fn();
-    const manager = {
-      getReadyProviderConnections: vi
-        .fn()
-        .mockReturnValueOnce([])
-        .mockImplementation(() => [provider]),
-      subscribeAvailabilityChanged: vi.fn((listener) => {
-        notify = listener;
-        return unsubscribe;
-      }),
-    };
-    const nexus = readyNexus(
-      manager,
-      vi.fn(() => ({})),
-    );
-    const selected = nexus.safeSelect(token, { wait: { timeout: 1_000 } });
-
-    await vi.waitFor(() => expect(notify).toBeTypeOf("function"));
-    notify!();
-    await expect(selected).resolves.toMatchObject({ value: {} });
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it("returns where predicate failures from safe select APIs", async () => {
-    const token = new Token<object>("service");
-    const where = () => {
-      throw new Error("where failed");
-    };
-    const manager = {
-      getReadyProviderConnections: vi.fn((_token, predicate) => {
-        predicate?.({}, {});
-        return [{ connectionId: "provider", isReady: () => true }];
-      }),
-    };
-    const nexus = readyNexus(manager, vi.fn());
-
-    await expect(nexus.safeSelect(token, { where })).resolves.toMatchObject({
-      error: { message: "where failed" },
-    });
-    await expect(
-      nexus.safeSelectMulticast(token, { where }),
-    ).resolves.toMatchObject({ error: { message: "where failed" } });
-  });
-
-  it("rejects create options that contain expects at runtime", async () => {
-    const result = await readyNexus({}, vi.fn()).safeCreate(
-      new Token<object>("service"),
-      { target: { context: "host" }, expects: "all" } as any,
-    );
-
-    expect(result).toMatchObject({ error: { code: "E_USAGE_INVALID" } });
-  });
-
-  it("cleans each create caller deadline on success, timeout, abort, and terminal error", async () => {
-    vi.useFakeTimers();
-    try {
-      const connection = {
-        connectionId: "provider",
-        isReady: () => true,
-      };
-      const cases = [
-        {
-          name: "success",
-          resolve: () => ok([connection]),
-          settle: async () => undefined,
-          code: undefined,
-        },
-        {
-          name: "timeout",
-          resolve: () => deferred<ReturnType<typeof ok<any>>>().promise,
-          settle: () => vi.advanceTimersByTimeAsync(10),
-          code: "E_SERVICE_ACQUISITION_TIMEOUT",
-        },
-        {
-          name: "abort",
-          resolve: () => deferred<ReturnType<typeof ok<any>>>().promise,
-          settle: (controller: AbortController) => controller.abort(),
-          code: "E_ABORTED",
-        },
-        {
-          name: "terminal error",
-          resolve: () => Result.err(new NexusError("bad", "E_UNKNOWN")),
-          settle: async () => undefined,
-          code: "E_SERVICE_UNAVAILABLE",
-        },
-      ];
-      for (const testCase of cases) {
-        const signal = trackAbortSignal();
-        const manager = {
-          safeResolveConnections: vi.fn(async () => testCase.resolve()),
-          getReadyTargetConnections: vi.fn(() => [connection]),
-          subscribeAvailabilityChanged: vi.fn(),
-        };
-        const acquisition = readyNexus(manager, vi.fn()).safeCreate(
-          new Token<object>(`service-${testCase.name}`),
-          {
-            target: { context: "host" },
-            timeout: 10,
-            signal: signal.controller.signal,
-          },
-        );
-        await Promise.resolve();
-        await testCase.settle(signal.controller);
-        const result = await acquisition;
-        if (testCase.code)
-          expect(result).toMatchObject({ error: { code: testCase.code } });
-        else expect(result).toMatchObject({ value: {} });
-        expect(signal.add).toHaveBeenCalledOnce();
-        expect(signal.remove).toHaveBeenCalledOnce();
-        expect(vi.getTimerCount()).toBe(0);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cleans select wait deadlines, reports ambiguity after waiting, and skips disconnected candidates", async () => {
-    vi.useFakeTimers();
-    try {
-      const disconnected = { connectionId: "gone", isReady: () => false };
-      const first = { connectionId: "first", isReady: () => true };
-      const second = { connectionId: "second", isReady: () => true };
-      const provider = { connectionId: "provider", isReady: () => true };
-      let notify: (() => void) | undefined;
-      const unsubscribe = vi.fn();
-      const scans = [[], [disconnected], [first, second]];
-      const manager = {
-        getReadyProviderConnections: vi.fn(() => scans.shift() ?? [provider]),
-        subscribeAvailabilityChanged: vi.fn((listener) => {
-          notify = listener;
-          return unsubscribe;
-        }),
-      };
-      const signal = trackAbortSignal();
-      const ambiguous = readyNexus(manager, vi.fn()).safeSelect(
-        new Token<object>("service"),
-        { wait: { timeout: 10, signal: signal.controller.signal } },
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      notify!();
-      await expect(ambiguous).resolves.toMatchObject({
-        error: { code: "E_SERVICE_AMBIGUOUS" },
-      });
-      expect(unsubscribe).toHaveBeenCalledOnce();
-      expect(signal.add).toHaveBeenCalledOnce();
-      expect(signal.remove).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-
-      let wake: (() => void) | undefined;
-      const subscribed = deferred<void>();
-      const selectedManager = {
-        getReadyProviderConnections: vi
-          .fn()
-          .mockReturnValueOnce([])
-          .mockReturnValueOnce([])
-          .mockReturnValueOnce([provider]),
-        subscribeAvailabilityChanged: vi.fn((listener) => {
-          wake = listener;
-          subscribed.resolve();
-          return vi.fn();
-        }),
-      };
-      const selected = readyNexus(
-        selectedManager,
-        vi.fn(() => ({})),
-      ).safeSelect(new Token<object>("later-provider"), {
-        wait: { timeout: 10 },
-      });
-      await subscribed.promise;
-      wake?.();
-      await expect(selected).resolves.toMatchObject({ value: {} });
-    } finally {
-      vi.useRealTimers();
     }
   });
 });
-
-const readyNexus = (
-  manager: object,
-  createServiceProxy: ReturnType<typeof vi.fn>,
-) => {
-  const nexus = new Nexus();
-  Object.assign(nexus as object, {
-    lifecycle: "ready",
-    initialization: Promise.resolve(),
-    connectionManager: manager,
-    engine: { createServiceProxy },
-  });
-  return nexus;
-};

@@ -170,16 +170,17 @@ pnpm dev
 ## Nexus Public Usage Style
 
 - Put service contracts and `Token`s in shared code imported by all participating contexts.
-- Prefer `TokenSpace.defaultTarget` for hierarchical token IDs and inherited create defaults.
+- Keep shared `Token` and `TokenSpace` definitions target-free. Targets belong to application-owned connection acquisition, not service contracts.
 - Import existing service types instead of redefining service shapes inline.
 - Configure every runtime context before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers like `usingBackgroundScript()` and `usingContentScript()` for standard runtime setup.
 - Use `nexus.configure(...)` for runtime bootstrap configuration: custom endpoints, adapter model-bound policy, multi-instance tests, and low-level composition.
 - Use `@xxNexus.Expose(...)` for class services, where `xxNexus` is the configured owner instance. Use `xxNexus.provide(...)` for object services, State stores, Relay providers, runtime-created dependencies, and live provider registration.
-- Use an adapter's exact `ConnectionTarget` constructor for `create`, or use `nexus.create(Token)` when a Token or endpoint `defaultTarget` supplies the target. Use `nexus.select(Token, { where, wait })` only to choose available providers without connecting.
+- Use an adapter's exact `ConnectionTarget` constructor with `nexus.connect({ target })`, then call `connection.get(Token)` or `connection.safeGet(Token)`. Without a target, `connect` passively waits for exactly one existing matching ready connection; it never discovers providers. Use `connectMulticast({ targets?, where, timeout, signal })` for fixed connection snapshots and `collection.get(Token)` for per-connection Results.
 - Treat `where(contextMeta, connectionMeta)` as a strict AND predicate over remote handshake identity and local adapter connection facts; it never discovers or connects to a provider by itself.
 - Application code owns target discovery such as active-tab, eligible-frame, or process selection. Nexus consumes the resulting `ConnectionTarget` values and does not perform global provider discovery.
-- Raw `nexus.create(...)` proxies and refs are session-bound. Recreate them after disconnect, daemon restart, or session replacement.
+- `where(contextMeta, connectionMeta)` applies to connection acquisition only, not per-RPC authorization. Keep `policy.canConnect` and `policy.canCall` as the authorization boundaries.
+- Raw connection proxies and refs are session-bound. Reconnect and get fresh handles after disconnect, daemon restart, or session replacement.
 - See `.agents/skills/use-nexus/references/usage-style.md` for detailed external usage style.
 
 ## React Code
@@ -201,13 +202,14 @@ pnpm dev
 
 - Public docs source lives in `apps/docs/content/docs/`; internal proposals and style notes live in `.doc/`.
 - Keep adapter docs focused on adapter-specific setup; do not redefine shared service contracts in every adapter guide.
-- Prefer minimal, type-correct examples with adapter-exported exact targets first, then explain Token and endpoint `defaultTarget`.
+- Prefer minimal, type-correct examples with adapter-exported exact targets first. Do not document Token, TokenSpace, endpoint, or adapter default targets.
 - Keep documentation changes minimal and preserve the surrounding terminology, tone, and structure.
 - If changing external usage guidance, update `.agents/skills/use-nexus` when relevant.
 - Add a changeset when a change affects published package behavior, public APIs, or documented user-facing capabilities.
 - Changes confined to the private documentation site, documentation migration, navigation, styling, or documentation links do not require a package changeset. Do not bump runtime packages solely for these changes.
 - Use `patch` for bug fixes, internal implementation changes, docs/tests, and non-breaking dependency metadata updates.
 - During the explicitly documented rapid-iteration phase, use `minor` for features and breaking API, protocol, or compatibility changes, including Core 1.x. This is an intentional exception to stable SemVer; do not describe these releases as backward-compatible.
+- The explicitly authorized Core 2.0 alpha milestone uses a `major` Core changeset; affected downstream packages use their own `minor` changesets. Do not describe this unshipped migration as a released version.
 - Keep `patch` backward-compatible. Clearly list breaking changes and migration steps against the last published version, not intermediate unshipped implementations.
 - Reserve `major` for an explicitly agreed release milestone or version-policy change; do not automatically promote 0.x adapters or React to 1.0 because Core changes.
 - Derive dependency ranges from tested compatibility. Bind version-sensitive consumers to the supported Core minor and do not claim untested future-major compatibility.

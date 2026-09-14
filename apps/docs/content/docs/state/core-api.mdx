@@ -43,23 +43,22 @@ const counterStore = createStoreToken<CounterStore>("app:counter");
 The StoreToken carries:
 
 - the store identity
+- the shared store contract
 - optional state and action validation through `validation`
-- optional convenience targeting through the store token's `defaultTarget`
 
 ### Notes
 
 - pass the StoreToken directly to State APIs, without a `{ token }` wrapper
-- store default targeting comes from the token's `defaultTarget`; Nexus State does not define a second store-level default target source
+- connection targeting is supplied by the State connection options, not by the StoreToken
 - host-side state and actions are supplied separately to `createNexusStore()` as a native Zustand `StateCreator`
 - store actions must use serializable arguments/results
 - synchronization publishes full snapshots
 
 `RemoteStore<CounterStore>` derives data-only reads and asynchronous methods from
 the same contract. `createStoreToken<Store, Model>(id, options)` supports typed
-`defaultTarget` and optional `validation: { state, actionResults }` schemas.
+adapter association and optional `validation: { state, actionResults }` schemas.
 Use `space.storeToken<Store>(name, options?)` or `space.safeStoreToken<Store>(...)`
-with TokenSpace to inherit namespaced IDs and default targets. Without a model,
-the token is portable across adapters. A local store may contain additional
+with TokenSpace to inherit namespaced IDs. A local store may contain additional
 private fields; `snapshot` and `expose` still define the runtime sharing boundary.
 
 ## `createNexusStore()`
@@ -137,15 +136,17 @@ State does not retry failed actions or replay snapshots automatically.
 Connects to a remote Nexus State store and returns a `RemoteStore`.
 
 ```ts
+import { chromeTarget } from "@nexus-js/chrome";
+
 const remote = await connectNexusStore(nexus, counterStore, {
-  target: { context: "background" },
+  target: chromeTarget.background(),
 });
 ```
 
 ### Key behavior
 
-- resolves the target through normal Nexus rules
-- creates a proxy through ordinary service paths
+- accepts Core `ConnectOptions`: target, where, positive finite timeout, and signal
+- acquires a connection, then checks its current service catalog; it does not wait for a missing provider
 - establishes the initial snapshot and live subscription through one callback-init setup
 - initializes the local mirror from the baseline
 - returns no Store handle when the handshake fails
@@ -157,16 +158,19 @@ retain Core error codes such as `E_CONN_CLOSED`, `E_CALL_TIMEOUT`, and
 `E_RESOURCE_ACCESS_DENIED`; `safeInvokeStoreAction()` may normalize them only at its
 public safe-result boundary.
 
-Timeout boundaries remain separate: `connectNexusStore()` uses its State `timeout`
-only for acquisition and the callback-init handshake. Action calls use Core's existing
-resource-call timeout defaults; State does not translate the acquisition timeout into
-Core's `callTimeout` option.
+Timeout boundaries remain separate: a supplied `timeout` bounds connection
+acquisition and then separately bounds callback-init setup. It is not one shared
+end-to-end deadline. `signal` cancels connection acquisition only; it does not
+cancel a subscription handshake that has already started or destroy a returned store.
+Action calls use Core's existing resource-call timeout defaults; State does not
+translate the acquisition timeout into Core's `callTimeout` option.
 
 Lifecycle boundary:
 
 - the returned `RemoteStore` is a session-bound handle
 - if the underlying session is replaced, create a new handle with `connectNexusStore(...)`
 - terminal handles are not revived in place
+- if the supplied `where` stops matching on an identity update, the State handle becomes `stale`; ordinary Connection proxies do not retain that predicate
 
 ## `safeConnectNexusStore()`
 

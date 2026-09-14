@@ -15,11 +15,8 @@ import {
   SERVICE_ON_DISCONNECT,
   type ServiceInvocationContext,
 } from "@/service/service-invocation-hooks";
-import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-  RELEASE_PROXY_SYMBOL,
-} from "@/types/symbols";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import { subscribeProxyStatus } from "@/service/proxy-lifecycle";
 import { isRefWrapper } from "@/types/ref-wrapper";
 import type {
   AdapterModel,
@@ -102,6 +99,7 @@ export class RelayError extends Error {
   readonly code: string;
   readonly context?: Record<string, unknown>;
 
+  /** Create a stable relay-owned error with optional downstream context. */
   constructor(
     message: string,
     code: string,
@@ -116,6 +114,7 @@ export class RelayError extends Error {
 
 const SERIALIZABLE_MODE = "serializable" as const;
 
+/** Create an identity for the relay's downstream store projection. */
 const createRelaySessionId = (): string => {
   const randomUuid = globalThis.crypto?.randomUUID?.();
   return randomUuid
@@ -123,6 +122,7 @@ const createRelaySessionId = (): string => {
     : `relay-store-session:${Date.now()}`;
 };
 
+/** Distinguish framework-supplied invocation context from ordinary user data. */
 const isInvocationContext = (
   value: unknown,
 ): value is ServiceInvocationContext =>
@@ -133,6 +133,7 @@ const isInvocationContext = (
   "localIdentity" in value &&
   "platform" in value;
 
+/** Remove a trusted invocation context from forwarded application arguments. */
 const splitInvocationArg = (
   args: unknown[],
   activeInvocation?: ServiceInvocationContext,
@@ -151,6 +152,7 @@ const splitInvocationArg = (
   };
 };
 
+/** Detect values that cannot cross a serializable relay boundary safely. */
 const isCapabilityBearingValue = (value: unknown): boolean => {
   if (typeof value === "function") {
     return true;
@@ -170,6 +172,7 @@ const isCapabilityBearingValue = (value: unknown): boolean => {
   return false;
 };
 
+/** Reject capability-bearing values recursively while preserving the failing path. */
 const validateSerializable = (
   value: unknown,
   path: (string | number)[] = [],
@@ -196,6 +199,7 @@ const validateSerializable = (
   }
 };
 
+/** Convert upstream failures into relay-owned errors without leaking transport details. */
 const mapRelayUpstreamError = (error: unknown): RelayError => {
   if (error instanceof RelayError) {
     return error;
@@ -205,14 +209,6 @@ const mapRelayUpstreamError = (error: unknown): RelayError => {
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code?: unknown }).code)
       : undefined;
-
-  if (code === "E_TARGET_NO_MATCH" || code === "E_TARGET_UNEXPECTED_COUNT") {
-    return new RelayError(
-      "Relay upstream target could not be resolved.",
-      "E_RELAY_UPSTREAM_TARGET_NOT_FOUND",
-      { cause: error },
-    );
-  }
 
   if (code === "E_CONN_CLOSED") {
     return new RelayError(
@@ -231,6 +227,7 @@ const mapRelayUpstreamError = (error: unknown): RelayError => {
   );
 };
 
+/** Convert terminal upstream state into the downstream store error type. */
 const toDisconnectedError = (
   reason: TerminalReason,
   cause?: unknown,
@@ -240,6 +237,7 @@ const toDisconnectedError = (
     typeof cause === "undefined" ? undefined : { cause },
   );
 
+/** Expose a service that authorizes and forwards calls through an upstream Nexus. */
 export const relayService = <
   TService extends object,
   DownstreamM extends AdapterModel,
@@ -251,6 +249,7 @@ export const relayService = <
   const upstreamToken = new Token<TService, UpstreamM>(token.id);
   let activeInvocation: ServiceInvocationContext | undefined;
 
+  /** Build a lazy path whose eventual call is authorized and forwarded upstream. */
   const createPathProxy = (path: (string | number)[]): unknown =>
     new Proxy(() => undefined, {
       get(_target, prop) {
@@ -310,9 +309,10 @@ export const relayService = <
         }
 
         try {
-          const upstream = await options.forwardThrough.create(upstreamToken, {
+          const connection = await options.forwardThrough.connect({
             target: options.forwardTarget,
           });
+          const upstream = connection.get(upstreamToken);
           let cursor: any = upstream;
           for (const segment of path) {
             cursor = cursor[segment];
@@ -371,7 +371,7 @@ export const relayService = <
 /**
  * Projects one upstream State session into the downstream graph. Each subscriber
  * owns its upstream callbacks, so action acknowledgement remains caller-specific.
- * Upstream replacement ends this provider; acquire a newly registered relay session.
+ * Upstream replacement ends this provider; connect and get a fresh relay session.
  */
 export const relayNexusStore = <
   Store extends object,
@@ -393,21 +393,37 @@ export const relayNexusStore = <
     onSync: Parameters<NexusStoreServiceContract<Store>["subscribe"]>[0];
     owner?: string;
     cleanup: Set<() => void>;
+    terminalPending: boolean;
     stop(): void;
   };
   const subscriptions = new Set<Subscription>();
   const contexts = new WeakMap<ServiceInvocationContext, symbol>();
   const connections = new Map<string, symbol>();
+  /** Reuse the terminal error so all subscriptions observe one relay failure. */
   const closedError = () =>
     terminalError ??
     new NexusStoreDisconnectedError("Relay store subscription closed.");
+  /** Guard asynchronous relay work against terminal or unsubscribed sessions. */
   const safeActive = (subscription: Subscription) =>
     terminalError || !subscriptions.has(subscription)
       ? Result.err(closedError())
       : Result.ok(undefined);
 
+  /** Release every upstream handle owned by one downstream subscription. */
+  const stopUpstream = (subscription: Subscription): void => {
+    for (const stop of subscription.cleanup) {
+      subscription.cleanup.delete(stop);
+      try {
+        stop();
+      } catch {
+        /* Complete all ownership cleanup. */
+      }
+    }
+  };
+
   // Each downstream subscriber owns an upstream subscription. Its action already
   // waits for this callback's ACK, so no relay waiter or all-subscriber barrier exists.
+  /** Mark the relay terminal and lazily notify each still-owned subscriber. */
   const emitTerminal = (reason: TerminalReason, cause?: unknown): void => {
     if (terminalError) return;
     terminalError = toDisconnectedError(reason, cause);
@@ -418,7 +434,15 @@ export const relayNexusStore = <
       reason,
       error: cause,
     };
+    // Mark the full batch first: a synchronous callback may unsubscribe siblings
+    // which share the same capability before their notification starts.
     for (const subscription of subscriptions) {
+      subscription.terminalPending = true;
+    }
+    for (const subscription of subscriptions) {
+      // Upstream work ends immediately; only the downstream callback must stay
+      // alive until its lazy terminal notification has been consumed.
+      stopUpstream(subscription);
       void Result.tryPromise({
         try: async () => {
           await subscription.onSync(event);
@@ -427,10 +451,12 @@ export const relayNexusStore = <
       }).then((sent) => {
         if (sent.isErr())
           logger.error("Relay terminal notification failed", sent.error);
+        subscription.terminalPending = false;
+        subscription.stop();
       });
-      subscription.stop();
     }
   };
+  /** Map a trusted invocation to the downstream relay policy context. */
   const buildBaseContext = (
     invocationContext: ServiceInvocationContext,
   ): RelayBaseContext<DownstreamM> => ({
@@ -440,6 +466,7 @@ export const relayNexusStore = <
     tokenId: token.id,
   });
 
+  /** Apply subscription or action policy before using an upstream capability. */
   const safeAuthorize = async (
     invocation: ServiceInvocationContext | undefined,
     action?: string,
@@ -480,6 +507,7 @@ export const relayNexusStore = <
   };
 
   const service = {
+    /** Subscribe one downstream caller and own its corresponding upstream session. */
     async subscribe(
       onSync: Subscription["onSync"],
       ...args: unknown[]
@@ -491,16 +519,15 @@ export const relayNexusStore = <
         onSync,
         owner: invocation?.sourceConnectionId,
         cleanup: new Set(),
+        terminalPending: false,
+        /** Release this subscriber and its upstream resources exactly once. */
         stop() {
-          if (!subscriptions.delete(subscription)) return;
-          for (const stop of subscription.cleanup) {
-            subscription.cleanup.delete(stop);
-            try {
-              stop();
-            } catch {
-              /* Complete all ownership cleanup. */
-            }
+          if (subscription.terminalPending) {
+            stopUpstream(subscription);
+            return;
           }
+          if (!subscriptions.delete(subscription)) return;
+          stopUpstream(subscription);
           if (![...subscriptions].some((other) => other.onSync === onSync)) {
             try {
               (
@@ -518,6 +545,7 @@ export const relayNexusStore = <
       subscriptions.add(subscription);
       let initialized = false;
       let observedVersion: number | undefined;
+      /** Validate one upstream event and project it to this subscriber. */
       const safeReceive = (input: unknown) =>
         Result.gen(async function* () {
           yield* Result.try({
@@ -527,7 +555,7 @@ export const relayNexusStore = <
                 typeof input === "object" &&
                 (input as { type?: unknown }).type === "init"
               ) {
-                if (!subscriptions.has(subscription))
+                if (terminalError || !subscriptions.has(subscription))
                   disposeSubscription(input);
                 else subscription.cleanup.add(() => disposeSubscription(input));
               }
@@ -614,7 +642,8 @@ export const relayNexusStore = <
                   yield* safeActive(subscription);
                   const value = yield* Result.await(
                     Result.tryPromise({
-                      try: () => event.actions[name](...callArgs),
+                      try: () =>
+                        Promise.resolve(event.actions[name](...callArgs)),
                       catch: (error) =>
                         error instanceof Error
                           ? error
@@ -660,10 +689,12 @@ export const relayNexusStore = <
         yield* safeActive(subscription);
         const upstream = yield* Result.await(
           Result.tryPromise({
-            try: () =>
-              options.forwardThrough.create(upstreamToken, {
+            try: async () => {
+              const connection = await options.forwardThrough.connect({
                 target: options.forwardTarget,
-              }),
+              });
+              return connection.get(upstreamToken);
+            },
             catch: mapRelayUpstreamError,
           }),
         );
@@ -671,36 +702,24 @@ export const relayNexusStore = <
         yield* Result.await(
           Result.tryPromise({
             try: async () => {
-              const hooks = [
-                [
-                  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-                  "source-disconnected",
-                ],
-                [
-                  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-                  "target-changed",
-                ],
-              ] as const;
-              for (const [symbol, reason] of hooks) {
-                const register = (
-                  upstream as typeof upstream & {
-                    [key: symbol]:
-                      | ((notify: () => void) => (() => void) | void)
-                      | undefined;
-                  }
-                )[symbol];
-                const stop = register?.(() => emitTerminal(reason));
-                if (stop) {
-                  if (!subscriptions.has(subscription)) stop();
-                  else subscription.cleanup.add(stop);
-                }
+              const stop = subscribeProxyStatus(upstream, (status) => {
+                if (status.type === "disconnected")
+                  emitTerminal("source-disconnected");
+                else if (status.selection === "stale")
+                  emitTerminal("target-changed");
+              });
+              if (terminalError || !subscriptions.has(subscription)) {
+                stop();
+                return;
               }
+              subscription.cleanup.add(stop);
               await upstream.subscribe(async (input) => {
                 const received = await safeReceive(input);
                 if (received.isErr()) {
                   if (received.error instanceof NexusStoreProtocolError)
                     emitTerminal("source-disconnected", received.error);
-                  subscription.stop();
+                  // emitTerminal owns callback release once its notification settles.
+                  if (!subscription.terminalPending) subscription.stop();
                   throw received.error;
                 }
               });
@@ -716,7 +735,7 @@ export const relayNexusStore = <
             );
       });
       if (result.isErr()) {
-        subscription.stop();
+        if (!subscription.terminalPending) subscription.stop();
         throw result.error;
       }
     },

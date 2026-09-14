@@ -87,7 +87,7 @@ test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves
     command: "provider-cardinality",
     participant: "content:alpha",
   });
-  expect(parsed(zero)).toEqual({ code: "E_SERVICE_NO_MATCH" });
+  expect(parsed(zero)).toEqual({ count: 0 });
 
   await commandAndResult({
     frame: alpha,
@@ -134,7 +134,17 @@ test("CE-14 observes 0/1/2 selection and rebinds after a multicast member leaves
     command: "multicast-select",
     participant: "content:alpha",
   });
-  expect(parsed(bound)?.identities).toHaveLength(2);
+  const identities = parsed(bound)?.identities;
+  expect(identities).toHaveLength(2);
+  expect(
+    Array.isArray(identities) &&
+      identities.every(
+        (result) =>
+          result &&
+          typeof result === "object" &&
+          (result as Record<string, unknown>).status === "fulfilled",
+      ),
+  ).toBe(true);
   await waitForBarrier(runId, "multicast-snapshot-bound");
 
   await beta.goto(
@@ -209,6 +219,7 @@ test("CE-15 distinguishes remote multicast rejection from unavailable all-target
     command: "multicast-fail",
     participant: "content:alpha",
   });
+  expect(parsed(rejected)).toHaveProperty("results");
   expect(JSON.stringify(parsed(rejected)?.results)).toContain(
     "fixture remote failure",
   );
@@ -309,7 +320,9 @@ test("CE-19 keeps raw alpha proxy pinned while fresh selection finds beta", asyn
     command: "identity-constraint",
     participant: "content:beta",
   });
-  expect(parsed(constrained)).toEqual({ code: "E_TARGET_CONSTRAINT_FAILED" });
+  expect(parsed(constrained)).toEqual({
+    code: "E_CONNECTION_CONSTRAINT_FAILED",
+  });
   await waitForBarrier(runId, "alpha-constraint-failed");
 });
 

@@ -6,7 +6,7 @@ bound when a proxy is created.
 
 ```mermaid
 graph TD
-    NexusAPI -->|bound IDs, strategy, timeout| Engine
+    NexusAPI -->|bound session, timeout| Engine
     Engine -->|creates| ProxyFactory
     ProxyFactory -->|operation + binding| CallProcessor
     CallProcessor -->|register before send| PendingCallManager
@@ -17,29 +17,25 @@ graph TD
     MessageHandler -->|RES / ERR| PendingCallManager
     MessageHandler -->|authorize, resolve, invoke| ResourceManager
     MessageHandler -->|encode reply / revive response| PayloadProcessor
-    PayloadProcessor -->|conversion tables| Protocol
+    PayloadProcessor -->|wire tags and value decoders| Protocol
     PayloadProcessor -->|local capabilities| ResourceManager
     PayloadProcessor -->|remote facades| ProxyFactory
 ```
 
 ## Dispatch And Ownership
 
-- `ProxyFactory.dispatch` is the Result-to-Promise-rejection boundary, not another
-  safe API. GET/APPLY return failures to the caller without automatic logging.
-  SET has no caller-visible completion Promise, so its trap observes and logs
-  asynchronous failure; the synchronous released-resource guard stays in place.
+- Lazy GET/APPLY closures start on first consumption and share one Result across
+  safe and throw-style consumers. Inspecting paths or declaring calls never sends.
+  Remote assignment is unsupported; writes use explicit business methods.
   RELEASE is also best-effort with send-failure logging, not a remote cleanup ACK.
 
-- `CallBinding` pairs one connection with `one`, or a fixed connection list with
-  `all` / `stream`. Timeout is explicit. `staleTarget.where` only observes
+- `CallBinding` captures one connection ID and an explicit timeout. `staleTarget.where` only observes
   selection invalidation; it does not reroute calls.
 - Check bound sessions before allocating pending state or capabilities. Register
   pending before sending because an in-process transport can reply synchronously.
-- Sanitize and send separately for each recipient. A failed handoff releases only
-  that recipient's outgoing capabilities; earlier accepted capabilities remain.
-- Collect calls settle with `Result`. Streams preserve target order. Normal
-  completion keeps queued results readable; cancellation releases both queued
-  and ordering-buffered capabilities, never already delivered results.
+- A failed handoff releases outgoing capabilities allocated for that request.
+- Each pending request has one peer and settles with one Result. Collection
+  composition uses ordinary JavaScript outside L3.
 
 ## Incoming Requests
 
@@ -64,13 +60,12 @@ All L3 runtime components are per-Engine classes; the class is also the instance
 type, without a parallel `Runtime` interface or factory return object. Only
 authorization and service creation retain model-dependent types. Dependency
 signatures reuse existing methods rather than redefining transport contracts.
-`ProxyFactory` shares its traps. One weak index associates both callable targets
-and facades with a binding/path. Resource facades additionally share a release
+`ProxyFactory` captures the binding and path directly in each proxy's closures.
+Resource facades additionally share a release
 state, which doubles as the finalizer anchor and does not point back to a facade.
-Service facades have no resource lifecycle state. Pending streams implement the
-iterator protocol directly.
+Service facades have no resource lifecycle state.
 
-`protocol.ts` retains independent sanitizer and reviver tables. Payload traversal
+`protocol.ts` defines wire tags and pure value decoders. Payload traversal
 and capability rollback belong to `PayloadProcessor`; wire conversion semantics
 are not part of request dispatch. Late responses release only resource identities
 not already registered locally. Proxy release remains idempotent, while discarding

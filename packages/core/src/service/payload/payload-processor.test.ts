@@ -3,7 +3,6 @@ import { Result } from "better-result";
 import { PayloadProcessor } from "./payload-processor";
 import { ResourceManager } from "../resource-manager";
 import { ProxyFactory } from "../proxy-factory";
-import { LocalResourceType } from "../types";
 import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 import { Placeholder } from "./placeholder";
 import { ESCAPE_CHAR, PlaceholderType } from "./protocol";
@@ -41,12 +40,45 @@ describe("PayloadProcessor", () => {
   });
 
   describe("safeSanitize", () => {
+    it("preserves __proto__ as ordinary data through encode and revive", () => {
+      const input = JSON.parse('{"__proto__":{"inherited":true},"value":1}');
+      const encoded = unwrap(
+        payloadProcessor.safeSanitize([input], mockConnectionId),
+      );
+      const [revived] = unwrap(
+        payloadProcessor.safeRevive(encoded, mockConnectionId),
+      );
+      expect(Object.hasOwn(encoded[0], "__proto__")).toBe(true);
+      expect(Object.hasOwn(revived, "__proto__")).toBe(true);
+      expect(revived.inherited).toBeUndefined();
+      expect(revived.value).toBe(1);
+    });
+    it("rolls back capabilities even when a getter throws an unserializable value", () => {
+      vi.mocked(resourceManager.registerLocalResource).mockRestore();
+      const hostile = {
+        toString() {
+          throw new Error("unreadable");
+        },
+      };
+      const result = payloadProcessor.safeSanitize(
+        [
+          () => {},
+          {
+            get value() {
+              throw hostile;
+            },
+          },
+        ],
+        mockConnectionId,
+      );
+      expect(result).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
+      expect(resourceManager.countLocalResources()).toBe(0);
+    });
     it("rolls back resources registered before a later value fails to sanitize", () => {
       vi.mocked(resourceManager.registerLocalResource).mockRestore();
       const existingResourceId = resourceManager.registerLocalResource(
         {},
         "existing-conn",
-        LocalResourceType.OBJECT,
       );
       const failingValue = {
         get failure() {
@@ -75,7 +107,7 @@ describe("PayloadProcessor", () => {
     });
 
     it("should convert undefined to an UNDEFINED placeholder", () => {
-      const expected = new Placeholder(PlaceholderType.UNDEFINED).toString();
+      const expected = Placeholder.encode(PlaceholderType.UNDEFINED);
       const result = unwrap(
         payloadProcessor.safeSanitize([undefined], mockConnectionId),
       );
@@ -83,9 +115,7 @@ describe("PayloadProcessor", () => {
     });
 
     it("should escape strings that start with placeholder/escape prefix", () => {
-      const placeholderStr = new Placeholder(
-        PlaceholderType.UNDEFINED,
-      ).toString();
+      const placeholderStr = Placeholder.encode(PlaceholderType.UNDEFINED);
       const escapedStr = `${ESCAPE_CHAR}test`;
       const result = unwrap(
         payloadProcessor.safeSanitize(
@@ -107,10 +137,11 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myFunc,
         mockConnectionId,
-        LocalResourceType.FUNCTION,
+        undefined,
+        undefined,
       );
       expect(result[0]).toBe(
-        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       );
     });
 
@@ -135,12 +166,11 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myFunc,
         mockConnectionId,
-        LocalResourceType.FUNCTION,
         "vault",
         servicePolicy,
       );
       expect(result[0]).toBe(
-        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       );
     });
 
@@ -168,12 +198,11 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myFunc,
         mockConnectionId,
-        LocalResourceType.FUNCTION,
         "vault",
         undefined,
       );
       expect(result[0]).toBe(
-        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       );
     });
 
@@ -186,12 +215,11 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myObject,
         mockConnectionId,
-        LocalResourceType.OBJECT,
         undefined,
         undefined,
       );
       expect(result[0]).toBe(
-        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       );
     });
 
@@ -209,19 +237,19 @@ describe("PayloadProcessor", () => {
         payloadProcessor.safeSanitize([myBigInt], mockConnectionId),
       );
       expect(mapResult[0]).toBe(
-        new Placeholder(
+        Placeholder.encode(
           PlaceholderType.MAP,
           JSON.stringify(Array.from(myMap.entries())),
-        ).toString(),
+        ),
       );
       expect(setResult[0]).toBe(
-        new Placeholder(
+        Placeholder.encode(
           PlaceholderType.SET,
           JSON.stringify(Array.from(mySet.values())),
-        ).toString(),
+        ),
       );
       expect(bigintResult[0]).toBe(
-        new Placeholder(PlaceholderType.BIGINT, myBigInt.toString()).toString(),
+        Placeholder.encode(PlaceholderType.BIGINT, myBigInt.toString()),
       );
     });
 
@@ -238,21 +266,38 @@ describe("PayloadProcessor", () => {
       expect(arrResult).toEqual([
         1,
         "test",
-        new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       ]);
       expect(objResult).toEqual({
         a: 1,
         b: "test",
-        c: new Placeholder(PlaceholderType.RESOURCE, "res-123").toString(),
+        c: Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
       });
     });
   });
 
   describe("safeRevive", () => {
+    it.each(["\u0003R", "\u0003R:"])(
+      "rejects a resource without an ID: %j",
+      (wire) => {
+        expect(
+          payloadProcessor.safeRevive([wire], mockConnectionId),
+        ).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
+        expect(proxyFactory.createRemoteResourceProxy).not.toHaveBeenCalled();
+      },
+    );
+    it("preserves unknown tags and escaped resource-looking strings", () => {
+      const unknown = "\u0003X:future";
+      const escaped = "\u0004\u0003R";
+      expect(
+        unwrap(
+          payloadProcessor.safeRevive([unknown, escaped], mockConnectionId),
+        ),
+      ).toEqual([unknown, "\u0003R"]);
+      expect(proxyFactory.createRemoteResourceProxy).not.toHaveBeenCalled();
+    });
     it("should keep primitives and unescape escaped strings", () => {
-      const placeholderStr = new Placeholder(
-        PlaceholderType.UNDEFINED,
-      ).toString();
+      const placeholderStr = Placeholder.encode(PlaceholderType.UNDEFINED);
       const escapedPlaceholder = `${ESCAPE_CHAR}${placeholderStr}`;
       const primitiveResult = unwrap(
         payloadProcessor.safeRevive(
@@ -268,13 +313,13 @@ describe("PayloadProcessor", () => {
     });
 
     it("should revive UNDEFINED and RESOURCE placeholders", () => {
-      const undefinedPlaceholder = new Placeholder(
+      const undefinedPlaceholder = Placeholder.encode(
         PlaceholderType.UNDEFINED,
-      ).toString();
-      const resourcePlaceholder = new Placeholder(
+      );
+      const resourcePlaceholder = Placeholder.encode(
         PlaceholderType.RESOURCE,
         "res-456",
-      ).toString();
+      );
       expect(
         unwrap(
           payloadProcessor.safeRevive([undefinedPlaceholder], mockConnectionId),
@@ -286,26 +331,46 @@ describe("PayloadProcessor", () => {
       expect(proxyFactory.createRemoteResourceProxy).toHaveBeenCalledWith(
         "res-456",
         mockConnectionId,
+        undefined,
       );
       expect(result[0]).toBe(mockProxyObject);
+    });
+
+    it("passes a call timeout to resources revived from that call's response", () => {
+      const resourcePlaceholder = Placeholder.encode(
+        PlaceholderType.RESOURCE,
+        "res-456",
+      );
+
+      unwrap(
+        payloadProcessor.safeRevive(
+          [resourcePlaceholder],
+          mockConnectionId,
+          1_234,
+        ),
+      );
+
+      expect(
+        proxyFactory.createRemoteResourceProxy as any,
+      ).toHaveBeenCalledWith("res-456", mockConnectionId, 1_234);
     });
 
     it("should revive MAP/SET/BIGINT placeholders", () => {
       const originalMap = new Map([["a", 1]]);
       const originalSet = new Set(["a", 1]);
       const originalBigInt = BigInt(9007199254740991);
-      const mapPlaceholder = new Placeholder(
+      const mapPlaceholder = Placeholder.encode(
         PlaceholderType.MAP,
         JSON.stringify(Array.from(originalMap.entries())),
-      ).toString();
-      const setPlaceholder = new Placeholder(
+      );
+      const setPlaceholder = Placeholder.encode(
         PlaceholderType.SET,
         JSON.stringify(Array.from(originalSet.values())),
-      ).toString();
-      const bigintPlaceholder = new Placeholder(
+      );
+      const bigintPlaceholder = Placeholder.encode(
         PlaceholderType.BIGINT,
         originalBigInt.toString(),
-      ).toString();
+      );
 
       const mapResult = unwrap(
         payloadProcessor.safeRevive([mapPlaceholder], mockConnectionId),
@@ -323,10 +388,10 @@ describe("PayloadProcessor", () => {
     });
 
     it("should recursively revive arrays and plain objects", () => {
-      const placeholder = new Placeholder(
+      const placeholder = Placeholder.encode(
         PlaceholderType.RESOURCE,
         "res-xyz",
-      ).toString();
+      );
       const arr = [1, "test", placeholder];
       const obj = { a: 1, b: "test", c: placeholder };
       const arrResult = unwrap(
@@ -364,7 +429,7 @@ describe("PayloadProcessor", () => {
           throw new Error("cannot revive");
         });
       const resource = (id: string) =>
-        new Placeholder(PlaceholderType.RESOURCE, id).toString();
+        Placeholder.encode(PlaceholderType.RESOURCE, id);
 
       const result = payloadProcessor.safeRevive(
         [resource("res-first"), resource("res-second")],
@@ -390,7 +455,7 @@ describe("PayloadProcessor", () => {
           sourceConnectionId === mockConnectionId,
       );
       const resource = (id: string) =>
-        new Placeholder(PlaceholderType.RESOURCE, id).toString();
+        Placeholder.encode(PlaceholderType.RESOURCE, id);
 
       const result = payloadProcessor.safeRevive(
         [resource("res-existing"), resource("res-new"), resource("res-bad")],

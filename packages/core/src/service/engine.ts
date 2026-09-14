@@ -1,40 +1,28 @@
 import type { ConnectionManager } from "@/connection/connection-manager";
 import type { NexusMessage, ReleaseMessage } from "@/types/message";
 import { NexusMessageType } from "@/types/message";
-import type {
-  AdapterModel,
-  ConnectionMetaOf,
-  ConnectionWhere,
-  ContextMetaOf,
-} from "@/types/adapter-model";
+import type { AdapterModel } from "@/types/adapter-model";
 import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Logger } from "@/logger";
-import { CallProcessor, type DispatchCallOptions } from "./call-processor";
+import {
+  CallProcessor,
+  type CallBinding,
+  type DispatchCallOptions,
+} from "./call-processor";
 import { MessageHandler } from "./message/message-handler";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { PendingCallManager } from "./pending-call-manager";
-import { type CreateProxyOptions, ProxyFactory } from "./proxy-factory";
+import { ProxyFactory } from "./proxy-factory";
 import { ResourceManager } from "./resource-manager";
 import {
   getServiceInvocationHook,
-  isServiceWithHooks,
   SERVICE_ON_DISCONNECT,
 } from "./service-invocation-hooks";
-import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
 import { installProxyLifecycle } from "./proxy-lifecycle";
 import { Result } from "better-result";
-const { err, ok } = Result;
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
-
-type TargetStaleSubscription<M extends AdapterModel> = {
-  readonly callback: () => void;
-  readonly staleTarget?: {
-    readonly where?: ConnectionWhere<M>;
-  };
-};
+import type { Connection } from "@/api/connection";
+import type { NexusCallError } from "@/errors";
 
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
@@ -46,11 +34,9 @@ export class Engine<M extends AdapterModel> {
   private readonly callProcessor: CallProcessor;
 
   private readonly disconnectListeners = new Map<string, Set<() => void>>();
-  private readonly targetStaleListeners = new Map<
-    string,
-    Set<TargetStaleSubscription<M>>
-  >();
+  private readonly staleListeners = new Map<string, Set<() => void>>();
 
+  /** Compose service, payload, call, and message processing around one manager. */
   constructor(
     private readonly connectionManagerState: ConnectionManager<M>,
     config: {
@@ -59,7 +45,9 @@ export class Engine<M extends AdapterModel> {
         { service: object; policy?: NexusAuthorizationPolicy<M> }
       >;
       policy?: NexusAuthorizationPolicy<M>;
-    } = {},
+      getConnection: (id: string) => Connection<M>;
+      callTimeout?: number;
+    },
   ) {
     this.resourceManager = new ResourceManager();
 
@@ -67,7 +55,12 @@ export class Engine<M extends AdapterModel> {
       this.registerServices(config.providers);
     }
 
-    this.proxyFactory = new ProxyFactory(this, this.resourceManager);
+    this.proxyFactory = new ProxyFactory(
+      this,
+      this.resourceManager,
+      config.getConnection,
+      config.callTimeout,
+    );
     this.payloadProcessor = new PayloadProcessor(
       this.resourceManager,
       this.proxyFactory,
@@ -86,8 +79,8 @@ export class Engine<M extends AdapterModel> {
         this.connectionManagerState.getConnectionAuthSnapshot(connectionId),
     });
     this.callProcessor = new CallProcessor({
-      getReadyConnectionIds: (target) =>
-        this.connectionManagerState.safeGetReadyConnectionIds(target),
+      isConnectionReady: (id) =>
+        this.connectionManagerState.isConnectionReady(id),
       sendMessage: (message, connectionId) =>
         this.safeSendMessage(message, connectionId),
       payloadProcessor: this.payloadProcessor,
@@ -95,90 +88,52 @@ export class Engine<M extends AdapterModel> {
     });
   }
 
+  /** Create a service proxy and attach observers for its bound session. */
   public createServiceProxy<T extends object>(
     serviceName: string,
-    options: CreateProxyOptions<M>,
+    options: CallBinding,
   ): T {
-    const proxy = this.proxyFactory.createServiceProxy(
-      serviceName,
-      options,
-    ) as T & {
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
-        callback: () => void,
-      ) => () => void;
-      [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
-        callback: () => void,
-      ) => () => void;
-    };
-
-    if ("connectionId" in options.target) {
-      const connectionId = options.target.connectionId;
-
-      Object.defineProperty(
-        proxy,
-        NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-        {
-          configurable: true,
-          value: (callback: () => void) => {
-            let listeners = this.disconnectListeners.get(connectionId);
-            if (!listeners) {
-              listeners = new Set();
-              this.disconnectListeners.set(connectionId, listeners);
-            }
-
-            listeners.add(callback);
-            return () => {
-              const current = this.disconnectListeners.get(connectionId);
-              if (!current) {
-                return;
-              }
-
-              current.delete(callback);
-              if (current.size === 0) {
-                this.disconnectListeners.delete(connectionId);
-              }
-            };
-          },
-        },
-      );
-
-      Object.defineProperty(
-        proxy,
-        NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-        {
-          configurable: true,
-          value: (callback: () => void) => {
-            let listeners = this.targetStaleListeners.get(connectionId);
-            if (!listeners) {
-              listeners = new Set();
-              this.targetStaleListeners.set(connectionId, listeners);
-            }
-
-            const entry: TargetStaleSubscription<M> = {
-              callback,
-              staleTarget: options.staleTarget,
-            };
-            listeners.add(entry);
-            return () => {
-              const current = this.targetStaleListeners.get(connectionId);
-              if (!current) {
-                return;
-              }
-
-              current.delete(entry);
-              if (current.size === 0) {
-                this.targetStaleListeners.delete(connectionId);
-              }
-            };
-          },
-        },
-      );
-      installProxyLifecycle(proxy, serviceName, connectionId);
-    }
-
+    const proxy = this.proxyFactory.createServiceProxy<T>(serviceName, options);
+    const { connectionId } = options;
+    installProxyLifecycle(proxy, serviceName, connectionId, {
+      subscribeDisconnect: (callback) =>
+        this.subscribeDisconnect(connectionId, callback),
+      subscribeStale: (callback) => this.subscribeStale(connectionId, callback),
+    });
     return proxy;
   }
 
+  /** Observes L3 disconnect cleanup; cancellation removes only this subscription. */
+  private subscribeDisconnect(
+    connectionId: string,
+    callback: () => void,
+  ): () => void {
+    let listeners = this.disconnectListeners.get(connectionId);
+    if (!listeners)
+      this.disconnectListeners.set(connectionId, (listeners = new Set()));
+    listeners.add(callback);
+    return () => {
+      listeners?.delete(callback);
+      if (listeners?.size === 0) this.disconnectListeners.delete(connectionId);
+    };
+  }
+
+  /** Observe identity changes for proxies bound to one session. */
+  private subscribeStale(
+    connectionId: string,
+    callback: () => void,
+  ): () => void {
+    let listeners = this.staleListeners.get(connectionId);
+    if (!listeners)
+      this.staleListeners.set(connectionId, (listeners = new Set()));
+    listeners.add(callback);
+    return () => {
+      listeners?.delete(callback);
+      if (listeners?.size === 0) this.staleListeners.delete(connectionId);
+    };
+  }
+
+  /** Register providers through the safe batch path and throw at this boundary. */
   public registerServices(
     providers: Record<
       string,
@@ -191,6 +146,7 @@ export class Engine<M extends AdapterModel> {
     }
   }
 
+  /** Atomically register providers locally, then announce their availability. */
   public safeProvideServicesBatch(
     providers: Record<
       string,
@@ -215,7 +171,7 @@ export class Engine<M extends AdapterModel> {
   /** Dispatches an already-bound proxy operation; acquisition and routing remain outside L3. */
   public safeDispatchCall(
     options: DispatchCallOptions,
-  ): Promise<Result<any, globalThis.Error>> {
+  ): Promise<Result<any, NexusCallError>> {
     return this.callProcessor.safeProcess(options);
   }
 
@@ -226,15 +182,12 @@ export class Engine<M extends AdapterModel> {
       id: null,
       resourceId,
     };
-    this.safeSendMessage(message, connectionId).match({
-      ok: () => undefined,
-      err: (error) => {
-        this.logger.warn(
-          `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
-          error,
-        );
-      },
-    });
+    const result = this.safeSendMessage(message, connectionId);
+    if (result.isErr())
+      this.logger.warn(
+        `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
+        result.error,
+      );
   }
 
   /** Handles an incoming message and reports local failures without manufacturing a second reply. */
@@ -258,43 +211,38 @@ export class Engine<M extends AdapterModel> {
 
   /**
    * Hands a message to exactly one live session.
-   * Success means local acceptance, not remote execution; empty/other recipients fail.
+   * Success means local acceptance, not remote execution.
    */
   public safeSendMessage(
     message: NexusMessage,
     connectionId: string,
   ): Result<void, Error> {
-    const sendResult = this.connectionManagerState.safeSendMessage(
-      { connectionId },
+    const result = this.connectionManagerState.safeSendMessage(
+      connectionId,
       message,
     );
-
-    if (sendResult.isErr()) {
-      const error = sendResult.error;
-      return err(
+    if (result.isErr()) {
+      const error = result.error;
+      if (
         error.code === "E_CONN_CLOSED" &&
-          !(error instanceof NexusDisconnectedError)
-          ? new NexusDisconnectedError(
-              error.message,
-              "E_CONN_CLOSED",
-              error.context,
-            )
-          : error,
-      );
-    }
-
-    return sendResult.value.length === 1 && sendResult.value[0] === connectionId
-      ? ok(undefined)
-      : err(
+        !(error instanceof NexusDisconnectedError)
+      ) {
+        return Result.err(
           new NexusDisconnectedError(
-            "Connection did not accept the message.",
+            error.message,
             "E_CONN_CLOSED",
-            { connectionId, messageId: message.id },
+            error.context,
           ),
         );
+      }
+    }
+    return result;
   }
 
+  /** Release session-owned state before notifying service and proxy observers. */
   public onDisconnect(connectionId: string): void {
+    this.resourceManager.cleanupConnection(connectionId);
+    this.pendingCallManager.onDisconnect(connectionId);
     const listeners = this.disconnectListeners.get(connectionId);
     if (listeners) {
       for (const listener of Array.from(listeners)) {
@@ -306,87 +254,31 @@ export class Engine<M extends AdapterModel> {
       }
       this.disconnectListeners.delete(connectionId);
     }
-    this.targetStaleListeners.delete(connectionId);
+    this.staleListeners.delete(connectionId);
 
     for (const service of this.resourceManager.listExposedServices()) {
-      if (isServiceWithHooks(service)) {
-        const onDisconnect = getServiceInvocationHook(
+      try {
+        getServiceInvocationHook(
           service,
           SERVICE_ON_DISCONNECT,
-        ) as ((connectionId: string) => void) | undefined;
-        try {
-          onDisconnect?.(connectionId);
-        } catch (error) {
-          this.logger.error("Exposed service disconnect hook failed.", error);
-        }
+        )?.(connectionId);
+      } catch (error) {
+        this.logger.error("Exposed service disconnect hook failed.", error);
       }
     }
-
-    this.resourceManager.cleanupConnection(connectionId);
-    this.pendingCallManager.onDisconnect(connectionId);
   }
 
-  public onConnectionTargetStale(
-    connectionId: string,
-    newIdentity: ContextMetaOf<M>,
-    oldIdentity: ContextMetaOf<M>,
-    connectionMeta: ConnectionMetaOf<M>,
-  ): void {
-    const listeners = this.targetStaleListeners.get(connectionId);
-    if (!listeners) {
-      return;
-    }
-
-    const staleEntries: TargetStaleSubscription<M>[] = [];
-
-    for (const entry of Array.from(listeners)) {
+  /** Mark all proxies on a session stale after an accepted identity update. */
+  public onConnectionIdentityUpdated(connectionId: string): void {
+    const listeners = this.staleListeners.get(connectionId);
+    if (!listeners) return;
+    for (const listener of Array.from(listeners)) {
       try {
-        if (
-          shouldMarkTargetStale({
-            staleTarget: entry.staleTarget,
-            newIdentity,
-            oldIdentity,
-            connectionMeta,
-          })
-        ) {
-          staleEntries.push(entry);
-        }
-      } catch (error) {
-        this.logger.error("Stale target predicate failed.", error);
-      }
-    }
-
-    for (const entry of staleEntries) {
-      try {
-        entry.callback();
+        listener();
       } catch {
         // listener isolation
       }
-      listeners.delete(entry);
     }
-
-    if (listeners.size === 0) {
-      this.targetStaleListeners.delete(connectionId);
-    }
+    this.staleListeners.delete(connectionId);
   }
-}
-
-function shouldMarkTargetStale<M extends AdapterModel>(input: {
-  readonly staleTarget?: {
-    readonly where?: ConnectionWhere<M>;
-  };
-  readonly newIdentity: ContextMetaOf<M>;
-  readonly oldIdentity: ContextMetaOf<M>;
-  readonly connectionMeta: ConnectionMetaOf<M>;
-}): boolean {
-  const { staleTarget, newIdentity, oldIdentity, connectionMeta } = input;
-
-  if (!staleTarget) {
-    return true;
-  }
-
-  return (
-    (staleTarget.where?.(oldIdentity, connectionMeta) ?? true) &&
-    !(staleTarget.where?.(newIdentity, connectionMeta) ?? true)
-  );
 }

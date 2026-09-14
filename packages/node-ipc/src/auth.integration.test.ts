@@ -24,13 +24,15 @@ describe("node-ipc auth integration", () => {
     });
     const client = harness.createClient({ authToken: "secret" });
 
-    const service = await client.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(service.echo("authorized")).resolves.toBe("authorized");
 
     daemon.close();
@@ -42,13 +44,15 @@ describe("node-ipc auth integration", () => {
     const client = harness.createClient({ authToken: "wrong" });
 
     await expect(
-      client.create(EchoToken, {
-        target: {
-          context: "node-ipc-daemon",
-          appId: "test-daemon",
-          instance: "default",
-        },
-      }),
+      client
+        .connect({
+          target: {
+            context: "node-ipc-daemon",
+            appId: "test-daemon",
+            instance: "default",
+          },
+        })
+        .then((connection) => connection.get(EchoToken)),
     ).rejects.toMatchObject({
       cause: {
         context: {
@@ -71,13 +75,15 @@ describe("node-ipc auth integration", () => {
     });
     const client = harness.createClient({ authToken: "secret" });
 
-    const service = await client.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(service.echo("connect-ok")).resolves.toBe("connect-ok");
     expect(canConnect).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -125,13 +131,15 @@ describe("node-ipc auth integration", () => {
       },
     });
 
-    const service = await client.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
 
     await expect(service.echo("immutable")).resolves.toBe("immutable");
     expect(mutationObserved).toHaveBeenCalledWith({
@@ -154,13 +162,15 @@ describe("node-ipc auth integration", () => {
     const client = harness.createClient();
 
     await expect(
-      client.create(EchoToken, {
-        target: {
-          context: "node-ipc-daemon",
-          appId: "test-daemon",
-          instance: "default",
-        },
-      }),
+      client
+        .connect({
+          target: {
+            context: "node-ipc-daemon",
+            appId: "test-daemon",
+            instance: "default",
+          },
+        })
+        .then((connection) => connection.get(EchoToken)),
     ).rejects.toMatchObject({
       code: "E_HANDSHAKE_REJECTED",
     });
@@ -174,13 +184,15 @@ describe("node-ipc auth integration", () => {
     const daemon = await harness.startDaemon({ policy: { canCall } });
     const client = harness.createClient();
 
-    const service = await client.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(service.echo("call-ok")).resolves.toBe("call-ok");
     expect(canCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -202,13 +214,15 @@ describe("node-ipc auth integration", () => {
     });
     const client = harness.createClient();
 
-    const service = await client.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(service.echo("blocked")).rejects.toMatchObject({
       context: {
         remoteError: expect.objectContaining({ code: "E_AUTH_CALL_DENIED" }),

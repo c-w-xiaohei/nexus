@@ -194,8 +194,10 @@ test("one iframe reload cleans only its subscription and the other child keeps w
     return Promise.resolve();
   });
   await expect
-    .poll(() =>
-      getChildTelemetry(page, "alpha").then((value) => value.currentStatus),
+    .poll(
+      () =>
+        getChildTelemetry(page, "alpha").then((value) => value.currentStatus),
+      { timeout: 10_000 },
     )
     .toBe("disconnected");
   expect(

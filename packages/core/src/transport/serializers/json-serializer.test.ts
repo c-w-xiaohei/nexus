@@ -2,8 +2,53 @@ import { describe, expect, it } from "vitest";
 import { JsonSerializer } from "./json-serializer";
 import { NexusProtocolError } from "../../errors/transport-errors";
 import { NexusMessageType } from "../../types/message";
+import { BinarySerializer } from "./binary-serializer";
+import {
+  NexusResourceError,
+  serializeFrameworkError,
+  reviveFrameworkError,
+} from "@/errors";
 
 describe("JsonSerializer", () => {
+  it("preserves framework diagnostics through JSON and binary transports", () => {
+    const error = new NexusResourceError("denied", "E_AUTH_CALL_DENIED", {
+      resourceId: "resource",
+      path: ["read"],
+      serviceName: "vault",
+    });
+    const cause = {
+      name: "Error",
+      code: "E_UNKNOWN",
+      message: "policy unavailable",
+    };
+    Object.defineProperty(error, "cause", { value: cause });
+    error.stack = "remote-stack";
+    const message = {
+      type: NexusMessageType.ERR as const,
+      id: 1,
+      error: serializeFrameworkError(error),
+    };
+    const json = JsonSerializer.safeDeserialize(
+      JsonSerializer.safeSerialize(message).unwrap(),
+    ).unwrap();
+    const binary = BinarySerializer.safeDeserialize(
+      BinarySerializer.safeSerialize(message).unwrap(),
+    ).unwrap();
+    for (const response of [json, binary]) {
+      expect(response.type).toBe(NexusMessageType.ERR);
+      if (response.type !== NexusMessageType.ERR)
+        throw new Error("Expected error packet");
+      expect(reviveFrameworkError(response.error)?.context).toMatchObject({
+        resourceId: "resource",
+        path: ["read"],
+        serviceName: "vault",
+      });
+      expect(reviveFrameworkError(response.error)).toMatchObject({
+        cause,
+        stack: "remote-stack",
+      });
+    }
+  });
   it("returns protocol error for malformed batch calls payload", () => {
     const malformedPacket = JSON.stringify([8, "batch-1", null]);
     const result = JsonSerializer.safeDeserialize(malformedPacket);

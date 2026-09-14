@@ -136,7 +136,7 @@ describe("iframe adapter factories", () => {
     expect(config.endpoint?.connectTo).toBeUndefined();
   });
 
-  it("builds child config with a frozen parent default target and binary capability override", () => {
+  it("builds child config with binary capability override", () => {
     const childWindow = new FakeWindow("https://child.test");
     const connectTo = [
       {
@@ -166,13 +166,6 @@ describe("iframe adapter factories", () => {
       binaryPackets: true,
       transferables: true,
     });
-    expect(config.endpoint?.defaultTarget).toEqual({
-      context: "iframe-parent",
-      appId: "app",
-      instance: "default",
-      origin: "https://parent.test",
-    });
-    expect(Object.isFrozen(config.endpoint?.defaultTarget)).toBe(true);
     expect(config.endpoint?.connectTo).toEqual(connectTo);
   });
 
@@ -1430,10 +1423,13 @@ describe("iframe adapter message behavior", () => {
       allowAnyOrigin: true,
     });
     const childEndpoint = childConfig.endpoint?.implementation;
-    const generatedTarget = childConfig.endpoint?.defaultTarget;
-    if (!childEndpoint?.connect || !generatedTarget) {
-      throw new Error("Expected the child factory to create a default target");
-    }
+    const generatedTarget = {
+      context: "iframe-parent" as const,
+      appId: "app",
+      instance: "default",
+      origin: "*",
+    };
+    if (!childEndpoint?.connect) throw new Error("Expected child endpoint");
 
     await expect(childEndpoint.connect(generatedTarget)).resolves.toBeDefined();
   });
@@ -1637,18 +1633,28 @@ describe("iframe adapter RPC integration", () => {
       ],
     });
     await Promise.all([parent.ready(), child.ready()]);
-    const childServicePromise = parent.create(EchoToken, {
-      target: {
-        context: "iframe-child",
-        appId: "app",
-        frameId: "main",
-      },
-    });
+    const childServicePromise = parent
+      .connect({
+        target: {
+          context: "iframe-child",
+          appId: "app",
+          frameId: "main",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await flush();
     const childService = await childServicePromise;
     await expect(childService.echo("hello")).resolves.toBe("hello");
 
-    const parentService = await child.create(ParentEchoToken);
+    const parentService = await child
+      .connect({
+        target: {
+          context: "iframe-parent",
+          appId: "app",
+          origin: "https://parent.test",
+        },
+      })
+      .then((connection) => connection.get(ParentEchoToken));
     await expect(parentService.echo("hello")).resolves.toBe("parent:hello");
   });
 });

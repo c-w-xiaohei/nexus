@@ -74,6 +74,7 @@ export const safeParsePayload = <T>(
     catch: (cause) => new NexusStoreProtocolError(message, { cause }),
   }).map(({ data }) => data);
 
+/** Validate object-shaped state without replacing the received wire value. */
 export const safeValidateState = <TState extends object>(
   state: unknown,
   schema: z.ZodType<TState> | undefined,
@@ -95,6 +96,7 @@ export const safeValidateState = <TState extends object>(
 /** Stops a subscription and releases callbacks, including partially valid init events. */
 export function disposeSubscription(input: object): void {
   const event = input as { unsubscribe?: () => unknown; actions?: object };
+  /** Release a remote capability without allowing one failure to block cleanup. */
   const release = (value: object | undefined) => {
     try {
       (value as { [RELEASE_PROXY_SYMBOL]?: () => void } | undefined)?.[
@@ -107,9 +109,18 @@ export function disposeSubscription(input: object): void {
   try {
     const stop = event.unsubscribe;
     if (typeof stop === "function") {
+      // Lazy remote callbacks do not start until the thenable is consumed. Keep
+      // the capability alive until that invocation has been observed.
       try {
-        void Promise.resolve(stop()).catch(() => undefined);
-      } finally {
+        const result = stop();
+        if (result && typeof result === "object" && "then" in result) {
+          void Promise.resolve(result)
+            .catch(() => undefined)
+            .finally(() => release(stop));
+        } else {
+          release(stop);
+        }
+      } catch {
         release(stop);
       }
     }

@@ -13,26 +13,11 @@ import type {
   NexusAuthorizationPolicy,
 } from "../api/types/config";
 
-export enum ConnectionStatus {
-  INITIALIZING,
-  HANDSHAKING,
-  CONNECTED,
-  CLOSING,
-  CLOSED,
-}
-
 export type ResolveOptions<M extends AdapterModel> = {
   target?: ConnectionTargetOf<M>;
   where?: ConnectionWhere<M>;
   assignmentMetadata?: ContextMetaOf<M>;
 };
-
-export type MessageTarget<M extends AdapterModel> =
-  | { connectionId: string }
-  | { connectionIds: readonly string[] }
-  | {
-      where: ConnectionWhere<M>;
-    };
 
 /**
  * Callbacks implemented by the session owner and passed to LogicalConnection.
@@ -242,7 +227,7 @@ export interface ConnectionManagerHandlers<M extends AdapterModel> {
   ): void | Promise<void>;
   /**
    * Release pending calls and resources belonging to a session that has closed.
-   * Called after Manager removes attached/published index entries and
+   * Called after Manager removes attached/published index entries and before it
    * notifies availability listeners. Also called for attached sessions whose
    * handshake failed; connection acquisition failing before attachment has no
    * session to report. Invoked once per closed session, not once per close call.

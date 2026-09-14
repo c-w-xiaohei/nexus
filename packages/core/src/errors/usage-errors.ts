@@ -13,7 +13,6 @@ export type NexusConfigurationErrorCode =
   | "E_DUPLICATE_PROVIDER";
 export type NexusUsageErrorCode =
   | "E_USAGE_INVALID"
-  | "E_USAGE_DEFAULT_CREATE_CONFLICT"
   | "E_PROVIDER_BATCH_INVALID";
 
 /**
@@ -21,10 +20,14 @@ export type NexusUsageErrorCode =
  * This is thrown synchronously when `nexus.configure()` is called with
  * invalid or incomplete options.
  */
-export class NexusConfigurationError extends NexusError {
+export class NexusConfigurationError<
+  C extends NexusConfigurationErrorCode = NexusConfigurationErrorCode,
+> extends NexusError {
+  declare public readonly code: C;
+  /** Records configuration failure without losing bootstrap or registration diagnostics. */
   constructor(
     message: string,
-    code: NexusConfigurationErrorCode = "E_CONFIGURATION_INVALID",
+    code: C = "E_CONFIGURATION_INVALID" as C,
     optionsOrContext?: NexusErrorOptions | Record<string, unknown>,
   ) {
     super(message, code, normalizeErrorOptions(optionsOrContext));
@@ -33,18 +36,23 @@ export class NexusConfigurationError extends NexusError {
 
 /**
  * Represents an error in how a Nexus API is used.
- * For example, calling `nexus.create()` without a clear target.
+ * For example, passing a non-positive acquisition timeout.
  */
-export class NexusUsageError extends NexusError {
+export class NexusUsageError<
+  C extends NexusUsageErrorCode = NexusUsageErrorCode,
+> extends NexusError {
+  declare public readonly code: C;
+  /** Creates a usage failure with a literal code suitable for public error-union narrowing. */
   constructor(
     message: string,
-    code: NexusUsageErrorCode = "E_USAGE_INVALID",
+    code: C = "E_USAGE_INVALID" as C,
     optionsOrContext?: NexusErrorOptions | Record<string, unknown>,
   ) {
     super(message, code, normalizeErrorOptions(optionsOrContext));
   }
 }
 
+/** Accepts structured error options or the existing shorthand diagnostic context. */
 const normalizeErrorOptions = (
   optionsOrContext?: NexusErrorOptions | Record<string, unknown>,
 ): NexusErrorOptions => {

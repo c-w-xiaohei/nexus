@@ -18,7 +18,7 @@ The daemon:
 The client:
 
 - connects to a daemon socket
-- creates Nexus proxies
+- gets Nexus proxies from an acquired connection
 - calls services exposed by the daemon
 
 Both sides are normal Nexus runtimes. The adapter only supplies endpoint wiring and metadata.
@@ -26,8 +26,8 @@ Both sides are normal Nexus runtimes. The adapter only supplies endpoint wiring 
 ### Client-Provided Services And Startup Dials
 
 A client can provide services to its daemon. If the daemon creates the client
-process, start the daemon listener first, spawn the client, and wait with
-`daemonNexus.select(WorkerToken, { where, wait: { timeout: 10_000 } })`.
+process, start the daemon listener first, spawn the client, and passively wait
+with `daemonNexus.connect({ where, timeout: 10_000 })`.
 
 ```ts
 usingNodeIpcClient({
@@ -36,10 +36,12 @@ usingNodeIpcClient({
 }).provide(WorkerToken, workerService);
 ```
 
-Match the spawned client's unique identity in `where`. The selection waits for
-authorization and provider publication, not merely socket open. `connectTo` is
-one-shot, does not block `ready()`, does not retry, and does not become the
-client's `defaultTarget`; the daemon need not expose a service.
+Match the spawned client's unique identity in `where`. Passive connection waits
+for an authorized ready session, not provider discovery or merely socket open.
+Register services before the client publishes its application-ready identity
+marker when the daemon needs those services immediately. `connectTo` is one-shot,
+does not block `ready()`, does not retry, and does not acquire a service; the
+daemon need not expose a service.
 
 ## ConnectionTarget Vs Socket Address
 

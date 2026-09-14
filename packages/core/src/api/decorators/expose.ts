@@ -1,6 +1,6 @@
 import { Token } from "../token";
 import type { AuthorizationPolicy } from "../types/config";
-import type { ServiceProviderData } from "../registry";
+import type { InstanceDecoratorRegistry } from "../registry";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { args, fn } from "@/utils/fn";
@@ -49,6 +49,7 @@ const ExposeOptionsSchema = z
   })
   .optional();
 
+/** Validate decorator arguments before recording a deferred class registration. */
 const validateExposeInput = fn(
   args([
     ["token", z.instanceof(Token)],
@@ -63,62 +64,47 @@ const validateExposeInput = fn(
  * @param token 标识此服务的 `Token` 对象。
  * @param options （可选）高级配置选项，如 `factory` 用于依赖注入。
  */
-export function createExposeDecorator(registry: {
-  registerService(token: Token<object, any>, data: ServiceProviderData): void;
-}): <T extends object>(
+export function createExposeDecorator(
+  registry: Pick<InstanceDecoratorRegistry, "registerService">,
+): <T extends object>(
   token: Token<T, any>,
   options?: ExposeOptions,
 ) => NexusClassDecorator<T> {
-  return (token, options) =>
-    createExposeDecoratorForRegistry(
-      registry,
-      token as Token<object, any>,
-      options,
-    );
+  return (token, options) => {
+    const validatedInput = validateExposeInput(token, options);
+    if (validatedInput.isErr()) {
+      throw new NexusUsageError(
+        "Nexus Error: Invalid inputs passed to @Expose decorator.",
+        "E_USAGE_INVALID",
+        { cause: validatedInput.error },
+      );
+    }
+
+    const validatedOptions = validatedInput.value.options;
+
+    return function (
+      targetClass: new (...args: unknown[]) => object,
+      context: ClassDecoratorContext,
+    ) {
+      if (context.kind !== "class") {
+        throw new NexusUsageError(
+          "Nexus Error: @Expose decorator can only be applied to classes.",
+        );
+      }
+
+      // Record the class now; instantiate it when this Nexus instance bootstraps.
+      registry.registerService(token, {
+        targetClass,
+        options: validatedOptions,
+      });
+    };
+  };
 }
 
+/** Delegate the default Nexus instance's decorator registration to its registry. */
 export function Expose<T extends object>(
   token: Token<T, any>,
   options?: ExposeOptions,
 ): NexusClassDecorator<T> {
   return nexus.Expose(token, options);
-}
-
-function createExposeDecoratorForRegistry(
-  registry: {
-    registerService(token: Token<object, any>, data: ServiceProviderData): void;
-  },
-  token: Token<object, any>,
-  options?: ExposeOptions,
-) {
-  const validatedInput = validateExposeInput(token, options);
-  if (validatedInput.isErr()) {
-    throw new NexusUsageError(
-      "Nexus Error: Invalid inputs passed to @Expose decorator.",
-      "E_USAGE_INVALID",
-      { cause: validatedInput.error },
-    );
-  }
-
-  const validatedToken = token;
-  const validatedOptions = validatedInput.value.options;
-
-  return function (
-    targetClass: new (...args: unknown[]) => object,
-    context: ClassDecoratorContext,
-  ) {
-    // 标准装饰器的 context 对象提供了元信息，如 'kind'。
-    // 我们可以用它来验证装饰器是否被正确地用在了类上。
-    if (context.kind !== "class") {
-      throw new NexusUsageError(
-        "Nexus Error: @Expose decorator can only be applied to classes.",
-      );
-    }
-
-    // 阶段一：仅收集注册信息到新的静态类中。
-    registry.registerService(validatedToken, {
-      targetClass,
-      options: validatedOptions,
-    });
-  };
 }

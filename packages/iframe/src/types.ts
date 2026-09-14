@@ -140,7 +140,6 @@ export type IframeParentConfigOptions = Omit<
 export type IframeChildOptions = IframeChildEndpointOptions &
   Omit<NexusConfig<IframeAdapterModel>, "endpoint"> & {
     configure?: true;
-    defaultTarget?: IframeParentConnectionTarget;
     connectTo?: readonly ConnectionTargetOf<IframeAdapterModel>[];
   };
 

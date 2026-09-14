@@ -9,7 +9,6 @@ import {
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
-  MessageTarget,
   ResolveOptions,
 } from "./types";
 import type { IPort } from "@/transport/types/port";
@@ -73,9 +72,9 @@ const resolveManagerCandidates = <M extends AdapterModel>(
 
 const sendFromManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  target: MessageTarget<M>,
+  connectionId: string,
   message: NexusMessage,
-): string[] => manager.safeSendMessage(target, message).unwrap();
+): void => manager.safeSendMessage(connectionId, message).unwrap();
 
 const updateManagerIdentity = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
@@ -161,7 +160,7 @@ describe("ConnectionManager", () => {
       const result = await hostManager.safeResolveConnection({
         target: clientMeta,
       });
-      expect(result).toMatchObject({ error: { code: "E_UNKNOWN" } });
+      expect(result).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
       expect(close).toHaveBeenCalledOnce();
       expect(hostManager.connections.size).toBe(0);
     });
@@ -506,7 +505,10 @@ describe("ConnectionManager", () => {
       ]);
       for (const result of results) {
         expect(result).toMatchObject({
-          error: { code: "E_UNKNOWN", cause: { message: failure.message } },
+          error: {
+            code: "E_PROTOCOL_ERROR",
+            cause: { message: failure.message },
+          },
         });
       }
       expect(listen).not.toHaveBeenCalled();
@@ -534,7 +536,7 @@ describe("ConnectionManager", () => {
       await initializeManager(manager);
       expect(
         await manager.safeResolveConnections({ target: clientMeta }),
-      ).toMatchObject({ error: { code: "E_UNKNOWN" } });
+      ).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
       failSetup = false;
       expect(
@@ -719,7 +721,7 @@ describe("ConnectionManager", () => {
   });
 
   describe("Provider Selection and Metadata Routing (B3)", () => {
-    it("selects and sends by where without dialing, and contains predicate failures", async () => {
+    it("sends to one ready connection without dialing", async () => {
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
         id: 1,
@@ -727,19 +729,12 @@ describe("ConnectionManager", () => {
         path: [],
         args: [],
       };
-      const where = vi.fn(
-        (identity: TestUserMeta) => identity.id === clientMeta.id,
-      );
-      expect(hostManager.safeGetReadyConnectionIds({ where })).toMatchObject({
-        error: { code: "E_USAGE_INVALID" },
-      });
       expect(await hostManager.safeResolveConnection({})).toMatchObject({
         error: { code: "E_USAGE_INVALID" },
       });
       expect(hostManager.safeUpdateLocalIdentity({ id: 5 })).toMatchObject({
         error: { code: "E_USAGE_INVALID" },
       });
-      expect(where).not.toHaveBeenCalled();
       await initializeManager(hostManager);
       const client = await createTestStack(clientMeta, hostL1OnConnect);
       await resolveManager(client.manager, { target: hostMeta });
@@ -747,26 +742,17 @@ describe("ConnectionManager", () => {
       expect(await hostManager.safeResolveConnection({})).toEqual(
         Result.ok(null),
       );
-      expect(hostManager.safeGetReadyConnectionIds({ where })).toEqual(
-        Result.ok([connection.connectionId]),
-      );
-      expect(hostManager.safeSendMessage({ where }, message)).toEqual(
-        Result.ok([connection.connectionId]),
-      );
+      expect(
+        hostManager.safeSendMessage(connection.connectionId, message),
+      ).toEqual(Result.ok(undefined));
       await vi.waitFor(() =>
         expect(client.handlers.onMessage).toHaveBeenCalledWith(
           message,
           expect.any(String),
         ),
       );
-      where.mockImplementation(() => {
-        throw new Error("predicate failed");
-      });
-      expect(hostManager.safeGetReadyConnectionIds({ where })).toMatchObject({
-        error: { code: "E_UNKNOWN" },
-      });
-      expect(hostManager.safeSendMessage({ where }, message)).toMatchObject({
-        error: { code: "E_UNKNOWN" },
+      expect(hostManager.safeSendMessage("unknown", message)).toMatchObject({
+        error: { code: "E_CONN_CLOSED" },
       });
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
     });
@@ -818,7 +804,7 @@ describe("ConnectionManager", () => {
       expect(hostManager.connections.size).toBe(1);
     });
 
-    it("routes messages through observable group metadata predicates", async () => {
+    it("sends independently to explicitly selected connections", async () => {
       // Arrange: Create two clients with different group memberships
       const clientAMeta: TestUserMeta = {
         context: "client",
@@ -865,30 +851,18 @@ describe("ConnectionManager", () => {
       };
 
       // Act & Assert: Send to group-1 metadata, both clients should receive it.
-      sendFromManager(
-        hostManager,
-        { where: (identity) => identity.groups?.includes("group-1") ?? false },
-        testMessage,
-      );
-      await vi.waitFor(() => {
+      sendFromManager(hostManager, clientAConnId!, testMessage);
+      await vi.waitFor(() =>
         expect(clientA.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
           expect.any(String),
-        );
-        expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
-          testMessage,
-          expect.any(String),
-        );
-      });
+        ),
+      );
 
       vi.clearAllMocks();
 
       // Act & Assert: Send to group-2 metadata, only client B should receive it.
-      sendFromManager(
-        hostManager,
-        { where: (identity) => identity.groups?.includes("group-2") ?? false },
-        testMessage,
-      );
+      sendFromManager(hostManager, clientBConnId!, testMessage);
       await vi.waitFor(() => {
         expect(clientB.handlers.onMessage).toHaveBeenCalledWith(
           testMessage,
@@ -896,46 +870,6 @@ describe("ConnectionManager", () => {
         );
       });
       expect(clientA.handlers.onMessage).not.toHaveBeenCalled();
-
-      // Explicit recipients preserve duplicates and recheck later recipients
-      // after each send, rather than taking a prefiltered snapshot.
-      const connectionA = hostManager.connections.get(clientAConnId!)!;
-      const connectionB = hostManager.connections.get(clientBConnId!)!;
-      const sentTo: string[] = [];
-      const sendA = vi
-        .spyOn(connectionA, "sendMessage")
-        .mockImplementation(() => {
-          sentTo.push(connectionA.connectionId);
-          return Result.ok(undefined);
-        });
-      const sendB = vi
-        .spyOn(connectionB, "sendMessage")
-        .mockImplementation(() => {
-          sentTo.push(connectionB.connectionId);
-          return Result.ok(undefined);
-        });
-      const connectionIds = [clientBConnId!, clientAConnId!, clientBConnId!];
-      expect(
-        hostManager.safeSendMessage({ connectionIds }, testMessage),
-      ).toEqual(Result.ok(connectionIds));
-      expect(sentTo).toEqual(connectionIds);
-      sentTo.length = 0;
-      sendB.mockImplementationOnce(() => {
-        sentTo.push(connectionB.connectionId);
-        connectionA.close();
-        return Result.ok(undefined);
-      });
-      expect(
-        hostManager.safeSendMessage({ connectionIds }, testMessage),
-      ).toMatchObject({
-        value: [connectionB.connectionId, connectionB.connectionId],
-      });
-      expect(sentTo).toEqual([
-        connectionB.connectionId,
-        connectionB.connectionId,
-      ]);
-      sendA.mockRestore();
-      sendB.mockRestore();
     });
   });
 
@@ -957,7 +891,11 @@ describe("ConnectionManager", () => {
         vi.spyOn(hostPort, "close").mockImplementation(() => {
           // Conn is already terminal, but Manager's onClosed has not run yet.
           if (operation === "queries")
-            observed.push(hostManager.getReadyProviderConnectionIds("service"));
+            observed.push(
+              hostManager
+                .findReadyConnections()
+                .map((candidate) => candidate.connectionId),
+            );
           else observed.push(hostManager.safeUpdateLocalIdentity({ id: 100 }));
           closePort();
         });
@@ -969,7 +907,7 @@ describe("ConnectionManager", () => {
       },
     );
 
-    it("closes a failed sender, preserves its cause and stops before later recipients", async () => {
+    it("closes a failed sender and preserves its cause", async () => {
       await initializeManager(hostManager);
       const ports: IPort[] = [];
       const accept = (port: IPort, meta?: TestConnectionMeta) => {
@@ -989,16 +927,13 @@ describe("ConnectionManager", () => {
       postA.mockClear();
       postB.mockClear();
 
-      const result = hostManager.safeSendMessage(
-        { connectionIds: [b.connectionId, a.connectionId, b.connectionId] },
-        {
-          type: NexusMessageType.APPLY,
-          id: 1,
-          resourceId: null,
-          path: [],
-          args: [],
-        },
-      );
+      const result = hostManager.safeSendMessage(a.connectionId, {
+        type: NexusMessageType.APPLY,
+        id: 1,
+        resourceId: null,
+        path: [],
+        args: [],
+      });
 
       expect(result).toMatchObject({
         error: {
@@ -1011,7 +946,7 @@ describe("ConnectionManager", () => {
         },
       });
       expect(postA).toHaveBeenCalledOnce();
-      expect(postB).toHaveBeenCalledOnce();
+      expect(postB).not.toHaveBeenCalled();
       expect(a.isReady()).toBe(false);
       expect(b.isReady()).toBe(true);
       expect(hostManager.connections.has(a.connectionId)).toBe(false);
@@ -1076,43 +1011,6 @@ describe("ConnectionManager", () => {
       expect([...hostManager.connections.values()]).toEqual([survivor]);
       expect(survivor.isReady()).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("publishes static and live provider catalogs and removes them on disconnect", async () => {
-      const staticPublished = hostManager.safePublishProviders([
-        "service.static",
-      ]);
-      expect(staticPublished.isOk()).toBe(true);
-
-      await initializeManager(hostManager);
-      const client = await createTestStack(clientMeta, hostL1OnConnect);
-      const connection = await resolveManager(client.manager, {
-        target: hostMeta,
-      });
-
-      await vi.waitFor(() => {
-        expect(
-          client.manager.getReadyProviderConnectionIds("service.static"),
-        ).toEqual([connection!.connectionId]);
-      });
-
-      const livePublished = hostManager.safePublishProviders(["service.live"]);
-      expect(livePublished.isOk()).toBe(true);
-      await vi.waitFor(() => {
-        expect(
-          client.manager.getReadyProviderConnectionIds("service.live"),
-        ).toEqual([connection!.connectionId]);
-      });
-
-      connection!.close();
-      await vi.waitFor(() => {
-        expect(
-          client.manager.getReadyProviderConnectionIds("service.static"),
-        ).toEqual([]);
-        expect(
-          client.manager.getReadyProviderConnectionIds("service.live"),
-        ).toEqual([]);
-      });
     });
 
     it("should clean up all resources when a connection is closed", async () => {
@@ -1184,7 +1082,7 @@ describe("ConnectionManager", () => {
         await hostManager.safeResolveConnections({ target: clientMeta }),
       ).toMatchObject({
         error: {
-          code: "E_UNKNOWN",
+          code: "E_PROTOCOL_ERROR",
           context: { options: { target: clientMeta } },
         },
       });
@@ -1482,7 +1380,7 @@ describe("ConnectionManager", () => {
       });
       const sendB = vi.spyOn(b, "sendMessage");
       expect(hostManager.safeUpdateLocalIdentity({ id: 777 })).toMatchObject({
-        error: { code: "E_UNKNOWN" },
+        error: { code: "E_PROTOCOL_ERROR" },
       });
       expect(sendA).toHaveBeenCalledOnce();
       expect(sendB).not.toHaveBeenCalled();
@@ -1537,7 +1435,7 @@ describe("ConnectionManager", () => {
       });
     });
 
-    it("routes by updated group metadata after identity update", async () => {
+    it("updates provider selection metadata after identity update", async () => {
       // Arrange: Host is connected to a client that belongs to 'group-1'
       await initializeManager(hostManager);
       const clientInitialMeta: TestUserMeta = {
@@ -1550,22 +1448,13 @@ describe("ConnectionManager", () => {
         target: hostMeta,
       });
 
-      const testMessage: ApplyMessage = {
-        type: NexusMessageType.APPLY,
-        id: 1,
-        resourceId: null,
-        path: ["testEvent"],
-        args: [],
-      };
-
-      // Assert: Client is initially matched by group-1 metadata.
       const inGroup = (group: string) => (identity: TestUserMeta) =>
         identity.groups?.includes(group) ?? false;
-      sendFromManager(hostManager, { where: inGroup("group-1") }, testMessage);
-      await vi.waitFor(() => {
-        expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
-      });
-      vi.clearAllMocks();
+      expect(
+        await resolveManagerCandidates(hostManager, {
+          where: inGroup("group-1"),
+        }),
+      ).toHaveLength(1);
 
       // Act: The client updates its identity to join 'group-2' and leave 'group-1'
       const clientUpdates: Partial<TestUserMeta> = {
@@ -1584,23 +1473,11 @@ describe("ConnectionManager", () => {
         ).toEqual(["group-2"]);
       });
 
-      // Assert: Host routes messages to the new group after propagation.
-      sendFromManager(hostManager, { where: inGroup("group-2") }, testMessage);
-      await vi.waitFor(() => {
-        expect(client.handlers.onMessage).toHaveBeenCalledTimes(1);
-      });
-
-      vi.clearAllMocks();
-
-      // The old metadata predicate no longer matches.
       expect(
-        sendFromManager(
-          hostManager,
-          { where: inGroup("group-1") },
-          testMessage,
-        ),
+        await resolveManagerCandidates(hostManager, {
+          where: inGroup("group-1"),
+        }),
       ).toEqual([]);
-      expect(client.handlers.onMessage).not.toHaveBeenCalled();
     });
   });
 });

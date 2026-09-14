@@ -6,6 +6,7 @@ import {
   type ServiceInvocationContext,
 } from "@/service/service-invocation-hooks";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import { NexusServiceError } from "@/errors/service-errors";
 import { RelayError, relayService } from "./index";
 
 interface TestMeta {
@@ -32,7 +33,9 @@ const createInvocation = (): ServiceInvocationContext => ({
 describe("relayService", () => {
   it("forwards nested APPLY calls through the upstream nexus", async () => {
     const update = vi.fn(async () => ({ ok: true }));
-    const create = vi.fn(async () => ({ profile: { update } }));
+    const connect = vi.fn(async () => ({
+      get: () => ({ profile: { update } }),
+    }));
     const token = new Token<TestService>("relay:test-service:apply");
     const registration = relayService<
       TestService,
@@ -41,7 +44,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect } as any,
       forwardTarget: { context: "background" },
     });
 
@@ -59,17 +62,15 @@ describe("relayService", () => {
     );
     service[SERVICE_INVOKE_END](invocation);
 
-    expect(create).toHaveBeenCalledWith(token, {
-      target: { context: "background" },
-    });
+    expect(connect).toHaveBeenCalledWith({ target: { context: "background" } });
     expect(update).toHaveBeenCalledWith({ name: "Ada" });
     expect(result).toEqual({ ok: true });
   });
 
   it("passes trusted invocation context to relay policy", async () => {
     const canCall = vi.fn(async () => true);
-    const create = vi.fn(async () => ({
-      profile: { update: vi.fn(async () => ({ ok: true })) },
+    const connect = vi.fn(async () => ({
+      get: () => ({ profile: { update: vi.fn(async () => ({ ok: true })) } }),
     }));
     const token = new Token<TestService>("relay:test-service:policy");
     const registration = relayService<
@@ -79,7 +80,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect } as any,
       forwardTarget: { context: "background" },
       policy: { canCall },
     });
@@ -104,7 +105,9 @@ describe("relayService", () => {
   });
 
   it("rejects unsupported capability-bearing args before forwarding upstream", async () => {
-    const create = vi.fn(async () => ({ profile: { update: vi.fn() } }));
+    const connect = vi.fn(async () => ({
+      get: () => ({ profile: { update: vi.fn() } }),
+    }));
     const token = new Token<TestService>("relay:test-service:arg-reject");
     const registration = relayService<
       TestService,
@@ -113,7 +116,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect } as any,
       forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
@@ -129,13 +132,13 @@ describe("relayService", () => {
         invocation as never,
       ),
     ).rejects.toMatchObject({ code: "E_RELAY_PAYLOAD_UNSUPPORTED" });
-    expect(create).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported capability-bearing upstream results", async () => {
     const released = { [RELEASE_PROXY_SYMBOL]: () => undefined };
-    const create = vi.fn(async () => ({
-      profile: { update: vi.fn(async () => released) },
+    const connect = vi.fn(async () => ({
+      get: () => ({ profile: { update: vi.fn(async () => released) } }),
     }));
     const token = new Token<TestService>("relay:test-service:result-reject");
     const registration = relayService<
@@ -145,7 +148,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect } as any,
       forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
@@ -160,9 +163,12 @@ describe("relayService", () => {
     ).rejects.toMatchObject({ code: "E_RELAY_PAYLOAD_UNSUPPORTED" });
   });
 
-  it("maps upstream targeting failures to relay errors", async () => {
-    const create = vi.fn(async () => {
-      throw { code: "E_TARGET_NO_MATCH" };
+  it("maps upstream acquisition failures to relay errors", async () => {
+    const connect = vi.fn(async () => {
+      throw new NexusServiceError(
+        "No upstream service connection matched.",
+        "E_SERVICE_NO_MATCH",
+      );
     });
     const token = new Token<TestService>("relay:test-service:targeting");
     const registration = relayService<
@@ -172,7 +178,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect } as any,
       forwardTarget: { context: "background" },
     });
     const service = registration.service as TestService & {
@@ -184,7 +190,7 @@ describe("relayService", () => {
 
     await expect(
       service.profile.update({ name: "Ada" }, invocation as never),
-    ).rejects.toMatchObject({ code: "E_RELAY_UPSTREAM_TARGET_NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "E_RELAY_UPSTREAM_FAILURE" });
   });
 
   it("rejects SET with a structured relay error", async () => {
@@ -196,7 +202,7 @@ describe("relayService", () => {
       TestMeta,
       TestPlatform
     >(token, {
-      forwardThrough: { create: vi.fn() } as any,
+      forwardThrough: { connect: vi.fn() } as any,
       forwardTarget: { context: "background" },
     });
 

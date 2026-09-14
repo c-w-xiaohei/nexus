@@ -19,7 +19,7 @@ origins. For other runtime boundaries, [choose another adapter](/nexus/docs/plat
 Import the same service contracts and Tokens in both bundles; see
 [Getting started](/nexus/docs/getting-started/) for the shared contract pattern.
 
-When repeated iframe calls target the same child, a TokenSpace `defaultTarget` can keep the route close to the Token:
+Keep the shared TokenSpace target-free and pass the exact child target when connecting:
 
 ```ts
 import { TokenSpace } from "@nexus-js/core";
@@ -30,21 +30,14 @@ const appSpace = new TokenSpace<IframeAdapterModel>({
   name: "iframe-demo",
 });
 
-const childServices = appSpace.space("child-services", {
-  defaultTarget: {
-    context: "iframe-child",
-    appId: "iframe-demo",
-    frameId: "preview",
-    origin: "https://child.example.com",
-  },
-});
+const childServices = appSpace.space("child-services");
 
 export const GreetingToken = childServices.token<GreetingService>("greeting");
 ```
 
-For multiple children, use `createMulticast` with exact targets or
-`selectMulticast` for already available providers. See
-[Core acquisition semantics](/nexus/docs/concepts/#resolution-and-fallbacks)
+For multiple children, use `connectMulticast` with exact targets or a targetless
+ready-connection snapshot. See
+[Core acquisition semantics](/nexus/docs/concepts/#connection-acquisition)
 for timeouts and result behavior. The setup below uses an explicit target.
 
 ## Parent Setup
@@ -71,7 +64,7 @@ usingIframeParent({
   ],
 });
 
-const greeting = await nexus.create(GreetingToken, {
+const connection = await nexus.connect({
   target: {
     context: "iframe-child",
     appId: "iframe-demo",
@@ -79,11 +72,13 @@ const greeting = await nexus.create(GreetingToken, {
     origin: "https://child.example.com",
   },
 });
+const greeting = connection.get(GreetingToken);
 
 await greeting.greet("parent");
 ```
 
-The parent helper does not register named targets. Keep exact `IframeConnectionTarget` values in application code, or use a Token `defaultTarget` when one route is stable.
+The parent helper does not register named targets. Keep exact
+`IframeConnectionTarget` values in application code and pass them to `connect`.
 
 ## Child Setup
 
@@ -121,13 +116,13 @@ usingIframeChild({
 
 ## Startup Connections
 
-Alternatively, the parent can start listening, create the child context, and call
-`select(GreetingToken, { where, wait: { timeout: 10_000 } })` before the child is
-ready. Give the child helper explicit startup targets:
+Alternatively, the parent can start listening, create the child context, and
+passively `connect({ where, timeout: 10_000 })` before the child is ready. Give
+the child helper explicit startup targets:
 `connectTo: [{ context: "iframe-parent", appId: "iframe-demo", origin: "https://parent.example.com" }]`.
 The child then connects without calling any parent service. Select the intended
 child using its identity and validated frame facts. Startup dialing is one-shot,
-does not block child `ready()`, and is separate from its `defaultTarget`.
+does not block child `ready()` and is separate from service acquisition.
 
 Child-originated connections wait for document load, then defer to a later task
 to allow the parent's iframe navigation cleanup to run before dialing, including
@@ -172,7 +167,7 @@ Compose structural configuration before the runtime bootstrap snapshot. After a 
 Config composition is domain-aware:
 
 - omitted fields keep previous layers
-- `endpoint.meta`, `endpoint.implementation`, and `endpoint.defaultTarget` are whole-field replacements when explicitly provided
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided
 - `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
 - `policy: undefined` clears inherited policy when callers intentionally need to remove it
 - `providers` replace by `token.id`; the later provider replaces both service and policy
@@ -190,7 +185,9 @@ Config composition is domain-aware:
 
 The browser `postMessage` bus does not guarantee a native disconnect signal. The iframe adapter uses the core virtual-port heartbeat to detect unresponsive links; its defaults come from core (5000ms interval / 3 misses unless core exposes different values). Override `heartbeat` only for tests or environments that need faster or slower disconnect detection.
 
-Iframe reloads replace the child window and Nexus session. Raw `nexus.create(...)` proxies and refs are session-bound, so recreate proxies and pass fresh refs after an iframe reload, reconnect, or session replacement.
+Iframe reloads replace the child window and Nexus session. Proxies and refs are
+session-bound, so reconnect, get fresh proxies, and pass fresh refs after an
+iframe reload, reconnect, or session replacement.
 
 If a parent swaps the iframe element, register the new element in parent setup before creating new proxies. Existing raw proxies do not silently retarget to the replacement session.
 

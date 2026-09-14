@@ -65,6 +65,8 @@ class HandshakeFailedError extends Error {
 
 class LogicalConnectionAuthDeniedError extends Error {
   readonly code = "E_AUTH_CONNECT_DENIED";
+
+  /** Retain the policy denial as a handshake-specific failure. */
   constructor(message: string) {
     super(message);
     this.name = "LogicalConnectionAuthDeniedError";
@@ -73,6 +75,8 @@ class LogicalConnectionAuthDeniedError extends Error {
 
 class LogicalConnectionInvalidStateError extends Error {
   readonly code = "E_USAGE_INVALID";
+
+  /** Attach the rejected session state to a caller-facing misuse error. */
   constructor(
     message: string,
     readonly context: Record<string, unknown>,
@@ -150,6 +154,7 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 
   /** Protocol readiness precedes active-side publication by one turn; sends queue during that gap. */
+  /** Report protocol readiness, including the short publication-drain interval. */
   public isReady(): boolean {
     return this.state.phase === "publishing" || this.state.phase === "ready";
   }
@@ -327,17 +332,30 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 
   /** Idempotently close the processor and notify onClosed, even for silent native closes. */
-  public close(): void {
-    this.stop(true);
+  private closedReason: "local" | "remote" | "protocol" | undefined;
+
+  /** Return the terminal cause retained after this session closes. */
+  public get disconnectReason(): "local" | "remote" | "protocol" | undefined {
+    return this.closedReason;
+  }
+
+  /** Close locally or for a protocol failure, settling startup before notifying the owner. */
+  public close(reason: "local" | "protocol" = "local"): void {
+    this.stop(true, reason);
   }
   /** Finish a native disconnect without asking the processor to close again. */
   public handleDisconnect(): void {
-    this.stop(false);
+    this.stop(false, "remote");
   }
 
-  private stop(closePort: boolean): void {
+  /** Transition once to closed, cancel work, release queues, and notify the owner. */
+  private stop(
+    closePort: boolean,
+    reason: "local" | "remote" | "protocol",
+  ): void {
     const state = this.state;
     if (state.phase === "closed") return;
+    this.closedReason = reason;
     const identity = this.isReady() ? this.peerIdentity : undefined;
     // Reentrant close/disconnect sees the terminal state before any native callback.
     this.state = { phase: "closed" };
@@ -367,6 +385,7 @@ export class LogicalConnection<M extends AdapterModel> {
     });
   }
 
+  /** Resolve the one startup waiter and prevent later lifecycle transitions from reusing it. */
   private settleOpening(result: Result<void, Error>): void {
     const notify = this.opening;
     this.opening = undefined;
@@ -394,10 +413,11 @@ export class LogicalConnection<M extends AdapterModel> {
     return this.write(message);
   }
 
+  /** Write one packet and close the session when the processor rejects it. */
   private write(message: NexusMessage): Result<void, Error> {
     // Control packets bypass publication buffering, not failure cleanup.
     const sent = this.port.sendMessage(message);
-    if (sent.isErr()) this.close();
+    if (sent.isErr()) this.close("protocol");
     return sent;
   }
 
@@ -405,6 +425,7 @@ export class LogicalConnection<M extends AdapterModel> {
    * Process one packet with transport-order authorization and concurrent RPC.
    * Returns callback failures as Err; managed reception additionally closes on Err.
    */
+  /** Serialize handshake authorization while allowing independent application work to overlap. */
   public safeHandleMessage(
     message: NexusMessage,
   ): Promise<Result<void, Error>> {
@@ -425,11 +446,12 @@ export class LogicalConnection<M extends AdapterModel> {
     return Result.tryPromise({ try: () => handling, catch: asError });
   }
 
+  /** Start managed inbound processing and turn failures into protocol closure. */
   private receive(message: NexusMessage): void {
     void this.safeHandleMessage(message).then((result) => {
       if (result.isErr()) {
         this.logger.error("Failed to process incoming message", result.error);
-        this.close();
+        this.close("protocol");
       }
     });
   }
@@ -441,6 +463,7 @@ export class LogicalConnection<M extends AdapterModel> {
    * current identity, optionally assigning the passive peer's identity. Manager
    * uses open instead, which also owns acquisition, reception and the deadline.
    */
+  /** Start the active handshake for an attached session and preserve its assignment metadata. */
   public initiateHandshake(
     assignmentMetadata?: ContextMetaOf<M>,
   ): Result<void, Error> {
@@ -472,6 +495,7 @@ export class LogicalConnection<M extends AdapterModel> {
     });
   }
 
+  /** Consume protocol packets or forward published application packets in order. */
   private async dispatch(message: NexusMessage): Promise<void> {
     const state = this.state;
     if (state.phase === "closed") return;
@@ -493,17 +517,17 @@ export class LogicalConnection<M extends AdapterModel> {
           this.rejection = new LogicalConnectionAuthDeniedError(
             "Identity update rejected by policy.",
           );
-          this.close();
+          this.close("protocol");
           return;
         }
-        this.peerIdentity = identity;
-        this.handlers.onIdentityUpdated(this, identity, previous);
+        this.peerIdentity = Object.freeze({ ...identity });
+        this.handlers.onIdentityUpdated(this, this.peerIdentity, previous);
         return;
       }
       case NexusMessageType.HANDSHAKE_REJECT:
         if (state.phase === "handshaking" && message.id === state.id) {
           this.rejection = serializedErrorToError(message.error);
-          this.close();
+          this.close("protocol");
         }
         return;
       case NexusMessageType.HANDSHAKE_REQ:
@@ -558,7 +582,7 @@ export class LogicalConnection<M extends AdapterModel> {
       );
       return;
     }
-    this.peerIdentity = identity;
+    this.peerIdentity = Object.freeze({ ...identity });
     if (message.type === NexusMessageType.HANDSHAKE_REQ) {
       // Policy saw the pre-assignment local identity; ACK reports the final one.
       if (message.assigns)
@@ -588,6 +612,7 @@ export class LogicalConnection<M extends AdapterModel> {
     }
   }
 
+  /** Ask the owner policy about a candidate identity without committing state here. */
   private async authorize(remoteIdentity: ContextMetaOf<M>): Promise<boolean> {
     // The session owns both identities and direction, including christening and
     // subsequent local updates. Policy is only a decision, not a state lookup.
@@ -608,6 +633,7 @@ export class LogicalConnection<M extends AdapterModel> {
     return allowed.isOk() && allowed.value === true;
   }
 
+  /** Publish a verified peer after control packets and reentrant sends are drained. */
   private publish(deferred: boolean): void {
     if (this.state.phase === "closed" || !this.peerIdentity) return;
     const drain = () => {
@@ -628,7 +654,7 @@ export class LogicalConnection<M extends AdapterModel> {
       }).andThen((result) => result);
       if (notified.isErr()) {
         this.settleOpening(notified);
-        this.close();
+        this.close("protocol");
         return;
       }
       // Owner registration may reenter sends or close. Keep inbound traffic behind
@@ -646,7 +672,7 @@ export class LogicalConnection<M extends AdapterModel> {
       } catch (error) {
         if (this.lifetime.signal.aborted) return;
         this.settleOpening(err(asError(error)));
-        this.close();
+        this.close("protocol");
       }
     };
     // Install the final Promise before any transport callback can reenter.
@@ -666,6 +692,7 @@ export class LogicalConnection<M extends AdapterModel> {
     if (!deferred) finish();
   }
 
+  /** Send best-effort handshake rejection while retaining the original failure. */
   private reject(
     id: HandshakeReqMessage["id"],
     error: Error,
@@ -683,26 +710,29 @@ export class LogicalConnection<M extends AdapterModel> {
     if (this.state.phase === "closed") return;
     if (deferred)
       void delay(0, { signal: this.lifetime.signal }).then(
-        () => this.close(),
+        () => this.close("protocol"),
         () => undefined,
       );
-    else this.close();
+    else this.close("protocol");
   }
 
   // ===== Identity And Catalog =====
 
   /** Merge local identity without broadcasting; the manager owns cross-session updates. */
+  /** Apply local identity changes to this session without broadcasting them. */
   public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
     this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
   }
 
   /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
+  /** Add provider names to the session catalog and flush them when routable. */
   public publishProviders(providers: readonly string[]): Result<void, Error> {
     if (this.state.phase === "closed") return ok(undefined);
     for (const provider of providers) this.pendingProviders.add(provider);
     return this.isReady() ? this.flushProviders() : ok(undefined);
   }
 
+  /** Merge provider names and notify the owner only after readiness. */
   private addProviders(providers: readonly string[]): void {
     const size = this.providers.size;
     for (const provider of providers) this.providers.add(provider);
@@ -710,6 +740,7 @@ export class LogicalConnection<M extends AdapterModel> {
       this.handlers.onProviderCatalogUpdated?.(this);
   }
 
+  /** Drain queued provider announcements, including registrations made reentrantly. */
   private flushProviders(): Result<void, Error> {
     // Reentrant registration during activation queues another delta. Drain it
     // before publishing instead of stranding it until an unrelated registration.
@@ -727,6 +758,7 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 }
 
+/** Convert arbitrary callback failures into safe diagnostic errors. */
 function asError(error: unknown): Error {
   // User callbacks may throw values whose string conversion also throws.
   return Result.try({
@@ -735,6 +767,7 @@ function asError(error: unknown): Error {
   }).match({ ok: (value) => value, err: (value) => value });
 }
 
+/** Reconstruct a handshake failure while preserving protocol-specific identity. */
 function serializedErrorToError(input: SerializedError): Error {
   if (input.code === "E_PROTOCOL_INCOMPATIBLE")
     return new NexusProtocolIncompatibleError(

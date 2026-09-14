@@ -214,7 +214,7 @@ test("denies calls without incrementing, then permits one call after policy allo
     counter: 0,
   });
   expect(denied.kind).toBe("error");
-  expect(result(denied.value)).toEqual({ code: "E_REMOTE_EXCEPTION" });
+  expect(result(denied.value)).toEqual({ code: "E_AUTH_CALL_DENIED" });
 
   await dispatchHostCommandAndResult(hostPage, runId, "policy-allow");
 

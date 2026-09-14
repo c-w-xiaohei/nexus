@@ -1,10 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
-import { composeNexusConfig } from "./types/config";
+import { composeNexusConfig, snapshotConfig } from "./types/config";
 import type { AdapterModel } from "../types/adapter-model";
 
 describe("composeNexusConfig", () => {
+  it("preserves Date metadata values independently of the caller", () => {
+    const createdAt = new Date("2026-01-02T00:00:00Z");
+    const snapshot = snapshotConfig({ endpoint: { meta: { createdAt } } });
+    createdAt.setUTCFullYear(2030);
+    expect(JSON.parse(JSON.stringify(snapshot.endpoint?.meta))).toEqual({
+      createdAt: "2026-01-02T00:00:00.000Z",
+    });
+  });
+  it("snapshots mutable endpoint data without cloning runtime capabilities", () => {
+    const endpoint = { listen: vi.fn() };
+    const service = { read: vi.fn() };
+    const policy = { canCall: () => true };
+    const token = new Token<object>("snapshot");
+    const config = {
+      endpoint: {
+        implementation: endpoint,
+        meta: { nested: { value: 1 } },
+        connectTo: [{ id: "first" }],
+      },
+      providers: [{ token, service, policy }],
+      policy,
+    };
+    const snapshot = snapshotConfig(config);
+    config.endpoint.meta.nested.value = 2;
+    config.endpoint.connectTo[0].id = "changed";
+    expect(snapshot.endpoint?.meta).toEqual({ nested: { value: 1 } });
+    expect(snapshot.endpoint?.connectTo).toEqual([{ id: "first" }]);
+    expect(snapshot.endpoint?.implementation).toBe(endpoint);
+    expect(snapshot.providers?.[0].service).toBe(service);
+    expect(snapshot.providers?.[0].token).toBe(token);
+    expect(snapshot.providers?.[0].policy).toBe(policy);
+    expect(snapshot.policy).toBe(policy);
+  });
   it("uses domain-aware last-wins semantics across config layers", () => {
     const firstToken = new Token<object>("config:first");
     const secondToken = new Token<object>("config:second");
@@ -20,7 +53,6 @@ describe("composeNexusConfig", () => {
         endpoint: {
           meta: { role: "first", stale: true },
           implementation: firstEndpoint,
-          defaultTarget: { context: "peer" },
           connectTo: [{ context: "first-owner" }],
         },
         policy: { canCall: firstCanCall },
@@ -36,7 +68,6 @@ describe("composeNexusConfig", () => {
         endpoint: {
           meta: { role: "second" },
           implementation: secondEndpoint,
-          defaultTarget: { context: "replacement" },
           connectTo: [],
         },
         providers: [
@@ -55,9 +86,6 @@ describe("composeNexusConfig", () => {
 
     expect(composed.endpoint?.meta).toEqual({ role: "second" });
     expect(composed.endpoint?.implementation).toBe(secondEndpoint);
-    expect(composed.endpoint?.defaultTarget).toEqual({
-      context: "replacement",
-    });
     expect(composed.policy).toEqual({ canCall: firstCanCall });
     expect(composed.endpoint?.connectTo).toEqual([]);
     expect(composed.providers).toEqual([
@@ -82,7 +110,6 @@ describe("Nexus.configure config layering", () => {
       endpoint: {
         meta: { role: "first", stale: true },
         implementation: { listen: vi.fn() },
-        defaultTarget: { context: "peer" },
       },
       providers: [{ token, service: firstService }],
     });
@@ -90,7 +117,6 @@ describe("Nexus.configure config layering", () => {
       endpoint: {
         meta: { role: "second" },
         implementation: { listen: vi.fn() },
-        defaultTarget: { context: "replacement" },
       },
       providers: [{ token, service: replacementService }],
     });
@@ -99,9 +125,6 @@ describe("Nexus.configure config layering", () => {
 
     expect((nexus as any).connectionManager.localEndpointMeta).toEqual({
       role: "second",
-    });
-    expect((nexus as any).config.endpoint.defaultTarget).toEqual({
-      context: "replacement",
     });
     expect(
       (nexus as any).engine.resourceManager.getExposedService(token.id),

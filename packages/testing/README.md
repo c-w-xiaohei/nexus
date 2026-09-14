@@ -13,7 +13,6 @@ pnpm add -D @nexus-js/testing
 ## Main API
 
 - `createMockNexus()`
-- `NexusMockError`
 
 ## Minimal Example
 
@@ -31,18 +30,24 @@ const settings: SettingsService = {
 
 mock.service(SettingsToken, settings);
 
-const proxy = await mock.nexus.create(SettingsToken, {
+const connection = await mock.nexus.connect({
   target: { context: "background" },
 });
+const proxy = connection.get(SettingsToken);
 
 await expect(proxy.getSettings()).resolves.toEqual({ theme: "dark" });
 ```
 
 `target` is an exact target object for the adapter model under test. When omitted,
-the mock applies the Token `defaultTarget`, then endpoint `defaultTarget`.
+the mock models passive acquisition of an existing matching ready connection; it
+does not discover providers.
 
 ## Scope
 
 Use this package to test application code that consumes a `NexusInstance`.
 
-The mock supports unscoped or metadata-backed registrations, `create`, `select` with object `wait`, and bound `createMulticast`/snapshot `selectMulticast` fanouts. It does not simulate real target acquisition, provider-catalog negotiation, adapter connection metadata, transports, adapters, or lifecycle behavior.
+The mock supports unscoped or metadata-backed registrations, `connect`,
+`safeConnect`, connection observation, and fixed connection collections whose
+`get` method returns per-connection Results. It does not simulate real target
+acquisition, provider-catalog negotiation, adapter connection metadata,
+transports, adapters, or lifecycle behavior.

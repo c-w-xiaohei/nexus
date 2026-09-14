@@ -13,7 +13,7 @@ export default defineConfig({
       fileName: () => "index.mjs",
     },
     rollupOptions: {
-      external: ["@nexus-js/core", "better-result"],
+      external: [/^@nexus-js\/core(?:\/|$)/, "better-result"],
       output: {
         entryFileNames: "index.mjs",
         chunkFileNames: "[name]-[hash].mjs",

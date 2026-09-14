@@ -27,9 +27,10 @@ const userService: UserService = {
 
 mock.service(UserToken, userService);
 
-const user = await mock.nexus.create(UserToken, {
+const connection = await mock.nexus.connect({
   target: { context: "background" },
 });
+const user = connection.get(UserToken);
 
 await expect(user.getUser("u1")).resolves.toEqual({ id: "u1", name: "Ada" });
 ```
@@ -50,11 +51,11 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 
 ## What This Covers
 
-- application code that calls `nexus.create(...)` or `nexus.safeCreate(...)`
+- application code that calls `nexus.connect(...)` and gets services from connections
 - React components and hooks that receive Nexus through `NexusProvider`
 - setup code that calls `configure(...)`
 - cleanup code that calls `release(...)`
-- error paths for missing services or injected create failures
+- error paths for connection or service acquisition failures
 - assertions against recorded calls
 
 ## What This Does Not Cover
@@ -63,7 +64,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 - connection handshakes
 - adapter auth, origin, socket, tab, frame, or runtime-port behavior
 - real disconnect, reconnect, reload, or daemon restart timing
-- multicast connection semantics
+- connection lifecycle, collection snapshots, or identity subscriptions
 
 Use adapter or integration tests for those behaviors.
 

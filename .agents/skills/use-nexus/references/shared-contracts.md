@@ -2,37 +2,29 @@
 
 Define service interfaces and Tokens in shared modules imported by both host and consumer contexts.
 
-Read `references/identity-and-metadata.md` when defining `ContextMeta` for identity replacement, `ConnectionTarget` for TokenSpace targets or Token `defaultTarget`, or `ConnectionMeta` for adapter facts and policy inputs.
+Read `references/identity-and-metadata.md` when defining `ContextMeta`, `ConnectionTarget` acquisition, or `ConnectionMeta` adapter facts and policy inputs.
 
 ## Tokens
 
-Use a shared `new Token<Service>(...)` without a default target when the contract must work across adapter models. Use `TokenSpace<Model>` when token IDs should be hierarchical or a model-bound family of tokens should share `defaultTarget` routing. A model-bound `Token<Service, Model>` may also carry a `defaultTarget`; an unbound Token remains portable.
+Use a target-free shared `new Token<Service>(...)` when the contract must work across adapter models. Use `TokenSpace<Model>` when token IDs should be hierarchical or a model-bound family of tokens should share compile-time typing. Targets belong to application-owned `connect` calls, not contract definitions.
 
 Token modules should import existing service interfaces with `import type`. Do not repeat service method shapes inline at token definition sites.
 
 ```ts
 import { Token, TokenSpace } from "@nexus-js/core";
-import { chromeTarget } from "@nexus-js/chrome";
-import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import type { AdapterModel } from "@nexus-js/core";
 import type { SettingsService } from "./contracts";
 
 export const SettingsToken = new Token<SettingsService>(
   "my-extension:settings",
 );
 
-export const BoundSettingsToken = new Token<
-  SettingsService,
-  ChromeAdapterModel
->("my-extension:bound-settings", {
-  defaultTarget: chromeTarget.background(),
-});
-
-const appSpace = new TokenSpace<ChromeAdapterModel>({
+const appSpace = new TokenSpace<AdapterModel>({
   name: "my-extension",
 });
 
 export const BackgroundSettingsToken = appSpace
-  .space("background-services", { defaultTarget: chromeTarget.background() })
+  .space("background-services")
   .token<SettingsService>("settings");
 ```
 
@@ -103,7 +95,7 @@ Keep `configure(...)` in main/bootstrap/runtime modules. Service implementation 
 For Nexus State, declare one shared Store type containing data and methods and
 create its contract with `createStoreToken<Store>(id, { validation? })`, separate
 from the host's Zustand creator. Use `TokenSpace.storeToken<Store>(...)` to inherit
-namespace IDs and default targets. Pass this token directly; do not create a
+namespace IDs. Pass this token directly; do not create a
 definition wrapper or describe the internal wire service. Use
 `createNexusStore(token, creator, options)`
 for a new store or `bindNexusStore(token, existingStore, options)` for an

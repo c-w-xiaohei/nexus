@@ -1,10 +1,8 @@
 import { expectTypeOf } from "vitest";
 import {
   type AdapterModel,
-  type Allified,
   type Asyncified,
   Nexus,
-  type Streamified,
   Token,
   type NexusInstance,
   type RefWrapper,
@@ -26,9 +24,41 @@ interface ResourceService {
   getPlainObject(): Promise<{ value: string }>;
 }
 
+interface ReservedMemberService {
+  nested: {
+    then(): string;
+    catch(): string;
+    finally(): string;
+    value: string;
+  };
+}
+
+interface NestedCallableService {
+  nested: {
+    invoke(value: string): string;
+  };
+}
+
+declare const reservedService: Asyncified<ReservedMemberService>;
+expectTypeOf(reservedService.nested.then).toEqualTypeOf<
+  PromiseLike<ReservedMemberService["nested"]>["then"]
+>();
+expectTypeOf(reservedService.nested.catch).toEqualTypeOf<
+  import("@/api/types").RemoteValue<ReservedMemberService["nested"]>["catch"]
+>();
+expectTypeOf(reservedService.nested.finally).toEqualTypeOf<
+  import("@/api/types").RemoteValue<ReservedMemberService["nested"]>["finally"]
+>();
+
+declare const nestedCallable: Asyncified<NestedCallableService>;
+expectTypeOf(nestedCallable.nested.invoke).toEqualTypeOf<
+  (value: string) => import("@/api/types").RemoteValue<string>
+>();
+
 const ResourceToken = new Token<ResourceService>("test:resource");
 declare const resourceNexus: NexusInstance;
-const resourceService = await resourceNexus.create(ResourceToken);
+const resourceConnection = await resourceNexus.connect();
+const resourceService = resourceConnection.get(ResourceToken);
 const processor = await resourceService.getProcessor();
 expectTypeOf(processor).toMatchTypeOf<
   Asyncified<OwnedProcessor> & Disposable
@@ -55,46 +85,6 @@ plainObject[Symbol.dispose]();
 // @ts-expect-error service roots are not disposable resources.
 resourceService[Symbol.dispose]();
 
-declare const allSettlement: Awaited<
-  ReturnType<Allified<PingService>["ping"]>
->[number];
-// @ts-expect-error multicast settlements intentionally do not expose recipient IDs.
-void allSettlement.from;
-
-declare const streamSettlement: Awaited<
-  ReturnType<Streamified<PingService>["ping"]>
-> extends AsyncIterable<infer T>
-  ? T
-  : never;
-// @ts-expect-error multicast settlements intentionally do not expose recipient IDs.
-void streamSettlement.from;
-
-declare const allResourceSettlement: Awaited<
-  ReturnType<Allified<ResourceService>["getProcessor"]>
->[number];
-if (allResourceSettlement.status === "fulfilled") {
-  expectTypeOf(allResourceSettlement.value).toMatchTypeOf<
-    Asyncified<OwnedProcessor> & Disposable
-  >();
-  allResourceSettlement.value[Symbol.dispose]();
-}
-
-declare const streamResourceSettlement: Awaited<
-  ReturnType<Streamified<ResourceService>["getProcessor"]>
-> extends AsyncIterable<infer T>
-  ? T
-  : never;
-if (streamResourceSettlement.status === "fulfilled") {
-  expectTypeOf(streamResourceSettlement.value).toMatchTypeOf<
-    Asyncified<OwnedProcessor> & Disposable
-  >();
-  streamResourceSettlement.value[Symbol.dispose]();
-}
-
-declare const allResourceService: Allified<ResourceService>;
-// @ts-expect-error multicast roots are borrowed and not disposable.
-allResourceService[Symbol.dispose]();
-
 type ChromeContextMeta =
   | { runtime: "background" }
   | { runtime: "content-script"; tabId: number };
@@ -118,36 +108,8 @@ type UpstreamContextMeta = { runtime: "upstream"; workerId: string };
 
 const PlainPingToken = new Token<PingService>("test:plain-ping");
 
-const chromeNexusForUndefinedConnected = new Nexus<ChromeModel>();
-chromeNexusForUndefinedConnected.create(PlainPingToken, {
-  // @ts-expect-error removed connected mode is rejected at the Nexus API.
-  connected: { context: "background" },
-});
-
-chromeNexusForUndefinedConnected.create(PlainPingToken, {
-  // @ts-expect-error create does not use multicast response strategies.
-  expects: "all",
-});
-
-chromeNexusForUndefinedConnected.safeCreate(PlainPingToken, {
-  // @ts-expect-error create does not use multicast response strategies.
-  expects: "stream",
-});
-
-const anyConnected: any = { context: "background" };
-chromeNexusForUndefinedConnected.create(PlainPingToken, {
-  // @ts-expect-error any-valued connected keys are rejected too.
-  connected: anyConnected,
-});
-
-// @ts-expect-error multicast options, including targets, are required.
-void chromeNexusForUndefinedConnected.createMulticast(PlainPingToken);
-// @ts-expect-error safe multicast options, including targets, are required.
-void chromeNexusForUndefinedConnected.safeCreateMulticast(PlainPingToken);
-
 const ModelBoundPingToken = new Token<PingService, ChromeModel>(
   "test:model-bound-ping",
-  { defaultTarget: { context: "background" } },
 );
 
 type UpstreamModel = {
@@ -161,22 +123,10 @@ const rejectModelBoundToken: Token<PingService, UpstreamModel> =
   ModelBoundPingToken;
 void rejectModelBoundToken;
 
-const ChromePingToken = new Token<PingService, ChromeModel>(
-  "test:chrome-ping",
-  {
-    defaultTarget: {
-      context: "background",
-    },
-  },
-);
+const ChromePingToken = new Token<PingService, ChromeModel>("test:chrome-ping");
 
 const BackgroundOnlyPingToken = new Token<PingService, ChromeModel>(
   "test:background-only-ping",
-  {
-    defaultTarget: {
-      context: "background",
-    },
-  },
 );
 
 const rejectBackgroundOnlyAsChromeToken: Token<PingService, ChromeModel> =
@@ -185,11 +135,6 @@ void rejectBackgroundOnlyAsChromeToken;
 
 const UpstreamPingToken = new Token<PingService, UpstreamModel>(
   "test:upstream-ping",
-  {
-    defaultTarget: {
-      context: "upstream",
-    },
-  },
 );
 
 const AnyPingToken = new Token<PingService, any>("test:any-ping");
@@ -198,21 +143,45 @@ const chromeNexus = new Nexus<ChromeModel>();
 
 expectTypeOf(chromeNexus).toMatchTypeOf<NexusInstance<ChromeModel>>();
 
-void chromeNexus.create(PlainPingToken);
-void chromeNexus.create(ChromePingToken);
-void chromeNexus.safeCreate(ChromePingToken);
+void chromeNexus
+  .connect({ target: { context: "background" } })
+  .then((connection) => connection.get(PlainPingToken));
+void chromeNexus
+  .connect({ target: { context: "background" } })
+  .then((connection) => connection.get(ChromePingToken));
+void chromeNexus
+  .safeConnect({ target: { context: "background" } })
+  .then((result) => {
+    if (result.isOk()) result.value.get(ChromePingToken);
+  });
 
-// @ts-expect-error create reads token.defaultTarget and must reject tokens from unrelated runtimes.
-void chromeNexus.create(UpstreamPingToken);
+void chromeNexus
+  .connect({ target: { context: "background" } })
+  .then((connection) => {
+    // @ts-expect-error model-bound tokens cannot cross adapter models.
+    connection.get(UpstreamPingToken);
+  });
 
-void chromeNexus.create(BackgroundOnlyPingToken);
+void chromeNexus
+  .connect({ target: { context: "background" } })
+  .then((connection) => connection.get(BackgroundOnlyPingToken));
 
 void AnyPingToken;
 
-// @ts-expect-error safeCreate reads token.defaultTarget and must reject tokens from unrelated runtimes.
-void chromeNexus.safeCreate(UpstreamPingToken);
+void chromeNexus
+  .safeConnect({ target: { context: "background" } })
+  .then((result) => {
+    if (result.isOk()) {
+      // @ts-expect-error model-bound tokens cannot cross adapter models.
+      result.value.get(UpstreamPingToken);
+    }
+  });
 
-void chromeNexus.safeCreate(BackgroundOnlyPingToken);
+void chromeNexus
+  .safeConnect({ target: { context: "background" } })
+  .then((result) => {
+    if (result.isOk()) result.value.get(BackgroundOnlyPingToken);
+  });
 
 chromeNexus.provide(ChromePingToken, { ping: () => "pong" });
 chromeNexus.safeProvide(ChromePingToken, { ping: () => "pong" });

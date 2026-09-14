@@ -1,5 +1,5 @@
-import type { Asyncified, RuntimeCreateTokenParam } from "../api/types";
-import type { CreateOptions } from "../api/types/config";
+import type { NexusInstance } from "../api/types";
+import type { ConnectOptions } from "../api/types/config";
 import type { AdapterModel } from "../types/adapter-model";
 import { Result, type InferErr } from "better-result";
 import { TimeoutError, withTimeout } from "es-toolkit";
@@ -12,47 +12,25 @@ import {
   normalizeNexusStoreError,
   NexusStoreActionError,
 } from "./errors";
-import type {
-  NexusStoreServiceContract,
-  RemoteStore,
-  StoreActionKeys,
-  StoreToken,
-} from "./contract";
+import type { RemoteStore, StoreActionKeys, StoreToken } from "./contract";
 import { createRemoteStore } from "./remote-store";
-import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
+import { isPlainTarget } from "../api/token";
 
-const ConnectNexusStoreOptionsSchema = z.object({
-  target: z
-    .custom<object>(
-      (value) =>
-        typeof value === "object" && value !== null && !Array.isArray(value),
-    )
-    .optional(),
-  where: z.function().optional(),
-  timeout: z.number().nonnegative().optional(),
-});
+const ConnectNexusStoreOptionsSchema = z
+  .object({
+    target: z.custom<object>(isPlainTarget).optional(),
+    where: z.function().optional(),
+    timeout: z.number().positive().finite().optional(),
+    signal: z
+      .custom<AbortSignal>(
+        (value) =>
+          typeof AbortSignal !== "undefined" && value instanceof AbortSignal,
+      )
+      .optional(),
+  })
+  .strict();
 
-export type ConnectNexusStoreOptions<M extends AdapterModel = AdapterModel> =
-  Partial<
-    Pick<CreateOptions<M>, keyof z.input<typeof ConnectNexusStoreOptionsSchema>>
-  >;
-
-type SafeCreateNexusLike<M extends AdapterModel> = {
-  safeCreate<T extends object>(
-    token: RuntimeCreateTokenParam<T, M>,
-    options?: CreateOptions<M>,
-  ): Promise<Result<Asyncified<T>, Error>>;
-};
-type CreateNexusLike<M extends AdapterModel> = {
-  create<T extends object>(
-    token: RuntimeCreateTokenParam<T, M>,
-    options?: CreateOptions<M>,
-  ): Promise<Asyncified<T>>;
-};
-
+/** Preserves terminal State failures while adding context to subscription setup errors. */
 const normalizeConnectHandshakeError = (error: unknown) => {
   if (error instanceof TimeoutError || isCallTimeout(error)) {
     return new NexusStoreConnectError("Store subscribe handshake timed out.", {
@@ -74,19 +52,23 @@ const normalizeConnectHandshakeError = (error: unknown) => {
 /**
  * Acquires a session-bound service and waits for its init callback to be applied.
  * Failure destroys the mirror; its callback still reclaims capabilities in a late init.
+ * The service must already be published. A supplied timeout bounds connection
+ * acquisition and then the subscription handshake; signal controls acquisition only.
+ * State observes later identity mismatch as stale without closing the shared session.
  */
 export const safeConnectNexusStore = async <
   Store extends object,
   M extends AdapterModel,
 >(
-  nexus: SafeCreateNexusLike<M>,
+  nexus: Pick<NexusInstance<M>, "safeConnect">,
   token: StoreToken<Store, M>,
-  options: ConnectNexusStoreOptions<M> = {},
+  options: ConnectOptions<M> = {},
 ): Promise<
   Result<RemoteStore<Store>, ReturnType<typeof normalizeConnectHandshakeError>>
 > => {
+  /** Maps connection and catalog failures to the State acquisition boundary. */
   const createError = (cause: unknown) =>
-    new NexusStoreConnectError("Failed to create store proxy.", { cause });
+    new NexusStoreConnectError("Failed to acquire store service.", { cause });
   const parsed = safeParsePayload(
     ConnectNexusStoreOptionsSchema,
     options,
@@ -96,26 +78,18 @@ export const safeConnectNexusStore = async <
       new NexusStoreConnectError(error.message, { cause: error.cause }),
   );
   if (parsed.isErr()) return parsed;
-  const { target, where, timeout } = parsed.value;
-  const acquisition = Result.try({
-    try: () => ({
-      pending: nexus.safeCreate(token, {
-        target,
-        where,
-        timeout,
-      } as CreateOptions<M>),
-    }),
+  const { timeout } = parsed.value;
+  const acquisition = await Result.tryPromise({
+    try: () => nexus.safeConnect(options),
     catch: createError,
   });
   if (acquisition.isErr()) return acquisition;
-  // Catch both throw-style implementations and returned Errs without delaying
-  // subscription behind another async composition boundary after acquisition.
-  const created = await acquisition.value.pending.then(
-    (result) => result.mapError(createError),
-    (cause) => Result.err(createError(cause)),
-  );
+  const connected = acquisition.value.mapError(createError);
+  if (connected.isErr()) return connected;
+  const connection = connected.value;
+  const created = connection.safeGet(token).mapError(createError);
   if (created.isErr()) return created;
-  const service = created.value as NexusStoreServiceContract<Store>;
+  const service = created.value;
 
   const remoteResult = Result.try({
     try: () => createRemoteStore<Store>(token.validation),
@@ -127,32 +101,32 @@ export const safeConnectNexusStore = async <
   // Observe the session before subscribe can deliver init or any update.
   const handshake = await Result.tryPromise({
     try: async () => {
-      const hooks = [
-        [
-          NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-          () => remote.disconnect("Remote store connection disconnected."),
-        ],
-        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL, () => remote.stale()],
-      ] as const;
-      for (const [symbol, notify] of hooks) {
-        const subscribe = (
-          service as typeof service & {
-            [key: symbol]: ((callback: () => void) => unknown) | undefined;
-          }
-        )[symbol];
-        if (typeof subscribe !== "function") continue;
-        const cleanup = subscribe(notify);
-        if (typeof cleanup === "function")
-          remote.addCleanup(cleanup as () => void);
+      remote.addCleanup(
+        connection.onDisconnected(() =>
+          remote.disconnect("Remote store connection disconnected."),
+        ),
+      );
+      // State owns selection staleness; a shared Connection does not retain the
+      // acquisition predicate or apply it to unrelated RPC calls.
+      if (options.where) {
+        const where = options.where;
+        remote.addCleanup(
+          connection.subscribeIdentity((meta) => {
+            if (!where(meta, connection.connectionMeta)) remote.stale();
+          }),
+        );
       }
+
+      // Immediate lifecycle delivery can invalidate the mirror before subscribe.
+      // Do not start remote business work after its local owner became terminal.
+      if (remote.store.getStatus().type !== "initializing") return;
 
       // Init arrives through the callback, not the response. A successful response
       // is only useful when init completed and the session is still usable.
       const subscribed = Promise.resolve(
         service.subscribe((event) => remote.onSync(event)),
       );
-      // Zero retains State's existing unbounded-handshake meaning.
-      return timeout && Number.isFinite(timeout)
+      return timeout !== undefined
         ? withTimeout(() => subscribed, timeout)
         : subscribed;
     },
@@ -165,26 +139,16 @@ export const safeConnectNexusStore = async <
     .tapError(() => remote.store.destroy());
 };
 
+/** Acquires and initializes a State mirror, throwing the safe entry's structured errors. */
 export const connectNexusStore = async <
   Store extends object,
   M extends AdapterModel,
 >(
-  nexus: SafeCreateNexusLike<M> | CreateNexusLike<M>,
+  nexus: Pick<NexusInstance<M>, "safeConnect">,
   token: StoreToken<Store, M>,
-  options: ConnectNexusStoreOptions<M> = {},
+  options: ConnectOptions<M> = {},
 ): Promise<RemoteStore<Store>> => {
-  const safeNexus: SafeCreateNexusLike<M> =
-    "safeCreate" in nexus
-      ? nexus
-      : {
-          safeCreate: (token, createOptions) =>
-            Result.tryPromise({
-              try: () => nexus.create(token, createOptions),
-              catch: (error) =>
-                error instanceof Error ? error : new Error(String(error)),
-            }),
-        };
-  const result = await safeConnectNexusStore(safeNexus, token, options);
+  const result = await safeConnectNexusStore(nexus, token, options);
   if (result.isErr()) throw result.error;
   return result.value;
 };
@@ -201,9 +165,11 @@ export const safeInvokeStoreAction = <
   Result.tryPromise({
     try: () => {
       const invoke = remoteStore.actions[action];
-      return (
-        invoke as unknown as (...values: typeof args) => Promise<unknown>
-      )(...args);
+      return Promise.resolve(
+        (invoke as unknown as (...values: typeof args) => PromiseLike<unknown>)(
+          ...args,
+        ),
+      );
     },
     catch: (error) =>
       error instanceof NexusStoreDisconnectedError ||
@@ -217,7 +183,6 @@ export type SafeInvokeStoreActionError = InferErr<
   Awaited<ReturnType<typeof safeInvokeStoreAction>>
 >;
 
+/** Recognizes Core timeouts by their stable code rather than diagnostic text. */
 const isCallTimeout = (error: unknown): boolean =>
-  error instanceof Error &&
-  (("code" in error && error.code === "E_CALL_TIMEOUT") ||
-    /^Call #\d+ timed out/.test(error.message));
+  error instanceof Error && "code" in error && error.code === "E_CALL_TIMEOUT";

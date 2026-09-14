@@ -19,12 +19,13 @@ Use `@nexus-js/testing` for application unit tests that only need to prove how c
 const mock = createMockNexus();
 mock.service(EchoToken, echoService);
 
-const echo = await mock.nexus.create(EchoToken, {
+const connection = await mock.nexus.connect({
   target: {
     context: "node-ipc-daemon",
     appId: "example-app",
   },
 });
+const echo = connection.get(EchoToken);
 ```
 
 This does not test node-ipc adapter behavior. It does not open sockets, resolve socket paths, frame packets, run shared-secret auth, detect stale sockets, or prove daemon restart semantics.
@@ -54,7 +55,7 @@ A good node-ipc integration test should:
 2. start a daemon with `usingNodeIpcDaemon`
 3. start a client with `usingNodeIpcClient`
 4. expose a real service through Nexus core
-5. call that service through `nexus.create()`
+5. connect and get that service through `nexus.connect()` and `connection.get()`
 6. close both runtimes and remove the temporary root
 
 This catches adapter/core integration problems that mocked endpoints cannot catch. Keep real socket integration tests for adapter/core integration problems that `createMockNexus()` intentionally cannot catch.

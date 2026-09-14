@@ -1,159 +1,96 @@
-import type { AdapterModel, ConnectionTargetOf } from "@/types/adapter-model";
+import type { AdapterModel } from "@/types/adapter-model";
 import { NexusUsageError } from "@/errors";
-import { isPlainTarget, Token, type TokenOptions } from "./token";
+import { Token } from "./token";
 import { StoreToken, type StoreValidationSchemas } from "../state/contract";
 import { Result } from "better-result";
-const { err, ok } = Result;
 
-export interface TokenSpaceConfig<M extends AdapterModel> {
+export interface TokenSpaceConfig {
   name: string;
-  defaultTarget?: ConnectionTargetOf<M>;
 }
 
-export type TokenSpaceDefaultTarget<M extends AdapterModel> =
-  ConnectionTargetOf<M>;
-
-export interface ChildTokenSpaceConfig<M extends AdapterModel> {
-  defaultTarget?: ConnectionTargetOf<M>;
-}
-
+/** Namespaces service contracts; connection addresses belong to acquisition calls. */
 export class TokenSpace<M extends AdapterModel> {
   private readonly fullPathValue: string;
-  private readonly defaultTargetValue?: ConnectionTargetOf<M>;
 
-  constructor(config: TokenSpaceConfig<M>, parentPath?: string) {
-    if (!config.name.trim() || config.name.includes(":")) {
-      throw new NexusUsageError(
-        "TokenSpace name must be non-empty and cannot contain ':'.",
-      );
-    }
-    if (
-      config.defaultTarget !== undefined &&
-      !isPlainTarget(config.defaultTarget)
-    ) {
-      throw new NexusUsageError(
-        "TokenSpace defaultTarget must be a plain object.",
-        "E_USAGE_INVALID",
-      );
-    }
+  /** Creates one namespace segment, optionally beneath an existing namespace. */
+  constructor(config: TokenSpaceConfig, parentPath?: string) {
+    const valid = validateName(config.name);
+    if (valid.isErr()) throw valid.error;
     this.fullPathValue = parentPath
       ? `${parentPath}:${config.name}`
       : config.name;
-    this.defaultTargetValue = config.defaultTarget ?? undefined;
   }
 
+  /** Returns the local namespace segment. */
   public get name(): string {
     return this.fullPathValue.split(":").at(-1)!;
   }
 
+  /** Returns the stable, fully qualified namespace. */
   public get fullPath(): string {
     return this.fullPathValue;
   }
 
-  public get defaultTarget(): ConnectionTargetOf<M> | undefined {
-    return this.defaultTargetValue;
+  /** Creates a model-bound service token without selecting a peer. */
+  public token<T>(serviceName: string): Token<T, M> {
+    const result = this.safeToken<T>(serviceName);
+    if (result.isErr()) throw result.error;
+    return result.value;
   }
 
-  public token<T>(serviceName: string, options?: TokenOptions<M>): Token<T, M> {
-    return this.safeToken(serviceName, options).match({
-      ok: (token) => token as Token<T, M>,
-      err: (error) => {
-        throw error;
-      },
-    });
+  /** Validates a service name and returns its namespaced token. */
+  public safeToken<T>(serviceName: string): Result<Token<T, M>, Error> {
+    return validateName(serviceName).map(
+      () => new Token<T, M>(`${this.fullPathValue}:${serviceName}`),
+    );
   }
 
-  /** Creates a State token in this namespace with its inherited target. */
+  /** Creates a State contract with optional wire validation. */
   public storeToken<Store extends object>(
     serviceName: string,
-    options?: {
-      defaultTarget?: ConnectionTargetOf<M>;
-      validation?: StoreValidationSchemas<Store>;
-    },
+    options?: { validation?: StoreValidationSchemas<Store> },
   ): StoreToken<Store, M> {
-    return this.safeStoreToken(serviceName, options).match({
-      ok: (token) => token,
-      err: (error) => {
-        throw error;
-      },
-    });
+    const result = this.safeStoreToken<Store>(serviceName, options);
+    if (result.isErr()) throw result.error;
+    return result.value;
   }
 
+  /** Validates a State contract name without throwing expected name errors. */
   public safeStoreToken<Store extends object>(
     serviceName: string,
-    options?: {
-      defaultTarget?: ConnectionTargetOf<M>;
-      validation?: StoreValidationSchemas<Store>;
-    },
+    options?: { validation?: StoreValidationSchemas<Store> },
   ): Result<StoreToken<Store, M>, Error> {
-    if (!serviceName.trim() || serviceName.includes(":")) {
-      return err(
-        new NexusUsageError(
-          "Token name must be non-empty and cannot contain ':'.",
+    return validateName(serviceName).map(
+      () =>
+        new StoreToken<Store, M>(
+          `${this.fullPathValue}:${serviceName}`,
+          options,
         ),
-      );
-    }
-    try {
-      return ok(
-        new StoreToken<Store, M>(`${this.fullPathValue}:${serviceName}`, {
-          defaultTarget: options?.defaultTarget ?? this.defaultTargetValue,
-          validation: options?.validation,
-        }),
-      );
-    } catch (error) {
-      return err(error instanceof Error ? error : new Error(String(error)));
-    }
+    );
   }
 
-  public safeToken<T>(
-    serviceName: string,
-    options?: TokenOptions<M>,
-  ): Result<Token<T, M>, Error> {
-    if (!serviceName.trim() || serviceName.includes(":")) {
-      return err(
-        new NexusUsageError(
-          "Token name must be non-empty and cannot contain ':'.",
-        ),
-      );
-    }
-    try {
-      return ok(
-        new Token<T, M>(`${this.fullPathValue}:${serviceName}`, {
-          defaultTarget: options?.defaultTarget ?? this.defaultTargetValue,
-        } as M extends AdapterModel ? TokenOptions<M> : never),
-      );
-    } catch (error) {
-      return err(error instanceof Error ? error : new Error(String(error)));
-    }
+  /** Creates a child namespace inheriting only the qualified name and model. */
+  public space(name: string): TokenSpace<M> {
+    const result = this.safeSpace(name);
+    if (result.isErr()) throw result.error;
+    return result.value;
   }
 
-  public space(name: string, config?: ChildTokenSpaceConfig<M>): TokenSpace<M> {
-    return this.safeSpace(name, config).match({
-      ok: (space) => space,
-      err: (error) => {
-        throw error;
-      },
-    });
+  /** Returns a child namespace or a name-validation failure. */
+  public safeSpace(name: string): Result<TokenSpace<M>, Error> {
+    return validateName(name).map(
+      () => new TokenSpace<M>({ name }, this.fullPathValue),
+    );
   }
+}
 
-  public safeSpace(
-    name: string,
-    config?: ChildTokenSpaceConfig<M>,
-  ): Result<TokenSpace<M>, Error> {
-    try {
-      return ok(
-        new TokenSpace<M>(
-          {
-            name,
-            defaultTarget: Object.hasOwn(config ?? {}, "defaultTarget")
-              ? config?.defaultTarget
-              : this.defaultTargetValue,
-          },
-          this.fullPathValue,
-        ),
-      );
-    } catch (error) {
-      return err(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
+/** Rejects ambiguous or empty namespace segments at the construction boundary. */
+function validateName(name: string): Result<void, NexusUsageError> {
+  if (typeof name !== "string" || !name.trim() || name.includes(":"))
+    return Result.err(
+      new NexusUsageError(
+        "Token name must be non-empty and cannot contain ':'.",
+      ),
+    );
+  return Result.ok(undefined);
 }

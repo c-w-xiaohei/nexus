@@ -7,8 +7,6 @@ export type NexusErrorCode =
   | "E_CONNECTION_CONSTRAINT_FAILED"
   | "E_HANDSHAKE_REJECTED"
   | "E_HANDSHAKE_FAILED"
-  | "E_TARGET_NO_MATCH"
-  | "E_TARGET_UNEXPECTED_COUNT"
   | "E_REMOTE_EXCEPTION"
   | "E_ENDPOINT_CONNECT_FAILED"
   | "E_ENDPOINT_LISTEN_FAILED"
@@ -17,12 +15,13 @@ export type NexusErrorCode =
   | "E_PROTOCOL_INCOMPATIBLE"
   | "E_RESOURCE_NOT_FOUND"
   | "E_RESOURCE_ACCESS_DENIED"
+  | "E_AUTH_CALL_DENIED"
+  | "E_INVOCATION_SERVICE_MISMATCH"
   | "E_INVALID_SERVICE_PATH"
   | "E_TARGET_NOT_CALLABLE"
   | "E_SET_ON_ROOT"
   | "E_CONFIGURATION_INVALID"
   | "E_USAGE_INVALID"
-  | "E_USAGE_DEFAULT_CREATE_CONFLICT"
   | "E_PROVIDER_DUPLICATE_TOKEN"
   | "E_PROVIDER_BATCH_INVALID"
   | "E_NEXUS_BOOTSTRAPPING_LOCKED"
@@ -31,13 +30,10 @@ export type NexusErrorCode =
   | "E_NEXUS_ALREADY_READY"
   | "E_ENDPOINT_SOURCE_CONFLICT"
   | "E_DUPLICATE_PROVIDER"
-  | "E_TARGET_REQUIRED"
-  | "E_TARGET_CONSTRAINT_FAILED"
   | "E_SERVICE_UNAVAILABLE"
   | "E_SERVICE_ACQUISITION_TIMEOUT"
   | "E_SERVICE_NO_MATCH"
   | "E_SERVICE_AMBIGUOUS"
-  | "E_SERVICE_WAIT_TIMEOUT"
   | "E_ABORTED";
 
 export interface NexusErrorOptions {
@@ -54,7 +50,7 @@ export class NexusError extends Error {
   /**
    * A machine-readable, unique error code.
    * This allows for programmatic handling and remains stable across framework versions.
-   * e.g., 'E_CONN_TIMEOUT', 'E_TARGET_NOT_FOUND'
+   * e.g., 'E_CONN_CLOSED', 'E_RESOURCE_NOT_FOUND'
    */
   public readonly code: NexusErrorCode;
 
@@ -66,6 +62,7 @@ export class NexusError extends Error {
 
   public readonly cause?: SerializedError;
 
+  /** Captures structured diagnostics and restores an explicitly supplied remote stack. */
   constructor(
     message: string,
     code: NexusErrorCode,

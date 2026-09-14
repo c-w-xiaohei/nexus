@@ -8,6 +8,7 @@ import type {
 } from "@/connection/types";
 import { ConnectionManager } from "@/connection/connection-manager";
 import { Engine } from "@/service/engine";
+import { ConnectionHandle } from "@/api/connection";
 import type {
   AdapterModel,
   ConnectionMetaOf,
@@ -172,11 +173,37 @@ export async function createL3Endpoints<M extends AdapterModel>(
 ) {
   const [clientPort, hostPort] = createMockPortPair();
 
+  const hostConnections = new Map<string, ConnectionHandle<M>>();
+  const clientConnections = new Map<string, ConnectionHandle<M>>();
+  let hostEngine!: Engine<M>;
+  let clientEngine!: Engine<M>;
+  const getConnection = (
+    manager: ConnectionManager<M>,
+    engine: () => Engine<M>,
+    cache: Map<string, ConnectionHandle<M>>,
+    id: string,
+  ): ConnectionHandle<M> => {
+    const existing = cache.get(id);
+    if (existing) return existing;
+    const session = manager.connections.get(id);
+    if (!session) throw new Error(`Missing test connection "${id}".`);
+    const connection = new ConnectionHandle(session, engine(), 5_000);
+    cache.set(id, connection);
+    return connection;
+  };
+
   // --- Host Setup ---
   const hostStack = createNexusTestStack<M>({
     meta: hostSetup.meta,
   });
-  const hostEngine = new Engine(hostStack.connectionManager, {
+  hostEngine = new Engine(hostStack.connectionManager, {
+    getConnection: (id) =>
+      getConnection(
+        hostStack.connectionManager,
+        () => hostEngine,
+        hostConnections,
+        id,
+      ),
     providers: Object.fromEntries(
       Object.entries(hostSetup.providers).map(([name, service]) => [
         name,
@@ -190,7 +217,13 @@ export async function createL3Endpoints<M extends AdapterModel>(
       .then((result) =>
         result.match({ ok: () => undefined, err: () => undefined }),
       );
-  hostStack.handlers.onDisconnect = (connId) => hostEngine.onDisconnect(connId);
+  hostStack.handlers.onDisconnect = (connId) => {
+    hostEngine.onDisconnect(connId);
+    hostConnections.get(connId)?.closed();
+    hostConnections.delete(connId);
+  };
+  hostStack.handlers.onIdentityUpdated = (id, next) =>
+    hostConnections.get(id)?.identityUpdated(next);
 
   // The host's mock endpoint will listen for incoming connections.
   hostStack.mockEndpoint.listen = vi.fn((onConnect) => {
@@ -204,15 +237,28 @@ export async function createL3Endpoints<M extends AdapterModel>(
       connectTo: clientSetup.connectTo,
     },
   });
-  const clientEngine = new Engine(clientStack.connectionManager);
+  clientEngine = new Engine(clientStack.connectionManager, {
+    getConnection: (id) =>
+      getConnection(
+        clientStack.connectionManager,
+        () => clientEngine,
+        clientConnections,
+        id,
+      ),
+  });
   clientStack.handlers.onMessage = (msg, connId) =>
     void clientEngine
       .safeOnMessage(msg, connId)
       .then((result) =>
         result.match({ ok: () => undefined, err: () => undefined }),
       );
-  clientStack.handlers.onDisconnect = (connId) =>
+  clientStack.handlers.onDisconnect = (connId) => {
     clientEngine.onDisconnect(connId);
+    clientConnections.get(connId)?.closed();
+    clientConnections.delete(connId);
+  };
+  clientStack.handlers.onIdentityUpdated = (id, next) =>
+    clientConnections.get(id)?.identityUpdated(next);
 
   // The client's mock endpoint will initiate the connection.
   clientStack.mockEndpoint.connect = vi.fn(
@@ -328,8 +374,7 @@ export async function createStarNetwork<
       meta: config.center.meta,
       implementation: {
         listen: vi.fn((onConnect) => (centerListenCallback = onConnect)),
-        // This is the crucial fix: The center node must also be able to initiate connections
-        // to the leaves, which is needed for "find or create" multicast semantics.
+        // The center can initiate connections when a test explicitly dials a leaf.
         connect: vi.fn(
           async (target: { context: string; issueId?: string }) => {
             // Find the target leaf instance from its endpoint identity.
@@ -392,7 +437,6 @@ export async function createStarNetwork<
           matchesTarget: (target, contextMeta) =>
             matchesObject(target, contextMeta),
         },
-        defaultTarget: leaf.cmConfig?.connectTo?.[0],
         connectTo: leaf.cmConfig?.connectTo,
       },
       providers: Object.entries(leaf.providers ?? {}).map(

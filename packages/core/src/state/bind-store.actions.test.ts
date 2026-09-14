@@ -38,7 +38,7 @@ const subscribe = async (
   service: NexusStoreServiceContract<CounterState & CounterActions>,
   onSync: (
     event: SyncEnvelope<CounterState, CounterState & CounterActions>,
-  ) => unknown = () => undefined,
+  ) => void | PromiseLike<void> = () => undefined,
 ) => {
   let init!: Extract<
     SyncEnvelope<CounterState, CounterState & CounterActions>,

@@ -18,9 +18,10 @@ const pingService: PingService = {
 
 mock.service(PingToken, pingService);
 
-const ping = await mock.nexus.create(PingToken, {
+const connection = await mock.nexus.connect({
   target: { context: "host" },
 });
+const ping = connection.get(PingToken);
 ```
 
 ## React
@@ -39,24 +40,18 @@ For React remote-store replacement, test `reconnectKey` changes, the stable `rec
 
 Use `useStoreStatus(store, selector?)` or `Scope.useStatus(selector?)` for lifecycle UI; select `status.type` if versions are irrelevant. Verify with separate publications that unchanged selectors and actions/error-only consumers do not rerender. An acquired handle disconnecting should update status observers, not the acquisition result or its `error`.
 
-For passed-proxy status UI, a unit test may mock the static
-`Nexus.getProxyStatus` / `Nexus.subscribeProxyStatus` pair. This can prove UI
-subscription and selector behavior, not a real proxy lifecycle. Use a Core and
-adapter integration test for actual stale/disconnect ordering and terminal
-status; `createMockNexus()` cannot prove real lifecycle behavior.
-
 ## Assertions
 
 Use call records for application-level assertions:
 
 ```ts
-expect(mock.calls.create(PingToken)).toHaveLength(1);
+expect(mock.calls.connect()).toHaveLength(1);
 expect(mock.calls.configure()).toHaveLength(1);
 expect(mock.calls.release()).toHaveLength(1);
 ```
 
 ## Boundaries
 
-`createMockNexus()` supports API-level `createMulticast` and `selectMulticast` behavior for `"all"` and `"stream"` results, including selection snapshots. It does not simulate endpoints, transports, adapter auth gates, real connection sessions, iframe reloads, daemon restarts, Chrome runtime ports, or transport-level multicast behavior.
+`createMockNexus()` does not simulate endpoints, transports, adapter auth gates, real connection sessions, connection collections, identity subscriptions, iframe reloads, daemon restarts, or Chrome runtime ports. Its connection seam is for application-level tests, not proof of real acquisition behavior.
 
 Use core, adapter, browser, or socket integration tests for real restart, transport, and session behavior.

@@ -104,17 +104,23 @@ const backgroundNexus: NexusInstance<ChromeAdapterModel<AppMeta>> =
 const chromePingToken = new Token<PingService, ChromeAdapterModel<AppMeta>>(
   "chrome-model-bound-ping",
 );
-void backgroundNexus.create(chromePingToken, {
-  target: chromeTarget.contentFrame({ tabId: 1, frameId: 0 }),
-  where: (_contextMeta: AppMeta, _connectionMeta: object) => true,
-});
+void backgroundNexus
+  .connect({
+    target: chromeTarget.contentFrame({ tabId: 1, frameId: 0 }),
+    where: (_contextMeta: AppMeta, _connectionMeta: object) => true,
+  })
+  .then((connection) => connection.get(chromePingToken));
 const otherPingToken = new Token<PingService, OtherAdapterModel>(
   "other-model-bound-ping",
 );
-// @ts-expect-error Chrome instances reject tokens bound to another adapter model.
-void backgroundNexus.create(otherPingToken, {
-  target: { kind: "other" },
-});
+void backgroundNexus
+  .connect({
+    target: { kind: "other" },
+  })
+  .then((connection) => {
+    // @ts-expect-error Chrome instances reject tokens bound to another adapter model.
+    return connection.get(otherPingToken);
+  });
 createContentScriptConfig<AppMeta>({ app: { feature: "content" } });
 usingContentScript<AppMeta>({ app: { feature: "content" } });
 createPopupConfig<AppMeta>({ app: { feature: "popup" }, tabId: 1 });

@@ -18,13 +18,15 @@ describe("node-ipc disconnect integration", () => {
     harness = await createHarness();
     const firstDaemon = await harness.startDaemon();
     const firstClient = harness.createClient();
-    const oldService = await firstClient.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const oldService = await firstClient
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(oldService.echo("before-close")).resolves.toBe("before-close");
 
     firstDaemon.close();
@@ -32,13 +34,15 @@ describe("node-ipc disconnect integration", () => {
 
     const secondDaemon = await harness.startDaemon();
     const secondClient = harness.createClient();
-    const newService = await secondClient.create(EchoToken, {
-      target: {
-        context: "node-ipc-daemon",
-        appId: "test-daemon",
-        instance: "default",
-      },
-    });
+    const newService = await secondClient
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     await expect(newService.echo("after-restart")).resolves.toBe(
       "after-restart",
     );
@@ -57,8 +61,12 @@ describe("node-ipc disconnect integration", () => {
     };
 
     const [first, second] = await Promise.all([
-      client.create(EchoToken, { target }),
-      client.create(EchoToken, { target }),
+      client
+        .connect({ target })
+        .then((connection) => connection.get(EchoToken)),
+      client
+        .connect({ target })
+        .then((connection) => connection.get(EchoToken)),
     ]);
 
     await expect(first.echo("first")).resolves.toBe("first");
@@ -66,7 +74,7 @@ describe("node-ipc disconnect integration", () => {
     daemon.close();
   });
 
-  it("connects once when concurrent requests mix omitted and explicit default instances", async () => {
+  it("connects once when concurrent requests use equivalent explicit targets", async () => {
     harness = await createHarness();
     const daemon = await harness.startDaemon();
     let connect: ReturnType<typeof vi.spyOn> | undefined;
@@ -76,15 +84,18 @@ describe("node-ipc disconnect integration", () => {
       },
     });
 
+    const target = {
+      context: "node-ipc-daemon" as const,
+      appId: "test-daemon",
+      instance: "default",
+    };
     await Promise.all([
-      client.create(EchoToken),
-      client.create(EchoToken, {
-        target: {
-          context: "node-ipc-daemon",
-          appId: "test-daemon",
-          instance: "default",
-        },
-      }),
+      client
+        .connect({ target })
+        .then((connection) => connection.get(EchoToken)),
+      client
+        .connect({ target })
+        .then((connection) => connection.get(EchoToken)),
     ]);
 
     expect(connect).toHaveBeenCalledTimes(1);
@@ -104,13 +115,19 @@ describe("node-ipc disconnect integration", () => {
       instance: "default",
     };
 
-    const service = await client.create(EchoToken, { target });
+    const service = await client
+      .connect({ target })
+      .then((connection) => connection.get(EchoToken));
     await expect(service.echo("before-failure")).resolves.toBe(
       "before-failure",
     );
 
     resolveTarget = false;
-    await expect(client.create(EchoToken, { target })).rejects.toMatchObject({
+    await expect(
+      client
+        .connect({ target })
+        .then((connection) => connection.get(EchoToken)),
+    ).rejects.toMatchObject({
       cause: {
         context: {
           originalError: expect.objectContaining({

@@ -1,11 +1,4 @@
 import type { AdapterModel } from "@/types/adapter-model";
-import {
-  getValueType,
-  LocalResourceType,
-  type ReviveContext,
-  type SanitizeContext,
-  ValueType,
-} from "../types";
 import type { ProxyFactory } from "../proxy-factory";
 import type { ResourceManager } from "../resource-manager";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
@@ -17,28 +10,27 @@ import {
   PLACEHOLDER_PREFIX,
   PlaceholderType,
   REVIVER_TABLE_CONFIG,
-  SANITIZER_TABLE_CONFIG,
 } from "./protocol";
 import { Logger } from "@/logger";
 import { Result } from "better-result";
+import { NexusProtocolError, toFrameworkProtocolError } from "@/errors";
 
-type Revival = { proxy: object; existedBeforeRevive: boolean };
-type RevivalContext = ReviveContext & { revived: Map<string, Revival> };
+type RevivalContext = {
+  sourceConnectionId: string;
+  callTimeout?: number;
+  revived: Map<string, { proxy: object; existedBeforeRevive: boolean }>;
+};
+type SanitizeContext = {
+  targetConnectionId: string;
+  createdResourceIds: string[];
+  serviceName?: string;
+  servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
+};
 
-class UnsupportedTypeError extends Error {
-  readonly code = "E_PROTOCOL_ERROR";
-  constructor(
-    message: string,
-    readonly context?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = "PayloadProcessorUnsupportedTypeError";
-  }
-}
-
-/** Transactional payload conversion for one Engine; protocol rules remain in the conversion tables. */
+/** Transactional payload conversion for one Engine, with session-owned capabilities. */
 export class PayloadProcessor {
   private readonly logger = new Logger("L3 --- PayloadProcessor");
+  /** Shares the Engine's capability registry and proxy factory across independent payload transactions. */
   constructor(
     readonly resourceManager: ResourceManager,
     readonly proxyFactory: ProxyFactory,
@@ -70,19 +62,19 @@ export class PayloadProcessor {
   public safeRevive(
     args: any[],
     sourceConnectionId: string,
+    callTimeout?: number,
   ): Result<any[], Error> {
-    const context: RevivalContext = { sourceConnectionId, revived: new Map() };
+    const context: RevivalContext = {
+      sourceConnectionId,
+      callTimeout,
+      revived: new Map(),
+    };
     const result = Result.try({
       try: () => {
         const revived = this.revive(args, context);
         return Array.isArray(revived) ? revived : [revived];
       },
-      catch: (error) =>
-        error instanceof Error
-          ? error
-          : new UnsupportedTypeError(`Nexus revive error: ${String(error)}`, {
-              sourceConnectionId,
-            }),
+      catch: toFrameworkProtocolError,
     });
     if (result.isErr()) {
       for (const { proxy, existedBeforeRevive } of context.revived.values()) {
@@ -119,9 +111,10 @@ export class PayloadProcessor {
 
   // ===== Conversion transactions: mutable tracking belongs to the payload, not the processor =====
 
+  /** Run one transactional encoding pass and roll back IDs on conversion failure. */
   private safeSanitizeWithContext(
     args: any[],
-    context: SanitizeContext,
+    context: Omit<SanitizeContext, "createdResourceIds">,
   ): Result<any[], Error> {
     const createdResourceIds: string[] = [];
     const result = Result.try({
@@ -129,13 +122,7 @@ export class PayloadProcessor {
         const encoded = this.sanitize(args, { ...context, createdResourceIds });
         return Array.isArray(encoded) ? encoded : [encoded];
       },
-      catch: (error) =>
-        error instanceof Error
-          ? error
-          : new UnsupportedTypeError(
-              `Nexus serialization error: ${String(error)}`,
-              { ...context },
-            ),
+      catch: toFrameworkProtocolError,
     });
     // Encoding is transactional until a message is accepted by the connection.
     if (result.isErr())
@@ -144,74 +131,80 @@ export class PayloadProcessor {
     return result;
   }
 
+  /** Recursively encode values and allocate session-owned capability IDs. */
   private sanitize(value: any, context: SanitizeContext): any {
-    if (isRefWrapper(value)) {
+    if (typeof value === "function" || isRefWrapper(value)) {
       const id = this.resourceManager.registerLocalResource(
-        value.target,
+        typeof value === "function" ? value : value.target,
         context.targetConnectionId,
-        LocalResourceType.OBJECT,
         context.serviceName || undefined,
         context.serviceName ? context.servicePolicy : undefined,
       );
-      context.createdResourceIds?.push(id);
-      return new Placeholder(PlaceholderType.RESOURCE, id).toString();
+      context.createdResourceIds.push(id);
+      return Placeholder.encode(PlaceholderType.RESOURCE, id);
     }
-    const type = getValueType(value);
-    switch (type) {
-      case ValueType.PRIMITIVE:
-        if (value === undefined)
-          return new Placeholder(PlaceholderType.UNDEFINED).toString();
-        if (
-          typeof value === "string" &&
-          (value.startsWith(PLACEHOLDER_PREFIX) ||
-            value.startsWith(ESCAPE_CHAR))
-        )
-          return `${ESCAPE_CHAR}${value}`;
-        return value;
-      case ValueType.ARRAY:
-        return value.map((item: any) => this.sanitize(item, context));
-      case ValueType.PLAIN_OBJECT: {
-        const result: Record<string, any> = {};
-        for (const key in value)
-          if (Object.prototype.hasOwnProperty.call(value, key))
-            result[key] = this.sanitize(value[key], context);
-        return result;
-      }
-      default: {
-        const handler = SANITIZER_TABLE_CONFIG.get(type);
-        if (handler) return handler(this, value, context).toString();
-        throw new UnsupportedTypeError(
-          `Nexus serialization error: Unsupported type "${typeof value}"`,
-          { valueType: typeof value },
-        );
-      }
+    if (value === undefined)
+      return Placeholder.encode(PlaceholderType.UNDEFINED);
+    if (typeof value === "string")
+      return value.startsWith(PLACEHOLDER_PREFIX) ||
+        value.startsWith(ESCAPE_CHAR)
+        ? ESCAPE_CHAR + value
+        : value;
+    if (typeof value === "bigint")
+      return Placeholder.encode(PlaceholderType.BIGINT, value.toString());
+    if (value instanceof Map)
+      return Placeholder.encode(
+        PlaceholderType.MAP,
+        JSON.stringify([...value]),
+      );
+    if (value instanceof Set)
+      return Placeholder.encode(
+        PlaceholderType.SET,
+        JSON.stringify([...value]),
+      );
+    if (Array.isArray(value))
+      return value.map((item) => this.sanitize(item, context));
+    if (value !== null && typeof value === "object") {
+      const result: Record<string, any> = Object.create(null);
+      for (const key of Object.keys(value))
+        result[key] = this.sanitize(value[key], context);
+      return result;
     }
+    return value;
   }
 
+  /** Recursively decode placeholders, sharing identities within one payload. */
   private revive(value: any, context: RevivalContext): any {
     if (typeof value === "string" && value.startsWith(ESCAPE_CHAR))
       return value.substring(ESCAPE_CHAR.length);
     const placeholder = Placeholder.fromString(value);
     if (placeholder) {
-      const handler = REVIVER_TABLE_CONFIG.get(placeholder.type);
-      if (!handler) {
+      if (placeholder.type !== PlaceholderType.RESOURCE) {
+        const handler = REVIVER_TABLE_CONFIG.get(placeholder.type);
+        if (handler) return handler(placeholder.payload!);
         this.logger.warn(
           `No reviver handler for placeholder type "${placeholder.type}". Returning as is.`,
           placeholder,
         );
         return value;
       }
-      if (placeholder.type !== PlaceholderType.RESOURCE)
-        return handler(this, placeholder, context);
+      if (!placeholder.payload)
+        throw new NexusProtocolError(
+          "Resource placeholder requires a non-empty ID.",
+        );
       // One payload can repeat an identity; keep one facade and one rollback entry.
-      const identity = `${context.sourceConnectionId}\u0000${placeholder.payload}`;
+      const identity = placeholder.payload;
       const previous = context.revived.get(identity);
       if (previous) return previous.proxy;
       const existedBeforeRevive = this.resourceManager.hasRemoteProxy(
-        placeholder.payload!,
+        identity,
         context.sourceConnectionId,
       );
-      const proxy = handler(this, placeholder, context);
+      const proxy = this.proxyFactory.createRemoteResourceProxy(
+        identity,
+        context.sourceConnectionId,
+        context.callTimeout,
+      );
       context.revived.set(identity, { proxy, existedBeforeRevive });
       return proxy;
     }
@@ -220,15 +213,15 @@ export class PayloadProcessor {
     if (value !== null && typeof value === "object") {
       // Preserve null-prototype revival: a wire __proto__ key must stay ordinary data.
       const result: Record<string, any> = Object.create(null);
-      for (const key in value)
-        if (Object.prototype.hasOwnProperty.call(value, key))
-          result[key] = this.revive(value[key], context);
+      for (const key of Object.keys(value))
+        result[key] = this.revive(value[key], context);
       return result;
     }
     return value;
   }
 }
 
+/** Collect resource placeholders so an unaccepted payload can release its IDs. */
 function collectResourceIds(
   value: unknown,
   ids = new Set<string>(),

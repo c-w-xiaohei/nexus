@@ -1,8 +1,5 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
-import {
-  NexusEndpointConnectError,
-  NexusEndpointListenError,
-} from "@nexus-js/core";
+import { NexusEndpointConnectError } from "@nexus-js/core";
 import type {
   ChromeAdapterModel,
   ChromeConnectionTarget,
@@ -32,23 +29,6 @@ export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
       target.kind === "background" &&
       matchesChromeTarget(target, contextMeta, connectionMeta)
     );
-  }
-
-  /**
-   * UI clients typically don't listen for connections
-   */
-  listen?(_onConnect: (port: IPort, meta: ChromeConnectionMeta) => void): void {
-    try {
-      console.warn(
-        "UIClientEndpoint.listen is not commonly used for this context.",
-      );
-      // If future special requirements arise, chrome.runtime.onConnect.addListener can be added here
-    } catch (error) {
-      throw new NexusEndpointListenError(
-        `Failed to start listening for connections: ${error instanceof Error ? error.message : String(error)}`,
-        { originalError: error },
-      );
-    }
   }
 
   /**

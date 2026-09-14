@@ -22,3 +22,4 @@ read [Core concepts](/nexus/docs/concepts/).
 - Forward services between graphs: [Relay](/nexus/docs/relay/).
 - Synchronize state: [Nexus State](/nexus/docs/state/).
 - Test application code: [Testing](/nexus/docs/testing/).
+- Migrate to Core 2.0 alpha: [Migration](/nexus/docs/migrations/2.0-alpha/).

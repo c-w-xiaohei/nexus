@@ -73,7 +73,7 @@ const childConfig = usingIframeChild({
   frameId,
   parentOrigin: HOST_ORIGIN,
   nonce: frameNonce(frameId),
-  heartbeat: { intervalMs: 100, maxMisses: 2 },
+  heartbeat: { intervalMs: 1_000, maxMisses: 3 },
 });
 const child = new Nexus<IframeAdapterModel>().configure({
   ...childConfig,

@@ -14,7 +14,7 @@ export const daemonTarget = {
   appId: "example-app",
 } satisfies NodeIpcConnectionTarget;
 
-// This shared contract has no default target and is usable by another model.
+// This shared target-free contract is usable by another model.
 export const EchoToken = new Token<EchoService>("example-app:echo");
 ```
 
@@ -40,7 +40,8 @@ For function/object style, use `daemonNexus.provide(EchoToken, echoService)`.
 
 ## Client
 
-Use `nexus.create(EchoToken)` when the Token or node-ipc endpoint `defaultTarget` supplies the daemon target.
+Use `nexus.connect({ target })` with the daemon's exact target, then
+`connection.get(EchoToken)`.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -49,21 +50,26 @@ import { EchoToken } from "./shared";
 
 usingNodeIpcClient({
   appId: "example-app",
-  defaultTarget: daemonTarget,
 });
 
-const echo = await nexus.create(EchoToken);
+const connection = await nexus.connect({
+  target: { context: "node-ipc-daemon", appId: "example-app" },
+});
+const echo = connection.get(EchoToken);
 ```
 
 Use explicit targets for debugging or multiple daemon topologies.
 
 ```ts
-const echo = await nexus.create(EchoToken, {
+const connection = await nexus.connect({
   target: daemonTarget,
 });
+const echo = connection.get(EchoToken);
 ```
 
-This works because core resolves `create(Token)` through the Token or endpoint `defaultTarget`. `select(EchoToken, { where, wait })` only chooses an already available provider and never opens a socket.
+Targetless `connect({ where, timeout, signal })` waits for one existing ready
+connection and never opens a socket or discovers a provider. Use `canConnect` and
+`canCall` for authorization.
 
 ## Authorization
 

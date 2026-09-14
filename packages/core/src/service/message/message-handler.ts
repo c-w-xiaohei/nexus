@@ -12,6 +12,12 @@ import type { Engine } from "../engine";
 import type { ConnectionManager } from "@/connection/connection-manager";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { toSerializedError } from "@/utils/error";
+import {
+  NexusError,
+  NexusResourceError,
+  serializeFrameworkError,
+  toFrameworkProtocolError,
+} from "@/errors";
 import type { PayloadProcessor } from "../payload/payload-processor";
 import type { PendingCallManager } from "../pending-call-manager";
 import type { ResourceManager } from "../resource-manager";
@@ -20,7 +26,6 @@ import {
   isServiceWithHooks,
   SERVICE_INVOKE_START,
   SERVICE_INVOKE_END,
-  type ServiceInvocationHooks,
 } from "../service-invocation-hooks";
 
 type Request = GetMessage | SetMessage | ApplyMessage;
@@ -30,30 +35,30 @@ type AuthorizedCall<M extends AdapterModel> = {
 };
 type InvocationTarget = { root: any; target: any; parent: any };
 
-const toError = (error: unknown): Error =>
-  error instanceof Error ? error : new Error(String(error));
-const dangerousPathKeys = new Set(["__proto__", "prototype", "constructor"]);
-
-class MessageResourceError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly context?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = "MessageResourceError";
+const toError = (error: unknown): Error => {
+  try {
+    if (error instanceof Error) return error;
+  } catch {
+    /* Untrusted thrown value. */
   }
-}
+  const serialized = toSerializedError(error);
+  return Object.assign(new Error(serialized.message), {
+    name: serialized.name,
+    code: serialized.code,
+  });
+};
+const dangerousPathKeys = new Set(["__proto__", "prototype", "constructor"]);
 
 /** Owns incoming RPC processing for one Engine; dependencies and methods are shared across requests. */
 export class MessageHandler<M extends AdapterModel> {
+  /** Bind request authorization, payload conversion, and response ownership. */
   constructor(
     private readonly context: {
       safeSendMessage: Engine<M>["safeSendMessage"];
       dispatchRelease: Engine<M>["dispatchRelease"];
       pendingCalls: Pick<
         PendingCallManager,
-        "handleResponse" | "canHandleResponse"
+        "handleResponse" | "canHandleResponse" | "getCallTimeout"
       >;
       resourceManager: ResourceManager;
       payloadProcessor: PayloadProcessor;
@@ -92,11 +97,17 @@ export class MessageHandler<M extends AdapterModel> {
             );
             break;
           }
-          const revived = payload.safeRevive([message.result], source);
+          const revived = payload.safeRevive(
+            [message.result],
+            source,
+            pending.getCallTimeout(message.id, source),
+          );
           pending.handleResponse(
             message.id,
             revived.isOk() ? revived.value[0] : null,
-            revived.isErr() ? toSerializedError(revived.error) : null,
+            revived.isErr()
+              ? serializeFrameworkError(toFrameworkProtocolError(revived.error))
+              : null,
             source,
           );
           break;
@@ -136,8 +147,10 @@ export class MessageHandler<M extends AdapterModel> {
     source: string,
   ): Promise<Result<void, Error>> {
     let encoded: Result<any[], Error>;
+    let frameworkFailure = false;
     try {
       encoded = await this.prepareReply(message, source);
+      frameworkFailure = encoded.isErr() && encoded.error instanceof NexusError;
     } catch (error) {
       encoded = Result.err(toError(error));
     }
@@ -145,7 +158,9 @@ export class MessageHandler<M extends AdapterModel> {
       ? {
           type: NexusMessageType.ERR,
           id: message.id,
-          error: toSerializedError(encoded.error),
+          error: frameworkFailure
+            ? serializeFrameworkError(encoded.error as NexusError)
+            : toSerializedError(encoded.error),
         }
       : {
           type: NexusMessageType.RES,
@@ -190,10 +205,10 @@ export class MessageHandler<M extends AdapterModel> {
         break;
       case NexusMessageType.SET: {
         const revived = payload.safeRevive([message.value], source);
-        if (revived.isErr()) return revived;
+        if (revived.isErr()) return revived.mapError(toFrameworkProtocolError);
         if (!propertyPath.length)
           return Result.err(
-            new MessageResourceError(
+            new NexusResourceError(
               "SET requires a path. Cannot set a root resource or service directly.",
               "E_SET_ON_ROOT",
               { resourceId: message.resourceId, path: message.path },
@@ -216,12 +231,14 @@ export class MessageHandler<M extends AdapterModel> {
       }
     }
     // The registration may have changed while we awaited; never reload the authorized policy.
-    return payload.safeSanitizeFromService(
-      [result],
-      source,
-      authorized.value.serviceName,
-      authorized.value.servicePolicy,
-    );
+    return payload
+      .safeSanitizeFromService(
+        [result],
+        source,
+        authorized.value.serviceName,
+        authorized.value.servicePolicy,
+      )
+      .mapError(toFrameworkProtocolError);
   }
 
   /**
@@ -237,7 +254,7 @@ export class MessageHandler<M extends AdapterModel> {
   ): Result<any, Error> {
     if (typeof target !== "function")
       return Result.err(
-        new MessageResourceError(
+        new NexusResourceError(
           `Target at path [${[message.resourceId, ...message.path].join(".")}] is not a function.`,
           "E_TARGET_NOT_CALLABLE",
           { resourceId: message.resourceId, path: message.path },
@@ -248,14 +265,8 @@ export class MessageHandler<M extends AdapterModel> {
       : this.context.resourceManager.getExposedService(serviceName);
     // Preserve short-circuit lookup: hook getters may execute application code.
     const owner = [service, root, parent ?? target].find(isServiceWithHooks);
-    const start = getServiceInvocationHook(
-      owner,
-      SERVICE_INVOKE_START,
-    ) as ServiceInvocationHooks[typeof SERVICE_INVOKE_START];
-    const end = getServiceInvocationHook(
-      owner,
-      SERVICE_INVOKE_END,
-    ) as ServiceInvocationHooks[typeof SERVICE_INVOKE_END];
+    const start = getServiceInvocationHook(owner, SERVICE_INVOKE_START);
+    const end = getServiceInvocationHook(owner, SERVICE_INVOKE_END);
     const auth = start
       ? this.context.getConnectionAuthContext?.(source)
       : undefined;
@@ -270,7 +281,7 @@ export class MessageHandler<M extends AdapterModel> {
         message.args,
         source,
       );
-      if (args.isErr()) return args;
+      if (args.isErr()) return args.mapError(toFrameworkProtocolError);
       return Result.ok(
         Reflect.apply(
           target,
@@ -307,7 +318,7 @@ export class MessageHandler<M extends AdapterModel> {
         message.invocationServiceName !== serviceName
       ) {
         return Result.err(
-          new MessageResourceError(
+          new NexusResourceError(
             `Resource invocation service mismatch for resource "${message.resourceId}".`,
             "E_INVOCATION_SERVICE_MISMATCH",
             {
@@ -334,7 +345,7 @@ export class MessageHandler<M extends AdapterModel> {
     const canCall = policy?.canCall;
     if (!canCall) return Result.ok(authorized);
     const denied = () =>
-      new MessageResourceError(
+      new NexusResourceError(
         `Connection "${source}" is not authorized to call service "${serviceName}".`,
         "E_AUTH_CALL_DENIED",
         { sourceConnectionId: source, path: message.path },
@@ -382,7 +393,7 @@ export class MessageHandler<M extends AdapterModel> {
     } else {
       if (typeof path[0] !== "string")
         return Result.err(
-          new MessageResourceError(
+          new NexusResourceError(
             "Invalid path for service call. Path must start with a service name.",
             "E_INVALID_SERVICE_PATH",
             { path },
@@ -392,7 +403,7 @@ export class MessageHandler<M extends AdapterModel> {
     }
     if (root === undefined)
       return Result.err(
-        new MessageResourceError(
+        new NexusResourceError(
           `Target resource or service "${resourceId ?? path[0]}" not found.`,
           "E_RESOURCE_NOT_FOUND",
           { resourceId, path },
@@ -414,7 +425,7 @@ export class MessageHandler<M extends AdapterModel> {
     const resource = this.context.resourceManager.getLocalResource(resourceId);
     if (!resource)
       return Result.err(
-        new MessageResourceError(
+        new NexusResourceError(
           `Local resource with ID "${resourceId}" not found.`,
           "E_RESOURCE_NOT_FOUND",
           { resourceId },
@@ -422,7 +433,7 @@ export class MessageHandler<M extends AdapterModel> {
       );
     if (resource.ownerConnectionId !== source)
       return Result.err(
-        new MessageResourceError(
+        new NexusResourceError(
           `Connection "${source}" is not authorized to access resource "${resourceId}".`,
           "E_RESOURCE_ACCESS_DENIED",
           { sourceConnectionId: source, resourceId },
@@ -432,6 +443,7 @@ export class MessageHandler<M extends AdapterModel> {
   }
 }
 
+/** Reject prototype-sensitive path segments before touching application objects. */
 function validatePath(path: readonly (string | number)[]): Result<void, Error> {
   const dangerous = path.find(
     (key) => typeof key === "string" && dangerousPathKeys.has(key),
@@ -439,7 +451,7 @@ function validatePath(path: readonly (string | number)[]): Result<void, Error> {
   return dangerous === undefined
     ? Result.ok(undefined)
     : Result.err(
-        new MessageResourceError(
+        new NexusResourceError(
           `Invalid RPC path. Segment "${dangerous}" is not allowed.`,
           "E_INVALID_SERVICE_PATH",
           { path },

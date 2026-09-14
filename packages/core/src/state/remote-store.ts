@@ -38,6 +38,7 @@ export function createRemoteStore<Store extends object>(
   let initialState: StoreData<Store> | null = null;
   let actions = {} as RemoteActions<Store>;
   let failure: Failure | null = null;
+  /** Identify terminal mirrors so late callbacks can be reclaimed immediately. */
   const isTerminal = () => {
     const { type } = mirror.getState().status;
     return type !== "ready" && type !== "initializing";
@@ -45,6 +46,7 @@ export function createRemoteStore<Store extends object>(
 
   // ===== Lifecycle and ownership =====
 
+  /** Retain cleanup until initialization succeeds, or run it after termination. */
   const addCleanup = (stop: () => void) => {
     if (isTerminal()) {
       try {
@@ -54,7 +56,7 @@ export function createRemoteStore<Store extends object>(
       }
     } else cleanup.add(stop);
   };
-  /** First terminal cause wins; explicit destroy can still remove local observers. */
+  /** Commit a terminal status, clear pending events, and release upstream ownership. */
   const finish = (
     error: Failure,
     reason?: "target-changed" | "target-replaced" | "destroyed",
@@ -85,11 +87,13 @@ export function createRemoteStore<Store extends object>(
       }
     }
   };
+  /** Transition the mirror to stale when its selected upstream identity changes. */
   const stale = () =>
     finish(
       new NexusStoreDisconnectedError("Store target changed."),
       "target-changed",
     );
+  /** Return the first terminal failure or the required initialization error. */
   const safeReady = () => {
     if (failure) return Result.err(failure);
     if (mirror.getState().status.type === "ready") return Result.ok(undefined);
@@ -102,6 +106,7 @@ export function createRemoteStore<Store extends object>(
 
   // ===== Callback validation and snapshot ordering =====
 
+  /** Apply one validated event while enforcing instance and version ordering. */
   const safeApplyEvent = (event: SyncEnvelope<StoreData<Store>, Store>) => {
     const { status } = mirror.getState();
     if (isTerminal()) return safeReady();
@@ -143,11 +148,12 @@ export function createRemoteStore<Store extends object>(
 
   /** Throw-style callback boundary: reject its RPC when the mirror cannot apply it. */
   const onSync = (input: unknown): void => {
-    // Init carries ownership even after timeout. Reclaim it before rejecting ACK.
+    // Init carries ownership even after timeout. Register reclamation first.
+    /** Wrap callback parsing failures without exposing arbitrary thrown values. */
     const eventError = (cause: unknown) =>
       new NexusStoreProtocolError("State event failed.", { cause });
     const result = Result.gen(function* () {
-      const isInit = yield* Result.try({
+      yield* Result.try({
         try: () => {
           const isInit = !!(
             input &&
@@ -155,12 +161,12 @@ export function createRemoteStore<Store extends object>(
             (input as { type?: unknown }).type === "init"
           );
           if (isInit) addCleanup(() => disposeSubscription(input as object));
-          return isInit;
         },
         catch: eventError,
       });
-      if (isTerminal())
-        return isInit && failure ? Result.err(failure) : Result.ok(undefined);
+      // A late init is already being reclaimed by the cleanup registered above.
+      // A rejected callback would make the provider emit a second terminal event.
+      if (isTerminal()) return Result.ok(undefined);
       const parsed = yield* safeParsePayload(
         SyncEnvelopeSchema,
         input,
@@ -187,7 +193,15 @@ export function createRemoteStore<Store extends object>(
         catch: eventError,
       });
       initialState = baseline.state;
-      actions = event.actions;
+      // State exposes native Promises while the received capabilities may be
+      // lazy remote tasks. Awaiting here starts each task at the public boundary.
+      actions = Object.fromEntries(
+        Object.entries(event.actions).map(([name, action]) => [
+          name,
+          async (...args: unknown[]) =>
+            (action as (...args: unknown[]) => PromiseLike<unknown>)(...args),
+        ]),
+      ) as unknown as RemoteActions<Store>;
       const pending = buffered.splice(0);
       // Separate callback requests can arrive before init. A matching terminal
       // wins; otherwise install the baseline before replaying buffered updates.
@@ -210,21 +224,26 @@ export function createRemoteStore<Store extends object>(
   // ===== Public synchronous read handle =====
 
   const store: RemoteStore<Store> = {
+    /** Return action proxies backed by the latest accepted initialization event. */
     get actions() {
       return actions;
     },
+    /** Read the latest atomically published state or reject before initialization. */
     getState() {
       const state = mirror.getState().state;
       if (state === null)
         throw new NexusStoreDisconnectedError("Store is still initializing.");
       return state;
     },
+    /** Return the initial snapshot captured before buffered updates were replayed. */
     getInitialState() {
       if (initialState === null)
         throw new NexusStoreDisconnectedError("Store is still initializing.");
       return initialState;
     },
+    /** Return the current mirror lifecycle status without starting remote work. */
     getStatus: () => mirror.getState().status,
+    /** Subscribe to ready state changes and isolate local listener failures. */
     subscribe(listener) {
       const stop = mirror.subscribe((next, previous) => {
         if (
@@ -246,6 +265,7 @@ export function createRemoteStore<Store extends object>(
         stop();
       };
     },
+    /** Subscribe to status transitions without exposing the internal mirror. */
     subscribeStatus(listener) {
       if (mirror.getState().status.type === "destroyed") return () => undefined;
       const stop = mirror.subscribe((next, previous) => {
@@ -263,6 +283,7 @@ export function createRemoteStore<Store extends object>(
         stop();
       };
     },
+    /** Terminate the mirror, release remote capabilities, and remove local observers. */
     destroy() {
       if (mirror.getState().status.type === "destroyed") return;
       finish(
@@ -272,6 +293,7 @@ export function createRemoteStore<Store extends object>(
       for (const stop of localUnsubscribers) stop();
       localUnsubscribers.clear();
     },
+    /** Alias disposal to destroy for explicit resource-scope cleanup. */
     [Symbol.dispose]() {
       this.destroy();
     },
@@ -281,8 +303,10 @@ export function createRemoteStore<Store extends object>(
     onSync,
     safeReady,
     addCleanup,
+    /** Mark the mirror disconnected with an upstream-provided diagnostic message. */
     disconnect: (message: string) =>
       finish(new NexusStoreDisconnectedError(message)),
+    /** Mark the mirror stale after its selected upstream identity changes. */
     stale,
   };
 }

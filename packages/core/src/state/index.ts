@@ -28,7 +28,6 @@ export {
   connectNexusStore,
   safeConnectNexusStore,
   safeInvokeStoreAction,
-  type ConnectNexusStoreOptions,
   type SafeInvokeStoreActionError,
 } from "./connect-store.js";
 export { relayNexusStore } from "../relay/index.js";

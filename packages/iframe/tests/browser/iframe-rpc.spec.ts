@@ -142,7 +142,7 @@ test("calls a child Nexus service through a real iframe boundary", async ({
   ]);
 });
 
-test("select waits for a child connectTo provider without parent demand", async ({
+test("passive connect waits for a child startup connection without parent dialing", async ({
   page,
 }) => {
   let releaseChild: (() => void) | undefined;

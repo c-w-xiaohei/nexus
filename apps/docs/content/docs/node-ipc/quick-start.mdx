@@ -40,7 +40,7 @@ The daemon's peer identity is `NodeIpcContextMeta`; the client connects with an 
 
 ## 4. Configure The Client
 
-The client owns an outgoing endpoint. `defaultTarget` gives `create` an optional default daemon address.
+The client owns an outgoing endpoint. Connect with the daemon's exact address.
 
 ```ts
 import { nexus } from "@nexus-js/core";
@@ -49,25 +49,28 @@ import { EchoToken } from "./shared";
 
 usingNodeIpcClient({
   appId: "example-app",
-  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
 });
 
-const echo = await nexus.create(EchoToken);
+const connection = await nexus.connect({
+  target: { context: "node-ipc-daemon", appId: "example-app" },
+});
+const echo = connection.get(EchoToken);
 
 console.log(await echo.echo("hello"));
 ```
 
-`create(EchoToken)` uses the Token default and then client endpoint `defaultTarget`. If neither exists, it returns `E_TARGET_REQUIRED`. Keep an exact target while debugging or when several daemons are reachable:
+Pass `timeout` to bound acquisition and `callTimeout` to `get` to override the
+runtime call default:
 
 ```ts
-const echo = await nexus.create(EchoToken, {
+const connection = await nexus.connect({
   target: {
     context: "node-ipc-daemon",
     appId: "example-app",
   },
   timeout: 30_000,
-  callTimeout: 5_000,
 });
+const echo = connection.get(EchoToken, { callTimeout: 5_000 });
 ```
 
 ## Optional Workflows
@@ -88,4 +91,4 @@ If the first call fails, check these in order:
 4. If `authToken` is configured, do both sides use the same non-empty token?
 5. Does `policy.canConnect` allow the client?
 6. Does `policy.canCall` allow the service name and operation?
-7. Are you reusing an old proxy after daemon restart? Create a fresh proxy.
+7. Are you reusing an old proxy after daemon restart? Reconnect and get a fresh proxy.

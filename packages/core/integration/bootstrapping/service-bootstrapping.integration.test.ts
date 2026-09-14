@@ -1,7 +1,7 @@
 /**
  * Simulates service bootstrapping at startup where decorators register providers,
- * factories provide dependency wiring, and TokenSpace namespaces define runtime
- * service identity and targeting defaults before RPC traffic starts.
+ * factories provide dependency wiring and Tokens define service identity before
+ * RPC traffic starts.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,7 +12,6 @@ import type {
   Comment,
   ICommentService,
   ISettingsService,
-  IUserService,
 } from "../fixtures";
 
 describe("Nexus L4 Integration: Service Bootstrapping", () => {
@@ -134,65 +133,5 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
     expect(comments).toEqual([
       { id: "1", user: "test-user", body: "Test comment" },
     ]);
-  });
-
-  it("should support TokenSpace for structured token namespaces", async () => {
-    const { TokenSpace } = await import("../../src/api/token-space");
-
-    const app = new TokenSpace<AppAdapterModel>({ name: "app" });
-
-    const background = app.space("background", {
-      defaultTarget: {
-        context: "background",
-      },
-    });
-
-    const contentScript = app.space("content-script", {
-      defaultTarget: {
-        context: "content-script",
-      },
-    });
-
-    const BackgroundSettingsToken =
-      background.token<ISettingsService>("settings");
-    const ContentCommentToken =
-      contentScript.token<ICommentService>("comments");
-
-    expect(BackgroundSettingsToken.id).toBe("app:background:settings");
-    expect(ContentCommentToken.id).toBe("app:content-script:comments");
-
-    expect(BackgroundSettingsToken.defaultTarget).toEqual({
-      context: "background",
-    });
-    expect(ContentCommentToken.defaultTarget).toEqual({
-      context: "content-script",
-    });
-  });
-
-  it("should support nested TokenSpace configuration inheritance", async () => {
-    const { TokenSpace } = await import("../../src/api/token-space");
-
-    const company = new TokenSpace<AppAdapterModel>({
-      name: "company",
-      defaultTarget: {
-        context: "background",
-      },
-    });
-
-    const product = company.space("product");
-    const backend = product.space("backend");
-    const microservices = backend.space("microservices", {
-      defaultTarget: {
-        context: "content-script",
-      },
-    });
-    const auth = microservices.space("auth");
-
-    const UserToken = auth.token<IUserService>("profile");
-
-    expect(UserToken.id).toBe(
-      "company:product:backend:microservices:auth:profile",
-    );
-    expect(UserToken.defaultTarget).toEqual({ context: "content-script" });
   });
 });

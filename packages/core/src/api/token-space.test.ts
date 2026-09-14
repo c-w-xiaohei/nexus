@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Token } from "./token";
+import { z } from "zod";
 import { TokenSpace } from "./token-space";
 
 type Model = {
@@ -8,45 +8,32 @@ type Model = {
   connectionTarget: { id: string };
 };
 
-describe("TokenSpace defaultTarget", () => {
-  it("inherits a plain-object defaultTarget", () => {
-    const space = new TokenSpace<Model>({
-      name: "app",
-      defaultTarget: { id: "host" },
-    });
-    expect(space.space("child").defaultTarget).toEqual({ id: "host" });
+describe("TokenSpace", () => {
+  it("builds qualified service names through child namespaces", () => {
+    const app = new TokenSpace<Model>({ name: "app" });
+    const service = app.space("services").token<{ read(): string }>("catalog");
+
+    expect(app.name).toBe("app");
+    expect(app.fullPath).toBe("app");
+    expect(service.id).toBe("app:services:catalog");
   });
 
-  it("rejects null, arrays, and non-plain targets", () => {
-    expect(() => new Token("null", { defaultTarget: null as never })).toThrow(
-      /plain object/,
-    );
-    expect(() => new Token("array", { defaultTarget: [] as never })).toThrow(
-      /plain object/,
-    );
-    expect(
-      () => new Token("date", { defaultTarget: new Date() as never }),
-    ).toThrow(/plain object/);
-    expect(
-      () =>
-        new TokenSpace<Model>({ name: "app", defaultTarget: null as never }),
-    ).toThrow(/plain object/);
-  });
-
-  it("accepts exact plain target objects", () => {
-    expect(
-      new Token<Model>("service", { defaultTarget: { id: "host" } } as never),
-    ).toBeDefined();
-  });
-
-  it("creates State tokens from the inherited namespace and target", () => {
-    const space = new TokenSpace<Model>({
-      name: "app",
-      defaultTarget: { id: "host" },
-    });
-    const token = space.space("state").storeToken<{ count: number }>("counter");
+  it("creates validated State tokens without selecting a connection", () => {
+    const validation = { state: z.object({ count: z.number() }) };
+    const token = new TokenSpace<Model>({ name: "app" })
+      .space("state")
+      .storeToken<{ count: number }>("counter", { validation });
 
     expect(token.id).toBe("app:state:counter");
-    expect(token.defaultTarget).toEqual({ id: "host" });
+    expect(token.validation).toBe(validation);
+  });
+
+  it("rejects empty or ambiguous namespace and token names", () => {
+    expect(() => new TokenSpace<Model>({ name: "" })).toThrow();
+    expect(() => new TokenSpace<Model>({ name: "app:invalid" })).toThrow();
+
+    const app = new TokenSpace<Model>({ name: "app" });
+    expect(() => app.token("" as never)).toThrow();
+    expect(() => app.space("invalid:name")).toThrow();
   });
 });

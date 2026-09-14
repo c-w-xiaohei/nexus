@@ -33,14 +33,12 @@ Keep adapter-level checks and core policy separate.
 
 Raw core handles are lifecycle-scoped.
 
-- `nexus.create(...)` returns a proxy bound to the resolved remote session.
+- `conn.get(...)` returns a proxy bound to that remote session.
 - `nexus.ref(...)` creates capabilities tied to the original connection scope after crossing the transport boundary.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
-- Recreate proxies and pass fresh refs after session replacement.
-- For an exact same-Core ordinary unicast root, `Nexus.getProxyStatus(proxy)` is a current immutable read and `Nexus.subscribeProxyStatus(proxy, listener)` synchronously sends that current snapshot after registration, then each future transition.
-- `active/stale` does not make a proxy unusable; `disconnected` is terminal for its local session. Neither status selects a replacement or authorizes recovery.
-- `Nexus.inspectProxy(proxy)` is a diagnostic-only snapshot. Its connection ID is opaque and runtime-local; do not use it as a routing input or behavior oracle.
-- `Nexus.release` and `nexus.release` are resource-only operations. Service proxies are not releasable, and legacy invalid release behavior is permissive rather than a validation contract.
+- Reconnect, get fresh proxies, and pass fresh refs after session replacement.
+- Observe session lifetime from the `Connection`: `onDisconnected` reports terminal closure, `nexus.onConnect` reports each ready session once, and `subscribeIdentity` reports the peer's full identity snapshot and updates. None selects a replacement or authorizes recovery.
+- `Nexus.release` and `nexus.release` are resource-only operations. Service proxies are not releasable, and `safeRelease` is the Result-returning form for expected release failures.
 - Local same-copy closure can use `instanceof NexusDisconnectedError`; cross-context or duplicate-copy code must check `error.code === "E_CONN_CLOSED"`.
 
 Relay-backed services and stores keep this lifecycle model explicit. Relay policy receives direct downstream caller identity from invocation context, and relay-backed store handles become terminal when the upstream source is disconnected, stale, or replaced. Create fresh downstream handles for fresh sessions.
@@ -53,7 +51,7 @@ For adapter docs:
 - Avoid redefining service interfaces inline in every adapter guide.
 - Keep examples minimal but type-correct.
 - Prefer explicit targets in first examples.
-- Explain default-target fallback only after the explicit version.
+- Do not document Token, TokenSpace, endpoint, or adapter default-target fallback.
 - State when a helper configures `nexus` directly versus returning config.
 - Show class-style service exposure with `@xxNexus.Expose(Token)` and function/object/helper provider exposure with `xxNexus.provide(...)`.
 

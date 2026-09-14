@@ -25,10 +25,10 @@ usingIframeChild({
 });
 ```
 
-Adapter helpers usually configure endpoint implementation, metadata, and an optional endpoint `defaultTarget`.
+Adapter helpers configure endpoint implementation and metadata. Application code supplies exact connection targets to `connect` or `connectMulticast`.
 
 Explicit `connectTo` targets configure one-shot startup dialing, independently of
-`defaultTarget`. Core starts them after listening, without waiting for a remote
+service acquisition. Core starts them after listening, without waiting for a remote
 Token or delaying `ready()`. Failures are logged through the Nexus logger; there
 is no automatic retry or reconnect. Do not infer startup targets from a default
 route or create a dummy service proxy just to connect.
@@ -105,7 +105,6 @@ const daemonTarget = {
 
 usingNodeIpcClient({
   appId: "example-app",
-  defaultTarget: daemonTarget,
 });
 ```
 
@@ -146,7 +145,7 @@ Layers apply left-to-right, and later layers win for the same domain.
 Domain-aware merge rules:
 
 - omitted fields keep previous layers
-- `endpoint.meta`, `endpoint.implementation`, `endpoint.defaultTarget`, and `endpoint.connectTo` are whole-field replacements when explicitly provided; `connectTo: []` disables inherited startup targets
+- `endpoint.meta`, `endpoint.implementation`, and `endpoint.connectTo` are whole-field replacements when explicitly provided; `connectTo: []` disables inherited startup targets
 - `policy` is a whole-field replacement when explicitly provided; omitted policy keeps previous layers
 - `policy: undefined` clears inherited policy when callers intentionally need to remove it
 - `providers` replace by `token.id`; the later provider replaces both service and policy

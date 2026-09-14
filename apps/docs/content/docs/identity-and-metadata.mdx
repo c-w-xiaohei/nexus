@@ -19,18 +19,15 @@ Use `ContextMeta` for:
 
 - product role and runtime context
 - application-level labels used by `where`
-- values used by a Token's `defaultTarget` when the adapter's target type intentionally overlaps them
 - policy decisions that explicitly accept peer-declared identity as their trust level
 
 Keep it small, serializable, and stable. Do not put secrets, mutable service state, or local adapter observations in it.
 
 Labels such as `groups` are ordinary application-defined `ContextMeta`, not a
-special core routing or authorization field. If your model defines
-`groups?: readonly string[]`, select with
-`where: (meta) => meta.groups?.includes("workers") === true`. Core still checks
-that each selected connection provides the requested Token. It does not maintain
-a separate group registry; identity updates affect future selections, not the
-membership of an already-bound multicast snapshot.
+special core routing or authorization field. Filter with
+`where: (meta) => meta.groups?.includes("workers") === true`. Identity updates
+can make a session newly eligible for `onConnect`, but never alter an existing
+`ConnectionCollection` snapshot.
 
 ## ConnectionMeta
 
@@ -71,12 +68,14 @@ Use `Nexus<AppModel>`, `TokenSpace<AppModel>`, and `IEndpoint<AppModel>` togethe
 
 ## Targeting Metadata
 
-`ConnectionTarget` is the adapter's exact connection input. `create` and `createMulticast` acquire targets asynchronously and bind the selected sessions. Neither changes the meaning of `ContextMeta`.
+`ConnectionTarget` is the adapter's exact connection input. `connect` and
+`connectMulticast` acquire targets asynchronously. Neither changes the meaning
+of `ContextMeta`.
 
 `where` receives each selected connection's peer-declared context identity and local adapter facts:
 
 ```ts
-const clients = await appNexus.selectMulticast(ClientToken, {
+const clients = await appNexus.connectMulticast({
   where: (contextMeta, connectionMeta) =>
     contextMeta.context === "client" &&
     contextMeta.clientId !== "admin" &&
@@ -84,7 +83,9 @@ const clients = await appNexus.selectMulticast(ClientToken, {
 });
 ```
 
-The target match and `where` predicate are strict AND conditions. `selectMulticast` binds a creation-time snapshot of currently available providers and never discovers or connects to a new provider. Call it again to select providers that appear later.
+The target match and `where` predicate are strict AND conditions. A targetless
+`connectMulticast` binds a current ready-connection snapshot and never discovers
+or connects to a new provider. Call it again to include later connections.
 
 ## Policy Trust Boundary
 
@@ -107,7 +108,7 @@ Treat `remoteIdentity` as peer-declared unless the adapter documents stronger ve
 
 ## Updating Identity
 
-Use `updateIdentity()` only for local endpoint identity changes that affect routing, policy, diagnostics, or lifecycle behavior. It does not mutate existing `ConnectionMeta`, change an existing session's target, or rebind old proxies.
+Use `updateIdentity()` only for local endpoint identity changes that affect routing, policy, diagnostics, or lifecycle behavior. It does not mutate existing `ConnectionMeta`, change an existing session's target, or rebind old proxies. Observe a peer's current and future complete identity with `connection.subscribeIdentity(listener)`; it does not deduplicate fields or turn updates into a second `onConnect` event.
 
 After session replacement, recreate proxies, references, and remote State handles. Discovery and replacement policy belong to the application.
 

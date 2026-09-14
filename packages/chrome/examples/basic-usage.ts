@@ -81,9 +81,11 @@ export async function setupContentScript() {
   contentNexus.provide(ContentNotificationToken, notificationService);
 
   // Get the background service
-  const tabService = await nexus.create(TabServiceToken, {
-    target: chromeTarget.background(),
-  });
+  const tabService = await nexus
+    .connect({
+      target: chromeTarget.background(),
+    })
+    .then((connection) => connection.get(TabServiceToken));
 
   // Use the service
   const currentTab = await tabService.getCurrentTab();
@@ -100,9 +102,11 @@ export async function setupPopup() {
   usingPopup();
 
   // Get the background service
-  const tabService = await nexus.create(TabServiceToken, {
-    target: chromeTarget.background(),
-  });
+  const tabService = await nexus
+    .connect({
+      target: chromeTarget.background(),
+    })
+    .then((connection) => connection.get(TabServiceToken));
 
   // Example: Execute script in current tab
   document
@@ -127,16 +131,15 @@ export async function setupPopup() {
 export async function notifyContentScripts() {
   usingBackgroundScript();
 
-  // Bind to the content-script providers available at selection time.
-  const contentScriptProxy = await nexus.selectMulticast(
-    ContentNotificationToken,
-    {
-      where: whereContentScript,
-    },
-  );
+  // Snapshot the content-script connections available at this moment.
+  const contentScriptResources = (
+    await nexus.connectMulticast({ where: whereContentScript })
+  ).get(ContentNotificationToken);
 
-  // This calls every provider captured by the selection snapshot.
-  await contentScriptProxy.notify(
-    "Multicast message to all selected content scripts!",
+  await Promise.all(
+    contentScriptResources.map(({ result }) => {
+      if (result.isErr()) throw result.error;
+      return result.value.notify("Message to all selected content scripts!");
+    }),
   );
 }

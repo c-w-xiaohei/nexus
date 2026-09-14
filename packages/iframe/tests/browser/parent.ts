@@ -32,6 +32,7 @@ const telemetry = {
 const childEchoServices = new Map<string, EchoService>();
 let connectToSelection: Promise<EchoService> | undefined;
 
+/** Observes real binary transport envelopes without intercepting their delivery. */
 function isBinaryDataEnvelope(data: unknown): boolean {
   if (!data || typeof data !== "object") return false;
   const envelope = data as {
@@ -58,6 +59,7 @@ window.addEventListener(
   { capture: true },
 );
 
+/** Resolves the fixture's exact iframe element used by adapter routing. */
 function getFrame(frameId: string) {
   const iframe = document.querySelector<HTMLIFrameElement>(
     `iframe[data-frame-id="${frameId}"]`,
@@ -117,29 +119,35 @@ for (const frameId of frameIds) {
   if (!connectToMode) iframe.src = iframe.dataset.src ?? "";
 }
 
+/** Acquires the explicitly addressed child and makes one observable remote call. */
 async function callChildEcho(frameId: string, value: string) {
-  const service = await parent.create(EchoToken, {
-    target: {
-      context: "iframe-child",
-      appId: "browser-app",
-      frameId,
-    },
-  });
-  const response = await service.echo(value);
-  telemetry.childCalls.push({ frameId, value });
-  return response;
-}
-
-async function callCachedChildEcho(frameId: string, value: string) {
-  let service = childEchoServices.get(frameId);
-  if (!service) {
-    service = await parent.create(EchoToken, {
+  const service = await parent
+    .connect({
       target: {
         context: "iframe-child",
         appId: "browser-app",
         frameId,
       },
-    });
+    })
+    .then((connection) => connection.get(EchoToken));
+  const response = await service.echo(value);
+  telemetry.childCalls.push({ frameId, value });
+  return response;
+}
+
+/** Reuses a session-bound proxy so reload tests can observe stale-session rejection. */
+async function callCachedChildEcho(frameId: string, value: string) {
+  let service = childEchoServices.get(frameId);
+  if (!service) {
+    service = await parent
+      .connect({
+        target: {
+          context: "iframe-child",
+          appId: "browser-app",
+          frameId,
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
     childEchoServices.set(frameId, service);
   }
   return service.echo(value);
@@ -158,15 +166,17 @@ function getTelemetry() {
 
 function selectConnectToChild() {
   telemetry.selectResolved = false;
-  connectToSelection = parent.select(EchoToken, {
-    where: (
-      contextMeta: IframeContextMeta,
-      connectionMeta: IframeConnectionMeta,
-    ) =>
-      contextMeta.context === "iframe-child" &&
-      connectionMeta.frameId === "alpha",
-    wait: { timeout: 5_000 },
-  });
+  connectToSelection = parent
+    .connect({
+      where: (
+        contextMeta: IframeContextMeta,
+        connectionMeta: IframeConnectionMeta,
+      ) =>
+        contextMeta.context === "iframe-child" &&
+        connectionMeta.frameId === "alpha",
+      timeout: 5_000,
+    })
+    .then((connection) => connection.get(EchoToken));
   void connectToSelection.then(
     () => {
       telemetry.selectResolved = true;

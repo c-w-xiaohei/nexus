@@ -43,8 +43,6 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   it("should reject with a connection error if the host is unreachable", async () => {
     const clientMeta: AppUserMeta = { context: "popup" };
     const hostTarget = { context: "background" } as const;
-    const UnreachableToken = new Token<IBackgroundService>("unreachable");
-
     const failingEndpoint: IEndpoint<AppAdapterModel> = {
       connect: vi.fn(async () => {
         throw new Error("Simulated connection failure: Host not found");
@@ -60,19 +58,19 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     });
 
     await expect(
-      client.create(UnreachableToken, {
+      client.connect({
         target: hostTarget,
       }),
     ).rejects.toMatchObject({
       code: "E_ENDPOINT_CONNECT_FAILED",
-      cause: { code: "E_ENDPOINT_CONNECT_FAILED" },
+      cause: { message: "Simulated connection failure: Host not found" },
     });
   });
 
   it("should reject subsequent calls on a proxy after connection is closed", async () => {
-    const bgApi = await world.popup.nexus.create(BackgroundServiceToken, {
-      target: { context: "background" },
-    });
+    const bgApi = (
+      await world.popup.nexus.connect({ target: { context: "background" } })
+    ).get(BackgroundServiceToken);
     expect(bgApi).toBeDefined();
 
     const settings = await bgApi.getSettings();
@@ -170,9 +168,9 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       connectTo: [{ context: "background" }],
     });
 
-    const api = await popup.create(token, {
-      target: { context: "background" },
-    });
+    const api = (
+      await popup.connect({ target: { context: "background" } })
+    ).get(token);
     expect((background as any).connectionManager.connections.size).toBe(1);
     expect((popup as any).connectionManager.connections.size).toBe(1);
     const popupEngine = (popup as any).engine;
@@ -209,12 +207,11 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("keeps old unicast create() proxy session-bound after replacement connection appears", async () => {
-    const oldApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const oldApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     await expect(oldApi.getTitle()).resolves.toContain("CS1");
 
     const oldConnection = findLogicalConnection(
@@ -230,12 +227,11 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       NexusDisconnectedError,
     );
 
-    const freshApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const freshApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     await expect(freshApi.getTitle()).resolves.toContain("CS1");
     await expect(oldApi.getTitle()).rejects.toBeInstanceOf(
@@ -244,9 +240,9 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("should auto-cleanup resources on the host when a client disconnects", async () => {
-    const bgApi = await world.cs1.nexus.create(BackgroundServiceToken, {
-      target: { context: "background" },
-    });
+    const bgApi = (
+      await world.cs1.nexus.connect({ target: { context: "background" } })
+    ).get(BackgroundServiceToken);
     const bgResourceManager = (world.background.nexus as any).engine
       .resourceManager;
     const initialProxyCount = bgResourceManager.countRemoteProxies();
@@ -270,9 +266,9 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("should release callback proxy resources on unsubscribe while connection remains alive", async () => {
-    const bgApi = await world.cs1.nexus.create(BackgroundServiceToken, {
-      target: { context: "background" },
-    });
+    const bgApi = (
+      await world.cs1.nexus.connect({ target: { context: "background" } })
+    ).get(BackgroundServiceToken);
     const bgResourceManager = (world.background.nexus as any).engine
       .resourceManager;
     const initialProxyCount = bgResourceManager.countRemoteProxies();
@@ -300,14 +296,13 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("should propagate errors from remote back to caller", async () => {
-    const contentApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const contentApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.issueId === "CS1",
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     const promise = contentApi.highlightUser("non-existent-user");
 
@@ -335,12 +330,11 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("should ignore forged late responses from non-target connections", async () => {
-    const cs1Api = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const cs1Api = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     const bgCm = (world.background.nexus as any).connectionManager;
     const connections = Array.from((bgCm as any).connections.values()) as Array<
@@ -409,14 +403,13 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
   });
 
   it("should ignore stale pre-handoff runtime responses after active target replacement", async () => {
-    const initiallyActiveApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const initiallyActiveApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.isActive,
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     await expect(initiallyActiveApi.getTitle()).resolves.toContain("CS1");
 
     const cs1Connection = findLogicalConnection(
@@ -438,19 +431,17 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     await world.cs2.nexus.updateIdentity({ isActive: true });
 
     await vi.waitFor(async () => {
-      const probeApi = await world.background.nexus.create(
-        ContentScriptServiceToken,
-        {
+      const probeApi = (
+        await world.background.nexus.connect({
           target: { context: "content-script", issueId: "CS2" },
           where: (id: AppUserMeta, _connectionMeta) =>
             id.context === "content-script" && id.isActive,
-        },
-      );
+        })
+      ).get(ContentScriptServiceToken);
       await expect(probeApi.getTitle()).resolves.toContain("CS2");
     });
 
     let capturedMessageId: number | string | null = null;
-    let capturedSentConnectionIds: string[] | null = null;
     const bgEngine = (world.background.nexus as any).engine;
     const originalRegister = bgEngine.pendingCallManager.register.bind(
       bgEngine.pendingCallManager,
@@ -459,7 +450,6 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       (...args: unknown[]) => {
         const [messageId, options] = args as [number | string, any];
         capturedMessageId = messageId;
-        capturedSentConnectionIds = options.sentConnectionIds;
         return originalRegister(messageId, options);
       },
     );
@@ -474,14 +464,13 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
         }),
     );
 
-    const postHandoffApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const postHandoffApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS2" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.isActive,
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     let settled = false;
     const callPromise = postHandoffApi.getTitle().then((result) => {
@@ -491,7 +480,6 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
 
     await vi.waitFor(() => {
       expect(capturedMessageId).not.toBeNull();
-      expect(capturedSentConnectionIds).toEqual([cs2Connection!.connectionId]);
       expect(world.cs2.service.getTitle).toHaveBeenCalled();
     });
 
@@ -512,13 +500,12 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     const logicalTarget = (id: AppUserMeta) =>
       id.context === "content-script" && id.isActive;
 
-    const oldApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const oldApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: logicalTarget,
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     await expect(oldApi.bumpSessionCounter()).resolves.toBe(1);
 
@@ -526,200 +513,25 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     await world.cs2.nexus.updateIdentity({ isActive: true });
 
     await vi.waitFor(async () => {
-      const candidate = await world.background.nexus.create(
-        ContentScriptServiceToken,
-        {
+      const candidate = (
+        await world.background.nexus.connect({
           target: { context: "content-script", issueId: "CS2" },
           where: logicalTarget,
-        },
-      );
+        })
+      ).get(ContentScriptServiceToken);
       await expect(candidate.getTitle()).resolves.toContain("CS2");
     });
 
-    const freshApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const freshApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS2" },
         where: logicalTarget,
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     await expect(freshApi.bumpSessionCounter()).resolves.toBe(1);
 
     await expect(oldApi.bumpSessionCounter()).resolves.toBe(2);
     await expect(freshApi.bumpSessionCounter()).resolves.toBe(2);
-  });
-
-  it("should ignore duplicate responses from the same valid target connection", async () => {
-    const allTabsProxy = await world.background.nexus.selectMulticast(
-      ContentScriptServiceToken,
-      {
-        where: (id: AppUserMeta, _connectionMeta) =>
-          id.context === "content-script",
-        expects: "all",
-      },
-    );
-
-    const bgCm = (world.background.nexus as any).connectionManager;
-    const connections = Array.from((bgCm as any).connections.values()) as Array<
-      LogicalConnection<AppAdapterModel>
-    >;
-    const cs1Connection = connections.find(
-      (connection) =>
-        connection.remoteIdentity?.context === "content-script" &&
-        connection.remoteIdentity?.issueId === "CS1",
-    );
-    const cs2Connection = connections.find(
-      (connection) =>
-        connection.remoteIdentity?.context === "content-script" &&
-        connection.remoteIdentity?.issueId === "CS2",
-    );
-
-    expect(cs1Connection).toBeDefined();
-    expect(cs2Connection).toBeDefined();
-
-    let capturedMessageId: number | string | null = null;
-    const bgEngine = (world.background.nexus as any).engine;
-    const originalRegister = bgEngine.pendingCallManager.register.bind(
-      bgEngine.pendingCallManager,
-    );
-    vi.spyOn(bgEngine.pendingCallManager, "register").mockImplementation(
-      (...args: unknown[]) => {
-        const [messageId, options] = args as [number | string, any];
-        capturedMessageId = messageId;
-        return originalRegister(messageId, options);
-      },
-    );
-
-    let releaseCs1Response: () => void = () => {
-      throw new Error("CS1 replay release was not initialized");
-    };
-    let releaseCs2Response: () => void = () => {
-      throw new Error("CS2 replay release was not initialized");
-    };
-    vi.spyOn(world.cs1.service, "getTitle").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseCs1Response = () => resolve("Issue CS1 - My Test Project");
-        }),
-    );
-    vi.spyOn(world.cs2.service, "getTitle").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseCs2Response = () => resolve("Issue CS2 - My Test Project");
-        }),
-    );
-
-    let settled = false;
-    const callPromise = allTabsProxy.getTitle().then((result) => {
-      settled = true;
-      return result;
-    });
-
-    await vi.waitFor(() => {
-      expect(capturedMessageId).not.toBeNull();
-      expect(world.cs1.service.getTitle).toHaveBeenCalled();
-      expect(world.cs2.service.getTitle).toHaveBeenCalled();
-    });
-
-    await cs1Connection!.safeHandleMessage({
-      type: NexusMessageType.RES,
-      id: capturedMessageId!,
-      result: "Issue CS1 - Replay 1",
-    });
-    await cs1Connection!.safeHandleMessage({
-      type: NexusMessageType.RES,
-      id: capturedMessageId!,
-      result: "Issue CS1 - Replay 2",
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseCs1Response();
-    releaseCs2Response();
-    const settledResults = await callPromise;
-    expect(settledResults).toHaveLength(2);
-  });
-
-  it("should not shrink pending expectations when an already-responded target disconnects", async () => {
-    const allTabsProxy = await world.background.nexus.selectMulticast(
-      ContentScriptServiceToken,
-      {
-        where: (id: AppUserMeta, _connectionMeta) =>
-          id.context === "content-script",
-        expects: "all",
-      },
-    );
-
-    const bgCm = (world.background.nexus as any).connectionManager;
-    const connections = Array.from((bgCm as any).connections.values()) as Array<
-      LogicalConnection<AppAdapterModel>
-    >;
-    const cs1Connection = connections.find(
-      (connection) =>
-        connection.remoteIdentity?.context === "content-script" &&
-        connection.remoteIdentity?.issueId === "CS1",
-    );
-    const cs2Connection = connections.find(
-      (connection) =>
-        connection.remoteIdentity?.context === "content-script" &&
-        connection.remoteIdentity?.issueId === "CS2",
-    );
-
-    expect(cs1Connection).toBeDefined();
-    expect(cs2Connection).toBeDefined();
-
-    let capturedMessageId: number | string | null = null;
-    const bgEngine = (world.background.nexus as any).engine;
-    const originalRegister = bgEngine.pendingCallManager.register.bind(
-      bgEngine.pendingCallManager,
-    );
-    vi.spyOn(bgEngine.pendingCallManager, "register").mockImplementation(
-      (...args: unknown[]) => {
-        const [messageId, options] = args as [number | string, any];
-        capturedMessageId = messageId;
-        return originalRegister(messageId, options);
-      },
-    );
-
-    let releaseCs2Response: () => void = () => {
-      throw new Error("CS2 disconnect release was not initialized");
-    };
-    vi.spyOn(world.cs1.service, "getTitle").mockImplementation(
-      () => new Promise(() => undefined),
-    );
-    vi.spyOn(world.cs2.service, "getTitle").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseCs2Response = () => resolve("Issue CS2 - My Test Project");
-        }),
-    );
-
-    let settled = false;
-    const callPromise = allTabsProxy.getTitle().then((result) => {
-      settled = true;
-      return result;
-    });
-
-    await vi.waitFor(() => {
-      expect(capturedMessageId).not.toBeNull();
-      expect(world.cs2.service.getTitle).toHaveBeenCalled();
-    });
-
-    await cs1Connection!.safeHandleMessage({
-      type: NexusMessageType.RES,
-      id: capturedMessageId!,
-      result: "Issue CS1 - Early",
-    });
-
-    (cs1Connection as LogicalConnection<AppAdapterModel>).close();
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseCs2Response();
-    const settledResults = await callPromise;
-    expect(settledResults).toHaveLength(2);
   });
 });

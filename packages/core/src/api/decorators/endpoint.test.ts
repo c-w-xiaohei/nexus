@@ -18,18 +18,6 @@ describe("@Endpoint", () => {
     );
   });
 
-  it.each([null, [], new Date()])(
-    "rejects non-plain defaultTarget %p before cloning",
-    (defaultTarget) => {
-      expect(() =>
-        Endpoint({
-          meta: { context: "invalid" },
-          defaultTarget: defaultTarget as never,
-        }),
-      ).toThrow(expect.objectContaining({ code: "E_USAGE_INVALID" }));
-    },
-  );
-
   it("registers endpoint with the decorator expression Nexus instance", () => {
     const first = new Nexus();
     const second = new Nexus();
@@ -56,7 +44,7 @@ describe("@Endpoint", () => {
     },
   );
 
-  it("carries decorated startup targets through bootstrap independently of the default target", async () => {
+  it("carries decorated startup targets through bootstrap", async () => {
     const instance = new Nexus();
     const connect = vi.fn(async () => {
       throw new Error("offline");
@@ -68,7 +56,6 @@ describe("@Endpoint", () => {
     instance.Endpoint({
       meta: { context: "child" },
       connectTo: [{ context: "owner" }],
-      defaultTarget: { context: "another-peer" },
     })(EndpointImpl, { kind: "class" } as ClassDecoratorContext);
     await instance.ready();
     expect(connect).toHaveBeenCalledExactlyOnceWith({ context: "owner" });

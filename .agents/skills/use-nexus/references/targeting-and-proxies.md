@@ -1,89 +1,70 @@
-# Targeting And Proxies
+# Connections And Proxies
 
-Create proxies from configured consumer contexts.
+Connect from configured consumer contexts, then get proxies from the session.
 
-Read `references/identity-and-metadata.md` when Token `defaultTarget`, exact targets, `where`, or identity replacement depend on `ContextMeta`; policy may also inspect adapter-provided `ConnectionMeta`.
+Read `references/identity-and-metadata.md` when exact targets, `where`, or
+identity observation depend on `ContextMeta`; policy may also inspect
+adapter-provided `ConnectionMeta`.
 
 ```ts
-import {
-  chromeTarget,
-  usingContentScript,
-  whereContentScript,
-} from "@nexus-js/chrome";
-import type { ChromeAdapterModel } from "@nexus-js/chrome";
-import type { NexusInstance } from "@nexus-js/core";
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
 import { SettingsToken } from "./shared";
 
-const chromeNexus: NexusInstance<ChromeAdapterModel> = usingContentScript();
-const abortController = new AbortController();
-const tabId = 7;
-const documentId = "doc-7";
+const chromeNexus = usingContentScript();
 
-const settings = await chromeNexus.create(SettingsToken, {
+const connection = await chromeNexus.connect({
   target: chromeTarget.background(),
 });
+const settings = connection.get(SettingsToken);
 
 await settings.saveSettings({ theme: "dark" });
 ```
 
-## Acquisition And Selection
+## Connection Acquisition
 
-Target resolution order for unicast proxy creation is:
+`connect({ target, where, timeout, signal })` reuses or opens one exact target.
+Without a target, it never dials and waits for exactly one existing matching
+session. `where(contextMeta, connectionMeta)` constrains an established peer; it
+does not discover or connect one. Active acquisition defaults to 30 seconds;
+pass a positive finite `timeout` to bound any acquisition, or `signal` to stop
+only this caller's wait.
 
-1. explicit `target` in `nexus.create(...)`
-2. Token `defaultTarget`
-3. endpoint `defaultTarget`
-
-`create` reuses or opens one exact target, waits for its provider, and binds the returned session. `timeout` and `signal` bound acquisition; `callTimeout` controls later RPC calls. It does not retry or discover contexts.
-
-When relying on a Token or endpoint `defaultTarget`, call `create(Token)` directly.
-
-```ts
-const settings = await chromeNexus.create(SettingsToken);
-```
-
-Use `select` when the caller wants an available provider without connecting:
-
-```ts
-const settings = await chromeNexus.select(SettingsToken, {
-  where: whereContentScript,
-  wait: { timeout: 30_000, signal: abortController.signal },
-  callTimeout: 5_000,
-});
-```
-
-With `wait`, selection can start before the provider context connects. For an
-owner A spawning child B, initialize A's listener first, spawn B, then select by
-its per-creation identity. Configure B's explicit `connectTo` to A. Selection
-wakes on availability changes and resolves only after handshake/authorization,
-Token publication, and `where` match. Without `wait`, no current match fails
-immediately. Group labels need no special API: use typed `contextMeta` in `where`.
+Use `conn.get(Token)` for a throwing synchronous catalog check, or
+`conn.safeGet(Token)` for a Result. Neither dials, waits for publication, or
+creates a remote business object.
 
 ## Exact Targets And Where
 
-Use adapter targets for one exact endpoint, `createMulticast` for explicit target acquisition, and `selectMulticast` for a current provider snapshot.
+Use adapter targets for one exact endpoint and `connectMulticast` for a fixed
+connection collection.
 
 ```ts
-const byTarget = await chromeNexus.create(SettingsToken, {
+import { usingBackgroundScript } from "@nexus-js/chrome";
+import { CaptureToken } from "./shared";
+
+const backgroundNexus = usingBackgroundScript();
+const tabId = 7;
+const documentId = "doc-7";
+const byTarget = await backgroundNexus.connect({
   target: chromeTarget.contentDocument({ tabId, documentId }),
 });
-
-const current = await chromeNexus.selectMulticast(SettingsToken, {
+const current = await backgroundNexus.connectMulticast({
   where: (contextMeta, _connectionMeta) =>
     contextMeta.context === "content-script" && contextMeta.isVisible === true,
 });
 
-const backgroundService = await chromeNexus.create(SettingsToken, {
-  target: chromeTarget.background(),
-});
+const capture = byTarget.get(CaptureToken);
 ```
 
-`target` and `targets` acquire exact endpoints and bind their sessions. `selectMulticast` snapshots available providers and never calls the adapter to connect. `where(contextMeta, connectionMeta)` filters remote identity and local adapter facts.
+`target` and `targets` acquire exact endpoints and bind their sessions. A
+targetless `connectMulticast` snapshots ready connections and never asks the
+adapter to connect. `where(contextMeta, connectionMeta)` filters remote identity
+and local adapter facts.
 
-For multicast, provide non-empty explicit targets:
+For strict multi-target acquisition, provide explicit targets:
 
 ```ts
-const selected = await chromeNexus.createMulticast(SettingsToken, {
+const selected = await backgroundNexus.connectMulticast({
   targets: [tabId, 8].map((tabId) =>
     chromeTarget.contentFrame({ tabId, frameId: 0 }),
   ),
@@ -91,65 +72,56 @@ const selected = await chromeNexus.createMulticast(SettingsToken, {
     contextMeta.context === "content-script",
 });
 
-const current = await chromeNexus.selectMulticast(SettingsToken, {
-  where: (contextMeta, _connectionMeta) =>
-    contextMeta.context === "content-script" && contextMeta.isVisible === true,
-});
+const resources = selected.get(CaptureToken);
 ```
 
-`createMulticast` requires a non-empty `targets` array; an empty array is `E_USAGE_INVALID`. It actively acquires every exact target under one acquisition deadline, deduplicates the accepted sessions stably, and fails the whole operation if any target cannot be acquired or does not provide the Token. It returns no partial multicast proxy. `selectMulticast` performs one ready-provider snapshot, never connects, has no `wait` option, and permits a valid empty all/stream result; call it again to include later providers.
+With targets, `connectMulticast` strictly acquires every target under one shared
+deadline and fails if any target cannot be acquired. Without targets, it takes one
+ready-connection snapshot; zero connections is valid. The collection preserves
+member order and identity. Later connections do not join it, and disconnected
+members are not removed or replaced.
 
-## Multicast Signatures, Deadlines, And Errors
+## Collections, Calls, And Timeouts
 
-The public signatures are:
+`collection.get(Token, { callTimeout: 5_000 })` returns an equal-length readonly list of
+`{ connection, result }`. Every successful result is an ordinary proxy; every
+failed acquisition remains associated with its connection. It neither filters
+failures nor returns a whole-collection proxy.
 
-```ts
-await chromeNexus.createMulticast(SettingsToken, {
-  targets: [chromeTarget.contentFrame({ tabId, frameId: 0 })],
-  where?,
-  expects?: "all" | "stream",
-  timeout?,
-  signal?,
-  callTimeout?,
-});
+The runtime call timeout defaults to 5 seconds. Configure it at bootstrap with
+`nexus.configure({ callTimeout })`; a `get`/`safeGet` override belongs only to the
+returned handle and is inherited by refs returned from its calls. `safeCall`
+consumes one call and preserves a concrete call error as a Result. Combine calls
+with ordinary `Promise.all`, `allSettled`, `any`, or `race`; Nexus does not add
+collection aggregators.
 
-await chromeNexus.selectMulticast(SettingsToken, {
-  where?,
-  expects?: "all" | "stream",
-  callTimeout?,
-});
-```
-
-`create` and `createMulticast` use `timeout` as the acquisition deadline, including bootstrap, target resolution, connection, handshake, `where`, and provider availability. `select` may use `wait: { timeout?, signal? }` to wait for a provider; `selectMulticast` does not wait. `callTimeout` starts only after a proxy is returned and bounds later RPC calls. Timeouts and abort signals are caller-local and do not cancel shared connection work.
-
-Common structured failures are `E_TARGET_REQUIRED` for missing create targets, `E_TARGET_CONSTRAINT_FAILED` for a reached target rejected by `where`, `E_SERVICE_UNAVAILABLE` for a reached target without an available provider, `E_SERVICE_ACQUISITION_TIMEOUT` for create acquisition expiry, `E_SERVICE_NO_MATCH` for non-waiting select with no provider, `E_SERVICE_AMBIGUOUS` for multiple select providers, `E_SERVICE_WAIT_TIMEOUT` for select wait expiry, `E_ABORTED` for cancellation, and `E_PROTOCOL_INCOMPATIBLE` when the required provider-catalog capability is absent. Invalid options, including non-finite or negative deadlines, return `E_USAGE_INVALID` at safe API boundaries.
-
-Multicast calls settle each recipient as `{ status: "fulfilled", value }` or `{ status: "rejected", reason }` (in an array for `"all"`, or an async iterable for `"stream"`). Public results do not expose connection IDs or a `from` field; recipient identity and ordering records remain internal.
+Do not pre-connect every target before `connectMulticast({ targets })`; it owns
+that acquisition. Use one consistent exact address for a workflow: Chrome frame
+and document targets can create distinct sessions even for the same document.
+`where` applies only to acquisition; ongoing authorization belongs to policy.
 
 ## Session-Bound Handles
 
-`safeCreate` / `safeSelect` return Results for acquisition only. Returned proxy
-methods and awaited reads retain their Promise/settled-result contracts. Await
-or explicitly catch calls; the proxy does not attach a logging catch to ordinary
-calls. Resource property assignment remains fire-and-forget with configured
-framework error logging, and does not expose completion even when the assignment
-expression is awaited. `Asyncified` property types are unchanged. Release is
-local and idempotent with best-effort host notification; `safeRelease` does not
-acknowledge remote cleanup. See the error/lifetime contracts in https://c-w-xiaohei.github.io/nexus/docs/concepts/.
+Proxy method calls and property reads are lazy. They send only when consumed with
+`await`, `then`, or a native Promise helper, and repeat observations share one
+result. Ignored calls, including remote callback results ignored by an event API,
+do not execute. Remote property assignment is unsupported; make writes explicit
+service methods. Release only drops a remote reference; it does not invoke
+application cleanup. See https://c-w-xiaohei.github.io/nexus/docs/concepts/.
 
 Raw core handles are lifecycle-scoped.
 
-- `nexus.create(...)` returns a proxy bound to the resolved remote session.
+- `conn.get(...)` returns a proxy bound to the resolved remote session.
 - `nexus.ref(...)` creates capabilities that remain tied to the original connection scope after crossing the transport boundary.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
-- Recreate proxies and pass fresh refs after session replacement.
+- Reconnect, get fresh proxies, and pass fresh refs after session replacement.
 
-For an existing exact root unicast proxy, static Core status observation is
-separate from targeting. `Nexus.getProxyStatus(proxy)` reads the current local
-status as a synchronous immutable snapshot, and
-`Nexus.subscribeProxyStatus(proxy, listener)` synchronously delivers that
-current snapshot after registration, then reports future distinct transitions.
-Neither recovers a session, discovers a provider, nor reconnects; acquire a
-fresh proxy with the application's chosen target when replacement is wanted.
+Use `nexus.onConnect(listener)` or `nexus.onConnect(where, listener)` to observe
+each existing and future ready session once. Use
+`connection.subscribeIdentity(listener)` for immediate full peer metadata and
+all subsequent validated updates. Neither listener reconnects or replaces a
+session.
 
-Nexus Relay does not change these service proxy and remote resource rules. Downstream callers still target the adjacent relay provider with ordinary `nexus.create(...)`; the relay provider separately uses `forwardThrough` and `forwardTarget` for its upstream call.
+Nexus Relay does not change these service proxy and remote resource rules.
+Downstream callers connect to the adjacent relay provider; the relay provider
+separately uses `forwardThrough` and `forwardTarget` for its upstream call.

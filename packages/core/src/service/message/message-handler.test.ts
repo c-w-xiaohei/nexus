@@ -11,7 +11,6 @@ import {
   type ErrMessage,
   type ReleaseMessage,
 } from "../../types/message";
-import { LocalResourceType } from "../types";
 import { Result } from "better-result";
 const { err, ok } = Result;
 import {
@@ -26,6 +25,7 @@ const mockEngine = {
   >(() => ok(undefined)),
   handleResponse: vi.fn(),
   canHandleResponse: vi.fn(() => true),
+  getCallTimeout: vi.fn(() => 5_000),
   dispatchRelease: vi.fn(),
 };
 
@@ -83,7 +83,6 @@ describe("MessageHandler", () => {
           const resourceId = resourceManager.registerLocalResource(
             value,
             targetConnectionId,
-            LocalResourceType.OBJECT,
             serviceName,
           );
           return `\u0003R:${resourceId}`;
@@ -146,7 +145,6 @@ describe("MessageHandler", () => {
     const resourceId = resourceManager.registerLocalResource(
       target,
       sourceConnectionId,
-      LocalResourceType.FUNCTION,
       "guarded",
       policy,
     );
@@ -442,7 +440,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockFn,
         sourceConnectionId,
-        LocalResourceType.FUNCTION,
       );
       context.policy = {
         canCall: vi.fn(() => false),
@@ -477,7 +474,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockFn,
         "conn-owner",
-        LocalResourceType.FUNCTION,
         "vault",
         resourcePolicy,
       );
@@ -520,7 +516,6 @@ describe("MessageHandler", () => {
           const resourceId = resourceManager.registerLocalResource(
             args[0],
             targetConnectionId,
-            LocalResourceType.OBJECT,
             serviceName,
             resourceManager.getExposedServiceRecord(serviceName)?.policy,
           );
@@ -591,7 +586,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         child,
         sourceConnectionId,
-        LocalResourceType.OBJECT,
         "vault",
         vaultPolicy,
       );
@@ -645,7 +639,6 @@ describe("MessageHandler", () => {
           const resourceId = resourceManager.registerLocalResource(
             args[0],
             targetConnectionId,
-            LocalResourceType.OBJECT,
             serviceName,
             resourceManager.getExposedServiceRecord(serviceName)?.policy,
           );
@@ -725,7 +718,6 @@ describe("MessageHandler", () => {
           const resourceId = resourceManager.registerLocalResource(
             args[0],
             targetConnectionId,
-            LocalResourceType.OBJECT,
             serviceName,
             servicePolicy,
           );
@@ -951,9 +943,6 @@ describe("MessageHandler", () => {
           const resourceId = resourceManager.registerLocalResource(
             args[0],
             targetConnectionId,
-            typeof args[0] === "function"
-              ? LocalResourceType.FUNCTION
-              : LocalResourceType.OBJECT,
             serviceName,
             servicePolicy ??
               resourceManager.getExposedServiceRecord(serviceName)?.policy,
@@ -1070,7 +1059,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         child,
         sourceConnectionId,
-        LocalResourceType.OBJECT,
         "vault",
         servicePolicy,
       );
@@ -1162,7 +1150,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockFn,
         sourceConnectionId,
-        LocalResourceType.FUNCTION,
       );
 
       const message: ApplyMessage = {
@@ -1254,7 +1241,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         mockStore,
         sourceConnectionId,
-        LocalResourceType.OBJECT,
       );
       const expectedConfig = { version: "1.0" };
       sanitizeSpy.mockReturnValueOnce(ok([expectedConfig]));
@@ -1379,6 +1365,7 @@ describe("MessageHandler", () => {
       expect(reviveSpy).toHaveBeenCalledWith(
         ["original_result"],
         sourceConnectionId,
+        5_000,
       );
       expect(mockEngine.handleResponse).toHaveBeenCalledWith(
         30,
@@ -1386,6 +1373,47 @@ describe("MessageHandler", () => {
         null,
         sourceConnectionId,
       );
+    });
+
+    it("revives response resources with the pending call timeout", async () => {
+      const message: ResMessage = {
+        type: NexusMessageType.RES,
+        id: 30,
+        result: "original_result",
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      expect(mockEngine.getCallTimeout).toHaveBeenCalledWith(
+        30,
+        sourceConnectionId,
+      );
+      expect(reviveSpy).toHaveBeenCalledWith(
+        ["original_result"],
+        sourceConnectionId,
+        5_000,
+      );
+    });
+
+    it("marks local response decode failures as framework protocol errors", async () => {
+      reviveSpy.mockReturnValueOnce(
+        err(new Error("invalid placeholder")) as any,
+      );
+      const message: ResMessage = {
+        type: NexusMessageType.RES,
+        id: 31,
+        result: "malformed",
+      };
+
+      await messageHandler.safeHandleMessage(message, sourceConnectionId);
+
+      const [, , error, source] = vi.mocked(mockEngine.handleResponse).mock
+        .calls[0];
+      expect(source).toBe(sourceConnectionId);
+      expect(error).toMatchObject({
+        code: "E_PROTOCOL_ERROR",
+        origin: "framework",
+      });
     });
   });
 
@@ -1461,7 +1489,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         () => {},
         sourceConnectionId,
-        LocalResourceType.FUNCTION,
       );
       expect(resourceManager.getLocalResource(resourceId)).toBeDefined();
 
@@ -1480,7 +1507,6 @@ describe("MessageHandler", () => {
       const resourceId = resourceManager.registerLocalResource(
         () => {},
         "some-other-conn",
-        LocalResourceType.FUNCTION,
       );
       const message: ReleaseMessage = {
         type: NexusMessageType.RELEASE,

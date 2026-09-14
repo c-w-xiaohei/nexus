@@ -27,8 +27,9 @@ const createCreator = (): StateCreator<State & Actions> => (set, get) => ({
 
 const subscribe = async <Store extends State & object>(
   service: NexusStoreServiceContract<Store>,
-  onSync: (event: SyncEnvelope<StoreData<Store>, Store>) => unknown = () =>
-    undefined,
+  onSync: (
+    event: SyncEnvelope<StoreData<Store>, Store>,
+  ) => void | PromiseLike<void> = () => undefined,
 ) => {
   let init!: Extract<SyncEnvelope<StoreData<Store>, Store>, { type: "init" }>;
   await service.subscribe(async (event) => {
@@ -176,9 +177,8 @@ describe("createNexusStore", () => {
     const service = setup.clientEngine.createServiceProxy<
       NexusStoreServiceContract<State & Actions>
     >(definition.id, {
-      strategy: "one",
       timeout: 5000,
-      target: { connectionId: (setup.clientConnection as any).connectionId },
+      connectionId: (setup.clientConnection as any).connectionId,
     });
     const callback = vi.fn();
     await service.subscribe(callback);

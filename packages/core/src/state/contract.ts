@@ -1,4 +1,4 @@
-import { Token, type TokenOptions } from "../api/token";
+import { Token } from "../api/token";
 import type { AdapterModel } from "../types/adapter-model";
 import type { ZodType } from "zod";
 import type { StoreApi } from "zustand/vanilla";
@@ -39,30 +39,32 @@ export type NexusStoreServiceContract<Store extends object> = {
   ): Promise<void>;
 };
 
-/** A State token carries shared wire validation while retaining Core Token targeting. */
+/** A State token carries shared wire validation independently of connection acquisition. */
 export class StoreToken<
   Store extends object,
   M extends AdapterModel | never = never,
 > extends Token<NexusStoreServiceContract<Store>, M> {
   readonly validation?: StoreValidationSchemas<Store>;
 
+  /** Creates a shared State service identifier with optional validation schemas. */
   constructor(
     id: string,
-    options?: TokenOptions<M & AdapterModel> & {
+    options?: {
       validation?: StoreValidationSchemas<Store>;
     },
   ) {
-    super(id, options);
+    super(id);
     this.validation = options?.validation;
   }
 }
 
+/** Creates a typed State contract without choosing or connecting to a provider. */
 export const createStoreToken = <
   Store extends object,
   M extends AdapterModel | never = never,
 >(
   id: string,
-  options?: TokenOptions<M & AdapterModel> & {
+  options?: {
     validation?: StoreValidationSchemas<Store>;
   },
 ): StoreToken<Store, M> => new StoreToken(id, options);

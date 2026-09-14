@@ -60,7 +60,7 @@ When the daemon closes or restarts, existing client proxies are no longer valid.
 
 Raw Nexus handles are session-bound:
 
-- old `nexus.create()` proxies should fail
+- old connection-bound proxies should fail
 - old remote refs should be considered invalid
 - new work should create a new proxy after reconnecting
 
@@ -102,5 +102,5 @@ For call failures:
 1. Check whether adapter pre-auth succeeded.
 2. Check `policy.canConnect`.
 3. Check `policy.canCall`.
-4. Check whether the proxy was created before a daemon restart.
+4. Check whether the proxy was acquired before a daemon restart.
 5. Recreate the proxy after reconnecting.

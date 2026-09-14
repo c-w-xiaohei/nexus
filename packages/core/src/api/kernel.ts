@@ -1,8 +1,5 @@
 import { ConnectionManager } from "@/connection/connection-manager";
-import type {
-  ConnectionManagerConfig,
-  ConnectionManagerHandlers,
-} from "@/connection/types";
+import type { ConnectionManagerHandlers } from "@/connection/types";
 import { NexusConfigurationError } from "@/errors";
 import { Engine } from "@/service/engine";
 import { Transport } from "@/transport";
@@ -13,87 +10,81 @@ const { err, ok } = Result;
 import type { EndpointRegistrationData, ServiceProviderData } from "./registry";
 import type { NexusConfig, ServiceProvider } from "./types/config";
 import type { Token } from "./token";
+import type { Connection } from "./connection";
 
-export namespace NexusKernelBuilder {
-  export interface Runtime<M extends AdapterModel> {
-    build(): Promise<
-      Result<
-        { engine: Engine<M>; connectionManager: ConnectionManager<M> },
-        Error
-      >
-    >;
-  }
-
-  export const create = <M extends AdapterModel>(
-    initialConfig: NexusConfig<M>,
-    serviceRegistry: ReadonlyMap<Token<object, any>, ServiceProviderData>,
-    endpointRegistration: EndpointRegistrationData<M> | null,
-  ): Runtime<M> => ({
-    build: async () => {
-      const bootstrap = await Result.tryPromise({
-        try: () =>
-          bootstrapConfig(initialConfig, serviceRegistry, endpointRegistration),
-        catch: (error) =>
-          error instanceof Error ? error : new Error(String(error)),
-      });
-      return bootstrap.andThen((config) => {
-        const endpoint = config.endpoint;
-        if (!endpoint?.implementation || !endpoint.meta) {
-          return err(
-            new NexusConfigurationError(
-              "Nexus initialization requires endpoint implementation and meta.",
-            ),
-          );
-        }
-        const engineRef: { current: Engine<M> | null } = { current: null };
-        const handlers: ConnectionManagerHandlers<M> = {
-          onMessage: (message: NexusMessage, connectionId: string) => {
-            void engineRef.current
-              ?.safeOnMessage(message, connectionId)
-              .then((result) =>
-                result.match({ ok: () => undefined, err: () => undefined }),
-              );
-          },
-          onDisconnect: (connectionId) =>
-            engineRef.current?.onDisconnect(connectionId),
-          onIdentityUpdated: (connectionId, next, previous, connectionMeta) =>
-            engineRef.current?.onConnectionTargetStale(
-              connectionId,
-              next,
-              previous,
-              connectionMeta,
-            ),
-        };
-        const managerConfig: ConnectionManagerConfig<M> = {
-          policy: config.policy,
-          connectTo: endpoint.connectTo,
-        };
-        const manager = new ConnectionManager(
-          managerConfig,
-          Transport.create(endpoint.implementation),
-          handlers,
-          endpoint.meta,
+/** Assemble first; Nexus installs these instances before starting listener traffic. */
+export async function buildKernel<M extends AdapterModel>(
+  initialConfig: NexusConfig<M>,
+  serviceRegistry: ReadonlyMap<Token<object, any>, ServiceProviderData>,
+  endpointRegistration: EndpointRegistrationData<M> | null,
+  observers:
+    | Pick<ConnectionManagerHandlers<M>, "onDisconnect" | "onIdentityUpdated">
+    | undefined,
+  getConnection: (id: string) => Connection<M>,
+): Promise<
+  Result<{ engine: Engine<M>; connectionManager: ConnectionManager<M> }, Error>
+> {
+  const bootstrap = await Result.tryPromise({
+    try: () =>
+      bootstrapConfig(initialConfig, serviceRegistry, endpointRegistration),
+    catch: (error) =>
+      error instanceof Error ? error : new Error(String(error)),
+  });
+  return bootstrap.andThen((config) => {
+    const endpoint = config.endpoint;
+    if (!endpoint?.implementation || !endpoint.meta) {
+      return err(
+        new NexusConfigurationError(
+          "Nexus initialization requires endpoint implementation and meta.",
+        ),
+      );
+    }
+    let engine: Engine<M> | undefined;
+    const handlers: ConnectionManagerHandlers<M> = {
+      onMessage: (message: NexusMessage, connectionId: string) => {
+        void engine?.safeOnMessage(message, connectionId);
+      },
+      onDisconnect: (connectionId) => {
+        // Settle calls/resources before public Connection observers see termination.
+        engine?.onDisconnect(connectionId);
+        observers?.onDisconnect(connectionId);
+      },
+      onIdentityUpdated: (connectionId, next, previous, connectionMeta) => {
+        engine?.onConnectionIdentityUpdated(connectionId);
+        observers?.onIdentityUpdated?.(
+          connectionId,
+          next,
+          previous,
+          connectionMeta,
         );
-        const providers = Object.fromEntries(
-          (config.providers ?? []).map((provider) => [
-            provider.token.id,
-            {
-              service: provider.service,
-              policy: provider.policy,
-            },
-          ]),
-        );
-        const engine = new Engine(manager, {
-          providers,
-          policy: config.policy,
-        });
-        engineRef.current = engine;
-        return ok({ engine, connectionManager: manager });
-      });
-    },
+      },
+    };
+    const manager = new ConnectionManager(
+      { policy: config.policy, connectTo: endpoint.connectTo },
+      Transport.create(endpoint.implementation),
+      handlers,
+      endpoint.meta,
+    );
+    const providers = Object.fromEntries(
+      (config.providers ?? []).map((provider) => [
+        provider.token.id,
+        {
+          service: provider.service,
+          policy: provider.policy,
+        },
+      ]),
+    );
+    engine = new Engine(manager, {
+      getConnection,
+      callTimeout: config.callTimeout,
+      providers,
+      policy: config.policy,
+    });
+    return ok({ engine, connectionManager: manager });
   });
 }
 
+/** Merge decorator registrations into configuration before runtime construction. */
 async function bootstrapConfig<M extends AdapterModel>(
   config: NexusConfig<M>,
   serviceRegistry: ReadonlyMap<Token<object, any>, ServiceProviderData>,
@@ -124,7 +115,6 @@ async function bootstrapConfig<M extends AdapterModel>(
     ? {
         implementation: new registration.targetClass(),
         meta: registration.options.meta,
-        defaultTarget: registration.options.defaultTarget,
         connectTo: registration.options.connectTo,
       }
     : config.endpoint;

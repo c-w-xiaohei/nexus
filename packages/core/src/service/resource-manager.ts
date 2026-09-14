@@ -1,4 +1,3 @@
-import { type LocalResourceRecord, LocalResourceType } from "./types";
 import type { AdapterModel } from "@/types/adapter-model";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { NexusConfigurationError } from "@/errors";
@@ -10,14 +9,23 @@ interface ExposedServiceRecord {
   readonly policy?: NexusAuthorizationPolicy<AdapterModel>;
 }
 
+interface LocalResourceRecord {
+  target: object;
+  ownerConnectionId: string;
+  /** Authorization snapshot captured when the capability was returned. */
+  serviceName?: string;
+  servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
+}
+
 /** Owns local capabilities and remote identities for one Engine. Registries never escape. */
 export class ResourceManager {
   private readonly logger = new Logger("L3 --- ResourceManager");
   private readonly exposedServices = new Map<string, ExposedServiceRecord>();
   private readonly localResources = new Map<string, LocalResourceRecord>();
-  private readonly remoteProxies = new Set<string>();
+  private readonly remoteProxies = new Map<string, Set<string>>();
   private resourceIdSeq = 1;
 
+  /** Publish a service record, replacing any existing record with the same name. */
   public registerExposedService(
     name: string,
     service: object,
@@ -31,10 +39,12 @@ export class ResourceManager {
     this.exposedServices.set(name, { service, policy });
   }
 
+  /** Look up the callable service object without exposing its registration record. */
   public getExposedService(name: string): object | undefined {
     return this.exposedServices.get(name)?.service;
   }
 
+  /** Look up a service and its captured authorization policy. */
   public getExposedServiceRecord(
     name: string,
   ): ExposedServiceRecord | undefined {
@@ -65,6 +75,7 @@ export class ResourceManager {
     return Result.ok(undefined);
   }
 
+  /** Return service objects for disconnect hooks without exposing registry state. */
   public listExposedServices(): readonly object[] {
     return Array.from(this.exposedServices.values(), ({ service }) => service);
   }
@@ -73,7 +84,6 @@ export class ResourceManager {
   public registerLocalResource(
     target: object,
     ownerConnectionId: string,
-    type: LocalResourceType,
     serviceName?: string,
     servicePolicy?: NexusAuthorizationPolicy<AdapterModel>,
   ): string {
@@ -81,68 +91,71 @@ export class ResourceManager {
     this.localResources.set(id, {
       target,
       ownerConnectionId,
-      type,
       serviceName,
       servicePolicy,
     });
     return id;
   }
 
+  /** Look up a local capability for ownership and invocation checks. */
   public getLocalResource(id: string): LocalResourceRecord | undefined {
     return this.localResources.get(id);
   }
 
+  /** Remove a locally owned capability after handoff, rejection, or release. */
   public releaseLocalResource(id: string): void {
     this.localResources.delete(id);
   }
 
+  /** Track a remote identity under the session that can release it. */
   public registerRemoteProxy(id: string, source: string): void {
-    this.remoteProxies.add(remoteProxyKey(id, source));
+    let ids = this.remoteProxies.get(source);
+    if (!ids) this.remoteProxies.set(source, (ids = new Set()));
+    ids.add(id);
   }
 
+  /** Stop tracking one remote identity without affecting sibling identities. */
   public releaseRemoteProxy(id: string, source: string): void {
-    this.remoteProxies.delete(remoteProxyKey(id, source));
+    const ids = this.remoteProxies.get(source);
+    if (ids?.delete(id) && !ids.size) this.remoteProxies.delete(source);
   }
 
+  /** Check remote ownership using separate identity and session keys. */
   public hasRemoteProxy(id: string, source: string): boolean {
-    return this.remoteProxies.has(remoteProxyKey(id, source));
+    return this.remoteProxies.get(source)?.has(id) ?? false;
   }
 
+  /** Check whether a local capability is still registered. */
   public hasLocalResource(id: string): boolean {
     return this.localResources.has(id);
   }
 
+  /** Count capabilities currently owned by this engine. */
   public countLocalResources(): number {
     return this.localResources.size;
   }
+
+  /** Count tracked remote identities across all source sessions. */
   public countRemoteProxies(): number {
-    return this.remoteProxies.size;
+    let count = 0;
+    for (const ids of this.remoteProxies.values()) count += ids.size;
+    return count;
   }
 
-  public listRemoteProxyIdsBySource(connectionId: string): string[] {
+  /** List local capability IDs that must be invalidated with one session. */
+  public listLocalResourceIdsByOwner(connectionId: string): string[] {
     const ids: string[] = [];
-    for (const key of this.remoteProxies) {
-      const separator = key.indexOf("\u0000");
-      if (key.slice(0, separator) === connectionId)
-        ids.push(key.slice(separator + 1));
+    for (const [id, resource] of this.localResources) {
+      if (resource.ownerConnectionId === connectionId) ids.push(id);
     }
     return ids;
   }
 
-  public listLocalResourceIdsByOwner(connectionId: string): string[] {
-    return [...this.localResources]
-      .filter(([, record]) => record.ownerConnectionId === connectionId)
-      .map(([id]) => id);
-  }
-
   /** Disconnect cleanup is local: the dead session cannot receive release notifications. */
   public cleanupConnection(connectionId: string): void {
-    for (const id of this.listLocalResourceIdsByOwner(connectionId))
-      this.releaseLocalResource(id);
-    for (const id of this.listRemoteProxyIdsBySource(connectionId))
-      this.releaseRemoteProxy(id, connectionId);
+    for (const [id, resource] of this.localResources)
+      if (resource.ownerConnectionId === connectionId)
+        this.localResources.delete(id);
+    this.remoteProxies.delete(connectionId);
   }
 }
-
-const remoteProxyKey = (id: string, source: string): string =>
-  `${source}\u0000${id}`;

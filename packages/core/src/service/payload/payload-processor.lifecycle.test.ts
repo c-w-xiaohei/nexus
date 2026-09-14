@@ -5,17 +5,15 @@ import { Placeholder } from "./placeholder";
 import { PlaceholderType } from "./protocol";
 import { ProxyFactory } from "../proxy-factory";
 import { ResourceManager } from "../resource-manager";
+import type { Connection } from "@/api/connection";
 
 const { ok } = Result;
 const sourceConnectionId = "conn-source";
 
 const resource = (resourceId: string): string =>
-  new Placeholder(PlaceholderType.RESOURCE, resourceId).toString();
+  Placeholder.encode(PlaceholderType.RESOURCE, resourceId);
 
-const malformedMap = new Placeholder(
-  PlaceholderType.MAP,
-  "not-json",
-).toString();
+const malformedMap = Placeholder.encode(PlaceholderType.MAP, "not-json");
 
 const createPayloadProcessor = () => {
   const resourceManager = new ResourceManager();
@@ -23,7 +21,12 @@ const createPayloadProcessor = () => {
     safeDispatchCall: vi.fn(() => Promise.resolve(ok(undefined))),
     dispatchRelease: vi.fn(),
   };
-  const proxyFactory = new ProxyFactory(engine, resourceManager);
+  const connection = { id: sourceConnectionId } as Connection;
+  const proxyFactory = new ProxyFactory(
+    engine,
+    resourceManager,
+    () => connection,
+  );
   return {
     engine,
     resourceManager,

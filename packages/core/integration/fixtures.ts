@@ -63,7 +63,7 @@ export interface IBackgroundService {
   saveSettings(newSettings: Settings): Promise<void>;
   subscribeToComments(
     issueId: string,
-    onNewComment: (comment: Comment) => void,
+    onNewComment: (comment: Comment) => void | PromiseLike<void>,
   ): Promise<SubscriptionId>;
   unsubscribe(subId: SubscriptionId): Promise<void>;
   processTimeline(processor: TimelineProcessor): Promise<unknown>;
@@ -105,11 +105,14 @@ export class BackgroundServiceImpl implements IBackgroundService {
   private settings: Settings = { showAvatars: true, defaultProject: "Nexus" };
   private commentSubscriptions = new Map<
     SubscriptionId,
-    (comment: Comment) => void
+    (comment: Comment) => void | PromiseLike<void>
   >();
 
   _simulateNewComment(subId: SubscriptionId, comment: Comment) {
-    this.commentSubscriptions.get(subId)?.(comment);
+    const callback = this.commentSubscriptions.get(subId);
+    void Promise.resolve()
+      .then(() => callback?.(comment))
+      .catch(() => undefined);
   }
 
   async getSettings() {
@@ -122,7 +125,7 @@ export class BackgroundServiceImpl implements IBackgroundService {
 
   async subscribeToComments(
     issueId: string,
-    onNewComment: (comment: Comment) => void,
+    onNewComment: (comment: Comment) => void | PromiseLike<void>,
   ) {
     const subId: SubscriptionId = `sub-${issueId}-${Math.random()}`;
     this.commentSubscriptions.set(subId, onNewComment);
@@ -201,6 +204,7 @@ export type IssueCompanionWorld = {
   };
 };
 
+/** Creates the connected issue-companion topology used by integration tests. */
 export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> {
   const bgMeta: AppUserMeta = { context: "background", version: "1.0.0" };
   const cs1Meta: ContentScriptMeta = {
@@ -267,6 +271,7 @@ export async function createIssueCompanionWorld(): Promise<IssueCompanionWorld> 
   };
 }
 
+/** Closes every logical session owned by the supplied fixture instances. */
 export function closeAllConnections(
   instances: Array<{ nexus: NexusInstance<AppAdapterModel> } | undefined>,
 ) {
@@ -297,6 +302,7 @@ export function listLogicalConnections(instance: {
   >;
 }
 
+/** Finds a logical session in a fixture instance without acquiring a service. */
 export function findLogicalConnection(
   instance: { nexus: NexusInstance<AppAdapterModel> },
   predicate: (connection: LogicalConnection<AppAdapterModel>) => boolean,

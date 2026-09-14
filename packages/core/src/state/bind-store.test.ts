@@ -17,6 +17,7 @@ import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { bindNexusStore, createNexusStore } from "./bind-store";
 import { createRemoteStore } from "./remote-store";
 import { connectNexusStore } from "./connect-store";
+import { installProxyLifecycle } from "../service/proxy-lifecycle";
 import { Result } from "better-result";
 import type { InitEnvelope, SyncEnvelope } from "./protocol";
 import type { NexusStoreServiceContract } from "./contract";
@@ -51,8 +52,9 @@ function setup() {
 }
 async function subscribe(
   service: NexusStoreServiceContract<Data & Actions>,
-  callback: (event: SyncEnvelope<Data, Data & Actions>) => unknown = () =>
-    undefined,
+  callback: (
+    event: SyncEnvelope<Data, Data & Actions>,
+  ) => void | PromiseLike<void> = () => undefined,
 ) {
   let init!: InitEnvelope<Data, Data & Actions>;
   await service.subscribe(async (event) => {
@@ -375,10 +377,21 @@ describe("buffered Zustand binding", () => {
         });
       },
     };
+    installProxyLifecycle(service, definition.id, "fixture", {
+      subscribeDisconnect: () => () => undefined,
+      subscribeStale: () => () => undefined,
+    });
     const pending = Result.tryPromise({
       try: () =>
         connectNexusStore(
-          { create: async <T extends object>() => service as T },
+          {
+            safeConnect: async () =>
+              Result.ok({
+                safeGet: () => Result.ok(service),
+                onDisconnected: () => () => undefined,
+                subscribeIdentity: () => () => undefined,
+              } as any),
+          },
           definition,
           { timeout: 10 },
         ),

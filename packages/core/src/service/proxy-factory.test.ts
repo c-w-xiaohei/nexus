@@ -1,585 +1,269 @@
-import {
-  describe,
-  it,
-  expect,
-  beforeEach,
-  afterEach,
-  vi,
-  type Mocked,
-} from "vitest";
-import { ProxyFactory } from "./proxy-factory";
-import { ResourceManager } from "./resource-manager";
-import { LocalResourceType } from "./types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Result } from "better-result";
-const { ok } = Result;
-import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
-import { NexusResourceError } from "@/errors/resource-errors";
-import { Logger } from "@/logger";
+import { ProxyFactory, safeCall } from "./proxy-factory";
+import { ResourceManager } from "./resource-manager";
+import type { Connection } from "@/api/connection";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import { NexusProtocolError } from "@/errors";
 
-// Mock the global FinalizationRegistry
-const mockFinalizationRegistryCallback = vi.fn();
-const mockRegister = vi.fn();
-const mockUnregister = vi.fn();
-const finalizationRegistrations = new Map<object, unknown>();
-global.FinalizationRegistry = class {
-  constructor(callback: any) {
-    mockFinalizationRegistryCallback.mockImplementation(callback);
-  }
+const finalizationCallback = vi.fn();
+const register = vi.fn();
+const unregister = vi.fn();
+const registrations = new Map<object, unknown>();
 
-  register = mockRegister.mockImplementation(
-    (target: object, heldValue: unknown, unregisterToken?: object) => {
-      finalizationRegistrations.set(unregisterToken ?? target, heldValue);
-    },
-  );
-  unregister = mockUnregister.mockImplementation((unregisterToken: object) =>
-    finalizationRegistrations.delete(unregisterToken),
-  );
-} as any;
+vi.stubGlobal(
+  "FinalizationRegistry",
+  class {
+    constructor(callback: (value: unknown) => void) {
+      finalizationCallback.mockImplementation(callback);
+    }
 
-const simulateFinalization = (unregisterToken: object): void => {
-  const heldValue = finalizationRegistrations.get(unregisterToken);
-  if (!heldValue) return;
-  finalizationRegistrations.delete(unregisterToken);
-  mockFinalizationRegistryCallback(heldValue);
-};
+    register = register.mockImplementation(
+      (target: object, heldValue: unknown, unregisterToken?: object) => {
+        registrations.set(unregisterToken ?? target, heldValue);
+      },
+    );
+    unregister = unregister.mockImplementation((token: object) =>
+      registrations.delete(token),
+    );
+  },
+);
 
 describe("ProxyFactory", () => {
-  let proxyFactory: ProxyFactory;
-  let mockEngine: Mocked<ConstructorParameters<typeof ProxyFactory>[0]>;
-  let resourceManager: ResourceManager;
+  let dispatch: ReturnType<typeof vi.fn>;
+  let dispatchRelease: ReturnType<typeof vi.fn>;
+  let connection: Connection<any>;
+  let factory: ProxyFactory;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    finalizationRegistrations.clear();
-
-    mockEngine = {
-      safeDispatchCall: vi
-        .fn()
-        .mockReturnValue(Promise.resolve(ok("mocked promise result"))),
-      dispatchRelease: vi.fn(),
-    } as unknown as Mocked<ConstructorParameters<typeof ProxyFactory>[0]>;
-    mockEngine.safeDispatchCall = vi
-      .fn()
-      .mockReturnValue(Promise.resolve(ok("mocked promise result")));
-    mockEngine.dispatchRelease = vi.fn();
-
-    resourceManager = new ResourceManager();
-    proxyFactory = new ProxyFactory(mockEngine, resourceManager);
-  });
-
-  afterEach(() => vi.restoreAllMocks());
-
-  describe("error ownership", () => {
-    it.each(["GET", "APPLY"] as const)(
-      "returns %s errors to the caller without logging them",
-      async (operation) => {
-        const log = vi
-          .spyOn(Logger.prototype, "error")
-          .mockImplementation(() => {});
-        const error = new NexusResourceError(
-          "remote read denied",
-          "E_RESOURCE_ACCESS_DENIED",
-          { resourceId: "protected" },
-        );
-        mockEngine.safeDispatchCall.mockResolvedValueOnce(Result.err(error));
-        const proxy: any = proxyFactory.createServiceProxy("api", {
-          target: { connectionId: "A" },
-          strategy: "one",
-          timeout: 1000,
-        });
-
-        const result =
-          operation === "GET" ? Promise.resolve(proxy.value) : proxy.read();
-        await expect(result).rejects.toBe(error);
-        expect(log).not.toHaveBeenCalled();
-      },
+    registrations.clear();
+    dispatch = vi.fn().mockResolvedValue(Result.ok("value"));
+    dispatchRelease = vi.fn();
+    connection = { id: "A" } as Connection<any>;
+    factory = new ProxyFactory(
+      { safeDispatchCall: dispatch, dispatchRelease },
+      new ResourceManager(),
+      vi.fn(() => connection),
     );
+  });
 
-    it.each(["error", "throw"] as const)(
-      "observes background SET %s without changing the assignment result",
-      async (failure) => {
-        const error = new NexusResourceError(
-          "remote write denied",
-          "E_RESOURCE_ACCESS_DENIED",
-        );
-        let logged!: () => void;
-        const observed = new Promise<void>((resolve) => {
-          logged = resolve;
-        });
-        const log = vi
-          .spyOn(Logger.prototype, "error")
-          .mockImplementation(() => logged());
-        mockEngine.safeDispatchCall.mockImplementationOnce(() => {
-          if (failure === "throw") throw error;
-          return Promise.resolve(Result.err(error));
-        });
-        const resource: any = proxyFactory.createRemoteResourceProxy(
-          "writable",
-          "A",
-        );
+  const service = () =>
+    factory.createServiceProxy<any>("api", {
+      connectionId: "A",
+      timeout: 1_000,
+    });
 
-        expect((resource.value = 12)).toBe(12);
-        await observed;
-        expect(log).toHaveBeenCalledExactlyOnceWith(
-          "Remote property assignment failed",
-          error,
-        );
-      },
+  it("keeps a root proxy non-thenable and exposes no request until a child is consumed", async () => {
+    const proxy = service();
+
+    expect(await Promise.resolve(proxy)).toBe(proxy);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects roots and copied thenables without executing a remote operation", () => {
+    const root = service();
+    const call = root.read();
+    for (const value of [root, { ...call }, Promise.resolve("local")]) {
+      expect(() => safeCall(value)).toThrow(
+        expect.objectContaining({ code: "E_USAGE_INVALID" }),
+      );
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps root catch and finally available as remote business paths", async () => {
+    const proxy = service();
+
+    await expect(proxy.catch("reason")).resolves.toBe("value");
+    await expect(proxy.finally("reason")).resolves.toBe("value");
+
+    expect(dispatch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ type: "APPLY", path: ["api", "catch"] }),
     );
-
-    it("reports a released SET synchronously instead of scheduling a background write", () => {
-      const log = vi
-        .spyOn(Logger.prototype, "error")
-        .mockImplementation(() => {});
-      const resource: any = proxyFactory.createRemoteResourceProxy(
-        "released",
-        "A",
-      );
-      resource[RELEASE_PROXY_SYMBOL]();
-      expect(() => {
-        resource.value = 12;
-      }).toThrow(NexusResourceError);
-      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
-      expect(log).not.toHaveBeenCalled();
-    });
+    expect(dispatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ type: "APPLY", path: ["api", "finally"] }),
+    );
   });
 
-  describe("createServiceProxy", () => {
-    it("keeps roots non-thenable and captures the original multicast binding", async () => {
-      const ids = ["A", "B"];
-      const options = {
-        target: { connectionIds: ids },
-        strategy: "all" as const,
-        timeout: 1000,
-      };
-      const service: any = proxyFactory.createServiceProxy("api", options);
-      const resource: any = proxyFactory.createRemoteResourceProxy(
-        "resource",
-        "A",
-      );
-      expect(await Promise.resolve(service)).toBe(service);
-      expect(await Promise.resolve(resource)).toBe(resource);
-      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
-      ids.push("C");
-      options.timeout = 10;
-      await service.run();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: { connectionIds: ["A", "B"] },
-          timeout: 1000,
-        }),
-      );
-    });
-    it("keeps paths and bindings isolated while traps are shared", async () => {
-      const first: any = proxyFactory.createServiceProxy("first", {
-        target: { connectionId: "A" },
-        strategy: "one",
-        timeout: 1000,
-      });
-      const second: any = proxyFactory.createServiceProxy("second", {
-        target: { connectionId: "B" },
-        strategy: "one",
-        timeout: 2000,
-      });
-      const firstMethod = first.nested.run;
-      const secondMethod = second.run;
-      await secondMethod(2);
-      await firstMethod(1);
-      await first.value;
-      expect(
-        mockEngine.safeDispatchCall.mock.calls.map(([options]) => options),
-      ).toEqual([
-        {
-          target: { connectionId: "B" },
-          strategy: "one",
-          timeout: 2000,
-          resourceId: null,
-          type: "APPLY",
-          path: ["second", "run"],
-          args: [2],
-        },
-        {
-          target: { connectionId: "A" },
-          strategy: "one",
-          timeout: 1000,
-          resourceId: null,
-          type: "APPLY",
-          path: ["first", "nested", "run"],
-          args: [1],
-        },
-        {
-          target: { connectionId: "A" },
-          strategy: "one",
-          timeout: 1000,
-          resourceId: null,
-          type: "GET",
-          path: ["first", "value"],
-        },
-      ]);
-    });
+  it("does not execute a GET when its then property is merely inspected", async () => {
+    const read = service().profile.name;
 
-    it("releasing a resource scope does not affect other proxies from the factory", async () => {
-      const first: any = proxyFactory.createRemoteResourceProxy("first", "A");
-      const second: any = proxyFactory.createRemoteResourceProxy("second", "B");
-      const firstMethod = first.nested.run;
-      const release = first[RELEASE_PROXY_SYMBOL];
-      release();
-      await expect(firstMethod()).rejects.toMatchObject({
-        code: "E_RESOURCE_ACCESS_DENIED",
-      });
-      await second.run();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          resourceId: "second",
-          target: { connectionId: "B" },
-        }),
-      );
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledExactlyOnceWith(
-        "first",
-        "A",
-      );
-    });
-
-    it("does not expose Symbol.dispose", () => {
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionId: "conn-1" },
-        strategy: "one",
-        timeout: 5000,
-      });
-
-      expect(serviceProxy[Symbol.dispose]).toBeUndefined();
-    });
-
-    it("should dispatch an APPLY call on method invocation", () => {
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionId: "conn-1" },
-        strategy: "one",
-        timeout: 5000,
-      });
-
-      serviceProxy.doSomething("hello", 123);
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "APPLY",
-          target: { connectionId: "conn-1" },
-          resourceId: null,
-          path: ["api", "doSomething"],
-          args: ["hello", 123],
-        }),
-      );
-    });
-
-    it("should return the promise from dispatchCall on method invocation", async () => {
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionId: "conn-1" },
-        strategy: "one",
-        timeout: 5000,
-      });
-      const promise = serviceProxy.doSomething();
-      await expect(promise).resolves.toBe("mocked promise result");
-    });
-
-    it("should dispatch a GET call when a property is awaited", async () => {
-      mockEngine.safeDispatchCall.mockReturnValue(
-        Promise.resolve(ok("mocked promise result")),
-      );
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionId: "conn-1" },
-        strategy: "one",
-        timeout: 5000,
-      });
-      // The `get` trap returns a promise, so we await it to trigger the call
-      await serviceProxy.getValue;
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "GET",
-          target: { connectionId: "conn-1" },
-          resourceId: null,
-          path: ["api", "getValue"],
-        }),
-      );
-    });
-
-    it("should not dispatch a call on simple property access", () => {
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionId: "conn-1" },
-        strategy: "one",
-        timeout: 5000,
-      });
-      const method = serviceProxy.doSomething; // Access without calling
-      expect(method).toBeTypeOf("function");
-      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
-    });
-
-    it("should pass strategy and timeout options to dispatchCall", () => {
-      const serviceProxy: any = proxyFactory.createServiceProxy("api", {
-        target: { connectionIds: ["conn-1", "conn-2"] },
-        strategy: "stream",
-        timeout: 1000,
-      });
-
-      serviceProxy.doWork();
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "APPLY",
-          target: { connectionIds: ["conn-1", "conn-2"] },
-          resourceId: null,
-          path: ["api", "doWork"],
-          args: [],
-          strategy: "stream",
-          timeout: 1000,
-        }),
-      );
-    });
-  });
-
-  describe("createRemoteResourceProxy", () => {
-    let spyRegisterRemoteProxy: any;
-
-    beforeEach(() => {
-      spyRegisterRemoteProxy = vi.spyOn(resourceManager, "registerRemoteProxy");
-    });
-
-    it("discard only unregisters finalization, leaving calls and explicit release usable", async () => {
-      const resource: any = proxyFactory.createRemoteResourceProxy("kept", "A");
-      const child = resource.deep;
-      proxyFactory.discardRemoteResourceProxy(resource);
-      simulateFinalization(mockRegister.mock.calls[0][0]);
-      expect(mockEngine.dispatchRelease).not.toHaveBeenCalled();
-      expect(resourceManager.hasRemoteProxy("kept", "A")).toBe(true);
-      await child.run();
-      const release = child[RELEASE_PROXY_SYMBOL];
-      release();
-      resource[RELEASE_PROXY_SYMBOL]();
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledExactlyOnceWith(
-        "kept",
-        "A",
-      );
-      await expect(child.run()).rejects.toMatchObject({
-        code: "E_RESOURCE_ACCESS_DENIED",
-      });
-    });
-
-    it("does not infer remote service ownership from a colliding local ID", async () => {
-      const resourceId = resourceManager.registerLocalResource(
-        {},
-        "conn-1",
-        LocalResourceType.OBJECT,
-        "unrelated-local-service",
-      );
-      const remote: any = proxyFactory.createRemoteResourceProxy(
-        resourceId,
-        "conn-1",
-      );
-      await remote.read();
-      expect(mockEngine.safeDispatchCall.mock.calls[0][0]).not.toHaveProperty(
-        "invocationServiceName",
-      );
-      remote[RELEASE_PROXY_SYMBOL]();
-    });
-
-    it("should register the proxy with ResourceManager and FinalizationRegistry on creation", () => {
-      const proxy = proxyFactory.createRemoteResourceProxy("res-123", "conn-1");
-
-      // We inspect the mock calls directly to avoid the test runner's deep
-      // equality check from accidentally triggering proxy traps.
-
-      expect(spyRegisterRemoteProxy).toHaveBeenCalledOnce();
-      const resourceManagerCallArgs = spyRegisterRemoteProxy.mock.calls[0];
-      expect(resourceManagerCallArgs[0]).toBe("res-123");
-      expect(resourceManagerCallArgs[1]).toBe("conn-1");
-
-      expect(mockRegister).toHaveBeenCalledOnce();
-      const finalizationRegistryCallArgs = mockRegister.mock.calls[0];
-      expect(finalizationRegistryCallArgs[0]).not.toBe(proxy);
-      expect(finalizationRegistryCallArgs[0]).toBeTypeOf("object");
-      expect(finalizationRegistryCallArgs[1]).toEqual({
-        resourceId: "res-123",
-        connectionId: "conn-1",
-      });
-      expect(finalizationRegistryCallArgs[2]).toBe(
-        finalizationRegistryCallArgs[0],
-      );
-    });
-
-    it("should dispatch an APPLY call when the proxy is called as a function", () => {
-      const remoteFn: any = proxyFactory.createRemoteResourceProxy(
-        "res-func",
-        "conn-2",
-      );
-      remoteFn("arg1", { key: "value" });
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
-        type: "APPLY",
-        target: { connectionId: "conn-2" },
-        strategy: "one",
-        timeout: 5000,
-        resourceId: "res-func",
-        path: [],
-        args: ["arg1", { key: "value" }],
-      });
-    });
-
-    it("should dispatch a GET call on property access and return a promise", async () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-obj",
-        "conn-3",
-      );
-      // Await the property to trigger the 'then' trap in the proxy
-      const result = await remoteObj.someProp;
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
+    expect(read.then).toBeTypeOf("function");
+    expect(dispatch).not.toHaveBeenCalled();
+    await expect(read).resolves.toBe("value");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
         type: "GET",
-        target: { connectionId: "conn-3" },
-        strategy: "one",
-        timeout: 5000,
-        resourceId: "res-obj",
-        path: ["someProp"],
-      });
-
-      // Also check that the result is passed through from the mocked engine
-      expect(result).toBe("mocked promise result");
-    });
-
-    it("should dispatch a SET call on property assignment", () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-obj",
-        "conn-4",
-      );
-      remoteObj.someProp = "new value";
-
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledOnce();
-      expect(mockEngine.safeDispatchCall).toHaveBeenCalledWith({
-        type: "SET",
-        strategy: "one",
-        timeout: 5000,
-        target: { connectionId: "conn-4" },
-        resourceId: "res-obj",
-        path: ["someProp"],
-        value: "new value",
-      });
-    });
-
-    it("should unregister remote proxy on explicit release", () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-release",
-        "conn-5",
-      );
-
-      expect(resourceManager.countRemoteProxies()).toBe(1);
-      remoteObj[RELEASE_PROXY_SYMBOL]();
-
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
-        "res-release",
-        "conn-5",
-      );
-      expect(resourceManager.countRemoteProxies()).toBe(0);
-      expect(mockUnregister).toHaveBeenCalledWith(
-        mockRegister.mock.calls[0][0],
-      );
-      simulateFinalization(mockRegister.mock.calls[0][0]);
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
-    });
-
-    it("disposes shared resource facades exactly once and terminalizes them", async () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-dispose",
-        "conn-dispose",
-      );
-      const nested = remoteObj.deep.path;
-      const lifetimeAnchor = mockRegister.mock.calls[0][0];
-
-      nested[Symbol.dispose]();
-      remoteObj[Symbol.dispose]();
-
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
-        "res-dispose",
-        "conn-dispose",
-      );
-      expect(resourceManager.countRemoteProxies()).toBe(0);
-      expect(mockUnregister).toHaveBeenCalledOnce();
-      expect(mockUnregister).toHaveBeenCalledWith(lifetimeAnchor);
-      await expect(remoteObj.run()).rejects.toThrow(NexusResourceError);
-      await expect(nested.value).rejects.toThrow(/released/i);
-      expect(() => {
-        nested.value = "blocked-after-dispose";
-      }).toThrow(NexusResourceError);
-    });
-
-    it("uses one finalization anchor for root and deep resource facades", async () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-shared-lifetime",
-        "conn-8",
-      );
-      const nested = remoteObj.deep.path;
-
-      expect(mockRegister).toHaveBeenCalledOnce();
-      expect(mockRegister.mock.calls[0][0]).not.toBe(remoteObj);
-      expect(mockRegister.mock.calls[0][0]).not.toBe(nested);
-
-      nested[RELEASE_PROXY_SYMBOL]();
-
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
-      expect(mockUnregister).toHaveBeenCalledWith(
-        mockRegister.mock.calls[0][0],
-      );
-      await expect(remoteObj.run()).rejects.toThrow(/released/i);
-    });
-
-    it("should reject calls after explicit release", async () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-release-guard",
-        "conn-6",
-      );
-
-      remoteObj[RELEASE_PROXY_SYMBOL]();
-
-      await expect(remoteObj.run()).rejects.toThrow(/released/i);
-      await expect(remoteObj.someProp).rejects.toThrow(/released/i);
-    });
-
-    it("should throw a typed resource error on property assignment after explicit release", () => {
-      const remoteObj: any = proxyFactory.createRemoteResourceProxy(
-        "res-release-set-guard",
-        "conn-7",
-      );
-
-      remoteObj[RELEASE_PROXY_SYMBOL]();
-
-      expect(() => {
-        remoteObj.someProp = "new value";
-      }).toThrow(NexusResourceError);
-      expect(() => {
-        remoteObj.someProp = "new value";
-      }).toThrow(/released/i);
-      expect(mockEngine.safeDispatchCall).not.toHaveBeenCalled();
-    });
+        path: ["api", "profile", "name"],
+      }),
+    );
   });
 
-  describe("FinalizationRegistry Callback", () => {
-    it("should dispatch a release message when a proxy is garbage collected", () => {
-      // The callback is captured when the ProxyFactory is instantiated in beforeEach
-      expect(mockFinalizationRegistryCallback).not.toHaveBeenCalled();
+  it("shares the first GET execution across repeated consumption", async () => {
+    const read = service().title;
 
-      // Manually trigger the captured callback, simulating GC
-      const releaseContext = { resourceId: "res-gc", connectionId: "conn-gc" };
-      mockFinalizationRegistryCallback(releaseContext);
+    await expect(read).resolves.toBe("value");
+    await expect(read).resolves.toBe("value");
 
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledOnce();
-      expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
-        releaseContext.resourceId,
-        releaseContext.connectionId,
-      );
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("caches failed consumption across safeCall, catch and finally", async () => {
+    const error = new NexusProtocolError("invalid response");
+    dispatch.mockResolvedValue(Result.err(error));
+    const call = service().read();
+    const safe = await safeCall(call);
+    expect(safe.isErr() && safe.error).toBe(error);
+    await expect(call.catch((caught: unknown) => caught)).resolves.toBe(error);
+    const settled = vi.fn();
+    await expect(call.finally(settled)).rejects.toBe(error);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("shares consumption when dispatch reenters safeCall", async () => {
+    const read = service().title;
+    let nested: ReturnType<typeof safeCall> | undefined;
+    dispatch.mockImplementation(() => {
+      nested = safeCall(read);
+      return Promise.resolve(Result.ok("value"));
     });
+    await expect(read).resolves.toBe("value");
+    expect(await nested).toEqual(Result.ok("value"));
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("exposes local provenance and shares GET consumption with safeCall", async () => {
+    const read = service().profile.name;
+    expect(read.connection).toBe(connection);
+    expect(dispatch).not.toHaveBeenCalled();
+    const safe = safeCall(read);
+    await expect(read).resolves.toBe("value");
+    expect((await safe).unwrap()).toBe("value");
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("captures APPLY arguments at declaration and encodes them when consumed", async () => {
+    const args = [{ title: "before" }];
+    const task = service().save(...args);
+    args[0].title = "after";
+
+    expect(dispatch).not.toHaveBeenCalled();
+    await task;
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "APPLY",
+        path: ["api", "save"],
+        args: [{ title: "after" }],
+      }),
+    );
+  });
+
+  it("keeps task connection provenance while then/catch return ordinary promises", async () => {
+    const task = service().read();
+
+    expect(task.connection).toBe(connection);
+    expect(task.then(() => "mapped")).toBeInstanceOf(Promise);
+    await expect(task).resolves.toBe("value");
+  });
+
+  it("does not support remote property assignment", () => {
+    const proxy = service();
+
+    expect(Reflect.set(proxy, "title", "new title")).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps symbols local and replays independently captured paths", async () => {
+    const first: any = factory.createServiceProxy("first", {
+      connectionId: "A",
+      timeout: 1_000,
+    });
+    const second: any = factory.createServiceProxy("second", {
+      connectionId: "B",
+      timeout: 2_000,
+    });
+    const firstMethod = first.nested.run;
+    const secondMethod = second.run;
+
+    expect(first[Symbol.iterator]).toBeUndefined();
+    await secondMethod(2);
+    await firstMethod(1);
+
+    expect(dispatch.mock.calls.map(([call]) => call)).toEqual([
+      expect.objectContaining({
+        connectionId: "B",
+        path: ["second", "run"],
+        args: [2],
+      }),
+      expect.objectContaining({
+        connectionId: "A",
+        path: ["first", "nested", "run"],
+        args: [1],
+      }),
+    ]);
+  });
+
+  it("registers finalization with an ID-only held value and a non-facade anchor", () => {
+    const proxy = factory.createRemoteResourceProxy("resource", "A");
+    const [anchor, heldValue, token] = register.mock.calls[0];
+
+    expect(anchor).toBeTypeOf("object");
+    expect(anchor).not.toBe(proxy);
+    expect(heldValue).toEqual({ resourceId: "resource", connectionId: "A" });
+    expect(token).toBe(anchor);
+  });
+
+  it("explicitly releases a resource once and prevents finalizer replay", () => {
+    const proxy: any = factory.createRemoteResourceProxy("resource", "A");
+    const anchor = register.mock.calls[0][0];
+
+    proxy[RELEASE_PROXY_SYMBOL]();
+    proxy[RELEASE_PROXY_SYMBOL]();
+
+    expect(unregister).toHaveBeenCalledExactlyOnceWith(anchor);
+    expect(register.mock.calls).toHaveLength(1);
+    expect(registrations.has(anchor)).toBe(false);
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
+  });
+
+  it("shares release state across child paths and already declared calls", async () => {
+    const resource: any = factory.createRemoteResourceProxy("resource", "A");
+    const child = resource.nested;
+    const call = child.read();
+    child[Symbol.dispose]();
+    expect(await safeCall(call)).toMatchObject({
+      error: { code: "E_RESOURCE_ACCESS_DENIED" },
+    });
+    await expect(child.value).rejects.toMatchObject({
+      code: "E_RESOURCE_ACCESS_DENIED",
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    resource[Symbol.dispose]();
+    expect(dispatchRelease).toHaveBeenCalledOnce();
+  });
+
+  it("discards a revived proxy finalizer without invalidating the resource", async () => {
+    const proxy: any = factory.createRemoteResourceProxy("resource", "A");
+    const anchor = register.mock.calls[0][0];
+
+    factory.discardRemoteResourceProxy(proxy);
+    expect(registrations.has(anchor)).toBe(false);
+    await expect(proxy.read()).resolves.toBe("value");
+    proxy[RELEASE_PROXY_SYMBOL]();
+
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
+  });
+
+  it("finalizes an unreleased resource with only its IDs", () => {
+    factory.createRemoteResourceProxy("resource", "A");
+    const anchor = register.mock.calls[0][0];
+
+    finalizationCallback(registrations.get(anchor));
+
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
   });
 });

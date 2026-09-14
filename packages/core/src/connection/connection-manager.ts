@@ -6,6 +6,7 @@ import {
   NexusConnectionError,
   NexusHandshakeError,
 } from "../errors/connection-errors";
+import { NexusProtocolError } from "../errors/transport-errors";
 import { NexusUsageError } from "../errors/usage-errors";
 import { Transport } from "../transport/transport";
 import type {
@@ -24,7 +25,6 @@ import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
   LogicalConnectionHandlers,
-  MessageTarget,
   ResolveOptions,
 } from "./types";
 
@@ -68,21 +68,9 @@ export class ConnectionManager<M extends AdapterModel> {
     return new Map(this.connectionsMap);
   }
 
-  /** Select advertised providers without discovering or connecting. */
-  public getReadyProviderConnectionIds(provider: string): readonly string[] {
-    return this.getReadyProviderConnections(provider).map(
-      (connection) => connection.connectionId,
-    );
-  }
-
-  /** Apply where to authorized identity and local adapter facts, then match the catalog. */
-  public getReadyProviderConnections(
-    provider: string,
-    where?: ResolveOptions<M>["where"],
-  ): readonly LogicalConnection<M>[] {
-    return this.findReadyConnections(where).filter((connection) =>
-      connection.hasProvider(provider),
-    );
+  /** Check the published index without initiating connection work. */
+  public isConnectionReady(connectionId: string): boolean {
+    return this.connectionsMap.get(connectionId)?.isReady() ?? false;
   }
 
   /** Match the adapter target before applying where; never dial. */
@@ -98,7 +86,7 @@ export class ConnectionManager<M extends AdapterModel> {
     return candidates.filter((connection) => matchesWhere(connection, where));
   }
 
-  /** Authorization inputs only exist after publication, and disappear before onDisconnect. */
+  /** Return live authorization inputs for one published session, if present. */
   public getConnectionAuthSnapshot(connectionId: string):
     | {
         readonly localIdentity: ContextMetaOf<M>;
@@ -115,13 +103,14 @@ export class ConnectionManager<M extends AdapterModel> {
     };
   }
 
-  /** Observe index/catalog changes; the returned function unsubscribes this listener. */
+  /** Observe published-session or provider-catalog changes. */
   public subscribeAvailabilityChanged(listener: () => void): () => void {
     this.availabilityListeners.add(listener);
     return () => this.availabilityListeners.delete(listener);
   }
 
-  private findReadyConnections(
+  /** Return currently published sessions satisfying the optional predicate. */
+  public findReadyConnections(
     where?: ResolveOptions<M>["where"],
   ): LogicalConnection<M>[] {
     const matches: LogicalConnection<M>[] = [];
@@ -268,6 +257,7 @@ export class ConnectionManager<M extends AdapterModel> {
     }
   }
 
+  /** Reject manager operations that require listener initialization. */
   private ensureInitialized(operation: string): Result<void, NexusError> {
     return this.initialized
       ? ok(undefined)
@@ -282,91 +272,46 @@ export class ConnectionManager<M extends AdapterModel> {
 
   // ===== Routing And Local Updates =====
 
-  /** Snapshot recipients before registering RPC pending state; never send or dial. */
-  public safeGetReadyConnectionIds(
-    target: MessageTarget<M>,
-  ): Result<string[], NexusError> {
-    return this.ensureInitialized("safeGetReadyConnectionIds").andThen(() =>
-      Result.try({
-        try: () =>
-          Array.from(
-            this.readyRecipients(target),
-            (connection) => connection.connectionId,
-          ),
-        catch: (error) =>
-          connectionError(error, "Failed to select ready connections", {
-            target,
-          }),
-      }),
-    );
-  }
-
-  /**
-   * Send in recipient order, preserving explicit duplicate IDs. Stop at the first
-   * failure without rolling back earlier sends. Success means local acceptance,
-   * not remote delivery; no recipient is connected implicitly.
-   */
+  /** Sends to one already-published connection; this never discovers or dials. */
   public safeSendMessage(
-    target: MessageTarget<M>,
+    connectionId: string,
     message: NexusMessage,
-  ): Result<string[], NexusError> {
+  ): Result<void, NexusError> {
     const initialized = this.ensureInitialized("safeSendMessage");
     if (initialized.isErr()) return initialized;
     try {
-      const sentIds: string[] = [];
-      for (const connection of this.readyRecipients(target)) {
-        const sent = connection.sendMessage(message);
-        if (sent.isErr()) {
-          // Conn closes before returning Err; only routing context belongs here.
-          return err(
-            new NexusConnectionError(
-              `Failed to send message #${message.id ?? "N/A"} to connection ${connection.connectionId}`,
-              "E_CONN_CLOSED",
-              {
-                connectionId: connection.connectionId,
-                messageType: message.type,
-                messageId: message.id,
-              },
-              toSerializedError(sent.error),
-            ),
-          );
-        }
-        sentIds.push(connection.connectionId);
-      }
-      return ok(sentIds);
+      const connection = this.connectionsMap.get(connectionId);
+      if (!connection?.isReady())
+        return err(
+          new NexusConnectionError(
+            `Connection ${connectionId} is not ready.`,
+            "E_CONN_CLOSED",
+            { connectionId, messageType: message.type, messageId: message.id },
+          ),
+        );
+      const sent = connection.sendMessage(message);
+      if (sent.isErr())
+        return err(
+          new NexusConnectionError(
+            `Failed to send message #${message.id ?? "N/A"} to connection ${connectionId}`,
+            "E_CONN_CLOSED",
+            { connectionId, messageType: message.type, messageId: message.id },
+            toSerializedError(sent.error),
+          ),
+        );
+      return ok(undefined);
     } catch (error) {
       return err(
         connectionError(
           error,
           `Failed to route message #${message.id ?? "N/A"}`,
           {
-            target,
+            connectionId,
             messageType: message.type,
             messageId: message.id,
           },
         ),
       );
-    }
-  }
-
-  private *readyRecipients(
-    target: MessageTarget<M>,
-  ): Generator<LogicalConnection<M>> {
-    let ids: Iterable<string>;
-    if ("connectionId" in target) ids = [target.connectionId];
-    else if ("connectionIds" in target) ids = target.connectionIds;
-    else {
-      for (const connection of this.connectionsMap.values()) {
-        if (connection.isReady() && matchesWhere(connection, target.where))
-          yield connection;
-      }
-      return;
-    }
-    // A previous send can synchronously close a later recipient. Do not replace
-    // this traversal with a prefiltered snapshot or deduplicated ID set.
-    for (const id of ids) {
-      const connection = this.connectionsMap.get(id);
-      if (connection?.isReady()) yield connection;
     }
   }
 
@@ -419,7 +364,7 @@ export class ConnectionManager<M extends AdapterModel> {
 
   // ===== Session Integration =====
 
-  /** Supply per-attempt inputs; shared owner callbacks maintain the session indexes. */
+  /** Open one incoming or outgoing session and map its failure to manager errors. */
   private async openConnection(
     direction: "incoming" | "outgoing",
     acquire: ConnectionOpenOptions<M>["acquire"],
@@ -472,11 +417,11 @@ export class ConnectionManager<M extends AdapterModel> {
     },
     onClosed: (connection, identity) => {
       const id = connection.connectionId;
-      // Read publication from our own index, not the protocol-ready close identity.
+      // Remove indexes before notifying L3 so cleanup cannot observe a live session.
       this.connectionsMap.delete(id);
       this.sessionsMap.delete(id);
-      this.notifyAvailabilityChanged();
       this.handlers.onDisconnect(id, identity);
+      this.notifyAvailabilityChanged();
     },
     onIdentityUpdated: (connection, next, previous) => {
       const id = connection.connectionId;
@@ -500,6 +445,7 @@ export class ConnectionManager<M extends AdapterModel> {
     },
   };
 
+  /** Notify availability observers without allowing one observer to block others. */
   private notifyAvailabilityChanged(): void {
     // Observer errors must not interrupt publication or startup settlement.
     for (const listener of this.availabilityListeners) {
@@ -512,6 +458,7 @@ export class ConnectionManager<M extends AdapterModel> {
   }
 }
 
+/** Apply an optional caller predicate to a session's committed peer identity. */
 function matchesWhere<M extends AdapterModel>(
   connection: LogicalConnection<M>,
   where?: ResolveOptions<M>["where"],
@@ -522,6 +469,7 @@ function matchesWhere<M extends AdapterModel>(
   );
 }
 
+/** Serialize an adapter target into a stable key for coalescing concurrent dials. */
 function getTargetKey(target: object): string {
   return JSON.stringify(
     Object.fromEntries(
@@ -540,9 +488,10 @@ function connectionError(
   // getters or no string conversion. Never let diagnostics reject a safe operation.
   const normalized = Result.try({
     try: () => (error instanceof NexusError ? error : toSerializedError(error)),
-    catch: () => new NexusError(message, "E_UNKNOWN", { context }),
-  }).match({ ok: (value) => value, err: (value) => value });
+    catch: () => undefined,
+  }).match({ ok: (value) => value, err: () => undefined });
   if (normalized instanceof NexusError) return normalized;
+  if (!normalized) return new NexusProtocolError(message, { context });
   const cause = normalized;
   if (
     cause.code === "E_HANDSHAKE_FAILED" ||
@@ -557,7 +506,7 @@ function connectionError(
       { cause, stack: cause.stack },
     );
   }
-  return new NexusError(message, "E_UNKNOWN", {
+  return new NexusProtocolError(message, {
     context,
     cause,
     stack: cause.stack,

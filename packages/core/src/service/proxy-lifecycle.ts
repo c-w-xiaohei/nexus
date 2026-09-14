@@ -1,9 +1,5 @@
 import { NexusDisconnectedError } from "../errors/call-errors.js";
 import { NexusUsageError } from "../errors/usage-errors.js";
-import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
 
 export type ProxyStatus =
   | { readonly type: "active"; readonly selection: "current" | "stale" }
@@ -24,17 +20,17 @@ const activeStale = Object.freeze({
   selection: "stale",
 } as const);
 const noop = (): void => undefined;
-const lifecycleDetails = Symbol("nexus.proxy.lifecycle.details");
+const lifecycleDetails = new WeakMap<object, ProxyLifecycleDetails>();
 const lifecycleFinalizer = new FinalizationRegistry<() => void>((cleanup) => {
   cleanup();
 });
 
 type ProxyLifecycleDetails = {
-  owner: object;
   snapshot: ProxyDebugSnapshot;
   listeners: Set<{ notify: (status: ProxyStatus) => void }>;
 };
 
+/** Publish one lifecycle transition while isolating listener failures and reentrancy. */
 const transitionTo = (
   details: ProxyLifecycleDetails,
   snapshot: (status: ProxyStatus) => ProxyDebugSnapshot,
@@ -56,14 +52,10 @@ const transitionTo = (
   }
 };
 
+/** Require lifecycle metadata installed on this exact service root. */
 const requireDetails = (proxy: object): ProxyLifecycleDetails => {
-  const objectLike =
-    typeof proxy === "function" ||
-    (typeof proxy === "object" && proxy !== null);
-  const details = objectLike
-    ? Object.getOwnPropertyDescriptor(proxy, lifecycleDetails)?.value
-    : undefined;
-  if (details?.owner !== proxy) {
+  const details = lifecycleDetails.get(proxy);
+  if (!details) {
     throw new NexusUsageError(
       "Nexus: proxy lifecycle requires an exact Nexus service root proxy.",
       "E_USAGE_INVALID",
@@ -72,39 +64,23 @@ const requireDetails = (proxy: object): ProxyLifecycleDetails => {
   return details;
 };
 
+/** Install weak lifecycle metadata and subscriptions on one exact service root. */
 export const installProxyLifecycle = (
   proxy: object,
   tokenId: string,
   connectionId: string,
+  subscriptions: {
+    subscribeDisconnect(listener: () => void): () => void;
+    subscribeStale(listener: () => void): () => void;
+  },
 ): void => {
-  const subscribeDisconnect = Object.getOwnPropertyDescriptor(
-    proxy,
-    NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  )?.value;
-  const subscribeStale = Object.getOwnPropertyDescriptor(
-    proxy,
-    NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-  )?.value;
-  if (
-    typeof subscribeDisconnect !== "function" ||
-    typeof subscribeStale !== "function"
-  ) {
-    throw new NexusUsageError(
-      "Nexus: proxy lifecycle requires connection lifecycle capabilities.",
-      "E_USAGE_INVALID",
-    );
-  }
-
   const snapshot = (status: ProxyStatus): ProxyDebugSnapshot =>
     Object.freeze({ tokenId, connectionId, status });
   const details: ProxyLifecycleDetails = {
-    owner: proxy,
     snapshot: snapshot(activeCurrent),
     listeners: new Set(),
   };
-  Object.defineProperty(proxy, lifecycleDetails, {
-    value: details,
-  });
+  lifecycleDetails.set(proxy, details);
   const detailsRef = new WeakRef(details);
   const finalizerToken = {};
   let stopStale = noop;
@@ -121,7 +97,7 @@ export const installProxyLifecycle = (
   };
   lifecycleFinalizer.register(proxy, cleanup, finalizerToken);
 
-  stopStale = subscribeStale(() => {
+  stopStale = subscriptions.subscribeStale(() => {
     const current = detailsRef.deref();
     if (!current) {
       cleanup();
@@ -138,7 +114,7 @@ export const installProxyLifecycle = (
   if (stopped) {
     stopStale();
   }
-  stopDisconnect = subscribeDisconnect(() => {
+  stopDisconnect = subscriptions.subscribeDisconnect(() => {
     const current = detailsRef.deref();
     if (!current) {
       cleanup();
@@ -166,6 +142,7 @@ export const installProxyLifecycle = (
   }
 };
 
+/** Read the current connection state of an exact service root proxy. */
 export const getProxyStatus = (proxy: object): ProxyStatus =>
   requireDetails(proxy).snapshot.status;
 
@@ -174,23 +151,17 @@ export const subscribeProxyStatus = (
   listener: (status: ProxyStatus) => void,
 ): (() => void) => {
   const details = requireDetails(proxy);
-  if (details.snapshot.status.type === "disconnected") {
-    try {
-      listener(details.snapshot.status);
-    } catch (error) {
-      console.error("Nexus: proxy lifecycle listener failed.", error);
-    }
-    return noop;
-  }
   const subscription = { notify: listener };
-  details.listeners.add(subscription);
+  const active = details.snapshot.status.type === "active";
+  if (active) details.listeners.add(subscription);
   try {
     listener(details.snapshot.status);
   } catch (error) {
     console.error("Nexus: proxy lifecycle listener failed.", error);
   }
-  return () => details.listeners.delete(subscription);
+  return active ? () => details.listeners.delete(subscription) : noop;
 };
 
+/** Return diagnostic identity and status without exposing mutable lifecycle state. */
 export const inspectProxy = (proxy: object): ProxyDebugSnapshot =>
   requireDetails(proxy).snapshot;

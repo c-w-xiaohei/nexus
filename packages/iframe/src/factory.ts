@@ -77,16 +77,6 @@ export function usingIframeChild(
         ...options,
         frameId,
       }),
-      defaultTarget: Object.freeze(
-        options.defaultTarget
-          ? { ...options.defaultTarget }
-          : {
-              context: "iframe-parent",
-              appId: options.appId,
-              instance,
-              origin: options.parentOrigin,
-            },
-      ),
       ...(connectTo ? { connectTo } : {}),
     },
   };

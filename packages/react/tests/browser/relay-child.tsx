@@ -127,9 +127,13 @@ function getStore() {
 }
 
 async function readProfile() {
-  const service = (await childNexus.create(RelayProfileToken, {
-    target: relayFrameTarget,
-  })) as unknown as RelayProfileService;
+  const service = (await childNexus
+    .connect({
+      target: relayFrameTarget,
+    })
+    .then((connection) =>
+      connection.get(RelayProfileToken),
+    )) as unknown as RelayProfileService;
   return service.profile.read(childId);
 }
 

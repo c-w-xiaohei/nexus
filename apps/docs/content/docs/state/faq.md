@@ -30,7 +30,7 @@ action and disconnect rules.
 Because a `RemoteStore` handle is tied to one target and connection session.
 Auto-rebinding would hide lifecycle changes. See [Lifecycle and
 errors](/nexus/docs/state/lifecycle-and-errors/) for the State rules, and
-[Core concepts](/nexus/docs/concepts/#session-bound-handles) for related Core
+[Core concepts](/nexus/docs/concepts/#services-and-calls) for related Core
 handles.
 
 ## What does scope selector fallback mean?

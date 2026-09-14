@@ -14,19 +14,11 @@ import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
 } from "../errors/transport-errors";
+import { toSerializedError } from "../utils/error";
 import { Result } from "better-result";
 const { err, ok } = Result;
 
 export namespace Transport {
-  const shouldUseBinarySerializer = <M extends AdapterModel>(
-    endpoint: IEndpoint<M>,
-  ): boolean => {
-    return (
-      endpoint.capabilities?.binaryPackets ??
-      endpoint.capabilities?.supportsTransferables === true
-    );
-  };
-
   export interface Context<M extends AdapterModel> {
     readonly endpoint: IEndpoint<M>;
     readonly serializer: ISerializer;
@@ -37,9 +29,11 @@ export namespace Transport {
     endpoint: IEndpoint<M>,
   ): Context<M> => ({
     endpoint,
-    serializer: shouldUseBinarySerializer(endpoint)
-      ? BinarySerializer.serializer
-      : JsonSerializer.serializer,
+    serializer:
+      (endpoint.capabilities?.binaryPackets ??
+      endpoint.capabilities?.supportsTransferables === true)
+        ? BinarySerializer.serializer
+        : JsonSerializer.serializer,
   });
 
   /**
@@ -64,8 +58,9 @@ export namespace Transport {
     }
 
     try {
-      const listenResult = context.endpoint.listen(
+      await context.endpoint.listen(
         (port: IPort, connectionMeta: ConnectionMetaOf<M>) => {
+          /** Binds the accepted port to its selected codec before protocol handlers attach. */
           const createProcessor = (
             handlers: PortProcessorHandlers,
           ): PortProcessor.Context =>
@@ -80,10 +75,14 @@ export namespace Transport {
           }
         },
       );
-      await listenResult;
       return ok(undefined);
     } catch (error) {
-      return err(createListenError(error));
+      return err(
+        new NexusEndpointListenError(
+          `Failed to start endpoint listener: ${toSerializedError(error).message}`,
+          { endpointType: "endpoint", originalError: error },
+        ),
+      );
     }
   };
 
@@ -106,15 +105,15 @@ export namespace Transport {
     >
   > => {
     if (!context.endpoint.connect) {
-      const capabilityError = new NexusEndpointCapabilityError(
-        "Cannot connect: endpoint does not implement connect() method",
-        {
-          endpointType: "endpoint",
-          target,
-        },
+      return err(
+        new NexusEndpointCapabilityError(
+          "Cannot connect: endpoint does not implement connect() method",
+          {
+            endpointType: "endpoint",
+            target,
+          },
+        ),
       );
-
-      return err(capabilityError);
     }
 
     return Result.tryPromise({
@@ -135,27 +134,22 @@ export namespace Transport {
   };
 }
 
-const createListenError = (error: unknown): NexusEndpointListenError =>
-  new NexusEndpointListenError(
-    `Failed to start endpoint listener: ${error instanceof Error ? error.message : String(error)}`,
-    {
-      endpointType: "endpoint",
-      originalError: error,
-    },
-  );
-
+/** Preserves adapter-owned connection errors and adds target diagnostics to unknown failures. */
 const createConnectError = <M extends AdapterModel>(
   error: unknown,
   target: ConnectionTargetOf<M>,
-): NexusEndpointCapabilityError | NexusEndpointConnectError =>
-  error instanceof NexusEndpointCapabilityError ||
-  error instanceof NexusEndpointConnectError
-    ? error
-    : new NexusEndpointConnectError(
-        `Failed to connect endpoint: ${error instanceof Error ? error.message : String(error)}`,
-        {
-          endpointType: "endpoint",
-          target,
-          originalError: error,
-        },
-      );
+): NexusEndpointCapabilityError | NexusEndpointConnectError => {
+  if (
+    error instanceof NexusEndpointCapabilityError ||
+    error instanceof NexusEndpointConnectError
+  )
+    return error;
+  const originalError = toSerializedError(error);
+  return new NexusEndpointConnectError(
+    `Failed to connect endpoint: ${originalError.message}`,
+    {
+      context: { endpointType: "endpoint", target, originalError: error },
+      cause: { ...originalError, context: { originalError } },
+    },
+  );
+};

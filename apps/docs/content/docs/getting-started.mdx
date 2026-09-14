@@ -82,50 +82,50 @@ providers or live registration.
 </Step>
 <Step>
 
-## Acquire A Proxy From Another Context
+## Connect And Get A Service
 
-Configure the content script and acquire the background provider:
+Configure the content script, connect to the background, then get its provider:
 
 ```ts
 import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
 import { PingToken } from "./shared";
 
 const contentNexus = usingContentScript();
-const remote = await contentNexus.create(PingToken, {
+const connection = await contentNexus.connect({
   target: chromeTarget.background(),
 });
+const remote = connection.get(PingToken);
 
 console.log(await remote.ping("hello")); // "pong:hello"
 ```
 
-The content-script helper also supplies this target as its default, so
-`contentNexus.create(PingToken)` is equivalent here.
-
-The throw-style `create(...)` rejects if acquisition fails. The safe-style form
-returns `Promise<Result<T, E>>` for acquisition:
+`connect(...)` returns a ready shared session. `connection.get(...)` checks the
+current provider catalog synchronously and returns a lightweight proxy. Use the
+safe forms when either boundary is expected to fail:
 
 ```ts
-const result = await contentNexus.safeCreate(PingToken, {
+const connected = await contentNexus.safeConnect({
   target: chromeTarget.background(),
 });
 
-if (result.isErr()) {
-  console.error(result.error.code, result.error.message);
+if (connected.isErr()) {
+  console.error(connected.error.code, connected.error.message);
 } else {
-  console.log(await result.value.ping("hello"));
+  const service = connected.value.safeGet(PingToken);
+  if (service.isErr()) console.error(service.error.code);
+  else console.log(await service.value.ping("hello"));
 }
 ```
 
-`safeCreate` makes acquisition safe, not calls on the returned proxy. A remote
-method can still reject, so handle that call with `try/catch` or an explicit
-Promise catch.
+`safeGet` covers service acquisition, not calls. A proxy call is lazy: it sends
+only when consumed with `await`, `then`, or a native Promise helper. Use
+`Nexus.safeCall(proxy.method())` when a single RPC failure should be a Result.
 
 <Callout type="warn" title="Proxies are session-bound">
 
-- A raw `nexus.create()` proxy is bound to the resolved remote session.
+- A proxy is bound to the connection that supplied it.
 - Disconnect, reload, daemon restart, or session replacement invalidates it.
-- Recreate the proxy with `nexus.create(...)`; it does not silently retarget or
-  reconnect in place.
+- Connect again and get a new proxy; it does not silently retarget or reconnect.
 
 </Callout>
 
@@ -143,3 +143,11 @@ uses the same `Token`, and the target resolves to the expected destination.
 - Platform and adapter overview: [Platforms](/nexus/docs/platforms/)
 - Package map: [Packages](/nexus/docs/packages/)
 - Synchronized state: [State quick start](/nexus/docs/state/quick-start/)
+
+## Migrating Existing Code
+
+Core 2.0 alpha removes the one-step acquisition and provider-wait APIs. Replace
+`create`/`safeCreate` with `connect`/`safeConnect`, then use `get`/`safeGet` on
+the returned connection. Replace both old multicast families with
+`connectMulticast(...).get(Token)`. See the [Core 2.0 alpha migration](/nexus/docs/migrations/2.0-alpha/)
+for the full contract and the default-target removal.

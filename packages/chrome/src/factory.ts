@@ -12,7 +12,6 @@ import type {
   ChromeOptionsPageMeta,
   ChromePopupMeta,
 } from "./types/meta.js";
-import { chromeTarget } from "./types/meta.js";
 import { BackgroundEndpoint } from "./endpoints/background.js";
 import { ContentScriptEndpoint } from "./endpoints/content-script.js";
 import { UIClientEndpoint } from "./endpoints/ui-client.js";
@@ -79,6 +78,7 @@ const chromeBuiltinContexts = new Set<ChromeBuiltinContext>([
   "offscreen-document",
 ]);
 
+/** Apply one adapter config to the shared Chrome Nexus instance. */
 function configureChrome<
   TAppMeta = never,
   TCustomMeta extends { context: string } = never,
@@ -90,6 +90,7 @@ function configureChrome<
   ).configure(config);
 }
 
+/** Reject custom page metadata that collides with an adapter-owned context. */
 function isChromeBuiltinContext(
   context: string,
 ): context is ChromeBuiltinContext {
@@ -149,7 +150,6 @@ export function createContentScriptConfig<TAppMeta = never>(
     endpoint: {
       meta: contentScriptMeta,
       implementation: new ContentScriptEndpoint(),
-      defaultTarget: chromeTarget.background(),
       ...(connectTo ? { connectTo } : {}),
     },
   };
@@ -198,6 +198,7 @@ export function usingPopup<TAppMeta = never>(
   return configureChrome<TAppMeta>(createPopupConfig<TAppMeta>(...args));
 }
 
+/** Create pure options-page configuration with optional startup connections. */
 export function createOptionsPageConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateOptionsPageConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
@@ -211,12 +212,14 @@ export function createOptionsPageConfig<TAppMeta = never>(
   return createUiClientConfig<TAppMeta>(optionsPageMeta, connectTo);
 }
 
+/** Configure the singleton Nexus runtime as an options page context. */
 export function usingOptionsPage<TAppMeta = never>(
   ...args: OptionalOptions<CreateOptionsPageConfigOptions<TAppMeta>>
 ) {
   return configureChrome<TAppMeta>(createOptionsPageConfig<TAppMeta>(...args));
 }
 
+/** Create a pure DevTools page configuration. */
 export function createDevToolsPageConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateDevToolsPageConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
@@ -230,12 +233,14 @@ export function createDevToolsPageConfig<TAppMeta = never>(
   return createUiClientConfig<TAppMeta>(devToolsPageMeta, connectTo);
 }
 
+/** Configure the singleton Nexus runtime as a DevTools page context. */
 export function usingDevToolsPage<TAppMeta = never>(
   ...args: OptionalOptions<CreateDevToolsPageConfigOptions<TAppMeta>>
 ) {
   return configureChrome<TAppMeta>(createDevToolsPageConfig<TAppMeta>(...args));
 }
 
+/** Create a pure offscreen document configuration. */
 export function createOffscreenDocumentConfig<TAppMeta = never>(
   options: CreateOffscreenDocumentConfigOptions<TAppMeta>,
 ): ChromeConfig<TAppMeta> {
@@ -248,6 +253,7 @@ export function createOffscreenDocumentConfig<TAppMeta = never>(
   return createUiClientConfig<TAppMeta>(offscreenDocumentMeta, connectTo);
 }
 
+/** Configure the singleton Nexus runtime as an offscreen document context. */
 export function usingOffscreenDocument<TAppMeta = never>(
   ...[reasonOrOptions]: [TAppMeta] extends [never]
     ? [reasonOrOptions: string | CreateOffscreenDocumentConfigOptions<TAppMeta>]
@@ -264,6 +270,7 @@ export function usingOffscreenDocument<TAppMeta = never>(
 }
 
 /** Keep arbitrary identity metadata separate from local connection options. */
+/** Create pure configuration for an application-defined extension page context. */
 export function createExtensionPageConfig<
   TAppMeta = never,
   const TCustomMeta extends { context: string } = {
@@ -290,6 +297,7 @@ export function createExtensionPageConfig(
   >(meta, options?.connectTo);
 }
 
+/** Configure the shared Nexus instance for an application-defined page context. */
 export function usingExtensionPage<
   TAppMeta = never,
   const TCustomMeta extends { context: string } = {
@@ -309,6 +317,7 @@ export function usingExtensionPage(
   return configureChrome(createExtensionPageConfig(meta, options));
 }
 
+/** Create a UI client endpoint configuration without mutating Nexus state. */
 function createUiClientConfig<
   TAppMeta = never,
   TCustomMeta extends { context: string } = never,
@@ -320,7 +329,6 @@ function createUiClientConfig<
     endpoint: {
       meta,
       implementation: new UIClientEndpoint(),
-      defaultTarget: chromeTarget.background(),
       ...(connectTo ? { connectTo } : {}),
     },
   };

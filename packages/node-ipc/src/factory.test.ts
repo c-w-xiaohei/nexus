@@ -25,13 +25,12 @@ describe("Node IPC factories", () => {
     });
   });
 
-  it("creates client config with startup targets independent of defaultTarget", () => {
+  it("creates client config with startup targets without acquisition defaults", () => {
     const connectTo = [
       { context: "node-ipc-daemon" as const, appId: "startup-daemon" },
     ];
     const config = usingNodeIpcClient({
       appId: "client",
-      defaultTarget: { context: "node-ipc-daemon", appId: "daemon" },
       connectTo,
       configure: false,
     });
@@ -43,10 +42,6 @@ describe("Node IPC factories", () => {
       pid: process.pid,
     });
     expect(implementation?.connect).toBeTypeOf("function");
-    expect(config.endpoint?.defaultTarget).toEqual({
-      context: "node-ipc-daemon",
-      appId: "daemon",
-    });
     expect(config.endpoint?.connectTo).toEqual(connectTo);
   });
 

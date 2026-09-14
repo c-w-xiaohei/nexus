@@ -37,13 +37,14 @@ const backgroundNexus = usingBackgroundScript();
 const tabId = 42;
 const documentId = "document-1";
 
-const capture = await backgroundNexus.create(CaptureToken, {
+const connection = await backgroundNexus.connect({
   target: chromeTarget.contentDocument({ tabId, documentId }),
   where: (contextMeta, connectionMeta) =>
     contextMeta.context === "content-script" &&
     contextMeta.isVisible === true &&
     connectionMeta.observed.documentId === documentId,
 });
+const capture = connection.get(CaptureToken);
 ```
 
 The application owns active-tab selection and content-script injection. Pass the
@@ -51,30 +52,51 @@ resulting address to Nexus. `tabId`, `frameId`, and `documentId` are platform
 addresses; verified sender facts are exposed through `ChromeConnectionMeta`,
 separately from peer-declared identity.
 
-The content-script helper supplies `chromeTarget.background()` as its endpoint
-`defaultTarget`, so `contentNexus.create(Token)` can omit the target when the Token
-does not supply a different default.
+The content-script helper does not choose a service target. Pass
+`chromeTarget.background()` to `connect` when the content script needs the
+background session.
 
-## Multiple Providers
+## Multiple Connections
 
-Use `selectMulticast` for a snapshot of already available providers:
+Use `connectMulticast` for a snapshot of already available connections, then get
+the service from each member:
 
 ```ts
-const captures = await backgroundNexus.selectMulticast(CaptureToken, {
+const captures = await backgroundNexus.connectMulticast({
   where: (contextMeta, _connectionMeta) =>
     contextMeta.context === "content-script" && contextMeta.isVisible === true,
 });
+const resources = captures.get(CaptureToken);
 ```
 
-Use `createMulticast` with an explicit `targets` array when Nexus must acquire
-the connections. Shared acquisition, timeout, and settled-result behavior is
-described in [resolution and fallbacks](/nexus/docs/concepts/#resolution-and-fallbacks).
+Supply `targets` when Nexus must acquire the connections; do not call `connect`
+for each target first. Target acquisition is strict, while service availability
+remains a per-member Result. Handle a missing service alongside call failures:
 
-Breaking from an `expects: "stream"` iteration cancels the local wait, not methods
-already executing remotely.
+```ts
+const outcomes = await Promise.allSettled(
+  resources.map(async ({ result }) => {
+    if (result.isErr()) throw result.error;
+    return await result.value.capture();
+  }),
+);
+```
+
+This assumes the shared `CaptureToken` contract declares `capture()`. Use native
+Promise results directly; a separate multicast proxy or report type is unnecessary.
 
 ## Session Lifecycle
 
 Navigation or context teardown invalidates the associated proxies and refs.
 Acquire replacements after the new context is ready; see
 [proxy lifecycle](/nexus/docs/proxy-lifecycle/).
+
+Choose a frame target when the address is a frame slot, or a document target when
+the operation must remain tied to a specific document. Use that address
+consistently in a workflow: frame and document targets are distinct, and targeting
+the same context through both may produce multiple sessions. A document target
+does not silently switch to the replacement document after navigation.
+
+Offscreen documents also need explicit `chromeTarget.background()` acquisition.
+Application code owns `chrome.offscreen.createDocument()` and its readiness
+handshake; `usingOffscreenDocument()` configures Nexus but does not create the page.

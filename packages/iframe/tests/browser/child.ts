@@ -114,7 +114,15 @@ const bootstrapChild = () => {
   if (connectToMode) void child.ready();
 
   async function callParentEcho(value: string) {
-    const service = await child.create(ParentEchoToken);
+    const service = await child
+      .connect({
+        target: {
+          context: "iframe-parent",
+          appId: "browser-app",
+          origin: "http://127.0.0.1:3210",
+        },
+      })
+      .then((connection) => connection.get(ParentEchoToken));
     return service.echoFromParent(`${frameId}:${value}`);
   }
 

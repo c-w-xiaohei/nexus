@@ -50,6 +50,11 @@
       "types": "./dist/internal/serializer-benchmark.d.ts",
       "import": "./dist/internal/serializer-benchmark.mjs",
       "require": "./dist/internal/serializer-benchmark.cjs"
+    },
+    "./internal/testing": {
+      "types": "./dist/internal/testing.d.ts",
+      "import": "./dist/internal/testing.mjs",
+      "require": "./dist/internal/testing.cjs"
     }
   },
   "main": "./dist/index.cjs",

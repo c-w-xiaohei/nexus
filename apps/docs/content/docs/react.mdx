@@ -64,8 +64,8 @@ Nexus State hooks and scope factories documented in the
 
 ## `useProxyStatus()`
 
-Observe an existing service proxy returned by unicast `create`, `safeCreate`,
-`select`, or `safeSelect`. The hook does not need `NexusProvider` and does not
+Observe an existing service proxy returned by `connection.get` or a legacy
+unicast migration entry. The hook does not need `NexusProvider` and does not
 create, release, reconnect, or replace the proxy.
 
 ```tsx

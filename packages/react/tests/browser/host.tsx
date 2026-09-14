@@ -1,5 +1,5 @@
 import { Nexus } from "@nexus-js/core";
-import { createNexusStore } from "@nexus-js/core/state";
+import { createNexusStore, type RemoteActions } from "@nexus-js/core/state";
 import { usingIframeParent, type IframeAdapterModel } from "@nexus-js/iframe";
 import {
   APP_ID,
@@ -8,6 +8,7 @@ import {
   iframeCounterStore,
   createCounterStoreCreator,
   frameNonce,
+  type CounterActions,
   type CounterStore,
   type FrameId,
 } from "./shared";
@@ -76,25 +77,44 @@ function instrumentStore(
     return ownerAwareImplementation.subscribe(
       async (event) => {
         if (event.type === "init") {
+          const initEvent = event;
           telemetry.activeSubscriptions.set(
             key,
             invocation?.sourceConnectionId,
           );
+          const actions: RemoteActions<CounterStore> = {
+            increment: async (
+              ...args: Parameters<CounterActions["increment"]>
+            ) => {
+              telemetry.dispatchCalls.push({ action: "increment", args });
+              return initEvent.actions.increment(...args);
+            },
+            setCount: async (
+              ...args: Parameters<CounterActions["setCount"]>
+            ) => {
+              telemetry.dispatchCalls.push({ action: "setCount", args });
+              return initEvent.actions.setCount(...args);
+            },
+            asyncIncrementSlow: async (
+              ...args: Parameters<CounterActions["asyncIncrementSlow"]>
+            ) => {
+              telemetry.dispatchCalls.push({
+                action: "asyncIncrementSlow",
+                args,
+              });
+              return initEvent.actions.asyncIncrementSlow(...args);
+            },
+            failAfterNoCommit: async (
+              ...args: Parameters<CounterActions["failAfterNoCommit"]>
+            ) => {
+              telemetry.dispatchCalls.push({
+                action: "failAfterNoCommit",
+                args,
+              });
+              return initEvent.actions.failAfterNoCommit(...args);
+            },
+          };
           const originalUnsubscribe = event.unsubscribe;
-          const actions = Object.fromEntries(
-            Object.entries(event.actions).map(([action, invoke]) => [
-              action,
-              async (...invokeArgs: unknown[]) => {
-                telemetry.dispatchCalls.push({
-                  action,
-                  args: [...invokeArgs],
-                });
-                return (invoke as (...args: unknown[]) => unknown)(
-                  ...invokeArgs,
-                );
-              },
-            ]),
-          ) as typeof event.actions;
           event = {
             ...event,
             actions,
@@ -164,7 +184,9 @@ const host = new Nexus<IframeAdapterModel>().configure({
       origin: CHILD_ORIGIN,
       nonce: frameNonce(frameId),
     })),
-    heartbeat: { intervalMs: 100, maxMisses: 2 },
+    // Exercise unresponsive-client cleanup without treating short browser stalls
+    // as a dead sibling session.
+    heartbeat: { intervalMs: 1_000, maxMisses: 3 },
   }),
   providers: [
     {

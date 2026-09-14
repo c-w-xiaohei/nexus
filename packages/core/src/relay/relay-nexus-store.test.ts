@@ -12,11 +12,8 @@ import type {
   RemoteActions,
 } from "@/state/contract";
 import { createStoreToken } from "@/state/contract";
-import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-  RELEASE_PROXY_SYMBOL,
-} from "@/types/symbols";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import { installProxyLifecycle } from "@/service/proxy-lifecycle";
 import { relayNexusStore } from "./index";
 import { createNexusStore } from "@/state/bind-store";
 import { createRemoteStore } from "@/state/remote-store";
@@ -25,7 +22,23 @@ type State = { count: number };
 type Actions = { increment(by: number): number };
 type Event = SyncEnvelope<State, State & Actions>;
 
+const connectionFor = (service: object) => ({
+  get: () => service,
+  safeGet: () => Result.ok(service),
+});
+
 const definition = createStoreToken<State & Actions>("relay:test-store");
+const lifecycleInstalled = new WeakSet<object>();
+
+const withLifecycle = <T extends object>(service: T): T => {
+  if (lifecycleInstalled.has(service)) return service;
+  installProxyLifecycle(service, definition.id, "upstream", {
+    subscribeDisconnect: () => () => undefined,
+    subscribeStale: () => () => undefined,
+  });
+  lifecycleInstalled.add(service);
+  return service;
+};
 
 const context = (connectionId: string): ServiceInvocationContext => ({
   sourceConnectionId: connectionId,
@@ -36,14 +49,14 @@ const context = (connectionId: string): ServiceInvocationContext => ({
 
 const makeUpstream = (
   options: {
-    onDisconnect?: (callback: () => void) => void;
-    onStale?: (callback: () => void) => void;
+    onDisconnect?: (callback: () => void) => () => void;
+    onStale?: (callback: () => void) => () => void;
     initialCount?: number;
   } = {},
 ) => {
   let count = options.initialCount ?? 0;
   let version = 0;
-  const subscribers = new Set<(event: Event) => void | Promise<void>>();
+  const subscribers = new Set<(event: Event) => void | PromiseLike<void>>();
   const actions: RemoteActions<Actions> = {
     increment: async (by) => {
       count += by;
@@ -58,8 +71,8 @@ const makeUpstream = (
       return count;
     },
   };
-  const service = {
-    async subscribe(listener: (event: Event) => void | Promise<void>) {
+  const service: NexusStoreServiceContract<State & Actions> = {
+    async subscribe(listener: (event: Event) => void | PromiseLike<void>) {
       subscribers.add(listener);
       await listener({
         type: "init",
@@ -72,17 +85,17 @@ const makeUpstream = (
         },
       });
     },
-    [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: options.onDisconnect,
-    [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: options.onStale,
-  } as unknown as NexusStoreServiceContract<State & Actions> & {
-    [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]?: (
-      callback: () => void,
-    ) => void;
-    [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]?: (
-      callback: () => void,
-    ) => void;
   };
-  return { service, actions };
+  installProxyLifecycle(service, definition.id, "upstream", {
+    subscribeDisconnect: options.onDisconnect ?? (() => () => undefined),
+    subscribeStale: options.onStale ?? (() => () => undefined),
+  });
+  return {
+    service,
+    actions,
+    emit: (event: Event) =>
+      Promise.all([...subscribers].map((listener) => listener(event))),
+  };
 };
 
 const createRelay = (
@@ -91,7 +104,7 @@ const createRelay = (
 ) =>
   relayNexusStore(definition, {
     forwardThrough: {
-      create: vi.fn(async () => upstream.service),
+      connect: vi.fn(async () => connectionFor(upstream.service)),
     } as any,
     forwardTarget: { context: "background" },
     policy,
@@ -113,6 +126,144 @@ const subscribeRelay = (
 };
 
 describe("relayNexusStore", () => {
+  it("defers shared callback release across reentrant unsubscribe and owner disconnect", async () => {
+    let disconnect!: () => void;
+    const upstream = makeUpstream({
+      onDisconnect: (listener) => {
+        disconnect = listener;
+        return () => {};
+      },
+    });
+    const relay = createRelay(upstream);
+    const stops: (() => void)[] = [];
+    let acknowledge!: () => void;
+    const ack = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const release = vi.fn();
+    const terminal = vi.fn();
+    const listener = Object.assign(
+      (event: Event) => {
+        if (event.type === "init") stops.push(event.unsubscribe);
+        if (event.type === "terminal") {
+          terminal();
+          for (const stop of stops) stop();
+          (relay.service as any)[SERVICE_ON_DISCONNECT]("shared");
+          return ack;
+        }
+      },
+      { [RELEASE_PROXY_SYMBOL]: release },
+    );
+    await subscribeRelay(relay.service, listener, context("shared"));
+    await subscribeRelay(relay.service, listener, context("shared"));
+    disconnect();
+    expect(terminal).toHaveBeenCalledTimes(2);
+    expect(release).not.toHaveBeenCalled();
+    acknowledge();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  });
+
+  it("does not subscribe to an upstream already reported disconnected", async () => {
+    let disconnect!: () => void;
+    const upstream = makeUpstream({
+      onDisconnect: (listener) => {
+        disconnect = listener;
+        return () => {};
+      },
+    });
+    const subscribe = vi.spyOn(upstream.service, "subscribe");
+    disconnect();
+    const relay = createRelay(upstream);
+    const events: Event[] = [];
+    await expect(
+      subscribeRelay(
+        relay.service,
+        (event) => {
+          events.push(event);
+        },
+        context("one"),
+      ),
+    ).rejects.toMatchObject({ code: "E_STORE_DISCONNECTED" });
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual(["terminal"]);
+  });
+  it("keeps a callback alive until an upstream terminal event is acknowledged", async () => {
+    const upstream = makeUpstream();
+    const relay = createRelay(upstream);
+    let acknowledge!: () => void;
+    const ack = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const release = vi.fn();
+    const listener = Object.assign(
+      (event: Event) => {
+        if (event.type === "terminal") return ack;
+      },
+      { [RELEASE_PROXY_SYMBOL]: release },
+    );
+    await subscribeRelay(relay.service, listener, context("one"));
+    await expect(
+      upstream.emit({
+        type: "terminal",
+        storeInstanceId: "upstream",
+        lastKnownVersion: 0,
+        reason: "source-disconnected",
+      }),
+    ).rejects.toMatchObject({ code: "E_STORE_DISCONNECTED" });
+    expect(release).not.toHaveBeenCalled();
+    const lateRelease = vi.fn();
+    const late = Object.assign(vi.fn(), {
+      [RELEASE_PROXY_SYMBOL]: lateRelease,
+    });
+    await expect(
+      subscribeRelay(relay.service, late, context("late")),
+    ).rejects.toMatchObject({ code: "E_STORE_DISCONNECTED" });
+    expect(late).not.toHaveBeenCalled();
+    expect(lateRelease).toHaveBeenCalledOnce();
+    acknowledge();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  });
+  it("stops upstream work while a terminal callback is still pending", async () => {
+    let disconnect!: () => void;
+    const stopWatching = vi.fn();
+    const upstream = makeUpstream({
+      onDisconnect: (listener) => {
+        disconnect = listener;
+        return stopWatching;
+      },
+    });
+    const relay = createRelay(upstream);
+    const events: Event[] = [];
+    let acknowledge!: () => void;
+    let delivered!: () => void;
+    const terminalStarted = new Promise<void>((resolve) => {
+      delivered = resolve;
+    });
+    const terminalAck = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const release = vi.fn();
+    const listener = Object.assign(
+      (event: Event) => {
+        events.push(event);
+        if (event.type === "terminal") {
+          delivered();
+          return terminalAck;
+        }
+      },
+      { [RELEASE_PROXY_SYMBOL]: release },
+    );
+    await subscribeRelay(relay.service, listener, context("one"));
+    disconnect();
+    await terminalStarted;
+    // Closed relay listeners must not keep upstream actions waiting for their ACK.
+    await expect(upstream.actions.increment(1)).resolves.toBe(1);
+    expect(stopWatching).toHaveBeenCalledOnce();
+    expect(events.map((event) => event.type)).toEqual(["init", "terminal"]);
+    expect(release).not.toHaveBeenCalled();
+    acknowledge();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  });
   it("rejects an old invocation after its connection ID is reused", async () => {
     const upstream = makeUpstream();
     const relay = createRelay(upstream);
@@ -144,7 +295,9 @@ describe("relayNexusStore", () => {
     const upstream = makeUpstream();
     const invoke = vi.spyOn(upstream.actions, "increment");
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => upstream.service } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(upstream.service),
+      } as any,
       forwardTarget: { context: "background" },
       policy: { canDispatch: () => policy },
     });
@@ -175,16 +328,14 @@ describe("relayNexusStore", () => {
     const acquiring = new Promise<void>((resolve) => {
       started = resolve;
     });
-    const acquisition = new Promise<ReturnType<typeof makeUpstream>["service"]>(
-      (resolve) => {
-        acquired = resolve;
-      },
-    );
+    const acquisition = new Promise<object>((resolve) => {
+      acquired = resolve;
+    });
     const upstream = makeUpstream();
     const subscribe = vi.spyOn(upstream.service, "subscribe");
     const relay = relayNexusStore(definition, {
       forwardThrough: {
-        create: () => {
+        connect: () => {
           started();
           return acquisition;
         },
@@ -197,7 +348,7 @@ describe("relayNexusStore", () => {
     });
     await acquiring;
     (relay.service as any)[SERVICE_ON_DISCONNECT]("one");
-    acquired(upstream.service);
+    acquired(connectionFor(upstream.service));
     const result = await pending;
     expect(result.isErr()).toBe(true);
     if (result.isErr())
@@ -221,7 +372,9 @@ describe("relayNexusStore", () => {
       },
     );
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => provider.service } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(withLifecycle(provider.service)),
+      } as any,
       forwardTarget: { context: "background" },
     });
     const failed = Object.assign(
@@ -247,7 +400,7 @@ describe("relayNexusStore", () => {
   });
 
   it("deduplicates snapshots, isolates downstream state, and rejects version regression", async () => {
-    let receive!: (event: Event) => void | Promise<void>;
+    let receive!: (event: Event) => void | PromiseLike<void>;
     const upstream = makeUpstream();
     const service = {
       async subscribe(callback: typeof receive) {
@@ -255,8 +408,11 @@ describe("relayNexusStore", () => {
         await upstream.service.subscribe(callback);
       },
     };
+    withLifecycle(service);
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => service } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(service),
+      } as any,
       forwardTarget: { context: "background" },
     });
     const events: Event[] = [];
@@ -285,12 +441,15 @@ describe("relayNexusStore", () => {
   it("preserves early snapshots and overlapping upstream baselines", async () => {
     const callbacks: Array<(event: Event) => void | Promise<void>> = [];
     const upstream = {
-      async subscribe(callback: (event: Event) => void | Promise<void>) {
+      async subscribe(callback: (event: Event) => void | PromiseLike<void>) {
         callbacks.push(callback);
       },
     };
+    withLifecycle(upstream);
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => upstream } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(upstream),
+      } as any,
       forwardTarget: { context: "background" },
     });
     // Hold both subscribe replies until their independently delivered init callbacks.
@@ -361,7 +520,7 @@ describe("relayNexusStore", () => {
   });
 
   it("closes the downstream and releases capabilities on a malformed live event", async () => {
-    let receive!: (event: unknown) => void | Promise<void>;
+    let receive!: (event: unknown) => void | PromiseLike<void>;
     const unsubscribe = Object.assign(vi.fn(), {
       [RELEASE_PROXY_SYMBOL]: vi.fn(),
     });
@@ -382,10 +541,15 @@ describe("relayNexusStore", () => {
           unsubscribe,
         });
       },
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => stopObserver,
     };
+    installProxyLifecycle(upstream, definition.id, "upstream", {
+      subscribeDisconnect: () => stopObserver,
+      subscribeStale: () => () => undefined,
+    });
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => upstream } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(upstream),
+      } as any,
       forwardTarget: { context: "background" },
     });
     const events: Event[] = [];
@@ -405,7 +569,6 @@ describe("relayNexusStore", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(unsubscribe[RELEASE_PROXY_SYMBOL]).toHaveBeenCalledOnce();
     expect(increment[RELEASE_PROXY_SYMBOL]).toHaveBeenCalledOnce();
-    expect(stopObserver).toHaveBeenCalledOnce();
     await expect(initOf(events).actions.increment(1)).rejects.toMatchObject({
       code: "E_STORE_DISCONNECTED",
     });
@@ -417,9 +580,9 @@ describe("relayNexusStore", () => {
     const policy = new Promise<boolean>((resolve) => {
       allow = resolve;
     });
-    const create = vi.fn();
+    const safeConnect = vi.fn();
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create } as any,
+      forwardThrough: { connect: safeConnect } as any,
       forwardTarget: { context: "background" },
       policy: { canSubscribe: () => policy },
     });
@@ -434,7 +597,7 @@ describe("relayNexusStore", () => {
     expect(result.isErr()).toBe(true);
     if (result.isErr())
       expect(result.error).toMatchObject({ code: "E_STORE_DISCONNECTED" });
-    expect(create).not.toHaveBeenCalled();
+    expect(safeConnect).not.toHaveBeenCalled();
   });
 
   it("reclaims late upstream capabilities and lifecycle observers after downstream disconnect", async () => {
@@ -471,10 +634,15 @@ describe("relayNexusStore", () => {
           ready();
         });
       },
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => stopObserver,
     };
+    installProxyLifecycle(upstream, definition.id, "upstream", {
+      subscribeDisconnect: () => stopObserver,
+      subscribeStale: () => () => undefined,
+    });
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => upstream } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(upstream),
+      } as any,
       forwardTarget: { context: "background" },
     });
     const downstream = vi.fn();
@@ -491,7 +659,6 @@ describe("relayNexusStore", () => {
     if (result.isErr())
       expect(result.error).toMatchObject({ code: "E_RELAY_UPSTREAM_FAILURE" });
     expect(downstream).not.toHaveBeenCalled();
-    expect(stopObserver).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(unsubscribe[RELEASE_PROXY_SYMBOL]).toHaveBeenCalledOnce();
     expect(increment[RELEASE_PROXY_SYMBOL]).toHaveBeenCalledOnce();
@@ -533,7 +700,9 @@ describe("relayNexusStore", () => {
       },
     );
     const relay = relayNexusStore(definition, {
-      forwardThrough: { create: async () => provider.service } as any,
+      forwardThrough: {
+        connect: async () => connectionFor(withLifecycle(provider.service)),
+      } as any,
       forwardTarget: { context: "background" },
     });
     let release!: () => void;
@@ -648,8 +817,18 @@ describe("relayNexusStore", () => {
       let notify!: () => void;
       const upstream = makeUpstream(
         kind === "disconnect"
-          ? { onDisconnect: (callback) => (notify = callback) }
-          : { onStale: (callback) => (notify = callback) },
+          ? {
+              onDisconnect: (callback) => {
+                notify = callback;
+                return () => undefined;
+              },
+            }
+          : {
+              onStale: (callback) => {
+                notify = callback;
+                return () => undefined;
+              },
+            },
       );
       const relay = createRelay(upstream);
       const events: Event[] = [];
@@ -671,23 +850,30 @@ describe("relayNexusStore", () => {
   );
 
   it("terminalizes subscribers when upstream store identity changes", async () => {
-    let listener!: (event: Event) => void | Promise<void>;
+    let listener!: (event: Event) => void | PromiseLike<void>;
     const upstream = makeUpstream();
     const relay = relayNexusStore(definition, {
       forwardThrough: {
-        create: vi.fn(async () => ({
-          async subscribe(callback: typeof listener) {
-            listener = callback;
-            await callback({
-              type: "init",
-              storeInstanceId: "one",
-              version: 0,
-              state: { count: 0 },
-              actions: upstream.actions,
-              unsubscribe: () => undefined,
-            } as Event);
-          },
-        })),
+        connect: vi.fn(async () => {
+          const service = {
+            async subscribe(callback: typeof listener) {
+              listener = callback;
+              await callback({
+                type: "init",
+                storeInstanceId: "one",
+                version: 0,
+                state: { count: 0 },
+                actions: upstream.actions,
+                unsubscribe: () => undefined,
+              } as Event);
+            },
+          };
+          installProxyLifecycle(service, definition.id, "upstream", {
+            subscribeDisconnect: () => () => undefined,
+            subscribeStale: () => () => undefined,
+          });
+          return connectionFor(service);
+        }),
       } as any,
       forwardTarget: { context: "background" },
     });

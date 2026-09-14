@@ -8,7 +8,7 @@ Use `ContextMeta` for peer identity and `where`. Use `ConnectionMeta` for adapte
 
 ## Field Placement
 
-- Put fields in `ContextMeta` when they are app-declared identity, product labels, routing fields, tenant/region/context markers, inputs for `where`, or policy that can trust peer-declared identity.
+- Put fields in `ContextMeta` when they are app-declared identity, product labels, tenant/region/context markers, inputs for acquisition `where`, or policy that can trust peer-declared identity.
 - Put fields in `ConnectionMeta` when they are adapter-observed facts, transport facts, source/process details, authentication results, admission results, or stronger inputs for security-sensitive policy.
 - Avoid secrets, credentials, large payloads, mutable objects, and frequently changing business state in either metadata channel. Use service calls or Nexus State for application data.
 - Prefer discriminated unions with a `context` field for `ContextMeta` roles so `where` and policy stay type-narrowed.
@@ -19,6 +19,7 @@ Use `ContextMeta` for peer identity and `where`. Use `ConnectionMeta` for adapte
 - Provide `ContextMeta` through `configure(...)`, adapter helper options, or `updateIdentity(...)` when routing-relevant identity changes.
 - Treat `ConnectionMeta` as adapter-owned, immutable, session-scoped metadata. Application options may feed adapter auth/admission, but the resulting facts should come from the adapter.
 - Use `updateIdentity(...)` only for changes that affect targeting, policy, diagnostics, or lifecycle behavior; keep ordinary app data out of identity.
-- Recreate raw `nexus.create(...)` proxies and refs after session replacement, connection loss, or identity replacement that should retarget future calls.
+- Reconnect and get fresh proxies and refs after session replacement, connection loss, or identity replacement that should affect future acquisition.
+- Use `connection.subscribeIdentity(listener)` when code needs the peer's immediate full `ContextMeta` and each later validated update. It does not deduplicate values or rerun `onConnect`.
 
 For the full public guide, see https://c-w-xiaohei.github.io/nexus/docs/identity-and-metadata/.

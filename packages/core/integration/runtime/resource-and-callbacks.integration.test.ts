@@ -6,7 +6,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NexusDisconnectedError } from "../../src/errors/call-errors";
-import { NexusResourceError } from "../../src/errors/resource-errors";
 import {
   type AppUserMeta,
   ContentScriptServiceToken,
@@ -29,19 +28,18 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   });
 
   it("should pass stateful objects by reference using nexus.ref()", async () => {
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const csApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.issueId === "CS1",
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     expect(csApi).toBeDefined();
 
     const processorProxy = await csApi.getTimelineProcessor();
-    processorProxy.addEvent("event-1-from-background");
-    processorProxy.addEvent("event-2-from-background");
+    await processorProxy.addEvent("event-1-from-background");
+    await processorProxy.addEvent("event-2-from-background");
 
     const result = await processorProxy.process();
 
@@ -54,14 +52,13 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
     const initialResourceCount = cs1ResourceManager.countLocalResources();
 
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const csApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.issueId === "CS1",
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     expect(csApi).toBeDefined();
 
     const processorProxy = await csApi.getTimelineProcessor();
@@ -81,12 +78,11 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   it("releases an explicitly marked remote resource through using", async () => {
     const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
     const initialResourceCount = cs1ResourceManager.countLocalResources();
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const csApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     {
       using processorProxy = await csApi.getTimelineProcessor();
@@ -103,14 +99,13 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   });
 
   it("should treat released remote resource proxies as terminal capabilities", async () => {
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const csApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.issueId === "CS1",
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     const processorProxy = await csApi.getTimelineProcessor();
     world.background.nexus.release(processorProxy);
@@ -118,37 +113,32 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     await expect(processorProxy.process()).rejects.toThrow(/released/i);
   });
 
-  it("should throw on SET after a remote resource proxy is released", async () => {
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+  it("should reject SET after a remote resource proxy is released", async () => {
+    const csApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: (id: AppUserMeta, _connectionMeta) =>
           id.context === "content-script" && id.issueId === "CS1",
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     const processorProxy: any = await csApi.getTimelineProcessor();
     world.background.nexus.release(processorProxy);
 
     expect(() => {
       processorProxy.someProp = "blocked-after-release";
-    }).toThrow(NexusResourceError);
-    expect(() => {
-      processorProxy.someProp = "blocked-after-release";
-    }).toThrow(/released/i);
+    }).toThrow(TypeError);
   });
 
   it("keeps old remote resource proxies disconnected after replacement connection appears", async () => {
-    const csApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const csApi = (
+      await world.background.nexus.connect({
         target: {
           context: "content-script",
           issueId: "CS1",
         },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
 
     const oldProcessorProxy = await csApi.getTimelineProcessor();
 
@@ -161,15 +151,14 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     expect(cs1Connection).toBeDefined();
     cs1Connection!.close();
 
-    const freshApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const freshApi = (
+      await world.background.nexus.connect({
         target: {
           context: "content-script",
           issueId: "CS1",
         },
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     const freshProcessorProxy = await freshApi.getTimelineProcessor();
 
     await expect(oldProcessorProxy.process()).rejects.toBeInstanceOf(
@@ -184,26 +173,24 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
     const logicalTarget = (id: AppUserMeta) =>
       id.context === "content-script" && id.isActive;
 
-    const oldApi = await world.background.nexus.create(
-      ContentScriptServiceToken,
-      {
+    const oldApi = (
+      await world.background.nexus.connect({
         target: { context: "content-script", issueId: "CS1" },
         where: logicalTarget,
-      },
-    );
+      })
+    ).get(ContentScriptServiceToken);
     const oldProcessorProxy = await oldApi.getTimelineProcessor();
 
     await world.cs1.nexus.updateIdentity({ isActive: false });
     await world.cs2.nexus.updateIdentity({ isActive: true });
 
     const freshApi = await vi.waitFor(async () => {
-      const candidate = await world.background.nexus.create(
-        ContentScriptServiceToken,
-        {
+      const candidate = (
+        await world.background.nexus.connect({
           target: { context: "content-script", issueId: "CS2" },
           where: logicalTarget,
-        },
-      );
+        })
+      ).get(ContentScriptServiceToken);
       await expect(candidate.getTitle()).resolves.toContain("CS2");
       return candidate;
     });

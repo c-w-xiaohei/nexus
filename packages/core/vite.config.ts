@@ -23,6 +23,7 @@ export default defineConfig({
           __dirname,
           "src/transport/serializers/serializer-benchmark.ts",
         ),
+        "internal/testing": path.resolve(__dirname, "src/internal/testing.ts"),
         "state/index": path.resolve(__dirname, "src/state/index.ts"),
         "relay/index": path.resolve(__dirname, "src/relay/index.ts"),
         "transport/index": path.resolve(__dirname, "src/transport/index.ts"),

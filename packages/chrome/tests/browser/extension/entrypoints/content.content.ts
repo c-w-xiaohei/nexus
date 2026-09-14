@@ -1,4 +1,8 @@
-import { type ChromeAdapterModel, usingContentScript } from "@nexus-js/chrome";
+import {
+  chromeTarget,
+  type ChromeAdapterModel,
+  usingContentScript,
+} from "@nexus-js/chrome";
 import type {
   Asyncified,
   ConnectionWhere,
@@ -42,33 +46,30 @@ type FixtureChromeModel = ChromeAdapterModel<FixtureAppMeta>;
 type FixtureWhere = ConnectionWhere<FixtureChromeModel>;
 type FixtureContext = Parameters<FixtureWhere>[0];
 type FixtureNexus = NexusInstance<FixtureChromeModel>;
-type ContentStateClient = RemoteStore<WorkspaceStore>;
-type WorkspaceProxy = Asyncified<WorkspaceService>;
-type ContentReporter = ReturnType<typeof createReporter>;
 type ContentCommandReporter = Pick<
-  ContentReporter,
+  ReturnType<typeof createReporter>,
   "barrier" | "result" | "error" | "terminalResult"
 >;
 
 type MainContentState = {
-  client: ContentStateClient | undefined;
+  client: RemoteStore<WorkspaceStore> | undefined;
   unsubscribe: (() => void) | undefined;
   subscriptionSequence: number;
 };
 
 type WorkerContentState = {
-  retained: ContentStateClient | undefined;
+  retained: RemoteStore<WorkspaceStore> | undefined;
   retainedUnsubscribe: (() => void) | undefined;
-  fresh: ContentStateClient | undefined;
+  fresh: RemoteStore<WorkspaceStore> | undefined;
 };
 
 type WorkerProxyHandles = {
-  retained: WorkspaceProxy | undefined;
+  retained: Asyncified<WorkspaceService> | undefined;
 };
 
 type WorkerCapabilityHandles = {
-  retained: WorkspaceCapability | undefined;
-  fresh: WorkspaceCapability | undefined;
+  retained: Asyncified<WorkspaceCapability> | undefined;
+  fresh: Asyncified<WorkspaceCapability> | undefined;
 };
 
 type ContentRouteProbe = {
@@ -82,6 +83,7 @@ export default defineContentScript({
   allFrames: true,
   world: "ISOLATED",
   runAt: "document_start",
+  /** Bootstrap the content fixture, providers, State mirror, and command queue. */
   main() {
     const searchParams = new URLSearchParams(location.search);
     const label = searchParams.get("frame") ?? "main";
@@ -186,6 +188,7 @@ export default defineContentScript({
         mainState.client = await connectNexusStore(
           nexus,
           workspaceStateDefinition,
+          { target: chromeTarget.background() },
         );
         const state = mainState.client;
         mainState.unsubscribe = state.subscribe(() => {
@@ -280,17 +283,21 @@ export default defineContentScript({
       });
     });
 
+    /** Connect to the background workspace service and report its generation. */
     async function connectBackground(
       commandReporter: ContentCommandReporter = reporter,
     ): Promise<void> {
       await reporter.barrier("content-connect");
-      const workspace = await nexus.create(WorkspaceToken);
+      const workspace = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(WorkspaceToken));
       const summary = await workspace.summary();
       await commandReporter.result(
         `background:${summary.generation}:${summary.nonce}`,
       );
     }
 
+    /** Serialize fixture command execution through the content-script queue. */
     async function runCommand(
       command: (typeof scenarioCommands)[number],
       reporter: ReturnType<typeof createReporter>,
@@ -364,8 +371,9 @@ export default defineContentScript({
   },
 });
 
+/** Observe native content routes and expose deterministic fixture facts. */
 function createContentRouteProbe(
-  reporter: ContentReporter,
+  reporter: ReturnType<typeof createReporter>,
   sessionId: string,
   nonce: string,
 ): ContentRouteProbe {
@@ -384,15 +392,18 @@ function createContentRouteProbe(
   });
 
   return {
+    /** Return current route counters and the identity captured by this probe. */
     facts: () => ({
       accepted: acceptedRoutes,
       invocationCount,
       sessionId,
       nonce,
     }),
+    /** Count a service invocation observed through the route. */
     recordInvocation: () => {
       invocationCount += 1;
     },
+    /** Arm the next accepted route for deterministic pre-ready closure testing. */
     armPreReadyClose: async () => {
       preReadyArmed = true;
       await reporter.barrier("pre-ready-armed");
@@ -400,6 +411,7 @@ function createContentRouteProbe(
   };
 }
 
+/** Handle commands that exercise content-to-background connection behavior. */
 async function runContentBackgroundCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -417,24 +429,32 @@ async function runContentBackgroundCommand(
   }
   if (command === "provider-first-select") {
     await connectBackground(reporter);
-    const admin = await nexus.create(TargetedContentAdminToken);
+    const admin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(TargetedContentAdminToken));
     await reporter.result(JSON.stringify(await admin.providerFirstSelect()));
     return true;
   }
   if (command === "background-summary") {
-    const workspace = await nexus.create(WorkspaceToken, {
+    const workspace = (
+      await nexus.connect({ target: chromeTarget.background() })
+    ).get(WorkspaceToken, {
       callTimeout: 30_000,
     });
     await reporter.result(JSON.stringify(await workspace.summary()));
     return true;
   }
   if (command === "background-increment") {
-    const workspace = await nexus.create(WorkspaceToken);
+    const workspace = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(WorkspaceToken));
     await reporter.result(String(await workspace.increment()));
     return true;
   }
   if (command === "background-setting") {
-    const workspace = await nexus.create(WorkspaceToken);
+    const workspace = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(WorkspaceToken));
     await reporter.result(await workspace.setting());
     return true;
   }
@@ -447,7 +467,9 @@ async function runContentBackgroundCommand(
     return true;
   }
   if (command === "content-hold") {
-    const admin = await nexus.create(TargetedContentAdminToken);
+    const admin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(TargetedContentAdminToken));
     await reporter.result(JSON.stringify(await admin.contentHold(label)));
     return true;
   }
@@ -465,6 +487,7 @@ async function runContentBackgroundCommand(
   return true;
 }
 
+/** Forward capability, multicast, offscreen, and policy commands to the admin service. */
 async function runFixtureAdminCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -484,11 +507,15 @@ async function runFixtureAdminCommand(
   )
     return false;
   if (command === "identity-constraint") {
-    const admin = await nexus.create(TargetedContentAdminToken);
+    const admin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(TargetedContentAdminToken));
     await reporter.result(JSON.stringify(await admin.identityConstraint()));
     return true;
   }
-  const admin = await nexus.create(FixtureAdminToken);
+  const admin = await nexus
+    .connect({ target: chromeTarget.background() })
+    .then((connection) => connection.get(FixtureAdminToken));
   const result =
     command === "multicast-bound-invoke"
       ? await admin.multicastBoundInvoke()
@@ -511,31 +538,39 @@ async function runFixtureAdminCommand(
   return true;
 }
 
+/** Exercise durable storage through the background workspace service. */
 async function runWorkerStorageCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
   reporter: ContentCommandReporter,
 ): Promise<boolean> {
   if (command === "worker-storage-write") {
-    const workspace = await nexus.create(WorkspaceToken);
+    const workspace = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(WorkspaceToken));
     await reporter.result(
       JSON.stringify({ durable: await workspace.setSetting("worker-durable") }),
     );
     return true;
   }
   if (command !== "worker-storage-read") return false;
-  const workspace = await nexus.create(WorkspaceToken);
+  const workspace = await nexus
+    .connect({ target: chromeTarget.background() })
+    .then((connection) => connection.get(WorkspaceToken));
   await reporter.result(JSON.stringify({ durable: await workspace.setting() }));
   return true;
 }
 
+/** Exercise call policy and cancellation behavior from the content context. */
 async function runContentControlCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
   reporter: ContentCommandReporter,
 ): Promise<boolean> {
   if (command === "policy-deny" || command === "policy-allow") {
-    const admin = await nexus.create(FixtureAdminToken);
+    const admin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(FixtureAdminToken));
     await reporter.result(
       JSON.stringify(await admin.setCallPolicy(command === "policy-deny")),
     );
@@ -543,11 +578,14 @@ async function runContentControlCommand(
   }
   if (command === "abort-acquire") {
     const controller = new AbortController();
-    const pending = nexus.safeSelect(DocumentToolToken, {
-      where: (context: FixtureContext) =>
-        context.app.label === "fixture-impossible-provider",
-      wait: { signal: controller.signal },
-    });
+    const pending = nexus
+      .safeConnect({
+        target: chromeTarget.background(),
+        signal: controller.signal,
+      })
+      .then((result) =>
+        result.andThen((connection) => connection.safeGet(DocumentToolToken)),
+      );
     await reporter.barrier("abort-started");
     controller.abort();
     const result = await pending;
@@ -561,11 +599,14 @@ async function runContentControlCommand(
     return true;
   }
   if (command !== "security-counter") return false;
-  const workspace = await nexus.create(WorkspaceToken);
+  const workspace = await nexus
+    .connect({ target: chromeTarget.background() })
+    .then((connection) => connection.get(WorkspaceToken));
   await reporter.result(JSON.stringify(await workspace.summary()));
   return true;
 }
 
+/** Publish a content identity update and wait for its observation barrier. */
 async function runIdentityUpdateCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -590,6 +631,7 @@ async function runIdentityUpdateCommand(
   return true;
 }
 
+/** Execute State commands owned by the main content-script mirror. */
 async function runContentStateCommand(
   command: ScenarioCommand,
   state: MainContentState,
@@ -645,6 +687,7 @@ async function runContentStateCommand(
   return true;
 }
 
+/** Exercise retained and fresh worker service proxies across worker lifecycle events. */
 async function runWorkerProxyCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -653,7 +696,9 @@ async function runWorkerProxyCommand(
 ): Promise<boolean> {
   if (command === "worker-pending") {
     const callTimeoutMs = 30_000;
-    const workspace = await nexus.create(WorkspaceToken, {
+    const workspace = (
+      await nexus.connect({ target: chromeTarget.background() })
+    ).get(WorkspaceToken, {
       callTimeout: callTimeoutMs,
     });
     await reporter.barrier("worker-pending-call-started");
@@ -673,11 +718,14 @@ async function runWorkerProxyCommand(
     return true;
   }
   if (command === "worker-proxy-retain") {
-    handles.retained = await nexus.create(WorkspaceToken, {
+    const retained = (
+      await nexus.connect({ target: chromeTarget.background() })
+    ).get(WorkspaceToken, {
       callTimeout: 30_000,
     });
+    handles.retained = retained;
     await reporter.result(
-      JSON.stringify({ retained: await handles.retained.summary() }),
+      JSON.stringify({ retained: await retained.summary() }),
     );
     return true;
   }
@@ -698,10 +746,16 @@ async function runWorkerProxyCommand(
     return true;
   }
   if (command !== "worker-proxy-fresh") return false;
-  const created = await nexus.safeCreate(WorkspaceToken, {
-    timeout: 5_000,
-    callTimeout: 30_000,
-  });
+  const created = await nexus
+    .safeConnect({
+      target: chromeTarget.background(),
+      timeout: 5_000,
+    })
+    .then((result) =>
+      result.andThen((connection) =>
+        connection.safeGet(WorkspaceToken, { callTimeout: 30_000 }),
+      ),
+    );
   if (created.isErr()) {
     await reporter.terminalResult(JSON.stringify(errorResult(created.error)));
     return true;
@@ -712,6 +766,7 @@ async function runWorkerProxyCommand(
   return true;
 }
 
+/** Exercise retained, fresh, and cleaned-up worker State mirrors. */
 async function runWorkerStateCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -719,7 +774,9 @@ async function runWorkerStateCommand(
   reporter: ContentCommandReporter,
 ): Promise<boolean> {
   if (command === "worker-state-retain") {
-    state.retained = await connectNexusStore(nexus, workspaceStateDefinition);
+    state.retained = await connectNexusStore(nexus, workspaceStateDefinition, {
+      target: chromeTarget.background(),
+    });
     state.retainedUnsubscribe = state.retained.subscribe(() => {});
     await reporter.terminalResult(
       JSON.stringify({
@@ -744,7 +801,9 @@ async function runWorkerStateCommand(
     return true;
   }
   if (command === "worker-state-fresh") {
-    state.fresh = await connectNexusStore(nexus, workspaceStateDefinition);
+    state.fresh = await connectNexusStore(nexus, workspaceStateDefinition, {
+      target: chromeTarget.background(),
+    });
     await reporter.terminalResult(
       JSON.stringify({
         state: state.fresh.getState(),
@@ -765,8 +824,9 @@ async function runWorkerStateCommand(
   return true;
 }
 
+/** Release a worker State mirror and report cleanup failures and final status. */
 function cleanupState(
-  state: ContentStateClient | undefined,
+  state: RemoteStore<WorkspaceStore> | undefined,
   unsubscribe: (() => void) | undefined,
 ) {
   let error: string | null = null;
@@ -780,7 +840,8 @@ function cleanupState(
   } catch (cause) {
     error ??= fixtureErrorCode(cause);
   }
-  let status: ReturnType<ContentStateClient["getStatus"]> | null = null;
+  let status: ReturnType<RemoteStore<WorkspaceStore>["getStatus"]> | null =
+    null;
   try {
     status = state?.getStatus() ?? null;
   } catch (cause) {
@@ -790,6 +851,7 @@ function cleanupState(
   return { status, error };
 }
 
+/** Exercise retained remote capabilities and explicit capability release. */
 async function runWorkerCapabilityCommand(
   command: ScenarioCommand,
   nexus: FixtureNexus,
@@ -797,7 +859,9 @@ async function runWorkerCapabilityCommand(
   reporter: ContentCommandReporter,
 ): Promise<boolean> {
   if (command === "worker-capability-retain") {
-    const workspace = await nexus.create(WorkspaceToken);
+    const workspace = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(WorkspaceToken));
     const callback = await workspace.acceptCallback(async () => "callback-ok");
     handles.retained = await workspace.createCapability();
     await reporter.result(
@@ -818,7 +882,9 @@ async function runWorkerCapabilityCommand(
     return true;
   }
   if (command === "worker-capability-fresh") {
-    const workspace = await nexus.create(WorkspaceToken, {
+    const workspace = (
+      await nexus.connect({ target: chromeTarget.background() })
+    ).get(WorkspaceToken, {
       callTimeout: 30_000,
     });
     const callback = await workspace.acceptCallback(
@@ -856,6 +922,7 @@ async function runWorkerCapabilityCommand(
   return true;
 }
 
+/** Send pre-route commands through the background control bridge. */
 async function runTargetedCommand(
   command: (typeof scenarioCommands)[number],
   runId: string,
@@ -863,6 +930,7 @@ async function runTargetedCommand(
 ): Promise<Record<string, unknown> | undefined> {
   // These operations intentionally test routing before this content context
   // has a Nexus route; acquiring the admin proxy would create that route.
+  /** Send one pre-route command through the extension background bridge. */
   const invoke = () =>
     chrome.runtime.sendMessage({
       kind: "fixture-command",
@@ -873,6 +941,7 @@ async function runTargetedCommand(
   return isPreRouteCommand(command) ? invoke() : undefined;
 }
 
+/** Accept only the local fixture origins when forwarding results to a parent frame. */
 function parentOrigin(referrer: string): string | undefined {
   try {
     const origin = new URL(referrer).origin;
@@ -888,6 +957,7 @@ function parentOrigin(referrer: string): string | undefined {
   }
 }
 
+/** Normalize a content fixture failure to the stable error-code result shape. */
 function errorResult(error: unknown): Record<string, string> {
   return { code: fixtureErrorCode(error) };
 }

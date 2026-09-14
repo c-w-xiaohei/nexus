@@ -5,6 +5,7 @@ import { createNexusStore } from "../../src/state/bind-store";
 import { createStoreToken } from "../../src/state/contract";
 import { connectNexusStore } from "../../src/state/connect-store";
 import { createRemoteStore } from "../../src/state/remote-store";
+import { installProxyLifecycle } from "../../src/service/proxy-lifecycle";
 import {
   SERVICE_INVOKE_START,
   SERVICE_INVOKE_END,
@@ -12,6 +13,7 @@ import {
   type ServiceInvocationHooks,
 } from "../../src/service/service-invocation-hooks";
 import { z } from "zod";
+import { Result } from "better-result";
 import type {
   NexusStoreServiceContract,
   StoreData,
@@ -273,7 +275,7 @@ describe("State callback lifecycle across host and mirror", () => {
       }
     });
     const pending = subscription.actions.add(1);
-    const rejected = pending.catch((error) => error);
+    const rejected = Promise.resolve(pending).catch((error) => error);
     await notified.promise;
     subscription.unsubscribe();
     expect(await rejected).toMatchObject({ code: "E_STORE_DISCONNECTED" });
@@ -606,8 +608,19 @@ describe("State callback lifecycle across host and mirror", () => {
         });
       }),
     } as unknown as NexusStoreServiceContract<Data & Actions>;
+    installProxyLifecycle(service, token.id, "fixture", {
+      subscribeDisconnect: () => () => undefined,
+      subscribeStale: () => () => undefined,
+    });
     const remote = await connectNexusStore(
-      { create: async () => service } as any,
+      {
+        safeConnect: async () =>
+          Result.ok({
+            safeGet: () => Result.ok(service),
+            onDisconnected: () => () => undefined,
+            subscribeIdentity: () => () => undefined,
+          }),
+      } as any,
       token,
     );
     remote.destroy();
@@ -646,9 +659,20 @@ describe("State callback lifecycle across host and mirror", () => {
         });
       },
     } as unknown as NexusStoreServiceContract<Data & Actions>;
+    installProxyLifecycle(service, token.id, "fixture", {
+      subscribeDisconnect: () => () => undefined,
+      subscribeStale: () => () => undefined,
+    });
     try {
       const connected = connectNexusStore(
-        { create: async () => service } as any,
+        {
+          safeConnect: async () =>
+            Result.ok({
+              safeGet: () => Result.ok(service),
+              onDisconnected: () => () => undefined,
+              subscribeIdentity: () => () => undefined,
+            }),
+        } as any,
         token,
         { timeout: 10 },
       );

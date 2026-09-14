@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
-import type { AdapterModel, NexusInstance } from "@nexus-js/core";
+import type {
+  AdapterModel,
+  ConnectOptions,
+  NexusInstance,
+} from "@nexus-js/core";
 import {
   connectNexusStore,
-  type ConnectNexusStoreOptions,
   type RemoteStore,
   type StoreToken,
 } from "@nexus-js/core/state";
 import { useNexus } from "./use-nexus.js";
-
-export type NexusStoreNexus<M extends AdapterModel> = Pick<
-  NexusInstance<M>,
-  "create" | "safeCreate"
->;
 
 /** Acquisition only. Observe the acquired handle with useStoreStatus or Zustand. */
 export type UseRemoteStoreResult<Store extends object> = (
@@ -25,7 +23,7 @@ export type UseRemoteStoreResult<Store extends object> = (
 ) & { readonly reconnect: () => void };
 
 export type UseRemoteStoreOptions<M extends AdapterModel = AdapterModel> =
-  ConnectNexusStoreOptions<M> & {
+  ConnectOptions<M> & {
     readonly reconnectKey?: string | number | boolean | null;
   };
 
@@ -37,11 +35,12 @@ export function useRemoteStore<Store extends object>(
   return useRemoteStoreWithNexus(useNexus(), token, options);
 }
 
+/** Acquires and owns one session-bound remote store handle for a Nexus instance. */
 export function useRemoteStoreWithNexus<
   Store extends object,
   M extends AdapterModel,
 >(
-  nexus: NexusStoreNexus<M>,
+  nexus: Pick<NexusInstance<M>, "safeConnect">,
   token: StoreToken<Store, M>,
   options: UseRemoteStoreOptions<M> = {},
 ): UseRemoteStoreResult<Store> {
@@ -49,10 +48,11 @@ export function useRemoteStoreWithNexus<
   const [revision, reconnect] = useReducer((value: number) => value + 1, 0);
   const targetKey = JSON.stringify(connectOptions.target ?? null);
   const timeout = connectOptions.timeout ?? null;
+  const signal = connectOptions.signal ?? null;
   // Associate the result with all acquisition inputs, including A -> B -> A.
   const request = useMemo(
     () => Symbol(),
-    [nexus, token, targetKey, timeout, reconnectKey, revision],
+    [nexus, token, targetKey, timeout, signal, reconnectKey, revision],
   );
   const [result, setResult] = useState<{
     request: typeof request;

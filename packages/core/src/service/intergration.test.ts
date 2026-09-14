@@ -27,7 +27,9 @@ interface TaskProcessor {
 interface TaskService {
   getTasks(): Promise<Task[]>;
   addTask(title: string, metadata: object): Promise<Task>;
-  subscribe(onUpdate: (tasks: Task[]) => void): Promise<string>;
+  subscribe(
+    onUpdate: (tasks: Task[]) => void | PromiseLike<void>,
+  ): Promise<string>;
   getProcessor(taskId: string): Promise<TaskProcessor | null>;
   throwError(): Promise<void>;
   unsubscribe(subscriptionId: string): Promise<void>;
@@ -52,7 +54,10 @@ class TaskProcessorImpl implements TaskProcessor {
 
 class TaskServiceImpl implements TaskService {
   private tasks = new Map<string, Task>();
-  private subscribers = new Map<string, (tasks: Task[]) => void>();
+  private subscribers = new Map<
+    string,
+    (tasks: Task[]) => void | PromiseLike<void>
+  >();
   private nextTaskId = 1;
   private nextSubId = 1;
 
@@ -77,7 +82,9 @@ class TaskServiceImpl implements TaskService {
     return newTask;
   }
 
-  async subscribe(onUpdate: (tasks: Task[]) => void): Promise<string> {
+  async subscribe(
+    onUpdate: (tasks: Task[]) => void | PromiseLike<void>,
+  ): Promise<string> {
     const id = `sub-${this.nextSubId++}`;
     this.subscribers.set(id, onUpdate);
     // Immediately send the current list to the new subscriber
@@ -138,13 +145,11 @@ describe("L3 Engine Integration Test: Task Service", () => {
     hostEngine = setup.hostEngine;
     clientCm = setup.clientCm;
     hostConnectionId = setup.hostConnection.connectionId;
-
     // --- Create Proxy ---
     // With the redesigned ProxyFactory, we now create a proxy bound directly
     // to the "tasks" service by name.
     serviceProxy = clientEngine.createServiceProxy("tasks", {
-      target: { connectionId: setup.clientConnection.connectionId },
-      strategy: "one",
+      connectionId: setup.clientConnection.connectionId,
       timeout: 5000,
     });
   });
@@ -327,64 +332,6 @@ describe("L3 Engine Integration Test: Task Service", () => {
       // Verify that the resources have been purged
       expect(clientResourceManager.countLocalResources()).toBe(0);
       expect(hostResourceManager.countRemoteProxies()).toBe(0);
-    });
-  });
-
-  describe("Broadcast and Streaming Strategies", () => {
-    let broadcastProxy: TaskService;
-
-    beforeEach(() => {
-      // Bind the current ready recipient list, as acquisition does.
-      // Even with one client, this tests the broadcast/multi-response logic.
-      broadcastProxy = (clientEngine as any).proxyFactory.createServiceProxy(
-        "tasks",
-        {
-          target: { connectionIds: [...clientCm.connections.keys()] },
-          strategy: "all",
-          timeout: 5000,
-        },
-      );
-    });
-
-    it("should return an aggregated array for 'all' strategy", async () => {
-      await broadcastProxy.addTask("Task for broadcast", {});
-      const tasksResult = await (broadcastProxy as any).getTasks();
-
-      // The result should be an array of results from all matched targets.
-      // In this case, one target, so an array with one element.
-      expect(tasksResult).toBeInstanceOf(Array);
-      expect(tasksResult).toHaveLength(1);
-      expect(tasksResult[0].status).toBe("fulfilled");
-      const tasks = tasksResult[0].value;
-      expect(tasks).toHaveLength(1);
-      expect(tasks[0].title).toBe("Task for broadcast");
-    });
-
-    it("should stream results for 'stream' strategy", async () => {
-      const streamProxy = (clientEngine as any).proxyFactory.createServiceProxy(
-        "tasks",
-        {
-          target: { connectionIds: [...clientCm.connections.keys()] },
-          strategy: "stream",
-          timeout: 5000,
-        },
-      );
-
-      await (streamProxy as any).addTask("Task for stream", {});
-      const tasksStream = await (streamProxy as any).getTasks();
-
-      const receivedResults = [];
-      for await (const result of tasksStream) {
-        receivedResults.push(result);
-      }
-
-      expect(receivedResults).toHaveLength(1);
-      // For broadcast/stream, the result is an object containing the value.
-      const firstResult = receivedResults[0];
-      expect(firstResult.status).toBe("fulfilled");
-      const tasks = firstResult.value;
-      expect(tasks).toHaveLength(1);
-      expect(tasks[0].title).toBe("Task for stream");
     });
   });
 });

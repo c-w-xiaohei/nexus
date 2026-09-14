@@ -1,43 +1,44 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServiceProvider } from "./types/config";
-import { NexusKernelBuilder } from "./kernel";
-import { Nexus } from "./nexus";
+import { buildKernel } from "./kernel";
+import type { Connection } from "./connection";
+import type { AdapterModel } from "@/types/adapter-model";
 import { Token } from "./token";
 import { NexusConfigurationError } from "../errors/usage-errors";
 
-describe("NexusKernelBuilder", () => {
+describe("buildKernel", () => {
   it("should type service policy with config metadata generics", () => {
-    type UserMeta = { role: "admin" | "guest" };
-    type ConnectionMeta = { processId: number };
+    interface Model extends AdapterModel {
+      contextMeta: { role: "admin" | "guest" };
+      connectionMeta: { processId: number };
+    }
 
     const registration = {
-      token: { id: "typed-service" },
+      token: new Token<object, Model>("typed-service"),
       service: {},
       policy: {
         canCall: ({ localIdentity, platform }) =>
           localIdentity.role === "admin" && platform.processId > 0,
       },
-    } satisfies ServiceProvider<object, UserMeta, ConnectionMeta>;
+    } satisfies ServiceProvider<object, Model>;
 
     expect(registration.policy.canCall).toBeTypeOf("function");
   });
 
   it("should fail when endpoint implementation or meta is missing", async () => {
-    const nexus = new Nexus();
+    const getConnection = vi.fn<() => Connection>();
     const config = {
       // Empty config
     };
 
-    const builder = NexusKernelBuilder.create(
+    const result = await buildKernel(
       config as any,
       new Map(),
       null,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
 
-    const result = await builder.build();
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error).toBeInstanceOf(NexusConfigurationError);
@@ -48,22 +49,20 @@ describe("NexusKernelBuilder", () => {
   });
 
   it("should merge endpoint registration from decorator", async () => {
-    const nexus = new Nexus();
-    const builder = NexusKernelBuilder.create(
+    const getConnection = vi.fn<() => Connection>();
+    const result = await buildKernel(
       {} as any,
       new Map(),
       {
         targetClass: class Endpoint {},
         options: { meta: { context: "bg" } },
       } as any,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
 
     // It should succeed because we provided both implementation (via targetClass)
     // and meta (via options), satisfying the validation.
-    const result = await builder.build();
     expect(result.isOk()).toBe(true);
     if (result.isErr()) {
       throw result.error;
@@ -78,7 +77,7 @@ describe("NexusKernelBuilder", () => {
   });
 
   it("should instantiate providers with factory injection", async () => {
-    const nexus = new Nexus();
+    const getConnection = vi.fn<() => Connection>();
     const token = new Token<object>("test");
     const serviceMap = new Map();
     const factorySpy = vi.fn().mockReturnValue({});
@@ -95,16 +94,14 @@ describe("NexusKernelBuilder", () => {
       },
     };
 
-    const builder = NexusKernelBuilder.create(
+    const result = await buildKernel(
       config as any,
       serviceMap,
       null,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
 
-    const result = await builder.build();
     expect(result.isOk()).toBe(true);
     expect(factorySpy).toHaveBeenCalledWith({
       targetClass: expect.any(Function),
@@ -123,7 +120,7 @@ describe("NexusKernelBuilder", () => {
   });
 
   it("should pass NexusConfig.policy into ConnectionManager and Engine", async () => {
-    const nexus = new Nexus();
+    const getConnection = vi.fn<() => Connection>();
     const policy = {
       canConnect: vi.fn(() => true),
       canCall: vi.fn(() => true),
@@ -136,16 +133,14 @@ describe("NexusKernelBuilder", () => {
       policy,
     };
 
-    const builder = NexusKernelBuilder.create(
+    const result = await buildKernel(
       config as any,
       new Map(),
       null,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
 
-    const result = await builder.build();
     expect(result.isOk()).toBe(true);
     if (result.isErr()) {
       throw result.error;
@@ -158,10 +153,10 @@ describe("NexusKernelBuilder", () => {
   });
 
   it("should fail endpoint source conflicts before endpoint instantiation", async () => {
-    const nexus = new Nexus();
+    const getConnection = vi.fn<() => Connection>();
     const endpointConstructor = vi.fn();
 
-    const builder = NexusKernelBuilder.create(
+    const result = await buildKernel(
       {
         endpoint: {
           meta: { context: "configured" },
@@ -177,12 +172,9 @@ describe("NexusKernelBuilder", () => {
         },
         options: { meta: { context: "decorated" } },
       } as any,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
-
-    const result = await builder.build();
 
     expect(result.isErr()).toBe(true);
     expect(endpointConstructor).not.toHaveBeenCalled();
@@ -193,43 +185,14 @@ describe("NexusKernelBuilder", () => {
     }
   });
 
-  it("should fail endpoint source conflicts when configured endpoint has a defaultTarget", async () => {
-    const nexus = new Nexus();
-
-    const builder = NexusKernelBuilder.create(
-      {
-        endpoint: {
-          defaultTarget: { context: "peer" },
-        },
-      } as any,
-      new Map(),
-      {
-        targetClass: class DecoratedEndpoint {},
-        options: { meta: { context: "decorated" } },
-      } as any,
-      nexus,
-      new Map(),
-      new Map(),
-    );
-
-    const result = await builder.build();
-
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toEqual(
-        expect.objectContaining({ code: "E_ENDPOINT_SOURCE_CONFLICT" }),
-      );
-    }
-  });
-
   it("should allow decorated providers to replace configured providers by id", async () => {
-    const nexus = new Nexus();
+    const getConnection = vi.fn<() => Connection>();
     const tokenA = new Token<object>("duplicate-before-instance");
     const tokenB = new Token<object>("duplicate-before-instance");
     const serviceConstructor = vi.fn();
     const factory = vi.fn(() => ({}));
 
-    const builder = NexusKernelBuilder.create(
+    const result = await buildKernel(
       {
         endpoint: {
           meta: { context: "bg" },
@@ -251,12 +214,9 @@ describe("NexusKernelBuilder", () => {
         ],
       ]),
       null,
-      nexus,
-      new Map(),
-      new Map(),
+      undefined,
+      getConnection,
     );
-
-    const result = await builder.build();
 
     expect(result.isOk()).toBe(true);
     expect(serviceConstructor).not.toHaveBeenCalled();

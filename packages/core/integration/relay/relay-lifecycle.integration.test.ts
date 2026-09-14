@@ -308,7 +308,6 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "relay-upstream" },
       implementation: network.createEndpoint({ context: "relay-upstream" }),
-      defaultTarget: hostTarget,
     },
   });
 
@@ -349,7 +348,6 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "leaf", id: "leaf-a" },
       implementation: network.createEndpoint({ context: "leaf", id: "leaf-a" }),
-      defaultTarget: relayTarget,
     },
   });
 
@@ -357,14 +355,13 @@ async function createRelayHarness() {
     endpoint: {
       meta: { context: "leaf", id: "leaf-b" },
       implementation: network.createEndpoint({ context: "leaf", id: "leaf-b" }),
-      defaultTarget: relayTarget,
     },
   });
 
   await Promise.all([
-    relayUpstreamNexus.create(counterStore, { target: hostTarget }),
-    leafANexus.create(RelayProfileToken, { target: relayTarget }),
-    leafBNexus.create(RelayProfileToken, { target: relayTarget }),
+    relayUpstreamNexus.connect({ target: hostTarget }),
+    leafANexus.connect({ target: relayTarget }),
+    leafBNexus.connect({ target: relayTarget }),
   ]);
   await waitForConnectionsReady([
     [hostNexus, 1],
@@ -390,9 +387,9 @@ describe("Nexus Relay lifecycle integration", () => {
   it("forwards service calls through a real relay Nexus and preserves downstream identity", async () => {
     const harness = await createRelayHarness();
     try {
-      const profile = await harness.leafANexus.create(RelayProfileToken, {
-        target: relayTarget,
-      });
+      const profile = (
+        await harness.leafANexus.connect({ target: relayTarget })
+      ).get(RelayProfileToken);
 
       const profileApi = await profile.profile;
       const result = await profileApi.read("leaf-a");

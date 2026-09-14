@@ -1,5 +1,6 @@
 import { NexusError, type NexusErrorOptions } from "./nexus-error.js";
 
+/** Preserves structured diagnostics while accepting the existing shorthand context input. */
 const errorOptions = (
   contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
 ): NexusErrorOptions =>
@@ -24,6 +25,8 @@ export class NexusTransportError extends NexusError {}
  * when their connect() method fails to establish a connection with the underlying platform.
  */
 export class NexusEndpointConnectError extends NexusTransportError {
+  declare public readonly code: "E_ENDPOINT_CONNECT_FAILED";
+  /** Records endpoint dial failure with adapter diagnostics and an optional cause. */
   constructor(
     message: string,
     contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
@@ -41,6 +44,8 @@ export class NexusEndpointConnectError extends NexusTransportError {
  * when their listen() method fails to start listening on the underlying platform.
  */
 export class NexusEndpointListenError extends NexusTransportError {
+  declare public readonly code: "E_ENDPOINT_LISTEN_FAILED";
+  /** Records a listener startup failure without treating it as an RPC business error. */
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, "E_ENDPOINT_LISTEN_FAILED", { context });
   }
@@ -57,6 +62,8 @@ export class NexusEndpointListenError extends NexusTransportError {
  * match IEndpoint.capabilities.
  */
 export class NexusEndpointCapabilityError extends NexusTransportError {
+  declare public readonly code: "E_ENDPOINT_CAPABILITY_MISMATCH";
+  /** Identifies a required transport capability missing from the configured endpoint. */
   constructor(
     message: string,
     contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
@@ -79,7 +86,13 @@ export class NexusEndpointCapabilityError extends NexusTransportError {
  * Usually occurs when passing non-serializable data or receiving corrupted messages.
  */
 export class NexusProtocolError extends NexusTransportError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, "E_PROTOCOL_ERROR", { context });
+  declare public readonly code: "E_PROTOCOL_ERROR";
+
+  /** Records a local or remote protocol-boundary failure with its original diagnostic cause. */
+  constructor(
+    message: string,
+    contextOrOptions?: Record<string, unknown> | NexusErrorOptions,
+  ) {
+    super(message, "E_PROTOCOL_ERROR", errorOptions(contextOrOptions));
   }
 }

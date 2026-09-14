@@ -8,13 +8,17 @@
 [![npm](https://img.shields.io/npm/v/@nexus-js/core)](https://www.npmjs.com/package/@nexus-js/core)
 [![license](https://img.shields.io/npm/l/@nexus-js/core)](https://github.com/c-w-xiaohei/nexus/blob/main/LICENSE)
 
-Nexus connects browser extension contexts, iframes, workers, and local Node processes through one TypeScript service model. Define a contract once, expose it in one context, and create a typed proxy from another context.
+Nexus connects browser extension contexts, iframes, workers, and local Node processes through one TypeScript service model. Define a contract once, expose it in one context, connect to a session, and get a typed proxy from that connection.
 
 > **API stability:** Nexus is under rapid development. During this phase, minor
 > releases may include breaking API or protocol changes; patch releases remain
 > backward-compatible. This policy also applies to Core 1.x and is not the usual
 > stable SemVer compatibility guarantee. Pin dependency versions and review the
 > migration notes before upgrading.
+>
+> The authorized Core 2.0 alpha migration is an unreleased major milestone. See
+> the [Core 2.0 alpha migration](https://c-w-xiaohei.github.io/nexus/docs/migrations/2.0-alpha/)
+> before adopting the new connection-resource API.
 
 ## Install
 
@@ -73,9 +77,10 @@ import { SettingsToken } from "./shared/settings";
 usingContentScript();
 
 async function main() {
-  const settings = await nexus.create(SettingsToken, {
+  const connection = await nexus.connect({
     target: chromeTarget.background(),
   });
+  const settings = connection.get(SettingsToken);
 
   await settings.setTheme("dark");
   console.log(await settings.getTheme());
@@ -84,7 +89,7 @@ async function main() {
 void main();
 ```
 
-Both contexts must be configured before creating proxies. `usingContentScript()` supplies `chromeTarget.background()` as its endpoint `defaultTarget`, so the usual content-to-background call can be `nexus.create(SettingsToken)`. An explicit target is useful while debugging or when the destination varies.
+Both contexts must be configured before connecting or getting services. A target is an exact adapter address supplied by application code; it is not inferred from a Token or endpoint default. An explicit target is useful whenever the destination is known, debugging, or the destination varies.
 
 ## The Target Model
 
@@ -97,16 +102,18 @@ Nexus separates the sources of connection information:
 - `ConnectionMeta` contains adapter-owned, connection-scoped observed or verified facts. It is not peer identity and is not a public target shape.
 - `AdapterModel` keeps context identity, connection facts, and exact targets associated at compile time.
 
-For unicast creation, resolution is:
+For unicast connection, the application supplies:
 
 ```text
-explicit ConnectionTarget
--> Token defaultTarget
--> endpoint defaultTarget
--> targeting error
+ explicit ConnectionTarget, or
+ no target for passive acquisition of an existing session
 ```
 
-`create` and `createMulticast` acquire exact targets, then bind the resulting sessions. `createMulticast` requires a non-empty `targets` array and fails the whole acquisition if any target cannot be acquired. Its `expects: "all"` (default) and `expects: "stream"` calls settle each result as `{ status, value }` or `{ status, reason }`, without connection IDs or `from` metadata. Connection IDs are not public acquisition inputs, selection keys, routing targets, or multicast result fields. `select` chooses one available provider without connecting, optionally waiting with `{ wait: { timeout, signal } }`; `selectMulticast` has no `wait`, binds the current provider snapshot, and may validly return an empty fanout. Acquisition `timeout`/`signal` apply to `create` and `createMulticast`; `callTimeout` applies to later proxy calls. Unknown option keys, invalid timeout values, aborts, and incompatible provider-catalog protocols produce structured usage, targeting, or protocol errors. `defaultTarget` only supplies `create` target resolution and never preconnects.
+`connect({ target, where, timeout, signal })` acquires one ready shared session; `connection.get(Token)` checks its provider catalog synchronously. With a target, the adapter may dial that exact endpoint. Without a target, `connect` waits for exactly one existing matching ready session and never performs provider discovery. `connectMulticast({ targets?, where, timeout, signal })` returns a fixed snapshot: explicit targets are acquired strictly, while no targets snapshots current ready sessions and may return an empty collection.
+
+`collection.get(Token)` returns one `{ connection, result }` entry per session, including errors for missing services. There is no aggregate multicast proxy or `expects` option. Method calls and property reads are lazy: consume them with `await`, Promise helpers, or `Nexus.safeCall`; repeated consumption shares the same execution.
+
+`where` is applied while acquiring or selecting connections and is never re-run as a per-RPC authorization check. Use `policy.canConnect` for connection authorization and `policy.canCall` for every service or resource operation. Acquisition `timeout`/`signal` govern obtaining sessions; `callTimeout` governs later RPCs. Connection IDs identify sessions, not dialable targets.
 
 Application code owns discovery. Querying an active tab, finding eligible frames, or choosing a set of processes is application/platform workflow that produces `ConnectionTarget` or `ConnectionTarget[]`; it is not global provider discovery performed by Nexus.
 
@@ -146,6 +153,7 @@ Nexus does not start browser contexts, inject content scripts, create iframes, s
 - [Nexus State](https://c-w-xiaohei.github.io/nexus/docs/state/)
 - [Testing](https://c-w-xiaohei.github.io/nexus/docs/testing/)
 - [Documentation home](https://c-w-xiaohei.github.io/nexus/docs/)
+- [Core 2.0 alpha migration](https://c-w-xiaohei.github.io/nexus/docs/migrations/2.0-alpha/)
 
 ## Repository Development
 

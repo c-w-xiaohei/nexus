@@ -8,7 +8,7 @@ import {
   waitForHostBridgeResult,
 } from "../harness/playwright-fixtures";
 
-test("CE-07/09 keeps background selection passive until content actively creates its default route", async ({
+test("CE-07/09 keeps background acquisition passive until content connects explicitly", async ({
   diagnostics,
   dispatchHostCommandAndResult,
   hostPage,
@@ -136,7 +136,7 @@ test("CE-09 reports no-route selection before any content connection", async ({
     readonly settled: number;
   };
   expect(terminal).toMatchObject({
-    code: "E_SERVICE_WAIT_TIMEOUT",
+    code: "E_SERVICE_ACQUISITION_TIMEOUT",
     waitTimeoutMs: 1000,
     started: expect.any(Number),
     settled: expect.any(Number),

@@ -1,28 +1,44 @@
-import type { AdapterModel, ConnectionWhere } from "@/types/adapter-model";
-import type { CallBinding, ProxyOperation } from "./call-processor";
+import type { CallBinding, DispatchCallOptions } from "./call-processor";
 import type { ResourceManager } from "./resource-manager";
-import {
-  RELEASE_PROXY_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
-import { Logger } from "@/logger";
+import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { NexusResourceError } from "@/errors/resource-errors";
-import type { Engine } from "./engine";
+import type { Connection } from "@/api/connection";
+import {
+  NexusUsageError,
+  toFrameworkProtocolError,
+  type NexusCallError,
+} from "@/errors";
+import type { AdapterModel } from "@/types/adapter-model";
+import type { RemoteValue } from "@/api/types";
+import { Result } from "better-result";
+
+const consumers = new WeakMap<
+  object,
+  () => Promise<Result<any, NexusCallError>>
+>();
+
+/** Consumes only a proxy-created operation, sharing its cached execution with await. */
+export function safeCall<T, M extends AdapterModel>(
+  value: RemoteValue<T, M>,
+): Promise<Result<T, NexusCallError>> {
+  const consume = consumers.get(value);
+  if (!consume)
+    throw new NexusUsageError("safeCall requires one Nexus lazy remote call.");
+  return consume();
+}
 
 type RemoteResource = {
   resourceId: string;
-  connectionId: string;
   released: boolean;
+  /** Releases this shared capability once, including its finalizer registration. */
   release(): void;
 };
 type ProxyPath = {
   binding: CallBinding;
   path: (string | number)[];
-  root: boolean;
   resource?: RemoteResource;
+  connection: Connection<any>;
 };
-type ProxyTarget = () => void;
 
 const INTERNAL_PROXY_PROPERTIES = new Set([
   "constructor",
@@ -31,37 +47,35 @@ const INTERNAL_PROXY_PROPERTIES = new Set([
   "toString",
   "nodeType",
 ]);
-const isLifecycleSymbol = (prop: PropertyKey): boolean =>
-  prop === NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL ||
-  prop === NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL;
+/** Keep release calls on service roots harmless while reserving release for resources. */
 const releaseServiceProxy = () =>
   console.warn(
     "Nexus: A service proxy cannot be released. This function is for resource proxies only.",
   );
 
-/** Fixed dispatch binding; staleTarget is observation policy consumed by Engine. */
-export type CreateProxyOptions<M extends AdapterModel> = CallBinding & {
-  staleTarget?: { where?: ConnectionWhere<M> };
-};
-
 /**
- * Creates path-based RPC facades with shared traps.
+ * Creates path-based RPC facades whose closures retain their binding and path.
  * Service proxies carry only a binding and path; resource proxies also share one
  * release state. Weak metadata never keeps an otherwise unused facade alive.
  */
-export class ProxyFactory implements ProxyHandler<ProxyTarget> {
-  private readonly paths = new WeakMap<object, ProxyPath>();
-  private readonly releaseRegistry: FinalizationRegistry<
-    Pick<RemoteResource, "resourceId" | "connectionId">
-  >;
-  private readonly logger = new Logger("L3 -> ProxyFactory");
+export class ProxyFactory {
+  private readonly resourceAnchors = new WeakMap<object, RemoteResource>();
+  private readonly releaseRegistry: FinalizationRegistry<{
+    resourceId: string;
+    connectionId: string;
+  }>;
 
+  /** Own dispatch, resource bookkeeping, connection lookup, and finalization policy. */
   constructor(
-    private readonly engine: Pick<
-      Engine<AdapterModel>,
-      "safeDispatchCall" | "dispatchRelease"
-    >,
+    private readonly engine: {
+      safeDispatchCall(
+        options: DispatchCallOptions,
+      ): Promise<Result<any, NexusCallError>>;
+      dispatchRelease(resourceId: string, connectionId: string): void;
+    },
     private readonly resourceManager: ResourceManager,
+    private readonly getConnection: (id: string) => Connection<any>,
+    private readonly callTimeout = 5_000,
   ) {
     this.releaseRegistry = new FinalizationRegistry(
       ({ resourceId, connectionId }) => {
@@ -72,23 +86,22 @@ export class ProxyFactory implements ProxyHandler<ProxyTarget> {
   }
 
   /** Captures the session snapshot; Engine installs lifecycle observation on unicast roots. */
-  public createServiceProxy<
-    T extends object,
-    M extends AdapterModel = AdapterModel,
-  >(serviceName: string, options: CreateProxyOptions<M>): T {
-    const binding: CallBinding =
-      options.strategy === "one"
-        ? {
-            target: { connectionId: options.target.connectionId },
-            strategy: "one",
-            timeout: options.timeout,
-          }
-        : {
-            target: { connectionIds: [...options.target.connectionIds] },
-            strategy: options.strategy,
-            timeout: options.timeout,
-          };
-    return this.createProxy({ binding, path: [serviceName], root: true }) as T;
+  public createServiceProxy<T extends object>(
+    serviceName: string,
+    options: CallBinding,
+  ): T {
+    const binding: CallBinding = {
+      connectionId: options.connectionId,
+      timeout: options.timeout,
+    };
+    return this.createProxy(
+      {
+        binding,
+        path: [serviceName],
+        connection: this.getConnection(binding.connectionId),
+      },
+      true,
+    ) as T;
   }
 
   /**
@@ -98,10 +111,11 @@ export class ProxyFactory implements ProxyHandler<ProxyTarget> {
   public createRemoteResourceProxy(
     resourceId: string,
     connectionId: string,
+    timeout = this.callTimeout,
   ): object {
+    const connection = this.getConnection(connectionId);
     const resource: RemoteResource = {
       resourceId,
-      connectionId,
       released: false,
       release: () => {
         if (resource.released) return;
@@ -118,116 +132,106 @@ export class ProxyFactory implements ProxyHandler<ProxyTarget> {
       resource,
     );
     this.resourceManager.registerRemoteProxy(resourceId, connectionId);
-    return this.createProxy({
-      binding: { target: { connectionId }, strategy: "one", timeout: 5000 },
-      path: [],
-      root: true,
-      resource,
-    });
+    const proxy = this.createProxy(
+      {
+        binding: { connectionId, timeout },
+        path: [],
+        resource,
+        connection,
+      },
+      true,
+    );
+    this.resourceAnchors.set(proxy, resource);
+    return proxy;
   }
 
   /** Drops this facade's finalizer, leaving a pre-existing shared resource identity intact. */
   public discardRemoteResourceProxy(proxy: object): void {
-    const resource = this.paths.get(proxy)?.resource;
+    const resource = this.resourceAnchors.get(proxy);
     if (resource) this.releaseRegistry.unregister(resource);
   }
 
-  // ===== Paths: property access extends a path; await/call/set dispatch it =====
+  // ===== Paths and lazy operations =====
 
-  /** Roots are not thenable; awaiting a child path dispatches GET. Symbols remain local. */
-  public get(
-    target: ProxyTarget,
-    prop: string | symbol,
-    receiver: unknown,
-  ): any {
-    const state = this.paths.get(target)!;
-    if (prop === "then") {
-      if (state.root) return undefined;
-      const result = this.dispatch(state, { type: "GET", path: state.path });
-      return result.then.bind(result);
-    }
-    if (prop === RELEASE_PROXY_SYMBOL)
-      return state.resource?.release ?? releaseServiceProxy;
-    if (prop === Symbol.dispose && state.resource)
-      return state.resource.release;
-    if (isLifecycleSymbol(prop)) return Reflect.get(target, prop);
-    if (typeof prop === "symbol" || INTERNAL_PROXY_PROPERTIES.has(prop)) {
-      return Reflect.get(target, prop, receiver);
-    }
-    return this.createProxy({
-      ...state,
-      path: [...state.path, prop],
-      root: false,
+  /** Roots are not thenable; child reads and method calls execute only on consumption. */
+  private createProxy(state: ProxyPath, root = false): object {
+    const proxy = new Proxy(() => {}, {
+      get: (target, prop, receiver) => {
+        if (prop === "then" && root) return undefined;
+        if (!root) {
+          if (prop === "connection") return state.connection;
+          if (prop === "then" || prop === "catch" || prop === "finally")
+            return read![prop];
+        }
+        if (prop === RELEASE_PROXY_SYMBOL)
+          return state.resource?.release ?? releaseServiceProxy;
+        if (prop === Symbol.dispose && state.resource)
+          return state.resource.release;
+        if (typeof prop === "symbol" || INTERNAL_PROXY_PROPERTIES.has(prop))
+          return Reflect.get(target, prop, receiver);
+        return this.createProxy({ ...state, path: [...state.path, prop] });
+      },
+      apply: (_target, _receiver, args) => this.createCall(state, args),
+      set: () => false,
     });
-  }
-
-  /** Returns the call Promise unchanged by logging policy; the caller owns its rejection. */
-  public apply(
-    target: ProxyTarget,
-    _thisArg: unknown,
-    args: any[],
-  ): Promise<any> {
-    const state = this.paths.get(target)!;
-    return this.dispatch(state, { type: "APPLY", path: state.path, args });
-  }
-
-  public set(target: ProxyTarget, prop: string | symbol, value: any): boolean {
-    if (isLifecycleSymbol(prop)) {
-      Reflect.set(target, prop, value);
-      return true;
-    }
-    const state = this.paths.get(target)!;
-    if (!state.resource) return false;
-    // SET cannot return a Promise: released resources must throw from the trap itself.
-    this.assertActive(state.resource);
-    // Assignment cannot expose a completion Promise, so this is framework-owned work.
-    void this.dispatch(state, {
-      type: "SET",
-      path: [...state.path, prop as string],
-      value,
-    }).catch((error) =>
-      this.logger.error("Remote property assignment failed", error),
-    );
-    return true;
-  }
-
-  private createProxy(state: ProxyPath): any {
-    const target = () => {};
-    const proxy = new Proxy(target, this);
-    // Traps receive the target; discard receives the facade. Both use one weak index.
-    this.paths.set(target, state);
-    this.paths.set(proxy, state);
+    const read = root ? undefined : this.createCall(state, undefined, proxy);
     return proxy;
   }
 
-  /**
-   * The sole Result-to-rejection boundary for proxy operations.
-   * Internal dispatch owns error normalization; GET/APPLY callers own the Promise,
-   * while the SET trap observes its otherwise inaccessible rejection.
-   */
-  private async dispatch(
+  /** Released references fail on consumption, just like disconnected sessions. */
+  private createCall(
     state: ProxyPath,
-    operation: ProxyOperation,
-  ): Promise<any> {
-    this.assertActive(state.resource);
-    const result = await this.engine.safeDispatchCall({
-      ...state.binding,
-      resourceId: state.resource?.resourceId ?? null,
-      ...operation,
-    });
-    if (result.isErr()) throw result.error;
-    return result.value;
-  }
-
-  private assertActive(resource?: RemoteResource): void {
-    if (resource?.released)
-      throw new NexusResourceError(
-        `Remote resource proxy "${resource.resourceId}" has been released and is no longer usable.`,
-        "E_RESOURCE_ACCESS_DENIED",
-        {
-          resourceId: resource.resourceId,
-          connectionId: resource.connectionId,
-        },
-      );
+    args?: any[],
+    facade?: object,
+  ): RemoteValue<any> {
+    const id = state.binding.connectionId;
+    let result: Promise<Result<any, NexusCallError>> | undefined;
+    let promise: Promise<any> | undefined;
+    /** Starts execution once and caches its safe outcome across all consumers. */
+    const consume = () => {
+      if (result) {
+        return result;
+      }
+      result = Promise.resolve()
+        .then(() => {
+          if (state.resource?.released) {
+            return Result.err(
+              new NexusResourceError(
+                `Remote resource "${state.resource.resourceId}" has been released.`,
+                "E_RESOURCE_ACCESS_DENIED",
+                { resourceId: state.resource.resourceId, connectionId: id },
+              ),
+            );
+          }
+          return this.engine.safeDispatchCall({
+            ...state.binding,
+            resourceId: state.resource?.resourceId ?? null,
+            path: state.path,
+            ...(args === undefined ? { type: "GET" } : { type: "APPLY", args }),
+          });
+        })
+        .catch((error) => Result.err(toFrameworkProtocolError(error)));
+      return result;
+    };
+    /** Shares one throw-style Promise without changing the cached safe outcome. */
+    const unwrap = () => {
+      if (!promise) {
+        promise = consume().then((value) => {
+          if (value.isErr()) {
+            throw value.error;
+          }
+          return value.value;
+        });
+      }
+      return promise;
+    };
+    const call: RemoteValue<any> = {
+      connection: state.connection,
+      then: (fulfilled, rejected) => unwrap().then(fulfilled, rejected),
+      catch: (rejected) => unwrap().catch(rejected),
+      finally: (callback) => unwrap().finally(callback),
+    };
+    consumers.set(facade ?? call, consume);
+    return Object.freeze(call);
   }
 }

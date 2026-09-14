@@ -93,10 +93,6 @@ export async function createHarness(): Promise<TestHarness> {
         appId: `test-client-${Math.random().toString(16).slice(2)}`,
         authToken: options.authToken,
         configure: false,
-        defaultTarget: {
-          context: "node-ipc-daemon",
-          appId: "test-daemon",
-        },
         policy: options.policy,
         resolveAddress: options.resolveAddress ?? (() => address),
       } as unknown as Parameters<typeof usingNodeIpcClient>[0]);

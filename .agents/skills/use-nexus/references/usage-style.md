@@ -22,14 +22,14 @@ Use this architecture model when explaining why configuration and adapter bounda
 1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
 2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
 3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
-4. product-facing API layer: `nexus.configure(...)`, `nexus.create(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
+4. product-facing API layer: `nexus.configure(...)`, `nexus.connect(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
 
 Adapters provide or compose endpoint wiring for the current context. Core then builds logical connections over the `IPort`-like channels returned by those endpoints. For bus-style transports such as `window.postMessage`, adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
 
 ## Core Rules
 
 - Put service interfaces and Tokens in shared modules imported by every host and consumer context.
-- Use shared `Token<Service>` without a default target for contracts used by multiple adapter models. A model-bound `Token<Service, Model>` or `TokenSpace<Model>` may carry `defaultTarget`; an unbound Token remains portable.
+- Use target-free shared `Token<Service>` values for contracts used by multiple adapter models. A model-bound `Token<Service, Model>` or `TokenSpace<Model>` remains a typed contract; application code supplies an adapter target during connection acquisition.
 - Import service interfaces with `import type` when defining Tokens; do not repeat anonymous service shapes inline.
 - Configure every runtime context from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, or bootstrap bulk configuration.
@@ -42,20 +42,19 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - Use `reconnectKey` for an external committed React lifecycle revision and stable `reconnect()` for an interaction, callback, or timer that requests replacement. Both feed the same replacement path with current committed inputs, do not revive session-bound handles or replay actions, and do not guarantee availability or success. Scope providers accept `reconnectKey`; `Scope.useRemoteStore()` consumers share the provider's reconnect command.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
 - Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
-- Keep explicit `ConnectionTarget` values in introductory `nexus.create(...)` examples; use `nexus.create(Token)` when relying on a Token or endpoint `defaultTarget`. Use `select(Token, { where, wait })` only for available providers.
+- Keep explicit `ConnectionTarget` values in introductory `nexus.connect(...)` examples, then use `conn.get(Token)` or `conn.safeGet(Token)`. Use `connectMulticast` plus `collection.get(Token)` for snapshots. Targetless `connect` passively waits for one existing matching ready connection; it never discovers providers.
 - Use `createMockNexus()` from `@nexus-js/testing` for application unit tests at the `NexusInstance` seam; do not use it to claim adapter, transport, authorization, reload, restart, or real lifecycle coverage.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
 - For Nexus State hosts, use `createNexusStore(token, nativeCreator, options)` or `bindNexusStore(token, existingStore, options)`. Require a pure complete `snapshot` projection and runtime `expose` allowlist, and preserve the returned original Zustand API for local synchronous actions. Publication uses a fixed 200ms default window and 32 pending-snapshot default; it is not debounce, transaction, rollback, receipt/waiter, queue, middleware, or automatic retry behavior.
-- Observe an existing ordinary unicast root proxy with static `Nexus.getProxyStatus(proxy)` and `Nexus.subscribeProxyStatus(proxy, listener)`. The listener synchronously receives the current snapshot and later distinct snapshots; the subscription neither releases nor recovers the proxy. React code can use `useProxyStatus(proxy, selector?)` from `@nexus-js/react` without a Provider.
-- Status applies only to same-Core exact unicast roots. A stale proxy remains callable, while disconnected is terminal for that session. The application owns explicit replacement acquisition, retry, retargeting, and replay policy.
+- Observe lifecycle from connections: `nexus.onConnect` delivers each ready session once, `conn.onDisconnected` reports terminal closure, and `conn.subscribeIdentity` delivers the peer's current complete metadata and later updates. These observers never reconnect or replace a session.
 - Do not add consumer-side import shims, preload wrappers, or dynamic-import facades around `@nexus-js/react` unless you have verified a published package import-time compatibility bug. The normal expectation is that static imports from `@nexus-js/react` work directly.
 
 ## Focused References
 
 - `references/shared-contracts.md` - service interfaces, `TokenSpace`, Token defaults, and service exposure style
 - `references/runtime-configuration.md` - adapter helpers, direct `nexus.configure(...)`, multi-instance runtimes, and composition rules
-- `references/targeting-and-proxies.md` - `nexus.create(...)`, `nexus.select(...)`, multicast snapshots, `where`, proxies, and refs
-- `references/adapter-node-ipc.md` - node-ipc daemon/client setup, `configure: false`, auth gates, and default-target routing
+- `references/targeting-and-proxies.md` - `nexus.connect(...)`, connection collections, `where`, proxies, and refs
+- `references/adapter-node-ipc.md` - node-ipc daemon/client setup, `configure: false`, auth gates, and exact connection targets
 - `references/adapter-iframe.md` - iframe parent/child setup, origin checks, nonce usage, heartbeat, reconnect, and session-bound handles
 - `references/policy-and-lifecycle.md` - core policy, authorization style, lifecycle expectations, and documentation style
 - `references/testing.md` - user-level unit testing with `createMockNexus()` and boundaries

@@ -4,7 +4,8 @@ For iframe integrations, keep contracts shared and keep parent/child setup focus
 
 ## Shared Contract Shape
 
-Use a model-bound `TokenSpace<IframeAdapterModel>` or `Token<GreetingService, IframeAdapterModel>` with a `defaultTarget` when the parent repeatedly calls the same child frame. Keep shared Tokens target-free.
+Keep shared Tokens and TokenSpace definitions target-free. Pass the exact child
+target to `connect` when the parent acquires a frame session.
 
 ```ts
 import { Token } from "@nexus-js/core";
@@ -18,7 +19,7 @@ export const childTarget = {
   origin: "https://child.example.com",
 } satisfies IframeChildConnectionTarget;
 
-// This shared contract has no default target and is usable by another model.
+// This shared target-free contract is usable by another model.
 export const GreetingToken = new Token<GreetingService>("iframe-demo:greeting");
 ```
 
@@ -47,9 +48,10 @@ const iframeParentNexus: NexusInstance<IframeAdapterModel> = usingIframeParent({
   ],
 });
 
-const greeting = await iframeParentNexus.create(GreetingToken, {
+const connection = await iframeParentNexus.connect({
   target: childTarget,
 });
+const greeting = connection.get(GreetingToken);
 ```
 
 ## Child

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { NexusDisconnectedError, NexusUsageError } from "@/errors";
 import {
-  NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-  NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL,
-} from "@/types/symbols";
-import {
   getProxyStatus,
   inspectProxy,
   installProxyLifecycle,
@@ -23,23 +19,20 @@ const installLifecycle = (
   let onDisconnect: (() => void) | undefined;
   let staleUnsubscribed = false;
   let disconnectUnsubscribed = false;
-  Object.assign(proxy, {
-    [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
-      listener: () => void,
-    ) => {
+  installProxyLifecycle(proxy, "orders", "one", {
+    subscribeStale: (listener) => {
       onStale = listener;
       return () => {
         staleUnsubscribed = true;
       };
     },
-    [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (listener: () => void) => {
+    subscribeDisconnect: (listener) => {
       onDisconnect = listener;
       return () => {
         disconnectUnsubscribed = true;
       };
     },
   });
-  installProxyLifecycle(proxy, "orders", "one");
   return {
     stale: () => onStale?.(),
     disconnect: () => onDisconnect?.(),
@@ -229,67 +222,35 @@ describe("proxy lifecycle", () => {
     const root = {};
     installLifecycle(root);
     const inherited = Object.create(root);
-    const forged = {
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => undefined,
-    };
-    const getter = vi.fn(() => {
-      throw new Error("must not run");
-    });
-    const getterBacked = {};
-    Object.defineProperty(
-      getterBacked,
-      NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-      { get: getter },
-    );
 
     expect(getProxyStatus(root)).toEqual({
       type: "active",
       selection: "current",
     });
 
-    for (const value of [
-      inherited,
-      forged,
-      getterBacked,
-      {},
-      () => undefined,
-      null,
-    ]) {
+    for (const value of [inherited, {}, () => undefined, null]) {
       expect(() => getProxyStatus(value as object)).toThrow(NexusUsageError);
     }
-    expect(getter).not.toHaveBeenCalled();
   });
 
-  it("rejects an object copied from a real root disconnect capability", () => {
+  it("rejects an unrelated object without lifecycle state", () => {
     const root = {};
     installLifecycle(root);
-    const copied = {};
-    Object.defineProperty(
-      copied,
-      NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-      Object.getOwnPropertyDescriptor(
-        root,
-        NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL,
-      )!,
-    );
 
-    expect(() => getProxyStatus(copied)).toThrow(NexusUsageError);
+    expect(() => getProxyStatus({})).toThrow(NexusUsageError);
   });
 
   it("rejects roots installed by a duplicate module copy", async () => {
     const first = await import("./proxy-lifecycle");
     const root = {};
     let onStale!: () => void;
-    Object.assign(root, {
-      [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => () => undefined,
-      [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
-        listener: () => void,
-      ) => {
+    first.installProxyLifecycle(root, "orders", "one", {
+      subscribeDisconnect: () => () => undefined,
+      subscribeStale: (listener) => {
         onStale = listener;
         return () => undefined;
       },
     });
-    first.installProxyLifecycle(root, "orders", "one");
     onStale();
 
     await vi.resetModules();
@@ -354,25 +315,20 @@ describe("proxy lifecycle", () => {
       let onDisconnect: (() => void) | undefined;
       let staleUnsubscribed = false;
       let disconnectUnsubscribed = false;
-      Object.assign(proxy, {
-        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
-          listener: () => void,
-        ) => {
+      lifecycleModule.installProxyLifecycle(proxy, "orders", "one", {
+        subscribeStale: (listener) => {
           onStale = listener;
           return () => {
             staleUnsubscribed = true;
           };
         },
-        [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: (
-          listener: () => void,
-        ) => {
+        subscribeDisconnect: (listener) => {
           onDisconnect = listener;
           return () => {
             disconnectUnsubscribed = true;
           };
         },
       });
-      lifecycleModule.installProxyLifecycle(proxy, "orders", "one");
 
       expect(staleUnsubscribed).toBe(false);
       expect(disconnectUnsubscribed).toBe(false);
@@ -391,20 +347,17 @@ describe("proxy lifecycle", () => {
       let onCallbackStale: (() => void) | undefined;
       let callbackStaleUnsubscribed = false;
       let callbackDisconnectUnsubscribed = false;
-      Object.assign(callbackProxy, {
-        [NEXUS_SUBSCRIBE_CONNECTION_TARGET_STALE_SYMBOL]: (
-          listener: () => void,
-        ) => {
+      lifecycleModule.installProxyLifecycle(callbackProxy, "orders", "two", {
+        subscribeStale: (listener) => {
           onCallbackStale = listener;
           return () => {
             callbackStaleUnsubscribed = true;
           };
         },
-        [NEXUS_SUBSCRIBE_CONNECTION_DISCONNECT_SYMBOL]: () => () => {
+        subscribeDisconnect: () => () => {
           callbackDisconnectUnsubscribed = true;
         },
       });
-      lifecycleModule.installProxyLifecycle(callbackProxy, "orders", "two");
 
       weakRefs[1]!.target = undefined;
       onCallbackStale?.();

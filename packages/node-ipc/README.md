@@ -48,16 +48,19 @@ usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
 ## Minimal Client
 
 ```ts
-import { nexus } from "@nexus-js/core";
 import { usingNodeIpcClient } from "@nexus-js/node-ipc";
 import { EchoToken } from "./shared";
 
+import { nexus } from "@nexus-js/core";
+
 usingNodeIpcClient({
   appId: "example-app",
-  defaultTarget: { context: "node-ipc-daemon", appId: "example-app" },
 });
 
-const echo = await nexus.create(EchoToken);
+const connection = await nexus.connect({
+  target: { context: "node-ipc-daemon", appId: "example-app" },
+});
+const echo = connection.get(EchoToken);
 
 console.log(await echo.echo("hello"));
 ```
@@ -71,8 +74,7 @@ console.log(await echo.echo("hello"));
 - Pass `resolveAddress(target)` when daemon locations are not on the default filesystem layout; return a `NodeIpcSocketAddress` or `null` for an unresolved target
 - Shared-secret pre-auth is optional and configured with `authToken`
 - Core `policy.canConnect` and `policy.canCall` remain the authorization authority after pre-auth
-- The client `defaultTarget` applies only to `create(EchoToken)` when the Token has no default; use an exact `NodeIpcConnectionTarget` for another daemon
-- `select(EchoToken, { where, wait })` never opens a socket and chooses only available daemon providers
+- Targetless `connect({ where, timeout, signal })` waits for one existing ready connection and never opens a socket or discovers a provider
 - `NodeIpcConnectionMeta` records the selected target, resolved socket address, and observed socket/authentication facts
 - Proxies and refs are session-bound; recreate them after daemon restart or disconnect
 
@@ -94,11 +96,6 @@ const resolveAddress = (
 
 usingNodeIpcClient({
   appId: "example-client",
-  defaultTarget: {
-    context: "node-ipc-daemon",
-    appId: "example-app",
-    instance: "main",
-  },
   resolveAddress,
 });
 ```

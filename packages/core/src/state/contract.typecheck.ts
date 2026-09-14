@@ -1,5 +1,5 @@
 import { Nexus } from "@/index";
-import type { CreateOptions } from "@/api/types/config";
+import type { ConnectOptions } from "@/api/types/config";
 import { expectTypeOf } from "vitest";
 import { z } from "zod";
 import type { StateCreator } from "zustand/vanilla";
@@ -9,7 +9,6 @@ import {
   createStoreToken,
   safeConnectNexusStore,
   safeInvokeStoreAction,
-  type ConnectNexusStoreOptions,
   type RemoteActions,
   type RemoteStore,
   type StoreData,
@@ -37,7 +36,6 @@ type ChromeModel = {
 const token = createStoreToken<CounterStore, ChromeModel>(
   "state:chrome-counter",
   {
-    defaultTarget: { context: "background" },
     validation: { state: z.object({ count: z.number() }) },
   },
 );
@@ -58,9 +56,9 @@ expectTypeOf<RemoteStore<CounterStore>["actions"]>().toEqualTypeOf<
 expectTypeOf<RemoteActions<AsyncStore>["reset"]>().toEqualTypeOf<
   () => Promise<void>
 >();
-expectTypeOf<ConnectNexusStoreOptions<ChromeModel>>().toEqualTypeOf<
-  Pick<CreateOptions<ChromeModel>, "target" | "where" | "timeout">
->();
+expectTypeOf<
+  Parameters<typeof connectNexusStore<CounterStore, ChromeModel>>[2]
+>().toEqualTypeOf<ConnectOptions<ChromeModel> | undefined>();
 
 const creator: StateCreator<CounterStore> = (set, get) => ({
   count: 0,

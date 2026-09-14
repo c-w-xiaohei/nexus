@@ -127,7 +127,14 @@ describe("Transport", () => {
         },
       );
       expect(result).toMatchObject({
-        error: { code: "E_ENDPOINT_CONNECT_FAILED" },
+        error: {
+          code: "E_ENDPOINT_CONNECT_FAILED",
+          cause: {
+            name: "Error",
+            code: "E_UNKNOWN",
+            message: "subscription failed",
+          },
+        },
       });
       expect(close).toHaveBeenCalledOnce();
     });

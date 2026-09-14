@@ -3,7 +3,7 @@ import type {
   NodeIpcAddressResolver,
   NodeIpcSocketAddress,
 } from "./address.js";
-import type { NodeIpcAdapterModel, NodeIpcConnectionTarget } from "./meta.js";
+import type { NodeIpcAdapterModel } from "./meta.js";
 
 export type NodeIpcDaemonOptions = {
   appId: string;
@@ -27,7 +27,6 @@ export type NodeIpcClientOptions = {
   authToken?: string;
   authTimeoutMs?: number;
   maxAuthLineBytes?: number;
-  defaultTarget?: NodeIpcConnectionTarget;
   connectTo?: readonly ConnectionTargetOf<NodeIpcAdapterModel>[];
   resolveAddress?: NodeIpcAddressResolver;
   configure?: true;

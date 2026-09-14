@@ -9,7 +9,7 @@ Relay is explicit. It is not transparent multi-hop routing, raw envelope forward
 
 ## When To Use Relay
 
-Use Relay when one runtime owns more than one configured `Nexus<M>` instance and downstream callers should access a selected upstream provider through the middle runtime. If two contexts can connect directly in one graph, use normal `create()` or `connectNexusStore()` instead.
+Use Relay when one runtime owns more than one configured `Nexus<M>` instance and downstream callers should access a selected upstream provider through the middle runtime. If two contexts can connect directly in one graph, use normal `connect()`/`get()` or `connectNexusStore()` instead.
 
 ## Service Relay
 
@@ -58,7 +58,7 @@ chromeNexus.provide(UpstreamUserProfileToken, {
 The downstream caller uses an exact target in its own graph:
 
 ```ts
-const profile = await iframeChildNexus.create(DownstreamUserProfileToken, {
+const connection = await iframeChildNexus.connect({
   target: {
     context: "iframe-parent",
     appId: "portal",
@@ -66,11 +66,13 @@ const profile = await iframeChildNexus.create(DownstreamUserProfileToken, {
     origin: "https://parent.example.com",
   },
 });
+const profile = connection.get(DownstreamUserProfileToken);
 
 await profile.update({ name: "Ada" });
 ```
 
-The shared Token's `defaultTarget` is graph-local. Relay never derives `forwardTarget` from downstream defaults; configure the upstream `forwardThrough` and `forwardTarget` explicitly.
+Relay never derives `forwardTarget` from a downstream contract or connection
+lookup; configure the upstream `forwardThrough` and `forwardTarget` explicitly.
 
 By default, `relayService()` forwards serializable method calls and rejects `SET`, callbacks, refs, remote resources, and other capability-bearing payloads. Model capability forwarding as an explicit service contract instead of relying on transparent tunneling.
 
@@ -135,7 +137,7 @@ iframeParentNexus.provide(
 );
 ```
 
-Downstream State code connects to the relay provider using an exact iframe target or a Token/endpoint `defaultTarget`:
+Downstream State code connects to the relay provider using an exact iframe target:
 
 ```ts
 const store = await connectNexusStore(

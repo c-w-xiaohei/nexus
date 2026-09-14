@@ -1,0 +1,159 @@
+---
+title: Core 2.0 Alpha Migration
+description: Migrate service acquisition and targeting to the connection-resource API.
+---
+
+Core 2.0 alpha makes connections explicit. The old service-acquisition APIs are
+removed rather than retained as compatibility aliases. This page describes the
+unreleased alpha migration contract; it does not claim that a published package
+already has this version.
+
+Removed entries are `create`, `safeCreate`, `select`, `safeSelect`,
+`createMulticast`, `safeCreateMulticast`, `selectMulticast`, and
+`safeSelectMulticast`.
+
+The associated `CreateOptions`, `SelectOptions`, multicast option types,
+`RuntimeCreateTokenParam`, and default-target option types are removed too.
+Use `ConnectOptions`, `ConnectMulticastOptions`, and per-handle `ResourceOptions`.
+State also uses `ConnectOptions` directly; `ConnectNexusStoreOptions` is removed.
+Mock call records retain their object shape without standalone `MockNexus*Call`
+exports. Derive record types from `MockNexus["calls"]` when an annotation is needed.
+The obsolete `NexusTargetingError` and provider-wait/default-target error codes
+are removed; connection acquisition now reports its concrete connection errors.
+
+## Replace Service Acquisition
+
+Replace a one-step service acquisition:
+
+```ts
+const service = await nexus.create(SettingsToken, { target });
+```
+
+with an explicit connection followed by a synchronous catalog lookup:
+
+```ts
+const connection = await nexus.connect({ target });
+const service = connection.get(SettingsToken);
+```
+
+The safe form separates the two failure boundaries:
+
+```ts
+const connected = await nexus.safeConnect({ target });
+if (connected.isErr()) {
+  report(connected.error);
+} else {
+  const service = connected.value.safeGet(SettingsToken);
+  if (service.isErr()) report(service.error);
+  else await service.value.read();
+}
+```
+
+`get` and `safeGet` do not dial, wait for a provider, or create a remote
+business object. They check the provider catalog of the already-ready
+connection.
+
+The existing `Asyncified<T>` type remains the type-level mapping for lazy remote
+service values. `RemoteValue<T, M>` remains a structural thenable with connection
+provenance; neither type adds cancellation or connection ownership.
+
+## Passive Connection Acquisition
+
+`connect({ where, timeout, signal })` without a `target` waits for exactly one
+existing matching ready connection. It never discovers a provider and never
+derives a target from a Token, TokenSpace, endpoint, or adapter default. Multiple
+matches are ambiguous; a timeout or abort ends only this caller's wait.
+
+`where(contextMeta, connectionMeta)` is an acquisition constraint. It is not
+re-evaluated for every RPC and cannot replace authorization policy:
+
+- `policy.canConnect` authorizes logical connection establishment.
+- `where` chooses an acquired connection that matches application constraints.
+- `policy.canCall` authorizes each service or resource operation.
+
+If a peer publishes a service after the initial session, publish the provider
+before changing the peer's application readiness marker. The peer that waits for
+that marker can then pass it in `where`; it should still use `get` or `safeGet`
+to check the actual catalog.
+
+## Replace Multicast APIs
+
+Use `connectMulticast` for a fixed connection snapshot:
+
+```ts
+const collection = await nexus.connectMulticast({
+  targets,
+  where: matchesWorker,
+});
+
+const resources = collection.get(TaskToken);
+const results = await Promise.all(
+  resources.map(async ({ connection, result }) => ({
+    connection,
+    result: result.isErr()
+      ? result
+      : await Nexus.safeCall(result.value.run(input)),
+  })),
+);
+```
+
+With explicit `targets`, every target must be acquired. Without `targets`, the
+operation snapshots current matching ready connections and may return an empty
+collection. The collection never changes membership. Each `get` item retains its
+source connection and its own acquisition `Result`; failed members are not
+silently filtered.
+
+The removed `createMulticast`, `safeCreateMulticast`, `selectMulticast`, and
+`safeSelectMulticast` APIs have no direct compatibility replacement. Use
+`(await nexus.connectMulticast(...)).get(Token)` and ordinary Promise helpers.
+
+## Remove Default Targets And Provider Wait
+
+Remove `defaultTarget` from:
+
+- `Token` and `TokenSpace` definitions
+- endpoint configuration and decorators
+- adapter helper options
+- State tokens and State connection options
+
+Pass exact adapter targets to `connect` or `connectMulticast`. Use an endpoint's
+explicit `connectTo` startup list only when the application wants one-shot
+startup dialing independent of service acquisition. It does not wait for a
+provider and does not make `ready()` wait for the dial.
+
+There is no replacement for provider-level `wait` configuration. To wait for a
+connection, use passive `connect` with a positive `timeout` and optional
+`signal`. To wait for a late service, publish it before the peer's ready marker,
+then acquire the connection and call `get`.
+
+## State Options
+
+`connectNexusStore` and `safeConnectNexusStore` remain available. Their options
+follow `ConnectOptions`: use an exact `target`, an acquisition `where`, a
+positive `timeout`, and an optional `signal`. They do not accept Token or
+endpoint default targets, provider wait settings, or a separate State targeting
+model. State action calls retain their own Core resource-call timeout behavior.
+State still observes its selected peer's identity after acquisition: if its
+`where` predicate stops matching, that State handle becomes `stale`. This is
+State lifecycle behavior, not a predicate retained by the shared Connection or
+an authorization check applied to ordinary service calls.
+
+## Resource And Call Rules
+
+`RemoteValue<T, M>` is a structural thenable type with a read-only `connection`
+provenance field. Declaring a method call or reading a remote property is lazy;
+consumption starts the operation. Use `Nexus.safeCall` for one call when a
+`Result` is required. Use business methods instead of remote property
+assignment.
+
+The migration does not remove the existing `Asyncified<T>` type mapping,
+instance `release`/`safeRelease` methods, or top-level `Expose`/`Endpoint`
+decorator shorthand. These APIs remain available; the removal is limited to the
+old acquisition families, default-target configuration, and provider wait
+configuration described above.
+
+Connections, service proxies, refs, callbacks, and State handles are
+session-bound. After disconnect, reload, restart, or session replacement,
+connect again and get fresh handles. `release` and `safeRelease` remain the
+explicit release operations for remote references; they do not close shared
+connections or invoke application cleanup.
