@@ -12,10 +12,12 @@ import type {
   ContextMetaOf,
   ConnectionMetaOf,
 } from "@/types/adapter-model";
-import { Logger } from "@/logger";
 import { Token } from "./token";
 import type { Remote } from "./types";
 import { hasOnlyOptionKeys, isValidTimeout } from "./types/config";
+import { Logger } from "@/logger";
+
+const logger = new Logger("L4 --- Connection");
 
 export type DisconnectReason = "local" | "remote" | "protocol";
 export interface ResourceOptions {
@@ -53,11 +55,31 @@ export interface Connection<M extends AdapterModel = AdapterModel> {
 export class ConnectionHandle<
   M extends AdapterModel = AdapterModel,
 > implements Connection<M> {
-  private readonly disconnected = new Set<(reason: DisconnectReason) => void>();
-  private readonly identities = new Set<
-    (meta: Readonly<ContextMetaOf<M>>) => void
-  >();
-  private readonly logger = new Logger("L4 --- Connection");
+  /** Public late-subscription behavior; live delivery uses the session event directly. */
+  readonly onDisconnected: Connection<M>["onDisconnected"] = (listener) => {
+    const reason = this.disconnectReason;
+    if (reason === undefined) return this.session.onDisconnected(listener);
+    try {
+      listener(reason);
+    } catch (error) {
+      logger.error("Disconnect observer failed", error);
+    }
+    return () => {};
+  };
+
+  /** Public current-value delivery; no additional listener collection or event hop. */
+  readonly subscribeIdentity: Connection<M>["subscribeIdentity"] = (
+    listener,
+  ) => {
+    if (!this.session.isReady()) return () => {};
+    const stop = this.session.subscribeIdentity(listener);
+    try {
+      listener(this.contextMeta);
+    } catch (error) {
+      logger.error("Identity observer failed", error);
+    }
+    return stop;
+  };
 
   /** Binds a public handle to one immutable session identity and runtime call budget. */
   constructor(
@@ -142,59 +164,6 @@ export class ConnectionHandle<
   /** Closes the whole shared session and invalidates all handles bound to it. */
   disconnect(): void {
     this.session.close();
-  }
-
-  /** Observes one terminal notification per registration, including late registrations. */
-  onDisconnected(listener: (reason: DisconnectReason) => void): () => void {
-    if (this.status === "disconnected") {
-      this.notify(() => listener(this.disconnectReason!));
-      return () => {};
-    }
-    /** Keeps repeated registrations of the same callback independently cancellable. */
-    const notify = (reason: DisconnectReason) => listener(reason);
-    this.disconnected.add(notify);
-    return () => {
-      this.disconnected.delete(notify);
-    };
-  }
-
-  /** Delivers the current and every later committed identity until stopped or disconnected. */
-  subscribeIdentity(
-    listener: (meta: Readonly<ContextMetaOf<M>>) => void,
-  ): () => void {
-    if (this.status === "disconnected") return () => {};
-    /** Gives this registration its own identity even when callbacks are reused. */
-    const notify = (meta: Readonly<ContextMetaOf<M>>) => listener(meta);
-    this.identities.add(notify);
-    this.notify(() => listener(this.contextMeta));
-    return () => {
-      this.identities.delete(notify);
-    };
-  }
-
-  /** @internal Called after L2 commits identity; State and other consumers observe through this handle. */
-  identityUpdated(meta: ContextMetaOf<M>): void {
-    for (const listener of Array.from(this.identities)) {
-      if (this.status === "connected" && this.identities.has(listener))
-        this.notify(() => listener(meta));
-    }
-  }
-
-  /** @internal Called after pending calls and references have been detached. */
-  closed(): void {
-    this.identities.clear();
-    for (const listener of Array.from(this.disconnected)) {
-      if (!this.disconnected.delete(listener)) continue;
-      this.notify(() => listener(this.disconnectReason!));
-    }
-  }
-
-  /** Isolates synchronous observer failures so other observers and cleanup still run. */
-  private notify(listener: () => void): void {
-    Result.try({ try: listener, catch: (error) => error }).match({
-      ok: () => undefined,
-      err: (error) => this.logger.error("Connection observer failed", error),
-    });
   }
 }
 

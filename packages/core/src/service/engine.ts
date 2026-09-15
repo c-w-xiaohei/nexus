@@ -20,12 +20,14 @@ import type { Connection } from "@/api/connection";
 
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
+
+  // Session-owned resources and outbound call lifecycle.
   private readonly resourceManager: ResourceManager;
-  private readonly payloadProcessor: PayloadProcessor;
+  private readonly pendingCallManager: PendingCallManager;
+
+  // Encoding, proxy construction and inbound dispatch.
   private readonly proxyFactory: ProxyFactory;
   private readonly messageHandler: MessageHandler<M>;
-  private readonly pendingCallManager: PendingCallManager;
-  private readonly callProcessor: CallProcessor;
 
   /** Compose service, payload, call, and message processing around one manager. */
   constructor(
@@ -42,7 +44,7 @@ export class Engine<M extends AdapterModel> {
       {
         // Construction never dispatches: this closes the proxy/payload/call cycle
         // without making Engine a second call-processing entry point.
-        safeDispatchCall: (options) => this.callProcessor.safeProcess(options),
+        safeDispatchCall: (options) => callProcessor.safeProcess(options),
         dispatchRelease: (resourceId, connectionId) =>
           this.dispatchRelease(resourceId, connectionId),
       },
@@ -50,7 +52,7 @@ export class Engine<M extends AdapterModel> {
       config.getConnection,
       config.callTimeout,
     );
-    this.payloadProcessor = new PayloadProcessor(
+    const payloadProcessor = new PayloadProcessor(
       this.resourceManager,
       this.proxyFactory,
     );
@@ -62,17 +64,17 @@ export class Engine<M extends AdapterModel> {
         this.dispatchRelease(resourceId, connectionId),
       pendingCalls: this.pendingCallManager,
       resourceManager: this.resourceManager,
-      payloadProcessor: this.payloadProcessor,
+      payloadProcessor,
       policy: config.policy,
       getConnectionAuthContext: (connectionId) =>
         this.connectionManagerState.getConnectionAuthSnapshot(connectionId),
     });
-    this.callProcessor = new CallProcessor({
+    const callProcessor = new CallProcessor({
       isConnectionReady: (id) =>
         this.connectionManagerState.isConnectionReady(id),
       sendMessage: (message, connectionId) =>
         this.safeSendMessage(message, connectionId),
-      payloadProcessor: this.payloadProcessor,
+      payloadProcessor,
       pendingCallManager: this.pendingCallManager,
     });
   }
@@ -97,21 +99,6 @@ export class Engine<M extends AdapterModel> {
     this.connectionManagerState.publishProviders(
       providers.map(({ name }) => name),
     );
-  }
-
-  /** Best-effort notification after local release; logs send failure without waiting for a remote ACK. */
-  public dispatchRelease(resourceId: string, connectionId: string): void {
-    const message: ReleaseMessage = {
-      type: NexusMessageType.RELEASE,
-      id: null,
-      resourceId,
-    };
-    const result = this.safeSendMessage(message, connectionId);
-    if (result.isErr())
-      this.logger.warn(
-        `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
-        result.error,
-      );
   }
 
   /** Handles an incoming message and reports local failures without manufacturing a second reply. */
@@ -178,5 +165,20 @@ export class Engine<M extends AdapterModel> {
         this.logger.error("Exposed service disconnect hook failed.", error);
       }
     }
+  }
+
+  /** Best-effort notification after local release; logs send failure without waiting for a remote ACK. */
+  public dispatchRelease(resourceId: string, connectionId: string): void {
+    const message: ReleaseMessage = {
+      type: NexusMessageType.RELEASE,
+      id: null,
+      resourceId,
+    };
+    const result = this.safeSendMessage(message, connectionId);
+    if (result.isErr())
+      this.logger.warn(
+        `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
+        result.error,
+      );
   }
 }

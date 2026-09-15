@@ -17,6 +17,19 @@ import type {
 } from "./config";
 import type { Connection, ConnectionCollection } from "../connection";
 
+/** A token needs an implementation; descriptors and batches already carry theirs. */
+export type ProviderArgs<T extends object, M extends AdapterModel> =
+  | [
+      token: Token<T> | Token<T, M>,
+      service: T,
+      options?: { policy?: AuthorizationPolicy<M> },
+    ]
+  | [
+      registration:
+        | ServiceProvider<T, M>
+        | readonly ServiceProvider<object, M>[],
+    ];
+
 export type TokenService<TToken> =
   TToken extends Token<infer T, never> ? T : never;
 
@@ -89,29 +102,11 @@ export interface NexusInstance<M extends AdapterModel = AdapterModel> {
   ): Result<NexusInstance<M>, Error>;
   /** Adds configuration and schedules local bootstrap after synchronous registration. */
   configure<const T extends NexusConfig<M>>(config: T): NexusInstance<M>;
-  /** Registers a service before bootstrap or publishes it on a ready runtime. */
-  provide<T extends object>(
-    token: Token<T> | Token<T, M>,
-    service: T,
-    options?: { policy?: AuthorizationPolicy<M> },
-  ): this;
-  /** Registers a provider descriptor without cloning its service implementation. */
-  provide<T extends object>(registration: ServiceProvider<T, M>): this;
-  /** Validates and registers a provider batch. */
-  provide(registrations: readonly ServiceProvider<object, M>[]): this;
-  /** Registers an object service and returns expected registration failures. */
+  /** Registers a token implementation, descriptor or batch before bootstrap or live after ready. */
+  provide<T extends object>(...args: ProviderArgs<T, M>): this;
+  /** Registers the same provider forms and returns validation or lifecycle errors. */
   safeProvide<T extends object>(
-    token: Token<T> | Token<T, M>,
-    service: T,
-    options?: { policy?: AuthorizationPolicy<M> },
-  ): Result<this, Error>;
-  /** Registers a descriptor and preserves structured registration errors. */
-  safeProvide<T extends object>(
-    registration: ServiceProvider<T, M>,
-  ): Result<this, Error>;
-  /** Validates and registers a batch without throwing expected registration errors. */
-  safeProvide(
-    registrations: readonly ServiceProvider<object, M>[],
+    ...args: ProviderArgs<T, M>
   ): Result<this, Error>;
   /** Waits for local bootstrap, not remote services or startup connections. */
   ready(): Promise<void>;

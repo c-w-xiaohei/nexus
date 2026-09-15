@@ -99,9 +99,7 @@ export const safeConnectNexusStore = async <
 
       // Init arrives through the callback, not the response. A successful response
       // is only useful when init completed and the session is still usable.
-      const subscribed = Promise.resolve(
-        service.subscribe((event) => remote.onSync(event)),
-      );
+      const subscribed = Promise.resolve(service.subscribe(remote.onSync));
       return timeout !== undefined
         ? withTimeout(() => subscribed, timeout)
         : subscribed;

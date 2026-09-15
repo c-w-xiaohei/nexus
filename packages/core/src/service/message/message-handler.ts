@@ -8,9 +8,10 @@ import {
   type NexusMessage,
 } from "@/types/message";
 import type { AdapterModel } from "@/types/adapter-model";
-import type { Engine } from "../engine";
-import type { ConnectionManager } from "@/connection/connection-manager";
-import type { NexusAuthorizationPolicy } from "@/api/types/config";
+import type {
+  NexusAuthorizationPolicy,
+  ServiceCallAuthContext,
+} from "@/api/types/config";
 import { toSerializedError } from "@/utils/error";
 import {
   NexusError,
@@ -54,8 +55,11 @@ export class MessageHandler<M extends AdapterModel> {
   /** Bind request authorization, payload conversion, and response ownership. */
   constructor(
     private readonly context: {
-      safeSendMessage: Engine<M>["safeSendMessage"];
-      dispatchRelease: Engine<M>["dispatchRelease"];
+      safeSendMessage(
+        message: NexusMessage,
+        connectionId: string,
+      ): Result<void, Error>;
+      dispatchRelease(resourceId: string, connectionId: string): void;
       pendingCalls: Pick<
         PendingCallManager,
         "handleResponse" | "canHandleResponse" | "getCallTimeout"
@@ -69,7 +73,14 @@ export class MessageHandler<M extends AdapterModel> {
         | "releaseOrphanedResponseResources"
       >;
       policy?: NexusAuthorizationPolicy<M>;
-      getConnectionAuthContext?: ConnectionManager<M>["getConnectionAuthSnapshot"];
+      getConnectionAuthContext?: (
+        connectionId: string,
+      ) =>
+        | Pick<
+            ServiceCallAuthContext<M>,
+            "localIdentity" | "remoteIdentity" | "connection"
+          >
+        | undefined;
     },
   ) {}
 

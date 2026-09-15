@@ -100,7 +100,7 @@ describe("ConnectionManager", () => {
   let hostManager: ConnectionManager<TestAdapterModel>;
 
   // L3 Handlers Mocks
-  let mockHostHandlers: ConnectionManagerHandlers<TestAdapterModel>;
+  let mockHostHandlers: ConnectionManagerHandlers;
 
   // Test Data
   const hostMeta: TestUserMeta = { context: "host", id: 1 };
@@ -153,8 +153,8 @@ describe("ConnectionManager", () => {
       mockHostEndpoint.connect = async () => ({
         port: {
           postMessage: vi.fn(),
-          onMessage: vi.fn(),
-          onDisconnect: vi.fn(),
+          onMessage: vi.fn(() => () => {}),
+          onDisconnect: vi.fn(() => () => {}),
           close,
         },
         connectionMeta: {
@@ -187,9 +187,11 @@ describe("ConnectionManager", () => {
       const port: IPort = {
         onMessage: (handler) => {
           receive = handler;
+          return () => {};
         },
         onDisconnect: (handler) => {
           disconnected = handler;
+          return () => {};
         },
         close: () => disconnected(),
         postMessage: (packet) => {
@@ -297,8 +299,8 @@ describe("ConnectionManager", () => {
       );
       const port = {
         postMessage: vi.fn(),
-        onMessage: vi.fn(),
-        onDisconnect: vi.fn(),
+        onMessage: vi.fn(() => () => {}),
+        onDisconnect: vi.fn(() => () => {}),
         close: vi.fn(),
       };
       finishDial({ port, connectionMeta: { from: "late" } });
@@ -344,7 +346,7 @@ describe("ConnectionManager", () => {
         const port: IPort = {
           postMessage: vi.fn(),
           close: vi.fn(),
-          onDisconnect: vi.fn(),
+          onDisconnect: vi.fn(() => () => {}),
           onMessage: (handler) => {
             receive = handler;
             deliver({
@@ -364,6 +366,7 @@ describe("ConnectionManager", () => {
               id: null,
               updates: { id: 3 },
             });
+            return () => {};
           },
         };
         const connectionMeta = { from: "client" };
@@ -488,7 +491,6 @@ describe("ConnectionManager", () => {
       await vi.waitFor(() =>
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledWith(
           expect.any(String),
-          undefined,
         ),
       );
     });
@@ -951,7 +953,6 @@ describe("ConnectionManager", () => {
       expect(hostManager.connections.has(a.connectionId)).toBe(false);
       expect(mockHostHandlers.onDisconnect).toHaveBeenCalledExactlyOnceWith(
         a.connectionId,
-        clientMeta,
       );
       b.close();
     });
@@ -973,8 +974,9 @@ describe("ConnectionManager", () => {
         port: {
           onMessage: (handler) => {
             receive = handler;
+            return () => {};
           },
-          onDisconnect: vi.fn(),
+          onDisconnect: vi.fn(() => () => {}),
           close,
           postMessage: (packet) => {
             const message = JsonSerializer.safeDeserialize(packet).unwrap();
@@ -1050,7 +1052,6 @@ describe("ConnectionManager", () => {
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledOnce();
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledWith(
           clientBConnOnHost.connectionId,
-          clientBMeta,
         );
 
         const hostConnections = [...hostManager.connections.values()];
@@ -1232,33 +1233,35 @@ describe("ConnectionManager", () => {
       const closed = new Promise<void>((resolve) => {
         disconnected = resolve;
       });
-      mockHostHandlers.onDisconnect = vi.fn((id, identity) => {
+      mockHostHandlers.onDisconnect = vi.fn((id) => {
         expect(id).toBe(connection.connectionId);
-        expect(identity).toEqual({ ...clientMeta, groups: ["new"] });
         expect(hostManager.connections.size).toBe(0);
         expect(hostManager.getConnectionAuthSnapshot(id)).toBeUndefined();
         connection.close();
         disconnected();
         throw new Error("disconnect observer failed");
       });
-      mockHostHandlers.onIdentityUpdated = vi.fn((id, next, previous, meta) => {
+      const identityUpdated = vi.fn((next: Readonly<TestUserMeta>) => {
+        if (next.groups?.[0] !== "new") return;
         expect(
-          hostManager.getConnectionAuthSnapshot(id)?.remoteIdentity,
+          hostManager.getConnectionAuthSnapshot(connection.connectionId)
+            ?.remoteIdentity,
         ).toEqual(next);
-        expect(previous.groups).toEqual(["old"]);
-        expect(meta).toBe(connection.context.connection);
         connection.close();
       });
+      const stopIdentity = connection.subscribeIdentity(identityUpdated);
+      identityUpdated.mockClear();
       try {
         expect(
           client.manager.safeUpdateLocalIdentity({ groups: ["new"] }).isOk(),
         ).toBe(true);
         await closed;
-        expect(mockHostHandlers.onIdentityUpdated).toHaveBeenCalledOnce();
+        expect(identityUpdated).toHaveBeenCalledOnce();
         expect(mockHostHandlers.onDisconnect).toHaveBeenCalledOnce();
-        expect(changes.at(-1)).toBe(0);
+        expect(changes).toEqual([1]);
       } finally {
         unsubscribe();
+        stopIdentity();
         connection.close();
       }
     });

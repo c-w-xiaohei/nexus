@@ -31,13 +31,7 @@ describe("buildKernel", () => {
       // Empty config
     };
 
-    const result = await buildKernel(
-      config as any,
-      [],
-      null,
-      undefined,
-      getConnection,
-    );
+    const result = await buildKernel(config as any, [], null, getConnection);
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
@@ -57,7 +51,6 @@ describe("buildKernel", () => {
         targetClass: class Endpoint {},
         options: { meta: { context: "bg" } },
       } as any,
-      undefined,
       getConnection,
     );
 
@@ -99,7 +92,6 @@ describe("buildKernel", () => {
       config as any,
       serviceDeclarations,
       null,
-      undefined,
       getConnection,
     );
 
@@ -134,13 +126,7 @@ describe("buildKernel", () => {
       policy,
     };
 
-    const result = await buildKernel(
-      config as any,
-      [],
-      null,
-      undefined,
-      getConnection,
-    );
+    const result = await buildKernel(config as any, [], null, getConnection);
 
     expect(result.isOk()).toBe(true);
     if (result.isErr()) {
@@ -173,7 +159,6 @@ describe("buildKernel", () => {
         },
         options: { meta: { context: "decorated" } },
       } as any,
-      undefined,
       getConnection,
     );
 
@@ -213,7 +198,6 @@ describe("buildKernel", () => {
         },
       ],
       null,
-      undefined,
       getConnection,
     );
 

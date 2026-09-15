@@ -6,6 +6,13 @@
 "@nexus-js/node-ipc": minor
 ---
 
+Let public Connection handles register live listeners with session-owned events
+and own public replay behavior, removing kernel/Nexus event forwarding while preserving cleanup
+ordering. Nexus observes manager availability directly and caches handles by
+session identity. Remove unused identity payloads from owner commands.
+Share provider argument types between Nexus and its public interface, and route
+throw-style registration directly through safe registration.
+
 Reject duplicate provider IDs within a single configure/provide submission before
 composition; separate configuration layers continue to use last-wins semantics.
 Unify bootstrap/live registration and keep provider-catalog updates separate from

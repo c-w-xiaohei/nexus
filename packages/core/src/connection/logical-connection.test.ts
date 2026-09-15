@@ -64,7 +64,6 @@ describe("LogicalConnection", () => {
       onReady: vi.fn(() => Result.ok(undefined)),
       onClosed: vi.fn(),
       onMessage: vi.fn(),
-      onIdentityUpdated: vi.fn(),
       authorize: vi.fn().mockResolvedValue(true),
     };
     mockHostHandlers = {
@@ -72,7 +71,6 @@ describe("LogicalConnection", () => {
       onReady: vi.fn(() => Result.ok(undefined)),
       onClosed: vi.fn(),
       onMessage: vi.fn(),
-      onIdentityUpdated: vi.fn(),
       authorize: vi.fn(),
     };
 
@@ -398,7 +396,6 @@ describe("LogicalConnection", () => {
         expect(connection.isReady()).toBe(false);
         expect(mockClientHandlers.onClosed).toHaveBeenCalledExactlyOnceWith(
           connection,
-          hostMeta,
         );
         expect(mockClientHandlers.onReady).not.toHaveBeenCalled();
         expect(sendMessage).toHaveBeenCalledTimes(sent);
@@ -479,10 +476,9 @@ describe("LogicalConnection", () => {
           return Result.ok(undefined);
         };
         const ownerError = new NexusProtocolError("owner registration failed");
-        mockClientHandlers.onReady = vi.fn((connection, identity) => {
-          expect(connection.remoteIdentity).toBe(identity);
+        mockClientHandlers.onReady = vi.fn((connection) => {
           expect(connection.isReady()).toBe(true);
-          expect(identity).toEqual(hostMeta);
+          expect(connection.remoteIdentity).toEqual(hostMeta);
           inbound.push(
             connection.safeHandleMessage({
               type: NexusMessageType.RES,
@@ -1121,7 +1117,6 @@ describe("LogicalConnection", () => {
     finish(true);
     await handling;
     expect(clientConnection.remoteIdentity).toEqual(hostMeta);
-    expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
     expect(mockClientHandlers.onClosed).toHaveBeenCalledOnce();
   });
 
@@ -1162,15 +1157,11 @@ describe("LogicalConnection", () => {
       await vi.waitFor(() => {
         // 2. Both sides are notified of verification
         expect(mockHostHandlers.onReady).toHaveBeenCalledOnce();
-        expect(mockHostHandlers.onReady).toHaveBeenCalledWith(
-          hostConnection,
-          clientMeta,
-        );
+        expect(mockHostHandlers.onReady).toHaveBeenCalledWith(hostConnection);
 
         expect(mockClientHandlers.onReady).toHaveBeenCalledOnce();
         expect(mockClientHandlers.onReady).toHaveBeenCalledWith(
           clientConnection,
-          hostMeta,
         );
 
         // 3. Both connections are now ready
@@ -1192,7 +1183,6 @@ describe("LogicalConnection", () => {
         onReady: vi.fn(() => Result.ok(undefined)),
         onClosed: vi.fn(),
         onMessage: vi.fn(),
-        onIdentityUpdated: vi.fn(),
         authorize: vi.fn().mockResolvedValue(true),
       };
       const connection = new LogicalConnection(
@@ -1270,7 +1260,6 @@ describe("LogicalConnection", () => {
         onReady: vi.fn(() => Result.ok(undefined)),
         onClosed: vi.fn(),
         onMessage: vi.fn(),
-        onIdentityUpdated: vi.fn(),
         authorize: vi.fn().mockResolvedValue(true),
       };
       const createConnection = () =>
@@ -1378,7 +1367,6 @@ describe("LogicalConnection", () => {
         onReady: vi.fn(() => Result.ok(undefined)),
         onClosed: vi.fn(),
         onMessage: vi.fn(),
-        onIdentityUpdated: vi.fn(),
         authorize: vi.fn().mockResolvedValue(true),
       };
       const connection = new LogicalConnection(portProcessor, handlers, {
@@ -1405,7 +1393,7 @@ describe("LogicalConnection", () => {
 
       expect(connection.isReady()).toBe(false);
       expect(handlers.onReady).not.toHaveBeenCalled();
-      expect(handlers.onClosed).toHaveBeenCalledWith(connection, undefined);
+      expect(handlers.onClosed).toHaveBeenCalledWith(connection);
     });
   });
 
@@ -1455,7 +1443,6 @@ describe("LogicalConnection", () => {
         expect(mockClientHandlers.onReady).not.toHaveBeenCalled();
         expect(mockClientHandlers.onClosed).toHaveBeenCalledExactlyOnceWith(
           connection,
-          undefined,
         );
       },
     );
@@ -1526,7 +1513,6 @@ describe("LogicalConnection", () => {
           onReady: vi.fn(() => Result.ok(undefined)),
           onClosed: vi.fn(),
           onMessage: vi.fn(),
-          onIdentityUpdated: vi.fn(),
           authorize: vi.fn().mockResolvedValue(false),
         });
       const incoming = createConnection(
@@ -1737,16 +1723,11 @@ describe("LogicalConnection", () => {
 
         // 3. onClosed IS called for both parties
         expect(mockHostHandlers.onClosed).toHaveBeenCalledOnce();
-        // Identity is undefined because the connection was never verified
-        expect(mockHostHandlers.onClosed).toHaveBeenCalledWith(
-          hostConnection,
-          undefined,
-        );
+        expect(mockHostHandlers.onClosed).toHaveBeenCalledWith(hostConnection);
 
         expect(mockClientHandlers.onClosed).toHaveBeenCalledOnce();
         expect(mockClientHandlers.onClosed).toHaveBeenCalledWith(
           clientConnection,
-          undefined,
         );
       });
 
@@ -1776,11 +1757,7 @@ describe("LogicalConnection", () => {
         connection: clientConnectionMeta,
         direction: "incoming",
       });
-      expect(mockHostHandlers.onIdentityUpdated).toHaveBeenLastCalledWith(
-        hostConnection,
-        { ...clientMeta, id: 200 },
-        clientMeta,
-      );
+      expect(hostConnection.remoteIdentity).toEqual({ ...clientMeta, id: 200 });
       clientConnection.close();
     });
 
@@ -1805,7 +1782,6 @@ describe("LogicalConnection", () => {
         expect(mockClientHandlers.onReady).toHaveBeenCalledOnce();
         expect(mockClientHandlers.onReady).toHaveBeenCalledWith(
           clientConnection,
-          assignmentMeta,
         );
 
         // 3. The host's local metadata has been updated internally.
@@ -1945,22 +1921,18 @@ describe("LogicalConnection", () => {
       resolveService();
     });
 
-    it("should notify both sides with valid identities on active disconnect", async () => {
+    it("should notify both session owners on active disconnect", async () => {
       // Act: Client closes the connection
       clientConnection.close();
 
       // Assert: Both sides are notified with the correct, verified identity
       await vi.waitFor(() => {
         expect(mockHostHandlers.onClosed).toHaveBeenCalledOnce();
-        expect(mockHostHandlers.onClosed).toHaveBeenCalledWith(
-          hostConnection,
-          clientMeta,
-        );
+        expect(mockHostHandlers.onClosed).toHaveBeenCalledWith(hostConnection);
 
         expect(mockClientHandlers.onClosed).toHaveBeenCalledOnce();
         expect(mockClientHandlers.onClosed).toHaveBeenCalledWith(
           clientConnection,
-          hostMeta,
         );
       });
 
@@ -1983,7 +1955,7 @@ describe("LogicalConnection", () => {
       vi.clearAllMocks();
     });
 
-    it("should update remote identity and call onIdentityUpdated handler", async () => {
+    it("publishes identity changes without replaying current state", async () => {
       // Arrange
       const updates: Partial<TestUserMeta> = { id: 999 };
       const updateMessage: IdentityUpdateMessage = {
@@ -1992,19 +1964,17 @@ describe("LogicalConnection", () => {
         updates,
       };
       const expectedNewIdentity: TestUserMeta = { ...hostMeta, ...updates };
+      const changed = vi.fn();
+      clientConnection.subscribeIdentity(changed);
+      expect(changed).not.toHaveBeenCalled();
+      expect(clientConnection.remoteIdentity).toEqual(hostMeta);
 
       // Act: Host sends an identity update *about itself* to the client
       hostConnection.sendMessage(updateMessage);
 
       // Assert: Client's view of the host is updated
       await vi.waitFor(() => {
-        // 1. The specific handler is called with new and old identities
-        expect(mockClientHandlers.onIdentityUpdated).toHaveBeenCalledOnce();
-        expect(mockClientHandlers.onIdentityUpdated).toHaveBeenCalledWith(
-          clientConnection,
-          expectedNewIdentity,
-          hostMeta, // The original identity
-        );
+        expect(changed).toHaveBeenCalledExactlyOnceWith(expectedNewIdentity);
 
         // 2. The regular message handler is NOT called for this message type
         expect(mockClientHandlers.onMessage).not.toHaveBeenCalled();
@@ -2034,7 +2004,6 @@ describe("LogicalConnection", () => {
           }),
         );
         expect(clientConnection.remoteIdentity).toEqual(hostMeta);
-        expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
         expect(clientConnection.isReady()).toBe(false);
       });
     });
@@ -2068,7 +2037,6 @@ describe("LogicalConnection", () => {
       await freshConnection.safeHandleMessage(updateMessage);
 
       // Assert
-      expect(mockClientHandlers.onIdentityUpdated).not.toHaveBeenCalled();
       expect(freshConnection.remoteIdentity).toBeUndefined();
     });
 
@@ -2108,18 +2076,6 @@ describe("LogicalConnection", () => {
           context: "latest",
         });
       });
-      expect(mockClientHandlers.onIdentityUpdated).toHaveBeenNthCalledWith(
-        1,
-        clientConnection,
-        { ...hostMeta, id: 10 },
-        hostMeta,
-      );
-      expect(mockClientHandlers.onIdentityUpdated).toHaveBeenNthCalledWith(
-        2,
-        clientConnection,
-        { ...hostMeta, id: 10, context: "latest" },
-        { ...hostMeta, id: 10 },
-      );
     });
 
     it("should forward service messages only after earlier identity update authorization completes", async () => {

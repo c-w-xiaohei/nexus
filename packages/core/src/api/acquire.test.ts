@@ -82,7 +82,6 @@ describe("connection acquisition boundaries", () => {
         },
         [],
         null,
-        undefined,
         vi.fn(),
       )
     ).unwrap();

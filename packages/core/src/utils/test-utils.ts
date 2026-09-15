@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { LogicalConnection } from "@/connection/logical-connection";
 import type { IPort } from "@/transport/types/port";
 import type { IEndpoint } from "@/transport/types/endpoint";
 import { Transport } from "@/transport/transport";
@@ -101,7 +102,7 @@ export async function createConnectionManagerStack<M extends AdapterModel>(
     }),
   };
   const transport = Transport.create(mockEndpoint);
-  const handlers: ConnectionManagerHandlers<M> = {
+  const handlers: ConnectionManagerHandlers = {
     onMessage: vi.fn(),
     onDisconnect: vi.fn(),
   };
@@ -124,7 +125,7 @@ export function createNexusTestStack<M extends AdapterModel>(setup: {
   meta: ContextMetaOf<M>;
   cmConfig?: ConnectionManagerConfig<M>;
 }) {
-  const handlers: ConnectionManagerHandlers<M> = {
+  const handlers: ConnectionManagerHandlers = {
     onMessage: vi.fn(),
     onDisconnect: vi.fn(),
   };
@@ -173,22 +174,28 @@ export async function createL3Endpoints<M extends AdapterModel>(
 ) {
   const [clientPort, hostPort] = createMockPortPair();
 
-  const hostConnections = new Map<string, ConnectionHandle<M>>();
-  const clientConnections = new Map<string, ConnectionHandle<M>>();
+  const hostConnections = new WeakMap<
+    LogicalConnection<M>,
+    ConnectionHandle<M>
+  >();
+  const clientConnections = new WeakMap<
+    LogicalConnection<M>,
+    ConnectionHandle<M>
+  >();
   let hostEngine!: Engine<M>;
   let clientEngine!: Engine<M>;
   const getConnection = (
     manager: ConnectionManager<M>,
-    engine: () => Engine<M>,
-    cache: Map<string, ConnectionHandle<M>>,
+    engine: Engine<M>,
+    cache: WeakMap<LogicalConnection<M>, ConnectionHandle<M>>,
     id: string,
   ): ConnectionHandle<M> => {
-    const existing = cache.get(id);
-    if (existing) return existing;
     const session = manager.getConnection(id);
     if (!session) throw new Error(`Missing test connection "${id}".`);
-    const connection = new ConnectionHandle(session, engine(), 5_000);
-    cache.set(id, connection);
+    const existing = cache.get(session);
+    if (existing) return existing;
+    const connection = new ConnectionHandle(session, engine, 5_000);
+    cache.set(session, connection);
     return connection;
   };
 
@@ -200,7 +207,7 @@ export async function createL3Endpoints<M extends AdapterModel>(
     getConnection: (id) =>
       getConnection(
         hostStack.connectionManager,
-        () => hostEngine,
+        hostEngine,
         hostConnections,
         id,
       ),
@@ -212,18 +219,8 @@ export async function createL3Endpoints<M extends AdapterModel>(
     })),
   );
   hostStack.handlers.onMessage = (msg, connId) =>
-    void hostEngine
-      .safeOnMessage(msg, connId)
-      .then((result) =>
-        result.match({ ok: () => undefined, err: () => undefined }),
-      );
-  hostStack.handlers.onDisconnect = (connId) => {
-    hostEngine.onDisconnect(connId);
-    hostConnections.get(connId)?.closed();
-    hostConnections.delete(connId);
-  };
-  hostStack.handlers.onIdentityUpdated = (id, next) =>
-    hostConnections.get(id)?.identityUpdated(next);
+    void hostEngine.safeOnMessage(msg, connId);
+  hostStack.handlers.onDisconnect = (connId) => hostEngine.onDisconnect(connId);
 
   // The host's mock endpoint will listen for incoming connections.
   hostStack.mockEndpoint.listen = vi.fn((onConnect) => {
@@ -241,24 +238,15 @@ export async function createL3Endpoints<M extends AdapterModel>(
     getConnection: (id) =>
       getConnection(
         clientStack.connectionManager,
-        () => clientEngine,
+        clientEngine,
         clientConnections,
         id,
       ),
   });
   clientStack.handlers.onMessage = (msg, connId) =>
-    void clientEngine
-      .safeOnMessage(msg, connId)
-      .then((result) =>
-        result.match({ ok: () => undefined, err: () => undefined }),
-      );
-  clientStack.handlers.onDisconnect = (connId) => {
+    void clientEngine.safeOnMessage(msg, connId);
+  clientStack.handlers.onDisconnect = (connId) =>
     clientEngine.onDisconnect(connId);
-    clientConnections.get(connId)?.closed();
-    clientConnections.delete(connId);
-  };
-  clientStack.handlers.onIdentityUpdated = (id, next) =>
-    clientConnections.get(id)?.identityUpdated(next);
 
   // The client's mock endpoint will initiate the connection.
   clientStack.mockEndpoint.connect = vi.fn(

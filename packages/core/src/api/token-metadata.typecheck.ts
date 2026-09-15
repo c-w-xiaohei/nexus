@@ -185,6 +185,45 @@ void chromeNexus
 
 chromeNexus.provide(ChromePingToken, { ping: () => "pong" });
 chromeNexus.safeProvide(ChromePingToken, { ping: () => "pong" });
+chromeNexus.provide({
+  token: ChromePingToken,
+  service: { ping: () => "pong" },
+});
+chromeNexus.safeProvide([
+  { token: ChromePingToken, service: { ping: () => "pong" } },
+]);
+// @ts-expect-error a token registration requires its implementation.
+chromeNexus.provide(ChromePingToken);
+// @ts-expect-error safe registration also requires its implementation.
+chromeNexus.safeProvide(ChromePingToken);
+// @ts-expect-error implementations must satisfy the token's contract.
+chromeNexus.provide(ChromePingToken, { ping: () => 123 });
+chromeNexus.provide(
+  // @ts-expect-error descriptors do not accept a separate implementation.
+  { token: ChromePingToken, service: { ping: () => "pong" } },
+  {},
+);
+// @ts-expect-error model-bound provider tokens cannot cross adapters.
+chromeNexus.safeProvide(UpstreamPingToken, { ping: () => "pong" });
+
+const publicNexus: NexusInstance<ChromeModel> = chromeNexus;
+publicNexus.provide(
+  ChromePingToken,
+  { ping: () => "pong" },
+  {
+    policy: {
+      canCall: (context) => context.remoteIdentity.runtime === "background",
+    },
+  },
+);
+publicNexus.safeProvide({
+  token: ChromePingToken,
+  service: { ping: () => "pong" },
+});
+// @ts-expect-error the interface and class both require a token implementation.
+publicNexus.provide(ChromePingToken);
+// @ts-expect-error the interface also preserves adapter model constraints.
+publicNexus.safeProvide(UpstreamPingToken, { ping: () => "pong" });
 
 class PingProvider implements PingService {
   ping(): string {

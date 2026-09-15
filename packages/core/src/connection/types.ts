@@ -1,7 +1,6 @@
 import type {
   AdapterModel,
   ConnectionTargetOf,
-  ConnectionMetaOf,
   ContextMetaOf,
 } from "../types/adapter-model";
 import type { Result } from "better-result";
@@ -24,14 +23,15 @@ export type ResolveOptions<M extends AdapterModel> = {
  *
  * With open(), normal startup is onAttached -> authorize -> onReady. Afterwards,
  * messages, authorized identity updates and catalog changes can recur until close.
+ * Identity and disconnect observation belongs to the session's event channels; these
+ * owner callbacks only commit collection indexes and dispatch application work.
  * Startup failure can skip onReady. A constructed session that reaches shutdown
  * calls onClosed; an acquisition failure before ownership transfers has no session
  * to notify. The low-level constructor does not invoke onAttached.
  *
  * Only authorize and onMessage may return Promises. Registration hooks return a
- * synchronous Result; notification hooks return void and are not awaited.
- * Connection arguments are live objects, not frozen event snapshots. Identity
- * arguments refer to the values at the transition; treat them as read-only.
+ * synchronous Result; onClosed returns void and is not awaited. Connection
+ * arguments are live objects, not frozen event snapshots.
  */
 export interface LogicalConnectionHandlers<M extends AdapterModel> {
   /**
@@ -67,18 +67,13 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
    *
    * @param connection - The same session previously supplied to onAttached when
    * using open(). Register this object directly; no ID-based lookup is needed.
-   * @param identity - The authorized remote identity at this transition. Use it
-   * to populate owner indexes, not to authorize the session again.
    * @returns Result.ok(undefined) once synchronous registration is complete, or
    * Result.err(error) on registration failure. Do not return a Promise. Err or a
    * thrown exception fails open() and closes the session; onClosed must remove
    * any registration already performed. Inbound application traffic is not
    * delivered for a failed registration.
    */
-  onReady(
-    connection: LogicalConnection<M>,
-    identity: ContextMetaOf<M>,
-  ): Result<void, Error>;
+  onReady(connection: LogicalConnection<M>): Result<void, Error>;
   /**
    * Remove a closed session from the owner's indexes and release its dependents.
    *
@@ -91,19 +86,11 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
    *
    * @param connection - The closed object; isReady() is false. Retained identity
    * and catalog getters remain available for diagnostics, not routing.
-   * @param identity - The last authorized remote identity if protocol readiness
-   * had been reached immediately before close; otherwise undefined. It can be
-   * present even when onReady was never called, or absent while remoteIdentity
-   * retains a handshake candidate that was authorized. Consult the owner's own
-   * index to determine whether it published the session.
    * @returns Nothing. Perform cleanup synchronously; returned Promises are not
    * awaited. Thrown exceptions are logged and contained by the connection; they
    * neither reopen it nor retry this callback, so essential cleanup must come first.
    */
-  onClosed(
-    connection: LogicalConnection<M>,
-    identity: ContextMetaOf<M> | undefined,
-  ): void;
+  onClosed(connection: LogicalConnection<M>): void;
   /**
    * Handle an inbound packet not consumed by the connection protocol itself.
    *
@@ -127,31 +114,6 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
     connection: LogicalConnection<M>,
     message: NexusMessage,
   ): void | Promise<void>;
-  /**
-   * Update owner indexes after an inbound IDENTITY_UPDATE is authorized and applied.
-   *
-   * Called synchronously after remoteIdentity is replaced, once per accepted
-   * update, even if its values are unchanged. Denied updates close the session
-   * without this callback; authorization finishing after close is ignored. This
-   * is not called for initial handshake identity or updateLocalIdentity(). It can
-   * run in the protocol-ready interval before onReady; ConnectionManager updates
-   * published indexes only if the session is already present in them.
-   *
-   * @param connection - The affected session, whose remoteIdentity is already new.
-   * Adapter facts remain available through connection.context.connection.
-   * @param newIdentity - The complete merged and authorized remote identity, not
-   * just the incoming patch. Treat the value as read-only.
-   * @param oldIdentity - The previously committed identity, supplied so the owner
-   * can remove obsolete index entries without storing its own identity copy.
-   * @returns Nothing. Update indexes synchronously; Promises are not awaited.
-   * A throw does not roll back the committed identity. It becomes Err from
-   * safeHandleMessage(), and managed reception also closes the session.
-   */
-  onIdentityUpdated(
-    connection: LogicalConnection<M>,
-    newIdentity: ContextMetaOf<M>,
-    oldIdentity: ContextMetaOf<M>,
-  ): void;
   /**
    * Decide whether a candidate peer identity is allowed for this session.
    *
@@ -191,7 +153,7 @@ export interface ConnectionManagerConfig<M extends AdapterModel> {
  * Manager owns session indexes; these callbacks own service dispatch and
  * session-bound call/resource cleanup. They do not drive the handshake.
  */
-export interface ConnectionManagerHandlers<M extends AdapterModel> {
+export interface ConnectionManagerHandlers {
   /**
    * Dispatch an application packet forwarded by a successfully published session.
    * Connection protocol packets are consumed by LogicalConnection, not forwarded.
@@ -202,6 +164,8 @@ export interface ConnectionManagerHandlers<M extends AdapterModel> {
    * @param sourceConnectionId - The source session ID, not a reusable target ID.
    * @returns Nothing or a Promise for this packet's processing. Throws/rejections
    * propagate to the session's message handling; managed reception closes it.
+   * A synchronous dispatcher may hand work off to its own error boundary; only
+   * failures returned through this callback propagate to the session.
    */
   onMessage(
     message: NexusMessage,
@@ -209,40 +173,16 @@ export interface ConnectionManagerHandlers<M extends AdapterModel> {
   ): void | Promise<void>;
   /**
    * Release pending calls and resources belonging to a session that has closed.
-   * Called after Manager removes attached/published index entries and before it
-   * notifies availability listeners. Also called for attached sessions whose
-   * handshake failed; connection acquisition failing before attachment has no
-   * session to report. Invoked once per closed session, not once per close call.
+   * Called after Manager removes attached/published index entries. Also called for
+   * attached sessions whose handshake failed; connection acquisition failing before
+   * attachment has no session to report. Invoked once per closed session, not once
+   * per close call.
    *
    * @param connectionId - The closed session ID. Manager queries no longer return
    * a published connection or authorization snapshot for it.
-   * @param identity - The pre-close remote identity if protocol readiness was
-   * reached; otherwise undefined. Its presence does not prove prior publication.
    * @returns Nothing. Cleanup must be synchronous; Promises are not awaited.
    * Throws are logged and contained by LogicalConnection after index removal;
    * the callback is not retried.
    */
-  onDisconnect(connectionId: string, identity?: ContextMetaOf<M>): void;
-  /**
-   * Observe an authorized remote identity update on an already published session.
-   * Called after the connection commits the new identity. Authorization snapshot
-   * queries already expose newIdentity.
-   * Updates before publication are not forwarded. Availability notification
-   * follows this callback, including when it throws.
-   *
-   * @param connectionId - The affected published session ID.
-   * @param newIdentity - The complete merged remote identity now in use.
-   * @param oldIdentity - The identity in use before this update.
-   * @param connectionMeta - The session's shallow-frozen local adapter facts,
-   * distinct from either peer identity.
-   * @returns Nothing. Optional; omission does not skip identity or index updates.
-   * Promises are not awaited. A throw does not roll back the update; it propagates
-   * to session message handling, and managed reception closes the session.
-   */
-  onIdentityUpdated?(
-    connectionId: string,
-    newIdentity: ContextMetaOf<M>,
-    oldIdentity: ContextMetaOf<M>,
-    connectionMeta: ConnectionMetaOf<M>,
-  ): void;
+  onDisconnect(connectionId: string): void;
 }

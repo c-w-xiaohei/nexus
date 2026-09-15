@@ -16,6 +16,7 @@ import {
 } from "../types/message";
 import type { LogicalConnectionHandlers } from "./types";
 import { Logger } from "@/logger";
+import { createEvtChannel } from "@/utils/evt-channel";
 import { toSerializedError } from "@/utils/error";
 import { NexusProtocolIncompatibleError } from "@/errors";
 import { Result } from "better-result";
@@ -101,7 +102,8 @@ type SessionState =
       messages: NexusMessage[];
       published: Promise<void>;
     }
-  | { phase: "ready" | "closed" };
+  | { phase: "ready" }
+  | { phase: "closed"; reason: "local" | "remote" | "protocol" };
 
 /**
  * One session owns its protocol state, authorization barrier and transport.
@@ -111,6 +113,8 @@ type SessionState =
  * protocol state or reconstructs authorization context from external indexes.
  */
 export class LogicalConnection<M extends AdapterModel> {
+  // ===== Immutable Identity And Dependencies =====
+
   /** Stable session identifier, not a reusable remote endpoint address. */
   public readonly connectionId: string;
   /** Physical direction for policy; an outgoing port can still receive the first REQ. */
@@ -120,9 +124,9 @@ export class LogicalConnection<M extends AdapterModel> {
   private readonly logger: Logger;
   private readonly nextMessageId: () => number;
   private readonly localProviders: () => readonly string[];
-  private localEndpointMeta: ContextMetaOf<M>;
-  private peerIdentity?: ContextMetaOf<M>;
-  private rejection?: Error;
+
+  // ===== Session Lifecycle =====
+
   // expected=null reserves a correlated attempt while its policy is pending.
   private state: SessionState = {
     phase: "handshaking",
@@ -132,8 +136,27 @@ export class LogicalConnection<M extends AdapterModel> {
   private authorization: Promise<void> = Promise.resolve();
   private readonly lifetime = new AbortController();
   private opening?: (result: Result<void, Error>) => void;
+
+  // ===== Identity And Catalog =====
+
+  private localEndpointMeta: ContextMetaOf<M>;
+  private peerIdentity?: ContextMetaOf<M>;
+  private rejection?: Error;
   private readonly providers = new Set<string>();
   private readonly pendingProviders = new Set<string>();
+
+  // ===== Notification Capabilities =====
+
+  private readonly identityChanel =
+    createEvtChannel<Readonly<ContextMetaOf<M>>>();
+  /** Accepted identity changes only; current state is available through remoteIdentity. */
+  public readonly subscribeIdentity = this.identityChanel[0];
+
+  private readonly disconnectedChanel = createEvtChannel<
+    "local" | "remote" | "protocol"
+  >();
+  /** Closure event after owner cleanup; current terminal state is available through disconnectReason. */
+  public readonly onDisconnected = this.disconnectedChanel[0];
 
   /** Construct an attached session without starting it; open also owns acquisition and timeout. */
   constructor(
@@ -153,10 +176,14 @@ export class LogicalConnection<M extends AdapterModel> {
     this.logger = new Logger(`L2 --- LogicalConnection<${this.connectionId}>`);
   }
 
-  /** Protocol readiness precedes active-side publication by one turn; sends queue during that gap. */
   /** Report protocol readiness, including the short publication-drain interval. */
   public isReady(): boolean {
     return this.state.phase === "publishing" || this.state.phase === "ready";
+  }
+
+  /** Return the terminal cause retained after this session closes. */
+  public get disconnectReason(): "local" | "remote" | "protocol" | undefined {
+    return this.state.phase === "closed" ? this.state.reason : undefined;
   }
 
   /** Last authorized peer identity, also retained after shutdown. */
@@ -180,7 +207,7 @@ export class LogicalConnection<M extends AdapterModel> {
     return this.providers.has(provider);
   }
 
-  // ===== Acquisition And Lifetime =====
+  // ===== Public Entry And Acquisition =====
 
   /**
    * Acquire a processor and establish one session through handshake publication.
@@ -331,13 +358,7 @@ export class LogicalConnection<M extends AdapterModel> {
     });
   }
 
-  /** Idempotently close the processor and notify onClosed, even for silent native closes. */
-  private closedReason: "local" | "remote" | "protocol" | undefined;
-
-  /** Return the terminal cause retained after this session closes. */
-  public get disconnectReason(): "local" | "remote" | "protocol" | undefined {
-    return this.closedReason;
-  }
+  // ===== Lifetime =====
 
   /** Close locally or for a protocol failure, settling startup before notifying the owner. */
   public close(reason: "local" | "protocol" = "local"): void {
@@ -348,51 +369,7 @@ export class LogicalConnection<M extends AdapterModel> {
     this.stop(false, "remote");
   }
 
-  /** Transition once to closed, cancel work, release queues, and notify the owner. */
-  private stop(
-    closePort: boolean,
-    reason: "local" | "remote" | "protocol",
-  ): void {
-    const state = this.state;
-    if (state.phase === "closed") return;
-    this.closedReason = reason;
-    const identity = this.isReady() ? this.peerIdentity : undefined;
-    // Reentrant close/disconnect sees the terminal state before any native callback.
-    this.state = { phase: "closed" };
-    this.lifetime.abort();
-    if ("messages" in state) state.messages.length = 0;
-    this.pendingProviders.clear();
-    if (closePort) {
-      const closed = this.port.close();
-      if (closed.isErr())
-        this.logger.error("Failed to close port processor", closed.error);
-    }
-    this.settleOpening(
-      err(
-        this.rejection ??
-          new HandshakeFailedError(
-            `Connection ${this.connectionId} closed before publication.`,
-          ),
-      ),
-    );
-    Result.try({
-      try: () => this.handlers.onClosed(this, identity),
-      catch: asError,
-    }).match({
-      ok: () => undefined,
-      err: (error) =>
-        this.logger.error("Session owner failed to handle closure", error),
-    });
-  }
-
-  /** Resolve the one startup waiter and prevent later lifecycle transitions from reusing it. */
-  private settleOpening(result: Result<void, Error>): void {
-    const notify = this.opening;
-    this.opening = undefined;
-    notify?.(result);
-  }
-
-  // ===== Transport Ordering =====
+  // ===== Public Transport =====
 
   /**
    * Send or queue in FIFO order. Ok means local acceptance, not remote delivery.
@@ -413,18 +390,6 @@ export class LogicalConnection<M extends AdapterModel> {
     return this.write(message);
   }
 
-  /** Write one packet and close the session when the processor rejects it. */
-  private write(message: NexusMessage): Result<void, Error> {
-    // Control packets bypass publication buffering, not failure cleanup.
-    const sent = this.port.sendMessage(message);
-    if (sent.isErr()) this.close("protocol");
-    return sent;
-  }
-
-  /**
-   * Process one packet with transport-order authorization and concurrent RPC.
-   * Returns callback failures as Err; managed reception additionally closes on Err.
-   */
   /** Serialize handshake authorization while allowing independent application work to overlap. */
   public safeHandleMessage(
     message: NexusMessage,
@@ -446,17 +411,7 @@ export class LogicalConnection<M extends AdapterModel> {
     return Result.tryPromise({ try: () => handling, catch: asError });
   }
 
-  /** Start managed inbound processing and turn failures into protocol closure. */
-  private receive(message: NexusMessage): void {
-    void this.safeHandleMessage(message).then((result) => {
-      if (result.isErr()) {
-        this.logger.error("Failed to process incoming message", result.error);
-        this.close("protocol");
-      }
-    });
-  }
-
-  // ===== Protocol =====
+  // ===== Public Protocol =====
 
   /**
    * Low-level startup for an already attached session. Advertises this object's
@@ -495,6 +450,91 @@ export class LogicalConnection<M extends AdapterModel> {
     });
   }
 
+  // ===== Public Identity And Catalog =====
+
+  /** Apply local identity changes to this session without broadcasting them. */
+  public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
+    this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
+  }
+
+  /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
+  public publishProviders(providers: readonly string[]): Result<void, Error> {
+    if (this.state.phase === "closed") return ok(undefined);
+    for (const provider of providers) this.pendingProviders.add(provider);
+    return this.isReady() ? this.flushProviders() : ok(undefined);
+  }
+
+  // ===== Private Lifetime =====
+
+  /** Transition once to closed, cancel work, release queues, and notify the owner. */
+  private stop(
+    closePort: boolean,
+    reason: "local" | "remote" | "protocol",
+  ): void {
+    const state = this.state;
+    if (state.phase === "closed") return;
+    // Reentrant close/disconnect sees the terminal state before any native callback.
+    this.state = { phase: "closed", reason };
+    this.lifetime.abort();
+    if ("messages" in state) state.messages.length = 0;
+    this.pendingProviders.clear();
+    if (closePort) {
+      const closed = this.port.close();
+      if (closed.isErr())
+        this.logger.error("Failed to close port processor", closed.error);
+    }
+    this.settleOpening(
+      err(
+        this.rejection ??
+          new HandshakeFailedError(
+            `Connection ${this.connectionId} closed before publication.`,
+          ),
+      ),
+    );
+    const cleaned = Result.try({
+      try: () => this.handlers.onClosed(this),
+      catch: asError,
+    });
+    this.identityChanel[1].clear();
+    const notified = this.disconnectedChanel[1].safeEmit(reason);
+    this.disconnectedChanel[1].clear();
+    cleaned.tapError((error) =>
+      this.logger.error("Session owner failed to handle closure", error),
+    );
+    notified.tapError((errors) =>
+      this.logger.error("Disconnect observers failed", errors),
+    );
+  }
+
+  /** Resolve the one startup waiter and prevent later lifecycle transitions from reusing it. */
+  private settleOpening(result: Result<void, Error>): void {
+    const notify = this.opening;
+    this.opening = undefined;
+    notify?.(result);
+  }
+
+  // ===== Private Transport =====
+
+  /** Write one packet and close the session when the processor rejects it. */
+  private write(message: NexusMessage): Result<void, Error> {
+    // Control packets bypass publication buffering, not failure cleanup.
+    const sent = this.port.sendMessage(message);
+    if (sent.isErr()) this.close("protocol");
+    return sent;
+  }
+
+  /** Start managed inbound processing and turn failures into protocol closure. */
+  private receive(message: NexusMessage): void {
+    void this.safeHandleMessage(message).then((result) => {
+      if (result.isErr()) {
+        this.logger.error("Failed to process incoming message", result.error);
+        this.close("protocol");
+      }
+    });
+  }
+
+  // ===== Private Protocol =====
+
   /** Consume protocol packets or forward published application packets in order. */
   private async dispatch(message: NexusMessage): Promise<void> {
     const state = this.state;
@@ -508,8 +548,7 @@ export class LogicalConnection<M extends AdapterModel> {
         return;
       case NexusMessageType.IDENTITY_UPDATE: {
         if (!this.isReady() || !this.peerIdentity) return;
-        const previous = this.peerIdentity;
-        const identity = { ...previous, ...message.updates };
+        const identity = { ...this.peerIdentity, ...message.updates };
         const allowed = await this.authorize(identity);
         // Publication may advance while policy waits; shutdown may not be crossed.
         if (this.state.phase === "closed") return;
@@ -521,7 +560,11 @@ export class LogicalConnection<M extends AdapterModel> {
           return;
         }
         this.peerIdentity = Object.freeze({ ...identity });
-        this.handlers.onIdentityUpdated(this, this.peerIdentity, previous);
+        this.identityChanel[1]
+          .safeEmit(this.peerIdentity)
+          .tapError((errors) =>
+            this.logger.error("Identity observers failed", errors),
+          );
         return;
       }
       case NexusMessageType.HANDSHAKE_REJECT:
@@ -647,9 +690,8 @@ export class LogicalConnection<M extends AdapterModel> {
     };
     const finish = () => {
       if (!drain() || !this.peerIdentity) return;
-      const identity = this.peerIdentity;
       const notified = Result.try({
-        try: () => this.handlers.onReady(this, identity),
+        try: () => this.handlers.onReady(this),
         catch: asError,
       }).andThen((result) => result);
       if (notified.isErr()) {
@@ -716,20 +758,7 @@ export class LogicalConnection<M extends AdapterModel> {
     else this.close("protocol");
   }
 
-  // ===== Identity And Catalog =====
-
-  /** Merge local identity without broadcasting; the manager owns cross-session updates. */
-  /** Apply local identity changes to this session without broadcasting them. */
-  public updateLocalIdentity(updates: Partial<ContextMetaOf<M>>): void {
-    this.localEndpointMeta = { ...this.localEndpointMeta, ...updates };
-  }
-
-  /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
-  public publishProviders(providers: readonly string[]): Result<void, Error> {
-    if (this.state.phase === "closed") return ok(undefined);
-    for (const provider of providers) this.pendingProviders.add(provider);
-    return this.isReady() ? this.flushProviders() : ok(undefined);
-  }
+  // ===== Private Identity And Catalog =====
 
   /** Merges wire catalog additions for synchronous get without waking connection acquisition. */
   private addProviders(providers: readonly string[]): void {

@@ -1,5 +1,6 @@
 import { Result } from "better-result";
 import { Logger } from "@/logger";
+import { createEvtChannel } from "@/utils/evt-channel";
 import { NexusError } from "../errors/nexus-error";
 import {
   NexusConnectionError,
@@ -38,6 +39,8 @@ const { ok, err } = Result;
  */
 export class ConnectionManager<M extends AdapterModel> {
   private readonly logger = new Logger("L2 --- ConnectionManager");
+
+  // Session indexes and shared acquisition work.
   private readonly sessionsMap = new Map<string, LogicalConnection<M>>();
   // Protocol readiness precedes manager publication, so this is a separate index,
   // not a filtered view of sessionsMap. Map order is publication order.
@@ -46,18 +49,60 @@ export class ConnectionManager<M extends AdapterModel> {
     string,
     Promise<Result<LogicalConnection<M>, NexusError>>
   >();
-  private readonly localProviders = new Set<string>();
-  private readonly availabilityListeners = new Set<() => void>();
   private nextConnectionOrdinal = 1;
   private nextMessageOrdinal = 1;
+
+  // Local publication and listener initialization.
+  private readonly localProviders = new Set<string>();
   private initialized = false;
   private initialization: Promise<Result<void, NexusError>> | undefined;
+
+  // Collection observation and session-owner callbacks.
+  private readonly availabilityChanel =
+    createEvtChannel<LogicalConnection<M>>();
+  /** Observes publication and accepted identity updates; close and catalog changes do not wake acquisition. */
+  public readonly subscribeAvailabilityChanged = this.availabilityChanel[0];
+
+  // One owner interface serves every session. These callbacks maintain collection
+  // indexes and dispatch direct commands upstream.
+  private readonly sessionHandlers: LogicalConnectionHandlers<M> = {
+    authorize: (context) => {
+      const canConnect = this.config.policy?.canConnect;
+      return canConnect ? canConnect(context) : true;
+    },
+    onAttached: (connection) => {
+      this.sessionsMap.set(connection.connectionId, connection);
+      return ok(undefined);
+    },
+    onReady: (connection) => {
+      this.connectionsMap.set(connection.connectionId, connection);
+      const notify = () => {
+        this.availabilityChanel[1]
+          .safeEmit(connection)
+          .tapError((errors) =>
+            this.logger.error("Availability observers failed", errors),
+          );
+      };
+      connection.subscribeIdentity(notify);
+      notify();
+      return ok(undefined);
+    },
+    onClosed: (connection) => {
+      const id = connection.connectionId;
+      // Remove indexes before notifying L3 so cleanup cannot observe a live session.
+      this.connectionsMap.delete(id);
+      this.sessionsMap.delete(id);
+      this.handlers.onDisconnect(id);
+    },
+    onMessage: (connection, message) =>
+      this.handlers.onMessage(message, connection.connectionId),
+  };
 
   /** Construct without listening or dialing. Call safeInitialize before demand operations. */
   constructor(
     private readonly config: ConnectionManagerConfig<M>,
     private readonly transport: Transport.Context<M>,
-    private readonly handlers: ConnectionManagerHandlers<M>,
+    private readonly handlers: ConnectionManagerHandlers,
     private localEndpointMeta: ContextMetaOf<M>,
   ) {}
 
@@ -78,17 +123,6 @@ export class ConnectionManager<M extends AdapterModel> {
     return this.connectionsMap.get(connectionId)?.isReady() ?? false;
   }
 
-  /** Match the adapter target before applying where; never dial. */
-  private getReadyTargetConnections(
-    target: ConnectionTargetOf<M>,
-  ): readonly LogicalConnection<M>[] {
-    const matchesTarget = this.transport.endpoint.matchesTarget;
-    if (!matchesTarget) return [];
-    return this.findReadyConnections((identity, meta) =>
-      matchesTarget(target, identity, meta),
-    );
-  }
-
   /** Return live authorization inputs for one published session, if present. */
   public getConnectionAuthSnapshot(connectionId: string):
     | {
@@ -104,12 +138,6 @@ export class ConnectionManager<M extends AdapterModel> {
       remoteIdentity: connection.remoteIdentity,
       connection: connection.context.connection,
     };
-  }
-
-  /** Observes session membership or identity changes; provider catalog updates do not affect acquisition. */
-  public subscribeAvailabilityChanged(listener: () => void): () => void {
-    this.availabilityListeners.add(listener);
-    return () => this.availabilityListeners.delete(listener);
   }
 
   /** Return currently published sessions satisfying the optional predicate. */
@@ -235,19 +263,6 @@ export class ConnectionManager<M extends AdapterModel> {
     }
   }
 
-  /** Reject manager operations that require listener initialization. */
-  private ensureInitialized(operation: string): Result<void, NexusError> {
-    return this.initialized
-      ? ok(undefined)
-      : err(
-          new NexusUsageError(
-            "ConnectionManager is not initialized. Call safeInitialize() first.",
-            "E_USAGE_INVALID",
-            { context: { operation } },
-          ),
-        );
-  }
-
   // ===== Routing And Local Updates =====
 
   /** Sends to one already-published connection; this never discovers or dials. */
@@ -338,6 +353,19 @@ export class ConnectionManager<M extends AdapterModel> {
 
   // ===== Session Integration =====
 
+  /** Reject manager operations that require listener initialization. */
+  private ensureInitialized(operation: string): Result<void, NexusError> {
+    return this.initialized
+      ? ok(undefined)
+      : err(
+          new NexusUsageError(
+            "ConnectionManager is not initialized. Call safeInitialize() first.",
+            "E_USAGE_INVALID",
+            { context: { operation } },
+          ),
+        );
+  }
+
   /** Open one incoming or outgoing session and map its failure to manager errors. */
   private async openConnection(
     direction: "incoming" | "outgoing",
@@ -373,58 +401,15 @@ export class ConnectionManager<M extends AdapterModel> {
       );
   }
 
-  // One owner interface serves every session. Conn supplies its own transition
-  // data; these callbacks maintain only collection indexes and upstream observers.
-  private readonly sessionHandlers: LogicalConnectionHandlers<M> = {
-    authorize: (context) => {
-      const canConnect = this.config.policy?.canConnect;
-      return canConnect ? canConnect(context) : true;
-    },
-    onAttached: (connection) => {
-      this.sessionsMap.set(connection.connectionId, connection);
-      return ok(undefined);
-    },
-    onReady: (connection) => {
-      this.connectionsMap.set(connection.connectionId, connection);
-      this.notifyAvailabilityChanged();
-      return ok(undefined);
-    },
-    onClosed: (connection, identity) => {
-      const id = connection.connectionId;
-      // Remove indexes before notifying L3 so cleanup cannot observe a live session.
-      this.connectionsMap.delete(id);
-      this.sessionsMap.delete(id);
-      this.handlers.onDisconnect(id, identity);
-      this.notifyAvailabilityChanged();
-    },
-    onIdentityUpdated: (connection, next, previous) => {
-      const id = connection.connectionId;
-      if (!this.connectionsMap.has(id)) return;
-      try {
-        this.handlers.onIdentityUpdated?.(
-          id,
-          next,
-          previous,
-          connection.context.connection,
-        );
-      } finally {
-        this.notifyAvailabilityChanged();
-      }
-    },
-    onMessage: (connection, message) =>
-      this.handlers.onMessage(message, connection.connectionId),
-  };
-
-  /** Notify availability observers without allowing one observer to block others. */
-  private notifyAvailabilityChanged(): void {
-    // Observer errors must not interrupt publication or startup settlement.
-    for (const listener of this.availabilityListeners) {
-      Result.try({ try: listener, catch: (error) => error }).match({
-        ok: () => undefined,
-        err: (error) =>
-          this.logger.error("Availability observer failed", error),
-      });
-    }
+  /** Match the adapter target before applying where; never dial. */
+  private getReadyTargetConnections(
+    target: ConnectionTargetOf<M>,
+  ): readonly LogicalConnection<M>[] {
+    const matchesTarget = this.transport.endpoint.matchesTarget;
+    if (!matchesTarget) return [];
+    return this.findReadyConnections((identity, meta) =>
+      matchesTarget(target, identity, meta),
+    );
   }
 }
 

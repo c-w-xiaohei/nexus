@@ -25,7 +25,7 @@ L4 initializes and acquires sessions; L3 executes messages on them.
 - **`safeInitialize()`**: Starts listening, then launches optional exact `connectTo` startup dials once. It does not await the dials or any remote Token; failures are logged without failing local readiness. Demand acquisition shares the same in-flight target slot.
 - **`safeResolveConnections({ target })`**: Reuses ready address matches or shares one adapter dial. It requires a target; L4 applies caller predicates afterward, without redialing on mismatch.
 - **`findReadyConnections(where?)`**: Synchronously scans current ready sessions. L4 builds passive waiting and fixed snapshots on this operation.
-- **`subscribeAvailabilityChanged(listener)`**: Notifies session membership and identity changes. Provider catalog updates do not wake connection acquisition.
+- **`subscribeAvailabilityChanged(listener)`**: Notifies initial session publication and accepted identity updates. Closure and provider catalog updates do not wake connection acquisition.
 - **`safeSendMessage(connectionId, message)`**: Routes a `NexusMessage` to one published connection. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details.
 
 ### Handlers (L2 -> L3)
@@ -33,8 +33,13 @@ L4 initializes and acquires sessions; L3 executes messages on them.
 The L4 kernel supplies handlers when constructing the manager:
 
 - **`onMessage(message, connectionId)`**: Forwards a fully validated, inbound `NexusMessage` from a specific connection to L3 for processing.
-- **`onDisconnect(connectionId, identity)`**: Notifies L3 that a connection has been terminated. This is crucial for L3 to perform resource cleanup (e.g., releasing remote proxies and pending calls).
-- **`onIdentityUpdated(...)`**: Delivers the committed identity to the public Connection. Ordinary proxies have no separate stale state. State may separately observe its own selection predicate.
+- **`onDisconnect(connectionId)`**: Runs required L3 cleanup after the session leaves L2 indexes. It is an ordered command, not a lifecycle broadcast.
 
 On disconnect, L2 removes session indexes first, the kernel invokes L3 cleanup,
-and only then does L4 notify public Connection listeners.
+and only then does LogicalConnection notify its own disconnect subscribers.
+Public Connection handles register live listeners directly with the session;
+they add public replay behavior without another channel or rebroadcast layer.
+Nexus onConnect subscribes directly to manager collection changes after bootstrap.
+Manager registers each published session, subscribes to identity changes and
+publishes initial availability explicitly. Session events report changes only;
+the public Connection handle owns current-value and late-terminal replay.

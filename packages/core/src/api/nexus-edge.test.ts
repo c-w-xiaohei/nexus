@@ -378,15 +378,9 @@ describe("Nexus public API", () => {
   });
 
   it("does not initialize or dial when safeConnect receives an aborted signal", async () => {
-    const ready = vi.fn();
     const controller = new AbortController();
     controller.abort();
     const nexus = new Nexus();
-    Object.assign(nexus as object, {
-      lifecycle: "ready",
-      initialization: Promise.resolve(),
-      connectionManager: { safeResolveConnections: ready },
-    });
 
     await expect(
       nexus.safeConnect({
@@ -394,7 +388,44 @@ describe("Nexus public API", () => {
         signal: controller.signal,
       }),
     ).resolves.toMatchObject({ error: { code: "E_ABORTED" } });
-    expect(ready).not.toHaveBeenCalled();
+    // An accidental bootstrap without an endpoint would permanently fail this
+    // instance. A subsequent valid configuration must still initialize once.
+    const implementation = endpoint();
+    nexus.configure({ endpoint: { implementation, meta: {} } });
+    await nexus.ready();
+    expect(implementation.listen).toHaveBeenCalledOnce();
+    expect(implementation.connect).not.toHaveBeenCalled();
+  });
+
+  it("keeps observation passive and contains bootstrap failure for early and late observers", async () => {
+    const nexus = new Nexus();
+    const early = vi.fn();
+    const stopEarly = nexus.onConnect(early);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const listen = vi.fn(() => {
+      throw new Error("listen failed");
+    });
+    expect(
+      nexus
+        .safeConfigure({ endpoint: { implementation: { listen }, meta: {} } })
+        .isOk(),
+    ).toBe(true);
+    const result = await nexus.safeReady();
+    expect(result).toMatchObject({
+      error: { code: "E_NEXUS_BOOTSTRAP_FAILED" },
+    });
+    const late = vi.fn();
+    const stopLate = nexus.onConnect(late);
+    const repeated = await nexus.safeReady();
+    expect(repeated.isErr()).toBe(true);
+    if (result.isErr() && repeated.isErr())
+      expect(repeated.error).toBe(result.error);
+    expect(listen).toHaveBeenCalledOnce();
+    expect(early).not.toHaveBeenCalled();
+    expect(late).not.toHaveBeenCalled();
+    stopEarly();
+    stopEarly();
+    stopLate();
   });
 
   it("maps manager connection errors to public acquisition errors", async () => {

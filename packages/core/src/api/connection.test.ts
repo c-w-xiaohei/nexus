@@ -4,6 +4,7 @@ import { Token } from "./token";
 import { createMockPortPair } from "@/utils/test-utils";
 import type { IPort } from "@/transport/types/port";
 import { NexusEndpointConnectError } from "@/errors";
+import { configureNexusLogger, resetNexusLoggerForTest } from "@/logger";
 
 interface Model {
   contextMeta: { context: string; ready?: boolean };
@@ -12,6 +13,102 @@ interface Model {
 }
 
 describe("Connection resources", () => {
+  it("hands pre-bootstrap observers to live availability without duplicate or cancelled delivery", async () => {
+    const host = new Nexus<Model>();
+    const [clientPort, hostPort] = createMockPortPair();
+    let finishListen!: () => void;
+    let accept!: (port: IPort, meta: object) => void;
+    let listening!: () => void;
+    const started = new Promise<void>((resolve) => {
+      listening = resolve;
+    });
+    const cancelled = vi.fn();
+    const stopCancelled = host.onConnect(cancelled);
+    stopCancelled();
+    const sibling = vi.fn();
+    let stopSibling = () => {};
+    const nested = vi.fn();
+    const first = vi.fn(() => {
+      stopSibling();
+      host.onConnect(nested);
+    });
+    const stopFirst = host.onConnect(first);
+    stopSibling = host.onConnect(sibling);
+    const matched = vi.fn();
+    let stopMatched = () => {};
+    stopMatched = host.onConnect((meta) => {
+      if (meta.ready) stopMatched();
+      return meta.ready === true;
+    }, matched);
+    host.configure({
+      endpoint: {
+        meta: { context: "host" },
+        implementation: {
+          listen(handler) {
+            accept = handler;
+            listening();
+            return new Promise<void>((resolve) => {
+              finishListen = resolve;
+            });
+          },
+        },
+      },
+    });
+    const hostReady = host.ready();
+    await started;
+    const client = new Nexus<Model>().configure({
+      endpoint: {
+        meta: { context: "client" },
+        implementation: {
+          listen() {},
+          connect() {
+            accept(hostPort, {});
+            return { port: clientPort, connectionMeta: {} };
+          },
+        },
+      },
+    });
+    try {
+      // Handshake finishes while host listener startup is still pending.
+      await client.connect({ target: { context: "host" } });
+      expect(first).not.toHaveBeenCalled();
+      finishListen();
+      await hostReady;
+      const connection = await host.connect();
+      expect(first).toHaveBeenCalledExactlyOnceWith(connection);
+      expect(nested).toHaveBeenCalledExactlyOnceWith(connection);
+      expect(sibling).not.toHaveBeenCalled();
+      expect(cancelled).not.toHaveBeenCalled();
+      const updated = new Promise<void>((resolve) => {
+        connection.subscribeIdentity((meta) => {
+          if (meta.ready) resolve();
+        });
+      });
+      await client.updateIdentity({ ready: true });
+      await updated;
+      expect(matched).not.toHaveBeenCalled();
+      expect(first).toHaveBeenCalledOnce();
+      expect(nested).toHaveBeenCalledOnce();
+      stopFirst();
+      stopFirst();
+      const later = new Promise<void>((resolve) => {
+        connection.subscribeIdentity((meta) => {
+          if (meta.ready === false) resolve();
+        });
+      });
+      await client.updateIdentity({ ready: false });
+      await later;
+      expect(first).toHaveBeenCalledOnce();
+      expect(sibling).not.toHaveBeenCalled();
+      expect(cancelled).not.toHaveBeenCalled();
+      expect(matched).not.toHaveBeenCalled();
+    } finally {
+      finishListen();
+      clientPort.close();
+      await hostReady;
+    }
+  });
+
   it("rejects a zero acquisition timeout", async () => {
     const nexus = new Nexus<Model>();
 
@@ -183,16 +280,49 @@ describe("Connection resources", () => {
       expect(identities.every(Object.isFrozen)).toBe(true);
       expect(connected).toHaveBeenCalledTimes(1);
       expect(firstReady).toHaveBeenCalledExactlyOnceWith(connection);
+      const unmatched = vi.fn(() => false);
+      const stopUnmatched = host.onConnect(unmatched, () => {});
+      expect(unmatched).toHaveBeenCalledTimes(1);
+      const observerFailure = new Error("observer failed");
+      const diagnostics: unknown[][] = [];
+      configureNexusLogger({
+        enabled: true,
+        handler: (_level, _scope, _message, ...args) => {
+          diagnostics.push(args);
+        },
+      });
+      const stopFailing = connection.subscribeIdentity(() => {
+        throw observerFailure;
+      });
+      stopFailing();
+      expect(diagnostics.some((args) => args.includes(observerFailure))).toBe(
+        true,
+      );
+      connection.onDisconnected(() => {
+        throw observerFailure;
+      });
       const disconnected = vi.fn();
       const duplicate = vi.fn();
       const stopDuplicate = connection.onDisconnected(duplicate);
       connection.onDisconnected(duplicate);
       stopDuplicate();
       connection.onDisconnected(disconnected);
+      const cancelledDuringClose = vi.fn();
+      let stopDuringClose = () => {};
+      connection.onDisconnected(() => stopDuringClose());
+      stopDuringClose = connection.onDisconnected(cancelledDuringClose);
       connection.disconnect();
       connection.disconnect();
+      expect(unmatched).toHaveBeenCalledTimes(1);
+      stopUnmatched();
       expect(disconnected).toHaveBeenCalledExactlyOnceWith("local");
       expect(duplicate).toHaveBeenCalledExactlyOnceWith("local");
+      expect(cancelledDuringClose).not.toHaveBeenCalled();
+      expect(
+        diagnostics.some(
+          (args) => Array.isArray(args[0]) && args[0].includes(observerFailure),
+        ),
+      ).toBe(true);
       expect(connection.status).toBe("disconnected");
       expect(await Nexus.safeCall(service.read())).toMatchObject({
         error: { code: "E_CONN_CLOSED" },
@@ -206,6 +336,7 @@ describe("Connection resources", () => {
       connection.onDisconnected(late);
       expect(late).toHaveBeenCalledExactlyOnceWith("local");
     } finally {
+      resetNexusLoggerForTest();
       clientPort.close();
     }
   });
