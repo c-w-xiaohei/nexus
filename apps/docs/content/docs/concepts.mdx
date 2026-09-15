@@ -148,8 +148,9 @@ Both `timeout` and `callTimeout`, when supplied, must be positive finite numbers
 `connection.get()` returns a service proxy tied to its connection. `ref()`
 transfers a remote resource tied to that same connection.
 Disconnect, reload, daemon restart, and replacement invalidate these values.
-Application code may observe lifecycle signals and create replacements, but an
-existing service proxy or remote resource never retargets or retries by itself.
+Retain the acquired `Connection` to observe lifecycle signals and create
+replacements; an existing service proxy or remote resource never retargets or
+retries by itself.
 
 Use `nexus.onConnect(listener)` or `nexus.onConnect(where, listener)` to observe
 each currently and subsequently ready connection once. Use
@@ -233,6 +234,6 @@ Name instances after the local graph they own, not after a remote destination. R
 - [Identity and connection metadata](/nexus/docs/identity-and-metadata/)
 - [Platforms and adapters](/nexus/docs/platforms/)
 - [Authorization and policy](/nexus/docs/auth-and-policy/)
-- [Service proxy lifecycle](/nexus/docs/proxy-lifecycle/)
+- [Connection lifecycle](/nexus/docs/proxy-lifecycle/)
 - [Nexus Relay](/nexus/docs/relay/)
 - [Nexus State](/nexus/docs/state/)

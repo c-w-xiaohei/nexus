@@ -49,7 +49,8 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   });
 
   it("should correctly release a remote resource proxy", async () => {
-    const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
+    const cs1ResourceManager = (world.cs1.nexus as any).lifecycle.engine
+      .resourceManager;
     const initialResourceCount = cs1ResourceManager.countLocalResources();
 
     const csApi = (
@@ -76,7 +77,8 @@ describe("Nexus L4 Integration: Resource and Callback Lifecycles", () => {
   });
 
   it("releases an explicitly marked remote resource through using", async () => {
-    const cs1ResourceManager = (world.cs1.nexus as any).engine.resourceManager;
+    const cs1ResourceManager = (world.cs1.nexus as any).lifecycle.engine
+      .resourceManager;
     const initialResourceCount = cs1ResourceManager.countLocalResources();
     const csApi = (
       await world.background.nexus.connect({

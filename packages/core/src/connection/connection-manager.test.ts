@@ -9,7 +9,6 @@ import {
 import type {
   ConnectionManagerConfig,
   ConnectionManagerHandlers,
-  ResolveOptions,
 } from "./types";
 import type { IPort } from "@/transport/types/port";
 import {
@@ -62,12 +61,20 @@ const initializeManager = <M extends AdapterModel>(
 
 const resolveManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  options: ResolveOptions<M>,
-) => manager.safeResolveConnection(options).then((result) => result.unwrap());
+  options: Parameters<ConnectionManager<M>["safeResolveConnections"]>[0],
+) =>
+  manager.safeResolveConnections(options).then((result) => {
+    const connections = result.unwrap();
+    if (connections.length !== 1)
+      throw new Error(
+        "Expected exactly one connection for an explicit target.",
+      );
+    return connections[0]!;
+  });
 
 const resolveManagerCandidates = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
-  options: ResolveOptions<M>,
+  options: Parameters<ConnectionManager<M>["safeResolveConnections"]>[0],
 ) => manager.safeResolveConnections(options).then((result) => result.unwrap());
 
 const sendFromManager = <M extends AdapterModel>(
@@ -157,7 +164,7 @@ describe("ConnectionManager", () => {
         },
       });
       await initializeManager(hostManager);
-      const result = await hostManager.safeResolveConnection({
+      const result = await hostManager.safeResolveConnections({
         target: clientMeta,
       });
       expect(result).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
@@ -208,7 +215,7 @@ describe("ConnectionManager", () => {
         port,
         connectionMeta: { from: "client" },
       });
-      const connecting = manager.safeResolveConnection({ target: clientMeta });
+      const connecting = manager.safeResolveConnections({ target: clientMeta });
       await vi.advanceTimersByTimeAsync(0);
       expect(readySent).toBe(true);
       expect(await connecting).toMatchObject({
@@ -277,7 +284,7 @@ describe("ConnectionManager", () => {
       await initializeManager(manager);
       const resolved = vi.fn();
       const connecting = manager
-        .safeResolveConnection({ target: clientMeta })
+        .safeResolveConnections({ target: clientMeta })
         .then((result) => {
           resolved(result);
           return result;
@@ -363,7 +370,7 @@ describe("ConnectionManager", () => {
         if (direction === "incoming") hostL1OnConnect(port, connectionMeta);
         else {
           mockHostEndpoint.connect = async () => ({ port, connectionMeta });
-          const connected = await manager.safeResolveConnection({
+          const connected = await manager.safeResolveConnections({
             target: clientMeta,
           });
           expect(connected.isOk()).toBe(true);
@@ -396,7 +403,7 @@ describe("ConnectionManager", () => {
         hostL1OnConnect,
       );
 
-      const resolution = clientManager.safeResolveConnection({
+      const resolution = clientManager.safeResolveConnections({
         target: hostMeta,
       });
       await vi.waitFor(() => expect(canConnect).toHaveBeenCalled());
@@ -460,7 +467,7 @@ describe("ConnectionManager", () => {
       await initializeManager(clientManager);
 
       await expect(
-        clientManager.safeResolveConnection({ target: hostMeta }),
+        clientManager.safeResolveConnections({ target: hostMeta }),
       ).resolves.toMatchObject({ error: { code: "E_HANDSHAKE_FAILED" } });
     });
 
@@ -695,29 +702,6 @@ describe("ConnectionManager", () => {
         expect(hostConnections).toHaveLength(1);
       });
     });
-
-    it("shares acquisition but evaluates each caller's constraint independently", async () => {
-      await initializeManager(hostManager);
-      const client = await createTestStack(clientMeta, hostL1OnConnect);
-      const [denied, accepted] = await Promise.all([
-        client.manager.safeResolveConnections({
-          target: hostMeta,
-          where: () => false,
-        }),
-        client.manager.safeResolveConnections({
-          target: hostMeta,
-          where: () => true,
-        }),
-      ]);
-      expect(denied).toMatchObject({
-        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
-      });
-      expect(accepted.isOk()).toBe(true);
-      if (accepted.isOk())
-        expect(accepted.value[0].remoteIdentity).toEqual(hostMeta);
-      expect(client.mockEndpoint.connect).toHaveBeenCalledOnce();
-      expect(client.manager.connections.size).toBe(1);
-    });
   });
 
   describe("Provider Selection and Metadata Routing (B3)", () => {
@@ -729,9 +713,6 @@ describe("ConnectionManager", () => {
         path: [],
         args: [],
       };
-      expect(await hostManager.safeResolveConnection({})).toMatchObject({
-        error: { code: "E_USAGE_INVALID" },
-      });
       expect(hostManager.safeUpdateLocalIdentity({ id: 5 })).toMatchObject({
         error: { code: "E_USAGE_INVALID" },
       });
@@ -739,9 +720,7 @@ describe("ConnectionManager", () => {
       const client = await createTestStack(clientMeta, hostL1OnConnect);
       await resolveManager(client.manager, { target: hostMeta });
       const [connection] = hostManager.connections.values();
-      expect(await hostManager.safeResolveConnection({})).toEqual(
-        Result.ok(null),
-      );
+      expect(hostManager.findReadyConnections()).toHaveLength(1);
       expect(
         hostManager.safeSendMessage(connection.connectionId, message),
       ).toEqual(Result.ok(undefined));
@@ -874,6 +853,26 @@ describe("ConnectionManager", () => {
   });
 
   describe("Connection Disconnect and Cleanup (B4)", () => {
+    it("publishes provider catalog changes without announcing connection availability", async () => {
+      await initializeManager(hostManager);
+      const client = await createTestStack(clientMeta, hostL1OnConnect);
+      await resolveManager(client.manager, { target: hostMeta });
+      const available = vi.fn();
+      const stop = hostManager.subscribeAvailabilityChanged(available);
+
+      expect(hostManager.publishProviders(["service.late"])).toBeUndefined();
+
+      await vi.waitFor(() => {
+        expect(
+          [...client.manager.connections.values()][0]?.hasProvider(
+            "service.late",
+          ),
+        ).toBe(true);
+      });
+      expect(available).not.toHaveBeenCalled();
+      stop();
+    });
+
     it.each(["queries", "identity broadcast"])(
       "excludes a closing session from reentrant %s before native cleanup returns",
       async (operation) => {
@@ -883,7 +882,7 @@ describe("ConnectionManager", () => {
           hostPort = port;
           hostL1OnConnect(port, meta);
         });
-        client.manager.safePublishProviders(["service"]);
+        client.manager.publishProviders(["service"]);
         await resolveManager(client.manager, { target: hostMeta });
         const connection = [...hostManager.connections.values()][0];
         const closePort = vi.mocked(hostPort.close).getMockImplementation()!;
@@ -997,11 +996,9 @@ describe("ConnectionManager", () => {
         },
       });
       vi.useFakeTimers();
-      const opening = hostManager.safeResolveConnection({ target });
+      const opening = hostManager.safeResolveConnections({ target });
       const acknowledge = await request;
-      expect(hostManager.safePublishProviders(["service.queued"])).toEqual(
-        Result.ok(undefined),
-      );
+      expect(hostManager.publishProviders(["service.queued"])).toBeUndefined();
       acknowledge();
       await vi.advanceTimersByTimeAsync(0);
       expect(await opening).toMatchObject({
@@ -1112,92 +1109,6 @@ describe("ConnectionManager", () => {
       expect([...clientManager.connections.values()]).toHaveLength(1);
     });
 
-    it("reuses an exact target connection when where passes", async () => {
-      // Arrange: Set up host and establish a client connection
-      await initializeManager(hostManager);
-      const clientAMeta: TestUserMeta = {
-        context: "client",
-        id: 10,
-        groups: ["group-1"],
-      };
-      const clientA = await createTestStack(clientAMeta, hostL1OnConnect);
-
-      // Create initial connection
-      const initialConnection = await resolveManager(clientA.manager, {
-        target: hostMeta,
-      });
-      expect(initialConnection).not.toBeNull();
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledTimes(1);
-      vi.clearAllMocks();
-
-      const where = (identity: TestUserMeta) => identity.context === "host";
-      const foundConnection = await resolveManager(clientA.manager, {
-        target: hostMeta,
-        where,
-      });
-
-      // Assert: Found the existing connection without creating a new one
-      expect(foundConnection).not.toBeNull();
-      expect(foundConnection).toBe(initialConnection);
-      expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
-    });
-
-    it("rejects an exact target connection when where fails without redialing", async () => {
-      // Arrange: Set up host and establish a client connection
-      await initializeManager(hostManager);
-      const clientA = await createTestStack(clientMeta, hostL1OnConnect);
-
-      // Create initial connection
-      const initialConnection = await resolveManager(clientA.manager, {
-        target: hostMeta,
-      });
-      expect(initialConnection).not.toBeNull();
-      vi.clearAllMocks();
-
-      const where = (identity: TestUserMeta) => identity.id === 999;
-      await expect(
-        clientA.manager.safeResolveConnection({ target: hostMeta, where }),
-      ).resolves.toMatchObject({
-        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
-      });
-      expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
-    });
-
-    it("should create from a target and apply where after the handshake", async () => {
-      // Arrange: Set up host
-      await initializeManager(hostManager);
-      const clientA = await createTestStack(clientMeta, hostL1OnConnect);
-
-      // Act 1: A target can create a connection, but where still filters its peer identity
-      const where = (identity: TestUserMeta) => identity.id === 999;
-      await expect(
-        clientA.manager.safeResolveConnections({
-          where,
-          target: hostMeta,
-        }),
-      ).resolves.toMatchObject({
-        error: { code: "E_CONNECTION_CONSTRAINT_FAILED" },
-      });
-
-      // Assert 1: The target was acquired, then rejected by where
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledTimes(1);
-      expect(clientA.mockEndpoint.connect).toHaveBeenCalledWith(hostMeta);
-      vi.clearAllMocks();
-
-      // Act 2: A matching where predicate reuses the same target connection
-      const matchingWhere = (identity: TestUserMeta) =>
-        identity.context === "host";
-      const matches = await resolveManagerCandidates(clientA.manager, {
-        where: matchingWhere,
-        target: hostMeta,
-      });
-
-      // Assert 2: Existing connection reused because where matched it
-      expect(matches).toHaveLength(1);
-      expect(matches[0]).toBeDefined();
-      expect(clientA.mockEndpoint.connect).not.toHaveBeenCalled();
-    });
-
     it("returns all matching ready connections in stable allocation order", async () => {
       await initializeManager(hostManager);
       const clientA = await createTestStack(
@@ -1214,9 +1125,9 @@ describe("ConnectionManager", () => {
 
       await vi.waitFor(() => expect(hostManager.connections.size).toBe(2));
 
-      const matches = await resolveManagerCandidates(hostManager, {
-        where: (identity: TestUserMeta) => identity.context === "client",
-      });
+      const matches = hostManager.findReadyConnections(
+        (identity: TestUserMeta) => identity.context === "client",
+      );
 
       expect(
         matches.map((connection) => connection.remoteIdentity?.id),
@@ -1280,9 +1191,7 @@ describe("ConnectionManager", () => {
         finishFirst(true);
         await pendingFirst;
         expect(
-          (await resolveManagerCandidates(manager, {})).map(
-            (c) => c.remoteIdentity!.id,
-          ),
+          manager.findReadyConnections().map((c) => c.remoteIdentity!.id),
         ).toEqual([20, 10]);
         expect(observed).toContainEqual([20, 10]);
         for (const connection of manager.connections.values())
@@ -1297,9 +1206,9 @@ describe("ConnectionManager", () => {
 
     it("does not actively connect when broadcasting a ready snapshot", async () => {
       await initializeManager(hostManager);
-      const where = (identity: TestUserMeta) => identity.context === "client";
-
-      const matches = await resolveManagerCandidates(hostManager, { where });
+      const matches = hostManager.findReadyConnections(
+        (identity: TestUserMeta) => identity.context === "client",
+      );
 
       expect(matches).toEqual([]);
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
@@ -1407,12 +1316,12 @@ describe("ConnectionManager", () => {
       const hostUpdates: Partial<TestUserMeta> = { id: 999 };
       updateManagerIdentity(hostManager, hostUpdates);
 
-      // Assert: The client can now find the same connection using the new identity
+      // Assert: Passive filtering finds the same connection using the new identity.
       const newHostMeta = { ...hostMeta, ...hostUpdates };
-      await vi.waitFor(async () => {
-        const foundConn = await resolveManager(client.manager, {
-          target: newHostMeta,
-        });
+      await vi.waitFor(() => {
+        const foundConn = client.manager.findReadyConnections((identity) =>
+          matchesTarget(newHostMeta, identity),
+        )[0];
         expect(foundConn).toBe(hostConnectionOnClient);
       });
     });
@@ -1450,11 +1359,9 @@ describe("ConnectionManager", () => {
 
       const inGroup = (group: string) => (identity: TestUserMeta) =>
         identity.groups?.includes(group) ?? false;
-      expect(
-        await resolveManagerCandidates(hostManager, {
-          where: inGroup("group-1"),
-        }),
-      ).toHaveLength(1);
+      expect(hostManager.findReadyConnections(inGroup("group-1"))).toHaveLength(
+        1,
+      );
 
       // Act: The client updates its identity to join 'group-2' and leave 'group-1'
       const clientUpdates: Partial<TestUserMeta> = {
@@ -1462,22 +1369,16 @@ describe("ConnectionManager", () => {
       };
       updateManagerIdentity(client.manager, clientUpdates);
 
-      await vi.waitFor(async () => {
+      await vi.waitFor(() => {
         expect(
-          await resolveManagerCandidates(hostManager, {
-            where: inGroup("group-2"),
-          }),
+          hostManager.findReadyConnections(inGroup("group-2")),
         ).toHaveLength(1);
         expect(
           [...hostManager.connections.values()][0].remoteIdentity?.groups,
         ).toEqual(["group-2"]);
       });
 
-      expect(
-        await resolveManagerCandidates(hostManager, {
-          where: inGroup("group-1"),
-        }),
-      ).toEqual([]);
+      expect(hostManager.findReadyConnections(inGroup("group-1"))).toEqual([]);
     });
   });
 });

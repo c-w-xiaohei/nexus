@@ -109,10 +109,12 @@ describe("MessageHandler", () => {
 
   it("does not read service getters before authorization", async () => {
     const getter = vi.fn(() => () => undefined);
-    resourceManager.registerExposedService(
-      "guarded",
-      Object.defineProperty({}, "run", { get: getter }),
-    );
+    resourceManager.registerExposedServices([
+      {
+        name: "guarded",
+        service: Object.defineProperty({}, "run", { get: getter }),
+      },
+    ]);
     context.policy = { canCall: () => false };
     await messageHandler.safeHandleMessage(
       {
@@ -171,18 +173,23 @@ describe("MessageHandler", () => {
     const promise = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    resourceManager.registerExposedService("scoped", {
-      [SERVICE_INVOKE_START]: () => {
-        events.push("start");
+    resourceManager.registerExposedServices([
+      {
+        name: "scoped",
+        service: {
+          [SERVICE_INVOKE_START]: () => {
+            events.push("start");
+          },
+          [SERVICE_INVOKE_END]: () => {
+            events.push("end");
+          },
+          run: () => {
+            events.push("apply");
+            return promise;
+          },
+        },
       },
-      [SERVICE_INVOKE_END]: () => {
-        events.push("end");
-      },
-      run: () => {
-        events.push("apply");
-        return promise;
-      },
-    });
+    ]);
     reviveSpy.mockImplementation((args: any[]) => {
       events.push("revive");
       return ok(args);
@@ -206,12 +213,17 @@ describe("MessageHandler", () => {
 
   it("preserves errors thrown when reading invocation hooks", async () => {
     const error = new Error("hook getter failed");
-    resourceManager.registerExposedService("broken", {
-      get [SERVICE_INVOKE_START]() {
-        throw error;
+    resourceManager.registerExposedServices([
+      {
+        name: "broken",
+        service: {
+          get [SERVICE_INVOKE_START]() {
+            throw error;
+          },
+          run() {},
+        },
       },
-      run() {},
-    });
+    ]);
     await messageHandler.safeHandleMessage(
       {
         type: NexusMessageType.APPLY,
@@ -236,7 +248,9 @@ describe("MessageHandler", () => {
   it.each(["error", "throw"] as const)(
     "releases an encoded reply after send %s without replying with ERR",
     async (failure) => {
-      resourceManager.registerExposedService("reply", { run: () => ({}) });
+      resourceManager.registerExposedServices([
+        { name: "reply", service: { run: () => ({}) } },
+      ]);
       const error = new Error("send failed");
       mockEngine.safeSendMessage.mockImplementationOnce(() => {
         if (failure === "throw") throw error;
@@ -260,7 +274,9 @@ describe("MessageHandler", () => {
 
   it("encodes a GET Promise without awaiting it", async () => {
     const value = new Promise(() => {});
-    resourceManager.registerExposedService("promises", { value });
+    resourceManager.registerExposedServices([
+      { name: "promises", service: { value } },
+    ]);
     const encode = vi
       .mocked(payloadProcessor.safeSanitizeFromService)
       .mockReturnValueOnce(ok(["encoded"]));
@@ -323,9 +339,14 @@ describe("MessageHandler", () => {
           },
         },
       );
-      resourceManager.registerExposedService("relay", {
-        profile: { read },
-      });
+      resourceManager.registerExposedServices([
+        {
+          name: "relay",
+          service: {
+            profile: { read },
+          },
+        },
+      ]);
 
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
@@ -351,7 +372,9 @@ describe("MessageHandler", () => {
 
     it("should deny APPLY before invoking a local service when policy.canCall returns false", async () => {
       const add = vi.fn((a: number, b: number) => a + b);
-      resourceManager.registerExposedService("calculator", { add });
+      resourceManager.registerExposedServices([
+        { name: "calculator", service: { add } },
+      ]);
       context.policy = {
         canCall: vi.fn(() => false),
       } as any;
@@ -379,7 +402,9 @@ describe("MessageHandler", () => {
 
     it("should normalize policy.canCall throw to E_AUTH_CALL_DENIED", async () => {
       const add = vi.fn((a: number, b: number) => a + b);
-      resourceManager.registerExposedService("calculator", { add });
+      resourceManager.registerExposedServices([
+        { name: "calculator", service: { add } },
+      ]);
       context.policy = {
         canCall: vi.fn(() => {
           throw new Error("policy exploded");
@@ -409,7 +434,9 @@ describe("MessageHandler", () => {
 
     it("should normalize policy.canCall rejection to E_AUTH_CALL_DENIED", async () => {
       const add = vi.fn((a: number, b: number) => a + b);
-      resourceManager.registerExposedService("calculator", { add });
+      resourceManager.registerExposedServices([
+        { name: "calculator", service: { add } },
+      ]);
       context.policy = {
         canCall: vi.fn(() => Promise.reject(new Error("policy rejected"))),
       } as any;
@@ -506,11 +533,13 @@ describe("MessageHandler", () => {
       const servicePolicy = {
         canCall: vi.fn(({ path }) => path[0] !== "read"),
       };
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        servicePolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: servicePolicy,
+        },
+      ]);
       vi.mocked(payloadProcessor.safeSanitizeFromService).mockImplementation(
         (args: any[], targetConnectionId: string, serviceName: string) => {
           const resourceId = resourceManager.registerLocalResource(
@@ -577,12 +606,12 @@ describe("MessageHandler", () => {
         [SERVICE_INVOKE_START]: vi.fn(),
         [SERVICE_INVOKE_END]: vi.fn(),
       };
-      resourceManager.registerExposedService("vault", {}, vaultPolicy);
-      resourceManager.registerExposedService(
-        "admin",
-        adminService,
-        adminPolicy,
-      );
+      resourceManager.registerExposedServices([
+        { name: "vault", service: {}, policy: vaultPolicy },
+      ]);
+      resourceManager.registerExposedServices([
+        { name: "admin", service: adminService, policy: adminPolicy },
+      ]);
       const resourceId = resourceManager.registerLocalResource(
         child,
         sourceConnectionId,
@@ -629,11 +658,13 @@ describe("MessageHandler", () => {
       const replacementPolicy = {
         canCall: vi.fn(() => true),
       };
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        originalPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: originalPolicy,
+        },
+      ]);
       vi.mocked(payloadProcessor.safeSanitizeFromService).mockImplementation(
         (args: any[], targetConnectionId: string, serviceName: string) => {
           const resourceId = resourceManager.registerLocalResource(
@@ -657,11 +688,13 @@ describe("MessageHandler", () => {
       );
       const resourceId =
         resourceManager.listLocalResourceIdsByOwner(sourceConnectionId)[0];
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        replacementPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: replacementPolicy,
+        },
+      ]);
 
       await messageHandler.safeHandleMessage(
         {
@@ -698,16 +731,18 @@ describe("MessageHandler", () => {
       const replacementPolicy = {
         canCall: vi.fn(() => true),
       };
-      resourceManager.registerExposedService(
-        "vault",
+      resourceManager.registerExposedServices([
         {
-          getChild: () =>
-            new Promise((resolve) => {
-              resolveChild = resolve;
-            }),
+          name: "vault",
+          service: {
+            getChild: () =>
+              new Promise((resolve) => {
+                resolveChild = resolve;
+              }),
+          },
+          policy: originalPolicy,
         },
-        originalPolicy,
-      );
+      ]);
       vi.mocked(payloadProcessor.safeSanitizeFromService).mockImplementation(
         (
           args: any[],
@@ -741,11 +776,13 @@ describe("MessageHandler", () => {
           expect.objectContaining({ serviceName: "vault", path: ["getChild"] }),
         );
       });
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        replacementPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: replacementPolicy,
+        },
+      ]);
       resolveChild(child);
       await handling;
 
@@ -788,12 +825,17 @@ describe("MessageHandler", () => {
       const replacementPolicy = {
         canCall: vi.fn(() => false),
       };
-      resourceManager.registerExposedService("vault", {
-        getChild: () =>
-          new Promise((resolve) => {
-            resolveChild = resolve;
-          }),
-      });
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: {
+            getChild: () =>
+              new Promise((resolve) => {
+                resolveChild = resolve;
+              }),
+          },
+        },
+      ]);
 
       const handling = messageHandler.safeHandleMessage(
         {
@@ -809,11 +851,13 @@ describe("MessageHandler", () => {
       await vi.waitFor(() => {
         expect(resolveChild).toBeTypeOf("function");
       });
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        replacementPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: replacementPolicy,
+        },
+      ]);
       resolveChild(child);
       await handling;
 
@@ -856,7 +900,7 @@ describe("MessageHandler", () => {
         [SERVICE_INVOKE_START]: vi.fn(() => invocationContext),
         [SERVICE_INVOKE_END]: vi.fn(),
       };
-      resourceManager.registerExposedService("hooked", service);
+      resourceManager.registerExposedServices([{ name: "hooked", service }]);
       reviveSpy.mockReturnValueOnce(err(new Error("revive failed")) as any);
 
       await messageHandler.safeHandleMessage(
@@ -896,7 +940,9 @@ describe("MessageHandler", () => {
         add,
         [SERVICE_INVOKE_START]: vi.fn(),
       };
-      resourceManager.registerExposedService("auth-hooked", service);
+      resourceManager.registerExposedServices([
+        { name: "auth-hooked", service },
+      ]);
 
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
@@ -928,11 +974,13 @@ describe("MessageHandler", () => {
       const replacementPolicy = {
         canCall: vi.fn(() => true),
       };
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        originalPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: originalPolicy,
+        },
+      ]);
       vi.mocked(payloadProcessor.safeSanitizeFromService).mockImplementation(
         (
           args: any[],
@@ -963,11 +1011,13 @@ describe("MessageHandler", () => {
       );
       const childResourceId =
         resourceManager.listLocalResourceIdsByOwner(sourceConnectionId)[0];
-      resourceManager.registerExposedService(
-        "vault",
-        { getChild: () => child },
-        replacementPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getChild: () => child },
+          policy: replacementPolicy,
+        },
+      ]);
 
       await messageHandler.safeHandleMessage(
         {
@@ -1014,11 +1064,13 @@ describe("MessageHandler", () => {
       const servicePolicy = {
         canConnect: vi.fn(() => true),
       };
-      resourceManager.registerExposedService(
-        "calculator",
-        { add },
-        servicePolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "calculator",
+          service: { add },
+          policy: servicePolicy,
+        },
+      ]);
       context.policy = {
         canCall: vi.fn(() => false),
       } as any;
@@ -1096,7 +1148,9 @@ describe("MessageHandler", () => {
     });
 
     it("should call a method on an exposed service and return the result", async () => {
-      resourceManager.registerExposedService("calculator", mockService);
+      resourceManager.registerExposedServices([
+        { name: "calculator", service: mockService },
+      ]);
       sanitizeSpy.mockReturnValueOnce(ok(["sanitized_3"]));
 
       const message: ApplyMessage = {
@@ -1127,7 +1181,9 @@ describe("MessageHandler", () => {
         .spyOn(mockEngine, "safeSendMessage")
         .mockReturnValueOnce(err(sendError));
 
-      resourceManager.registerExposedService("calculator", mockService);
+      resourceManager.registerExposedServices([
+        { name: "calculator", service: mockService },
+      ]);
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
         id: 999,
@@ -1184,7 +1240,9 @@ describe("MessageHandler", () => {
           throw error;
         },
       };
-      resourceManager.registerExposedService("failingCalc", mockServiceWithErr);
+      resourceManager.registerExposedServices([
+        { name: "failingCalc", service: mockServiceWithErr },
+      ]);
 
       const message: ApplyMessage = {
         type: NexusMessageType.APPLY,
@@ -1214,7 +1272,9 @@ describe("MessageHandler", () => {
     const mockStore = { config: { version: "1.0" } };
 
     it("should get a property from an exposed service", async () => {
-      resourceManager.registerExposedService("store", mockStore);
+      resourceManager.registerExposedServices([
+        { name: "store", service: mockStore },
+      ]);
       sanitizeSpy.mockReturnValueOnce(ok(["sanitized_v1.0"]));
 
       const message: GetMessage = {
@@ -1269,7 +1329,9 @@ describe("MessageHandler", () => {
     });
 
     it("should deny constructor function access through RPC paths", async () => {
-      resourceManager.registerExposedService("store", { value: "safe" });
+      resourceManager.registerExposedServices([
+        { name: "store", service: { value: "safe" } },
+      ]);
 
       await messageHandler.safeHandleMessage(
         {
@@ -1296,7 +1358,9 @@ describe("MessageHandler", () => {
     const mockStore: { user?: { name: string } } = {};
 
     it("should set a property on an exposed service", async () => {
-      resourceManager.registerExposedService("store", mockStore);
+      resourceManager.registerExposedServices([
+        { name: "store", service: mockStore },
+      ]);
       reviveSpy.mockReturnValueOnce(ok([{ name: "John" }]));
 
       const message: SetMessage = {
@@ -1325,7 +1389,7 @@ describe("MessageHandler", () => {
     });
 
     it("should deny prototype pollution through RPC set paths", async () => {
-      resourceManager.registerExposedService("store", {});
+      resourceManager.registerExposedServices([{ name: "store", service: {} }]);
       reviveSpy.mockReturnValueOnce(ok(["polluted"]));
 
       await messageHandler.safeHandleMessage(

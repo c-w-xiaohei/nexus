@@ -115,6 +115,7 @@ Raw core handles are lifecycle-scoped.
 - `nexus.ref(...)` creates capabilities that remain tied to the original connection scope after crossing the transport boundary.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Reconnect, get fresh proxies, and pass fresh refs after session replacement.
+- Ordinary proxies do not provide lifecycle status or subscriptions. Retain their source `Connection` to observe the session.
 
 Use `nexus.onConnect(listener)` or `nexus.onConnect(where, listener)` to observe
 each existing and future ready session once. Use

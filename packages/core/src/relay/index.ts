@@ -16,7 +16,6 @@ import {
   type ServiceInvocationContext,
 } from "@/service/service-invocation-hooks";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { subscribeProxyStatus } from "@/service/proxy-lifecycle";
 import { isRefWrapper } from "@/types/ref-wrapper";
 import type {
   AdapterModel,
@@ -687,14 +686,12 @@ export const relayNexusStore = <
           return Result.err(closedError());
         yield* Result.await(safeAuthorize(invocation));
         yield* safeActive(subscription);
-        const upstream = yield* Result.await(
+        const connection = yield* Result.await(
           Result.tryPromise({
-            try: async () => {
-              const connection = await options.forwardThrough.connect({
+            try: () =>
+              options.forwardThrough.connect({
                 target: options.forwardTarget,
-              });
-              return connection.get(upstreamToken);
-            },
+              }),
             catch: mapRelayUpstreamError,
           }),
         );
@@ -702,18 +699,15 @@ export const relayNexusStore = <
         yield* Result.await(
           Result.tryPromise({
             try: async () => {
-              const stop = subscribeProxyStatus(upstream, (status) => {
-                if (status.type === "disconnected")
-                  emitTerminal("source-disconnected");
-                else if (status.selection === "stale")
-                  emitTerminal("target-changed");
-              });
+              const stop = connection.onDisconnected(() =>
+                emitTerminal("source-disconnected"),
+              );
               if (terminalError || !subscriptions.has(subscription)) {
                 stop();
                 return;
               }
               subscription.cleanup.add(stop);
-              await upstream.subscribe(async (input) => {
+              await connection.get(upstreamToken).subscribe(async (input) => {
                 const received = await safeReceive(input);
                 if (received.isErr()) {
                   if (received.error instanceof NexusStoreProtocolError)

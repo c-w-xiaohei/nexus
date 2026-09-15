@@ -6,8 +6,56 @@ import type {
   ContextMetaOf,
 } from "@/types/adapter-model";
 import type { IEndpoint } from "@/transport";
-import type { Token } from "../token";
-import { isPlainTarget } from "../token";
+import { isPlainTarget, Token } from "../token";
+import { NexusConfigurationError } from "@/errors";
+import { Result } from "better-result";
+
+/** Rejects duplicate declarations within one submission, before cross-layer last-wins composition. */
+export function validateProviderBatch<M extends AdapterModel>(
+  providers: readonly ServiceProvider<object, M>[],
+): Result<void, NexusConfigurationError> {
+  if (
+    !Array.isArray(providers) ||
+    !Array.from(providers).every(
+      (provider) =>
+        provider !== null &&
+        typeof provider === "object" &&
+        provider.token instanceof Token &&
+        provider.service !== null &&
+        (typeof provider.service === "object" ||
+          typeof provider.service === "function"),
+    )
+  ) {
+    return Result.err(
+      new NexusConfigurationError(
+        "Provider declarations require a Token and a service object.",
+        "E_PROVIDER_BATCH_INVALID",
+      ),
+    );
+  }
+  return validateProviderIds(providers.map(({ token }) => token.id));
+}
+
+/** Checks declaration identities before composition or any user factory executes. */
+export function validateProviderIds(
+  ids: readonly string[],
+): Result<void, NexusConfigurationError> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) duplicates.add(id);
+    seen.add(id);
+  }
+  return duplicates.size
+    ? Result.err(
+        new NexusConfigurationError(
+          "Provider batch contains duplicate token IDs.",
+          "E_PROVIDER_DUPLICATE_TOKEN",
+          { duplicateTokenIds: [...duplicates] },
+        ),
+      )
+    : Result.ok(undefined);
+}
 
 /** Validates a positive, finite millisecond budget without coercing business input. */
 export function isValidTimeout(value: unknown): value is number | undefined {

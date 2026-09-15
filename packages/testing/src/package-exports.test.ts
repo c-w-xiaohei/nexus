@@ -29,13 +29,10 @@ describe("package exports", () => {
        });
        const connection = await mock.nexus.connect({ where: (meta) => meta.context === "host" });
        const proxy = connection.get(token);
-      const call = proxy.ping();
-      assert.equal((await Nexus.safeCall(call)).unwrap(), "pong");
-      assert.equal(await call, "pong");
-      assert.equal(Nexus.getProxyStatus(proxy).type, "active");
-      call.connection.disconnect();
-      assert.equal(Nexus.getProxyStatus(proxy).type, "disconnected");
-    `,
+       const call = proxy.ping();
+       assert.equal((await Nexus.safeCall(call)).unwrap(), "pong");
+       assert.equal(await call, "pong");
+     `,
       ],
       { cwd: packageRoot },
     );

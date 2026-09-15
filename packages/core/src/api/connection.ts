@@ -172,7 +172,7 @@ export class ConnectionHandle<
     };
   }
 
-  /** @internal Called after L2 commits identity and L3 updates its dependents. */
+  /** @internal Called after L2 commits identity; State and other consumers observe through this handle. */
   identityUpdated(meta: ContextMetaOf<M>): void {
     for (const listener of Array.from(this.identities)) {
       if (this.status === "connected" && this.identities.has(listener))

@@ -92,7 +92,7 @@ const createHost = async (service: object) => {
     },
     providers: [{ token: definition, service }],
   });
-  await vi.waitFor(() => expect((nexus as any).connectionManager).toBeTruthy());
+  await vi.waitFor(() => expect((nexus as any).lifecycle.manager).toBeTruthy());
   return { nexus, accept };
 };
 
@@ -116,7 +116,7 @@ const createPopup = async (getHost: () => { accept(port: IPort): void }) => {
       connectTo: [{ context: "background" }],
     },
   });
-  await vi.waitFor(() => expect((popup as any).connectionManager).toBeTruthy());
+  await vi.waitFor(() => expect((popup as any).lifecycle.manager).toBeTruthy());
   return popup;
 };
 
@@ -133,7 +133,7 @@ describe("Nexus State background restart lifecycle", () => {
 
     for (const connection of (
       host.nexus as any
-    ).connectionManager.connections.values())
+    ).lifecycle.manager.connections.values())
       connection.close();
     host = await createHost(createService("v2"));
     await vi.waitFor(() => expect(old.getStatus().type).toBe("disconnected"));
@@ -159,7 +159,7 @@ describe("Nexus State background restart lifecycle", () => {
     await started.promise;
     for (const connection of (
       oldHost.nexus as any
-    ).connectionManager.connections.values())
+    ).lifecycle.manager.connections.values())
       connection.close();
     await vi.waitFor(() => expect(old.getStatus().type).toBe("disconnected"));
     release.resolve();

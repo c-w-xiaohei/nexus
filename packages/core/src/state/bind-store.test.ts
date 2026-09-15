@@ -17,7 +17,6 @@ import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { bindNexusStore, createNexusStore } from "./bind-store";
 import { createRemoteStore } from "./remote-store";
 import { connectNexusStore } from "./connect-store";
-import { installProxyLifecycle } from "../service/proxy-lifecycle";
 import { Result } from "better-result";
 import type { InitEnvelope, SyncEnvelope } from "./protocol";
 import type { NexusStoreServiceContract } from "./contract";
@@ -377,10 +376,6 @@ describe("buffered Zustand binding", () => {
         });
       },
     };
-    installProxyLifecycle(service, definition.id, "fixture", {
-      subscribeDisconnect: () => () => undefined,
-      subscribeStale: () => () => undefined,
-    });
     const pending = Result.tryPromise({
       try: () =>
         connectNexusStore(

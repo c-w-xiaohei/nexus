@@ -4,7 +4,6 @@ import type {
   ContextMetaOf,
 } from "@/types/adapter-model";
 import type { IEndpoint } from "@/transport";
-import type { InstanceDecoratorRegistry } from "../registry";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { fn } from "@/utils/fn";
@@ -41,14 +40,20 @@ export type NexusEndpointDecorator<M extends AdapterModel = AdapterModel> = (
   context: ClassDecoratorContext,
 ) => void;
 
+/** A deferred endpoint declaration; Nexus owns its registration window. */
+export type EndpointRegistration<M extends AdapterModel = AdapterModel> = {
+  targetClass: new (...args: unknown[]) => IEndpoint<M>;
+  options: EndpointOptions<M>;
+};
+
 /**
  * `@Endpoint` 装饰器，用于将一个类声明为当前上下文的通信端点。
  * 它将端点的身份、启动连接和平台实现内聚在一起。
  *
- * @param registry 当前 Nexus 实例拥有的装饰器注册表。
+ * @param register 当前 Nexus 实例的声明写入入口。
  */
 export function createEndpointDecorator(
-  registry: Pick<InstanceDecoratorRegistry, "registerEndpoint">,
+  register: (registration: EndpointRegistration) => void,
 ): <M extends AdapterModel>(
   options: EndpointOptions<M>,
 ) => NexusEndpointDecorator<M> {
@@ -79,7 +84,7 @@ export function createEndpointDecorator(
       }
 
       // Collect registration only; instantiate the endpoint at bootstrap.
-      registry.registerEndpoint({
+      register({
         targetClass,
         options: registrationOptions,
       });

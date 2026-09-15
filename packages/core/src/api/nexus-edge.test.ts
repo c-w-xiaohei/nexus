@@ -28,6 +28,59 @@ const endpoint = () => ({
 });
 
 describe("Nexus public API", () => {
+  it("contains hostile declaration inspection without replacing earlier providers", async () => {
+    const nexus = new Nexus();
+    const token = new Token<object>("inspection");
+    const original = {};
+    nexus.provide(token, original);
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("getter failed");
+        },
+        has() {
+          throw new Error("descriptor failed");
+        },
+      },
+    );
+    expect(nexus.safeConfigure(hostile)).toMatchObject({
+      error: { code: "E_USAGE_INVALID" },
+    });
+    expect(nexus.safeProvide(hostile as never)).toMatchObject({
+      error: { code: "E_PROVIDER_BATCH_INVALID" },
+    });
+    expect((nexus as any).lifecycle.phase).toBe("draft");
+    nexus.configure({ endpoint: { implementation: endpoint(), meta: {} } });
+    await nexus.ready();
+    expect(
+      nexus.safeProvide([{ token, service: {} }, hostile as never]),
+    ).toMatchObject({
+      error: { code: "E_PROVIDER_BATCH_INVALID" },
+    });
+    const resources = (nexus as any).lifecycle.engine.resourceManager;
+    expect(resources.getExposedService(token.id)).toBe(original);
+  });
+  it("rejects duplicate IDs within pre-bootstrap submissions without discarding earlier providers", () => {
+    const nexus = new Nexus();
+    const token = new Token<object>("duplicate");
+    const original = { version: 1 };
+    nexus.provide(token, original);
+    const providers = [
+      { token, service: { version: 2 } },
+      { token: new Token<object>(token.id), service: { version: 3 } },
+    ];
+    expect(nexus.safeProvide(providers)).toMatchObject({
+      error: { code: "E_PROVIDER_DUPLICATE_TOKEN" },
+    });
+    expect(nexus.safeConfigure({ providers })).toMatchObject({
+      error: { code: "E_PROVIDER_DUPLICATE_TOKEN" },
+    });
+    expect((nexus as any).config.providers).toEqual([
+      { token, service: original, policy: undefined },
+    ]);
+    expect((nexus as any).lifecycle).toEqual({ phase: "draft" });
+  });
   it("normalizes token and registration provider overloads", () => {
     const nexus = new Nexus();
     const first = new Token<object>("first");
@@ -41,6 +94,20 @@ describe("Nexus public API", () => {
 
   it("rejects invalid provider batches atomically", () => {
     const nexus = new Nexus();
+    const valid = { token: new Token<object>("valid"), service: {} };
+    for (const providers of [
+      [valid, null],
+      [valid, , { token: new Token<object>("later"), service: {} }],
+    ] as const) {
+      expect(nexus.safeProvide(providers as never)).toMatchObject({
+        error: { code: "E_PROVIDER_BATCH_INVALID" },
+      });
+      expect(
+        nexus.safeConfigure({ providers: providers as never }),
+      ).toMatchObject({
+        error: { code: "E_PROVIDER_BATCH_INVALID" },
+      });
+    }
     expect(
       nexus.safeProvide([
         { token: new Token<object>("valid"), service: {} },
@@ -48,6 +115,116 @@ describe("Nexus public API", () => {
       ]),
     ).toMatchObject({ error: { code: "E_PROVIDER_BATCH_INVALID" } });
     expect((nexus as any).config.providers).toBeUndefined();
+  });
+
+  it("passes decorated endpoint metadata to decorated service factories", async () => {
+    const nexus = new Nexus();
+    const token = new Token<object>("decorated-factory-meta");
+    const factory = vi.fn(() => ({}));
+
+    nexus.Expose(token, { factory })(class Service {}, {
+      kind: "class",
+    } as ClassDecoratorContext);
+    nexus.Endpoint({ meta: { context: "decorated", scope: "worker" } })(
+      class Endpoint {
+        listen() {}
+      } as never,
+      { kind: "class" } as ClassDecoratorContext,
+    );
+
+    await nexus.ready();
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token,
+        localMeta: { context: "decorated", scope: "worker" },
+      }),
+    );
+  });
+
+  it("locks reentrant factory registrations while bootstrap is starting", async () => {
+    const nexus = new Nexus();
+    const token = new Token<object>("factory-reentrant");
+    const factory = vi.fn(() => {
+      expect(nexus.safeConfigure({ policy: {} })).toMatchObject({
+        error: { code: "E_NEXUS_BOOTSTRAPPING_LOCKED" },
+      });
+      expect(nexus.safeProvide(new Token<object>("late"), {})).toMatchObject({
+        error: { code: "E_NEXUS_BOOTSTRAPPING_LOCKED" },
+      });
+      expect(() =>
+        nexus.Expose(new Token<object>("late-decorator"))(
+          class LateService {},
+          { kind: "class" } as ClassDecoratorContext,
+        ),
+      ).toThrowError(
+        expect.objectContaining({ code: "E_NEXUS_BOOTSTRAPPING_LOCKED" }),
+      );
+      return {};
+    });
+    nexus.Expose(token, { factory })(class Service {}, {
+      kind: "class",
+    } as ClassDecoratorContext);
+    nexus.configure({
+      endpoint: { meta: { context: "host" }, implementation: endpoint() },
+    });
+
+    await expect(nexus.safeReady()).resolves.toMatchObject({
+      value: undefined,
+    });
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("locks synchronous listener registrations after the runtime is installed", async () => {
+    const nexus = new Nexus();
+    const results: unknown[] = [];
+    nexus.configure({
+      endpoint: {
+        meta: { context: "host" },
+        implementation: {
+          listen: () => {
+            results.push(nexus.safeConfigure({ policy: {} }));
+            results.push(nexus.safeProvide(new Token<object>("late"), {}));
+            expect(() =>
+              nexus.Endpoint({ meta: { context: "late" } })(
+                class LateEndpoint {
+                  listen() {}
+                } as never,
+                { kind: "class" } as ClassDecoratorContext,
+              ),
+            ).toThrowError(
+              expect.objectContaining({ code: "E_NEXUS_BOOTSTRAPPING_LOCKED" }),
+            );
+          },
+        },
+      },
+    });
+
+    await nexus.ready();
+    for (const result of results)
+      expect(result).toEqual(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: "E_NEXUS_BOOTSTRAPPING_LOCKED",
+          }),
+        }),
+      );
+  });
+
+  it("returns a factory rejection from safeReady without rejecting", async () => {
+    const failure = new Error("factory rejected");
+    const nexus = new Nexus();
+    nexus.Expose(new Token<object>("factory-rejection"), {
+      factory: async () => Promise.reject(failure),
+    })(class Service {}, { kind: "class" } as ClassDecoratorContext);
+    nexus.configure({
+      endpoint: { meta: { context: "host" }, implementation: endpoint() },
+    });
+
+    await expect(nexus.safeReady()).resolves.toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "E_NEXUS_BOOTSTRAP_FAILED" }),
+      }),
+    );
   });
 
   it("replaces a live provider by token id", async () => {
@@ -63,6 +240,54 @@ describe("Nexus public API", () => {
     expect(nexus.safeProvide(token, { version: 2 })).toMatchObject({
       value: nexus,
     });
+  });
+
+  it("rejects decorators registered after readiness", async () => {
+    const nexus = new Nexus().configure({
+      endpoint: { meta: { context: "host" }, implementation: endpoint() },
+    }) as Nexus;
+    await nexus.ready();
+
+    expect(() =>
+      nexus.Expose(new Token<object>("late-service"))(class LateService {}, {
+        kind: "class",
+      } as ClassDecoratorContext),
+    ).toThrowError(expect.objectContaining({ code: "E_NEXUS_ALREADY_READY" }));
+    expect(() =>
+      nexus.Endpoint({ meta: { context: "late" } })(
+        class LateEndpoint {
+          listen() {}
+        } as never,
+        { kind: "class" } as ClassDecoratorContext,
+      ),
+    ).toThrowError(expect.objectContaining({ code: "E_NEXUS_ALREADY_READY" }));
+  });
+
+  it("shares one safe bootstrap failure across concurrent callers", async () => {
+    const failure = new Error("listener failed");
+    const nexus = new Nexus().configure({
+      endpoint: {
+        meta: { context: "host" },
+        implementation: {
+          listen: () => {
+            throw failure;
+          },
+        },
+      },
+    }) as Nexus;
+
+    const [first, second] = await Promise.all([
+      nexus.safeReady(),
+      nexus.safeReady(),
+    ]);
+
+    expect(first).toMatchObject({
+      error: { code: "E_NEXUS_BOOTSTRAP_FAILED" },
+    });
+    expect(second).toMatchObject({
+      error: { code: "E_NEXUS_BOOTSTRAP_FAILED" },
+    });
+    if (first.isErr() && second.isErr()) expect(first.error).toBe(second.error);
   });
 
   it("locks structural configuration during bootstrap", async () => {
@@ -197,13 +422,16 @@ describe("Nexus public API", () => {
 
     for (const [failure, code] of cases) {
       const nexus = new Nexus();
+      const manager = {
+        safeResolveConnections: vi.fn(async () => Result.err(failure)),
+      };
       Object.assign(nexus as object, {
-        lifecycle: "ready",
-        initialization: Promise.resolve(),
-        engine: {},
-        connectionManager: {
-          safeResolveConnections: vi.fn(async () => Result.err(failure)),
+        lifecycle: {
+          phase: "ready",
+          engine: {},
+          manager,
         },
+        initialization: Promise.resolve(Result.ok(manager)),
       });
       const result = await nexus.safeConnect({ target: { context: "host" } });
       expect(result).toMatchObject({ error: { code } });

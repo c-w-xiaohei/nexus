@@ -171,11 +171,13 @@ class InMemoryRelayNetwork {
 const getReadyConnectionCount = (nexus: object): number => {
   const connections = (
     nexus as {
-      connectionManager?: {
-        connections?: Map<string, { isReady(): boolean }>;
+      lifecycle?: {
+        manager?: {
+          connections?: Map<string, { isReady(): boolean }>;
+        };
       };
     }
-  ).connectionManager?.connections;
+  ).lifecycle?.manager?.connections;
 
   return Array.from(connections?.values() ?? []).filter((connection) =>
     connection.isReady(),
@@ -188,14 +190,16 @@ const getReadyConnection = (
 ): { close(): void } | undefined => {
   const connections = (
     nexus as {
-      connectionManager?: {
-        connections?: Map<
-          string,
-          { close(): void; isReady(): boolean; remoteIdentity?: RelayMeta }
-        >;
+      lifecycle?: {
+        manager?: {
+          connections?: Map<
+            string,
+            { close(): void; isReady(): boolean; remoteIdentity?: RelayMeta }
+          >;
+        };
       };
     }
-  ).connectionManager?.connections;
+  ).lifecycle?.manager?.connections;
 
   return Array.from(connections?.values() ?? []).find(
     (connection) =>
@@ -373,6 +377,7 @@ async function createRelayHarness() {
 
   return {
     network,
+    hostNexus,
     relayUpstreamNexus,
     relayDownstreamNexus,
     hostCalls,
@@ -548,6 +553,33 @@ describe("Nexus Relay lifecycle integration", () => {
 
       stopA();
       remoteA.destroy();
+    } finally {
+      harness.network.close();
+    }
+  });
+
+  it("keeps relay store subscribers live when unrelated upstream identity changes", async () => {
+    const harness = await createRelayHarness();
+    try {
+      const remote = await connectNexusStore(harness.leafANexus, counterStore, {
+        target: relayTarget,
+      });
+      const updates: number[] = [];
+      const stop = remote.subscribe((state) => updates.push(state.count));
+
+      await harness.hostNexus.updateIdentity({ id: "host-v2" });
+      await vi.waitFor(() => {
+        expect(remote.getStatus().type).toBe("ready");
+      });
+
+      await remote.actions.increment(1, "leaf-a");
+      await vi.waitFor(() => {
+        expect(remote.getState()).toEqual({ count: 1 });
+        expectLastUpdate(updates, 1);
+      });
+
+      stop();
+      remote.destroy();
     } finally {
       harness.network.close();
     }

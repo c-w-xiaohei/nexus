@@ -50,8 +50,9 @@ export class NexusDisconnectedError extends NexusError {
     message: string,
     code: NexusDisconnectedErrorCode = "E_CONN_CLOSED",
     context?: Record<string, unknown>,
+    cause?: SerializedError,
   ) {
-    super(message, code, { context });
+    super(message, code, { context, cause });
   }
 }
 

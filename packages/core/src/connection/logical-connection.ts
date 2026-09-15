@@ -725,19 +725,15 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 
   /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
-  /** Add provider names to the session catalog and flush them when routable. */
   public publishProviders(providers: readonly string[]): Result<void, Error> {
     if (this.state.phase === "closed") return ok(undefined);
     for (const provider of providers) this.pendingProviders.add(provider);
     return this.isReady() ? this.flushProviders() : ok(undefined);
   }
 
-  /** Merge provider names and notify the owner only after readiness. */
+  /** Merges wire catalog additions for synchronous get without waking connection acquisition. */
   private addProviders(providers: readonly string[]): void {
-    const size = this.providers.size;
     for (const provider of providers) this.providers.add(provider);
-    if (this.isReady() && size !== this.providers.size)
-      this.handlers.onProviderCatalogUpdated?.(this);
   }
 
   /** Drain queued provider announcements, including registrations made reentrantly. */

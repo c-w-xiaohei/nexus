@@ -61,7 +61,13 @@ export class MessageHandler<M extends AdapterModel> {
         "handleResponse" | "canHandleResponse" | "getCallTimeout"
       >;
       resourceManager: ResourceManager;
-      payloadProcessor: PayloadProcessor;
+      payloadProcessor: Pick<
+        PayloadProcessor,
+        | "safeRevive"
+        | "safeSanitizeFromService"
+        | "releaseSanitizedResources"
+        | "releaseOrphanedResponseResources"
+      >;
       policy?: NexusAuthorizationPolicy<M>;
       getConnectionAuthContext?: ConnectionManager<M>["getConnectionAuthSnapshot"];
     },

@@ -6,7 +6,7 @@ import { NexusMessageType, type ApplyMessage } from "@/types/message";
 import { createL3Endpoints } from "@/utils/test-utils";
 import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
 import { Nexus } from "@/api/nexus";
-import { NexusDisconnectedError, NexusUsageError } from "@/errors";
+import { NexusDisconnectedError, NexusConnectionError } from "@/errors";
 import { Result } from "better-result";
 import { Logger } from "@/logger";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
@@ -41,6 +41,35 @@ describe("Engine", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("preserves the transport cause when converting a send failure to a call error", () => {
+    const cause = { name: "Error", message: "port rejected send" };
+    vi.spyOn(
+      (clientEngine as any).connectionManagerState,
+      "safeSendMessage",
+    ).mockReturnValue(
+      Result.err(
+        new NexusConnectionError(
+          "closed",
+          "E_CONN_CLOSED",
+          { connectionId: clientConnectionId },
+          cause,
+        ),
+      ),
+    );
+    const result = clientEngine.safeSendMessage(
+      {
+        type: NexusMessageType.RELEASE,
+        id: null,
+        resourceId: "released",
+      },
+      clientConnectionId,
+    );
+    expect(result).toMatchObject({ error: { code: "E_CONN_CLOSED", cause } });
+    expect(result.isErr() && result.error).toBeInstanceOf(
+      NexusDisconnectedError,
+    );
   });
 
   it("safeRelease succeeds locally even when the release notification cannot be sent", async () => {
@@ -139,10 +168,9 @@ describe("Engine", () => {
     const service = {
       [Symbol("nexus.service.on.disconnect")]: onDisconnect,
     };
-    (hostEngine as any).resourceManager.registerExposedService(
-      "globalSymbolService",
-      service,
-    );
+    (hostEngine as any).resourceManager.registerExposedServices([
+      { name: "globalSymbolService", service },
+    ]);
 
     hostEngine.onDisconnect(hostConnectionId);
 
@@ -155,14 +183,16 @@ describe("Engine", () => {
       throw new Error("service disconnect failure");
     });
     const laterHook = vi.fn();
-    (hostEngine as any).resourceManager.registerExposedService(
-      "throwingDisconnectService",
-      { [SERVICE_ON_DISCONNECT]: throwingHook },
-    );
-    (hostEngine as any).resourceManager.registerExposedService(
-      "laterDisconnectService",
-      { [SERVICE_ON_DISCONNECT]: laterHook },
-    );
+    (hostEngine as any).resourceManager.registerExposedServices([
+      {
+        name: "throwingDisconnectService",
+        service: { [SERVICE_ON_DISCONNECT]: throwingHook },
+      },
+      {
+        name: "laterDisconnectService",
+        service: { [SERVICE_ON_DISCONNECT]: laterHook },
+      },
+    ]);
     const resourceManagerSpy = vi.spyOn(
       (hostEngine as any).resourceManager,
       "cleanupConnection",
@@ -190,50 +220,26 @@ describe("Engine", () => {
       },
       [SERVICE_ON_DISCONNECT]: disconnected,
     };
-    (hostEngine as any).resourceManager.registerExposedService(
-      "unrelated",
-      service,
-    );
-    (hostEngine as any).resourceManager.registerExposedService(
-      "throwingGetter",
+    (hostEngine as any).resourceManager.registerExposedServices([
+      { name: "unrelated", service },
       {
-        get [SERVICE_ON_DISCONNECT]() {
-          throw new Error("getter failed");
+        name: "throwingGetter",
+        service: {
+          get [SERVICE_ON_DISCONNECT]() {
+            throw new Error("getter failed");
+          },
         },
       },
-    );
+    ]);
     const later = vi.fn();
-    (hostEngine as any).resourceManager.registerExposedService("later", {
-      [SERVICE_ON_DISCONNECT]: later,
-    });
+    (hostEngine as any).resourceManager.registerExposedServices([
+      { name: "later", service: { [SERVICE_ON_DISCONNECT]: later } },
+    ]);
 
     expect(() => hostEngine.onDisconnect(hostConnectionId)).not.toThrow();
     expect(unrelated).not.toHaveBeenCalled();
     expect(disconnected).toHaveBeenCalledOnce();
     expect(later).toHaveBeenCalledOnce();
-  });
-
-  it("exposes status and constrained diagnostics only for exact unicast roots", () => {
-    const proxy = clientEngine.createServiceProxy<any>("testService", {
-      connectionId: clientConnectionId,
-      timeout: 5000,
-    });
-    const current = Nexus.getProxyStatus(proxy);
-
-    expect(Nexus.getProxyStatus(proxy)).toBe(current);
-    expect(Nexus.inspectProxy(proxy)).toEqual({
-      tokenId: "testService",
-      connectionId: clientConnectionId,
-      status: { type: "active", selection: "current" },
-    });
-    expect(() => Nexus.getProxyStatus(proxy.method)).toThrow(NexusUsageError);
-    expect(() => Nexus.inspectProxy({})).toThrow(NexusUsageError);
-
-    clientEngine.onDisconnect(clientConnectionId);
-    expect(Nexus.getProxyStatus(proxy)).toMatchObject({
-      type: "disconnected",
-      error: expect.any(NexusDisconnectedError),
-    });
   });
 
   // The other tests about connection resolution and pending call registration

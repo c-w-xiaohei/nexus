@@ -15,7 +15,7 @@ The key distinction is:
 - Start with `@nexus-js/core` in all Nexus applications
 - Use the `@nexus-js/core/state` entrypoint when you need synchronized remote state
 - Use the `@nexus-js/core/relay` entrypoint when a bridge context forwards selected services or stores between adjacent Nexus graphs
-- Add `@nexus-js/react` when React components need a Nexus instance, service proxy status, or Nexus State
+- Add `@nexus-js/react` when React components need a Nexus instance or Nexus State
 - Add `@nexus-js/chrome` when building a Chrome extension integration
 - Add `@nexus-js/iframe` when connecting a parent window and iframe over `postMessage`
 - Add `@nexus-js/node-ipc` when connecting local Node daemon and client processes over Unix sockets
@@ -89,8 +89,8 @@ import { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 ## UI Binding Package
 
 - `@nexus-js/react`
-  - React bindings for Nexus instances, service proxy status, and Nexus State
-  - Provides `useProxyStatus(...)`, `createRemoteStoreScope(...)` for shared `RemoteStore` handles, and lower-level State hooks
+  - React bindings for Nexus instances and Nexus State
+  - Provides `createRemoteStoreScope(...)` for shared `RemoteStore` handles and lower-level State hooks
   - See [React](/nexus/docs/react/) for general React integration and [Nexus State React](/nexus/docs/state/react/) for Nexus State
   - Depends on `@nexus-js/core` and works with stores imported from `@nexus-js/core/state`
 

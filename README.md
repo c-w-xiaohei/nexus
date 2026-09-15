@@ -117,7 +117,11 @@ For unicast connection, the application supplies:
 
 Application code owns discovery. Querying an active tab, finding eligible frames, or choosing a set of processes is application/platform workflow that produces `ConnectionTarget` or `ConnectionTarget[]`; it is not global provider discovery performed by Nexus.
 
-Raw proxies and remote references are session-bound. After disconnect, reload, restart, or session replacement, create a fresh handle. Nexus does not silently rebind, retry, replay, or discover a replacement.
+Raw proxies and remote references are session-bound. Retain the acquired
+`Connection` and observe it with `onDisconnected` or `subscribeIdentity` when
+application code needs session updates. After disconnect, reload, restart, or
+session replacement, create a fresh handle. Nexus does not silently rebind,
+retry, replay, or discover a replacement.
 
 ## Choose Your Setup
 
@@ -135,7 +139,7 @@ Raw proxies and remote references are session-bound. After disconnect, reload, r
 
 - Typed RPC, callbacks, and disposable remote resources
 - Connection and service authorization
-- React bindings for Nexus instances, service proxy status, and synchronized state
+- React bindings for Nexus instances and synchronized state
 - Explicit provider-level Relay between adjacent Nexus graphs
 - Custom endpoint implementations through `IEndpoint<AdapterModel>`
 

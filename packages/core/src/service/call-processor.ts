@@ -34,7 +34,10 @@ export class CallProcessor {
         message: NexusMessage,
         connectionId: string,
       ): Result<void, Error>;
-      payloadProcessor: PayloadProcessor;
+      payloadProcessor: Pick<
+        PayloadProcessor,
+        "safeSanitize" | "releaseSanitizedResources"
+      >;
       pendingCallManager: PendingCallManager;
     },
   ) {}

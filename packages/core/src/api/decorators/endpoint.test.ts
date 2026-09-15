@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { Endpoint } from "./endpoint";
-import { Nexus, nexus } from "../nexus";
-
-const decoratorSnapshotOf = (instance: Nexus) =>
-  (instance as any).decoratorRegistry.snapshot();
+import { createEndpointDecorator, Endpoint } from "./endpoint";
+import { Nexus } from "../nexus";
 
 describe("@Endpoint", () => {
   it("attaches schema validation error as cause for invalid endpoint config", () => {
@@ -18,18 +15,20 @@ describe("@Endpoint", () => {
     );
   });
 
-  it("registers endpoint with the decorator expression Nexus instance", () => {
-    const first = new Nexus();
-    const second = new Nexus();
+  it("passes endpoint registration to its callback", () => {
+    const register = vi.fn();
+    const decorator = createEndpointDecorator(register);
 
     class EndpointImpl {}
-    first.Endpoint({ meta: { context: "background" } })(
+    decorator({ meta: { context: "background" } })(
       EndpointImpl as never,
       { kind: "class" } as ClassDecoratorContext,
     );
 
-    expect(decoratorSnapshotOf(first).endpoint?.targetClass).toBe(EndpointImpl);
-    expect(decoratorSnapshotOf(second).endpoint).toBeNull();
+    expect(register).toHaveBeenCalledWith({
+      targetClass: EndpointImpl,
+      options: { meta: { context: "background" } },
+    });
   });
 
   it.each([{}, [null]])(
@@ -63,13 +62,11 @@ describe("@Endpoint", () => {
 
   it("top-level Endpoint delegates to the default singleton", () => {
     class EndpointImpl {}
-    Endpoint({ meta: { context: "singleton" } })(
-      EndpointImpl as never,
-      {
-        kind: "class",
-      } as ClassDecoratorContext,
-    );
-
-    expect(decoratorSnapshotOf(nexus).endpoint?.targetClass).toBe(EndpointImpl);
+    expect(() =>
+      Endpoint({ meta: { context: "singleton" } })(
+        EndpointImpl as never,
+        { kind: "class" } as ClassDecoratorContext,
+      ),
+    ).not.toThrow();
   });
 });

@@ -1,8 +1,5 @@
 import type { AdapterModel } from "@/types/adapter-model";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
-import { NexusConfigurationError } from "@/errors";
-import { Logger } from "@/logger";
-import { Result } from "better-result";
 
 interface ExposedServiceRecord {
   readonly service: object;
@@ -19,25 +16,10 @@ interface LocalResourceRecord {
 
 /** Owns local capabilities and remote identities for one Engine. Registries never escape. */
 export class ResourceManager {
-  private readonly logger = new Logger("L3 --- ResourceManager");
   private readonly exposedServices = new Map<string, ExposedServiceRecord>();
   private readonly localResources = new Map<string, LocalResourceRecord>();
   private readonly remoteProxies = new Map<string, Set<string>>();
   private resourceIdSeq = 1;
-
-  /** Publish a service record, replacing any existing record with the same name. */
-  public registerExposedService(
-    name: string,
-    service: object,
-    policy?: NexusAuthorizationPolicy<AdapterModel>,
-  ): void {
-    if (this.exposedServices.has(name)) {
-      const message = `Service with name "${name}" is already registered. Overwriting.`;
-      this.logger.warn(message);
-      console.warn(`Nexus L3: ${message}`);
-    }
-    this.exposedServices.set(name, { service, policy });
-  }
 
   /** Look up the callable service object without exposing its registration record. */
   public getExposedService(name: string): object | undefined {
@@ -51,28 +33,13 @@ export class ResourceManager {
     return this.exposedServices.get(name);
   }
 
-  /** Validates the entire bootstrap batch before replacing any registration. */
-  public safeRegisterExposedServicesBatch(
+  /** Commits validated services without invoking application code or publishing between writes. */
+  public registerExposedServices(
     providers: readonly (ExposedServiceRecord & { name: string })[],
-  ): Result<void, Error> {
-    const seen = new Set<string>();
-    const duplicates = new Set<string>();
-    for (const { name } of providers) {
-      if (seen.has(name)) duplicates.add(name);
-      seen.add(name);
-    }
-    if (duplicates.size)
-      return Result.err(
-        new NexusConfigurationError(
-          `Nexus: Provider token id already registered: ${[...duplicates].join(", ")}.`,
-          "E_PROVIDER_DUPLICATE_TOKEN",
-          { duplicateTokenIds: [...duplicates] },
-        ),
-      );
+  ): void {
     for (const { name, service, policy } of providers) {
       this.exposedServices.set(name, { service, policy });
     }
-    return Result.ok(undefined);
   }
 
   /** Return service objects for disconnect hooks without exposing registry state. */

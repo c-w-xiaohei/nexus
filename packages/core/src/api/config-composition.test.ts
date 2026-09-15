@@ -106,28 +106,31 @@ describe("Nexus.configure config layering", () => {
     const firstService = { value: "first" };
     const replacementService = { value: "replacement" };
 
+    const firstListen = vi.fn();
+    const secondListen = vi.fn();
     nexus.configure({
       endpoint: {
         meta: { role: "first", stale: true },
-        implementation: { listen: vi.fn() },
+        implementation: { listen: firstListen },
       },
       providers: [{ token, service: firstService }],
     });
     nexus.configure({
       endpoint: {
         meta: { role: "second" },
-        implementation: { listen: vi.fn() },
+        implementation: { listen: secondListen },
       },
       providers: [{ token, service: replacementService }],
     });
 
     await nexus.ready();
 
-    expect((nexus as any).connectionManager.localEndpointMeta).toEqual({
-      role: "second",
-    });
+    expect(firstListen).not.toHaveBeenCalled();
+    expect(secondListen).toHaveBeenCalledOnce();
     expect(
-      (nexus as any).engine.resourceManager.getExposedService(token.id),
+      (nexus as any).lifecycle.engine.resourceManager.getExposedService(
+        token.id,
+      ),
     ).toBe(replacementService);
   });
 });

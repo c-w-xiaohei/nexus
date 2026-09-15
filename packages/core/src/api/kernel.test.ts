@@ -33,7 +33,7 @@ describe("buildKernel", () => {
 
     const result = await buildKernel(
       config as any,
-      new Map(),
+      [],
       null,
       undefined,
       getConnection,
@@ -52,7 +52,7 @@ describe("buildKernel", () => {
     const getConnection = vi.fn<() => Connection>();
     const result = await buildKernel(
       {} as any,
-      new Map(),
+      [],
       {
         targetClass: class Endpoint {},
         options: { meta: { context: "bg" } },
@@ -79,13 +79,14 @@ describe("buildKernel", () => {
   it("should instantiate providers with factory injection", async () => {
     const getConnection = vi.fn<() => Connection>();
     const token = new Token<object>("test");
-    const serviceMap = new Map();
     const factorySpy = vi.fn().mockReturnValue({});
-
-    serviceMap.set(token, {
-      targetClass: class Service {},
-      options: { factory: factorySpy },
-    });
+    const serviceDeclarations = [
+      {
+        token,
+        targetClass: class Service {},
+        options: { factory: factorySpy },
+      },
+    ];
 
     const config = {
       endpoint: {
@@ -96,7 +97,7 @@ describe("buildKernel", () => {
 
     const result = await buildKernel(
       config as any,
-      serviceMap,
+      serviceDeclarations,
       null,
       undefined,
       getConnection,
@@ -135,7 +136,7 @@ describe("buildKernel", () => {
 
     const result = await buildKernel(
       config as any,
-      new Map(),
+      [],
       null,
       undefined,
       getConnection,
@@ -163,7 +164,7 @@ describe("buildKernel", () => {
           implementation: { listen: () => {} },
         },
       } as any,
-      new Map(),
+      [],
       {
         targetClass: class DecoratedEndpoint {
           constructor() {
@@ -185,7 +186,7 @@ describe("buildKernel", () => {
     }
   });
 
-  it("should allow decorated providers to replace configured providers by id", async () => {
+  it("rejects configured and decorated providers with the same token in one bootstrap batch", async () => {
     const getConnection = vi.fn<() => Connection>();
     const tokenA = new Token<object>("duplicate-before-instance");
     const tokenB = new Token<object>("duplicate-before-instance");
@@ -200,32 +201,26 @@ describe("buildKernel", () => {
         },
         providers: [{ token: tokenA, service: {} }],
       } as any,
-      new Map([
-        [
-          tokenB,
-          {
-            targetClass: class DecoratedService {
-              constructor() {
-                serviceConstructor();
-              }
-            },
-            options: { factory },
+      [
+        {
+          token: tokenB,
+          targetClass: class DecoratedService {
+            constructor() {
+              serviceConstructor();
+            }
           },
-        ],
-      ]),
+          options: { factory },
+        },
+      ],
       null,
       undefined,
       getConnection,
     );
 
-    expect(result.isOk()).toBe(true);
+    expect(result).toMatchObject({
+      error: { code: "E_PROVIDER_DUPLICATE_TOKEN" },
+    });
     expect(serviceConstructor).not.toHaveBeenCalled();
-    expect(factory).toHaveBeenCalledTimes(1);
-    if (result.isErr()) {
-      throw result.error;
-    }
-    expect(
-      (result.value.engine as any).resourceManager.getExposedService(tokenA.id),
-    ).toEqual({});
+    expect(factory).not.toHaveBeenCalled();
   });
 });

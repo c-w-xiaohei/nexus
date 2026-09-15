@@ -118,7 +118,7 @@ describe("Nexus State protocol and errors", () => {
     const pending = remote.actions.noop();
     await actionStarted;
     const connection = Array.from(
-      (popup as any).connectionManager.connections.values(),
+      (popup as any).lifecycle.manager.connections.values(),
     )[0] as {
       close(): void;
     };

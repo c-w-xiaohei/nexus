@@ -76,7 +76,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     const settings = await bgApi.getSettings();
     expect(settings.showAvatars).toBe(true);
 
-    const popupCm = (world.popup.nexus as any).connectionManager;
+    const popupCm = (world.popup.nexus as any).lifecycle.manager;
     const connection = Array.from(
       (popupCm as any).connections.values(),
     )[0] as LogicalConnection<AppAdapterModel>;
@@ -171,9 +171,9 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     const api = (
       await popup.connect({ target: { context: "background" } })
     ).get(token);
-    expect((background as any).connectionManager.connections.size).toBe(1);
-    expect((popup as any).connectionManager.connections.size).toBe(1);
-    const popupEngine = (popup as any).engine;
+    expect((background as any).lifecycle.manager.connections.size).toBe(1);
+    expect((popup as any).lifecycle.manager.connections.size).toBe(1);
+    const popupEngine = (popup as any).lifecycle.engine;
     const pendingCallManager = popupEngine.pendingCallManager;
     const handleResponse = vi.spyOn(pendingCallManager, "handleResponse");
     let messageId: number | string | undefined;
@@ -192,7 +192,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       const call = api.getSettings();
       await expect(call).rejects.toMatchObject({ code: "E_CONN_CLOSED" });
       await expect(call).rejects.toBeInstanceOf(NexusDisconnectedError);
-      expect((popup as any).connectionManager.connections.size).toBe(0);
+      expect((popup as any).lifecycle.manager.connections.size).toBe(0);
       expect(messageId).toBeDefined();
       expect(pendingCallManager.canHandleResponse(messageId!, "conn-1")).toBe(
         false,
@@ -243,7 +243,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     const bgApi = (
       await world.cs1.nexus.connect({ target: { context: "background" } })
     ).get(BackgroundServiceToken);
-    const bgResourceManager = (world.background.nexus as any).engine
+    const bgResourceManager = (world.background.nexus as any).lifecycle.engine
       .resourceManager;
     const initialProxyCount = bgResourceManager.countRemoteProxies();
 
@@ -254,7 +254,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       initialProxyCount,
     );
 
-    const cs1Cm = (world.cs1.nexus as any).connectionManager;
+    const cs1Cm = (world.cs1.nexus as any).lifecycle.manager;
     const connection = Array.from(
       (cs1Cm as any).connections.values(),
     )[0] as LogicalConnection<AppAdapterModel>;
@@ -269,7 +269,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     const bgApi = (
       await world.cs1.nexus.connect({ target: { context: "background" } })
     ).get(BackgroundServiceToken);
-    const bgResourceManager = (world.background.nexus as any).engine
+    const bgResourceManager = (world.background.nexus as any).lifecycle.engine
       .resourceManager;
     const initialProxyCount = bgResourceManager.countRemoteProxies();
 
@@ -291,7 +291,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       expect(bgResourceManager.countRemoteProxies()).toBe(initialProxyCount);
     });
 
-    const cs1Cm = (world.cs1.nexus as any).connectionManager;
+    const cs1Cm = (world.cs1.nexus as any).lifecycle.manager;
     expect((cs1Cm as any).connections.size).toBeGreaterThan(0);
   });
 
@@ -336,7 +336,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
       })
     ).get(ContentScriptServiceToken);
 
-    const bgCm = (world.background.nexus as any).connectionManager;
+    const bgCm = (world.background.nexus as any).lifecycle.manager;
     const connections = Array.from((bgCm as any).connections.values()) as Array<
       LogicalConnection<AppAdapterModel>
     >;
@@ -356,7 +356,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     expect(cs2Connection).toBeDefined();
 
     let capturedMessageId: number | string | null = null;
-    const bgEngine = (world.background.nexus as any).engine;
+    const bgEngine = (world.background.nexus as any).lifecycle.engine;
     const originalRegister = bgEngine.pendingCallManager.register.bind(
       bgEngine.pendingCallManager,
     );
@@ -442,7 +442,7 @@ describe("Nexus L4 Integration: Connection Lifecycle and Error Handling", () => 
     });
 
     let capturedMessageId: number | string | null = null;
-    const bgEngine = (world.background.nexus as any).engine;
+    const bgEngine = (world.background.nexus as any).lifecycle.engine;
     const originalRegister = bgEngine.pendingCallManager.register.bind(
       bgEngine.pendingCallManager,
     );

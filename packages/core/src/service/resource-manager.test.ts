@@ -20,7 +20,9 @@ describe("ResourceManager", () => {
 
   describe("Exposed Services", () => {
     it("should register and retrieve an exposed service", () => {
-      resourceManager.registerExposedService("myApi", mockService);
+      resourceManager.registerExposedServices([
+        { name: "myApi", service: mockService },
+      ]);
       const target = resourceManager.getExposedService("myApi");
       expect(target).toBe(mockService);
     });
@@ -33,13 +35,26 @@ describe("ResourceManager", () => {
     it("replaces existing exposed providers", () => {
       const replacement = { echo: () => "replacement" };
 
-      resourceManager.registerExposedService("myApi", mockService);
-      const result = resourceManager.safeRegisterExposedServicesBatch([
+      resourceManager.registerExposedServices([
+        { name: "myApi", service: mockService },
+      ]);
+      resourceManager.registerExposedServices([
         { name: "myApi", service: replacement },
       ]);
 
-      expect(result.isOk()).toBe(true);
       expect(resourceManager.getExposedService("myApi")).toBe(replacement);
+    });
+
+    it("commits duplicate names in order because declaration validation belongs to Nexus", () => {
+      const first = { echo: () => "first" };
+      const second = { echo: () => "second" };
+
+      resourceManager.registerExposedServices([
+        { name: "duplicate", service: first },
+        { name: "duplicate", service: second },
+      ]);
+
+      expect(resourceManager.getExposedService("duplicate")).toBe(second);
     });
   });
 

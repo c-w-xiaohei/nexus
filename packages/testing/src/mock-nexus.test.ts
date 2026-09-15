@@ -20,11 +20,13 @@ interface TestAdapterModel extends AdapterModel {
 interface ExampleService {
   readonly greet: (name: string) => string;
   readonly explode: () => string;
+  readonly fakeFrameworkFailure: () => never;
   readonly hold: () => Promise<never>;
   readonly version: number;
   readonly acceptCallback: (callback: (value: string) => string) => string;
   readonly createReference: () => object;
   readonly useReference: (reference: object) => object;
+  readonly mutateReference: (reference: { visits: number }) => number;
 }
 
 const ExampleToken = new Token<ExampleService, TestAdapterModel>(
@@ -38,11 +40,15 @@ const service = (label: string): ExampleService => ({
   explode: () => {
     throw new Error(label);
   },
+  fakeFrameworkFailure: () => {
+    throw Object.assign(new Error(label), { code: "E_RESOURCE_NOT_FOUND" });
+  },
   hold: () => new Promise<never>(() => {}),
   version: 1,
   acceptCallback: (callback) => callback(label),
   createReference: () => ({ label }),
   useReference: (reference) => reference,
+  mutateReference: (reference) => ++reference.visits,
 });
 const provider = (context: AppMeta["context"], origin: string = context) => ({
   target: { context },
@@ -141,10 +147,25 @@ describe("createMockNexus", () => {
     });
     expect(thrown).toMatchObject({
       error: {
-        code: "E_USAGE_INVALID",
-        context: { connectionId: expect.any(String) },
+        code: "E_SERVICE_UNAVAILABLE",
       },
     });
+  });
+
+  it("does not deliver a connection when selection aborts the request", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const controller = new globalThis.AbortController();
+    mock.service(ExampleToken, service("background"), provider("background"));
+
+    const result = await mock.nexus.safeConnect({
+      signal: controller.signal,
+      where: () => {
+        controller.abort();
+        return true;
+      },
+    });
+
+    expect(result).toMatchObject({ error: { code: "E_ABORTED" } });
   });
 
   it("strictly validates connection options before recording calls", async () => {
@@ -181,6 +202,7 @@ describe("createMockNexus", () => {
     try {
       const mock = createMockNexus<TestAdapterModel>();
       const pending = mock.nexus.safeConnect({ timeout: 50 });
+      expect(mock.calls.connect()).toHaveLength(1);
       mock.service(ExampleToken, service("late"), provider("background"));
       await Promise.resolve();
       const connected = await pending;
@@ -204,6 +226,7 @@ describe("createMockNexus", () => {
       });
       controller.abort();
       expect(await aborted).toMatchObject({ error: { code: "E_ABORTED" } });
+      expect(abortedMock.calls.connect()).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -363,9 +386,19 @@ describe("createMockNexus", () => {
     await expect(Nexus.safeCall(call)).resolves.toMatchObject({
       error: { code: "E_REMOTE_EXCEPTION" },
     });
+    await expect(
+      Nexus.safeCall(proxy.fakeFrameworkFailure()),
+    ).resolves.toMatchObject({
+      error: {
+        code: "E_REMOTE_EXCEPTION",
+        context: {
+          remoteError: { code: "E_RESOURCE_NOT_FOUND" },
+        },
+      },
+    });
   });
 
-  it("preserves callbacks, references, reflection, and remote errors", async () => {
+  it("preserves direct callbacks and shared references while using Core validation", async () => {
     const mock = createMockNexus<TestAdapterModel>();
     mock.service(ExampleToken, service("callback"), provider("background"));
     const proxy = (
@@ -373,9 +406,19 @@ describe("createMockNexus", () => {
         target: { context: "background" },
       })
     ).get(ExampleToken);
-    await expect(proxy.acceptCallback((value) => `${value}:ok`)).resolves.toBe(
-      "callback:ok",
+    let callbackCompleted = false;
+    await expect(
+      proxy.acceptCallback((value) => {
+        callbackCompleted = true;
+        return `${value}:ok`;
+      }),
+    ).resolves.toBe("callback:ok");
+    expect(callbackCompleted).toBe(true);
+    const target = { visits: 0 };
+    await expect(proxy.mutateReference(mock.nexus.ref(target))).resolves.toBe(
+      1,
     );
+    expect(target.visits).toBe(1);
     const reference = await proxy.createReference();
     await expect(proxy.useReference(reference)).resolves.toEqual({
       label: "callback",
@@ -384,6 +427,23 @@ describe("createMockNexus", () => {
     expect(() => String(proxy)).not.toThrow();
     await expect(proxy.explode()).rejects.toMatchObject({
       code: "E_REMOTE_EXCEPTION",
+    });
+  });
+
+  it("uses Core callable and dangerous-path validation", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("validation"), provider("background"));
+    const proxy = (
+      await mock.nexus.connect({ target: { context: "background" } })
+    ).get(ExampleToken);
+
+    await expect(
+      (proxy.version as unknown as () => Promise<unknown>)(),
+    ).rejects.toMatchObject({
+      code: "E_TARGET_NOT_CALLABLE",
+    });
+    await expect((proxy as any).__proto__.read()).rejects.toMatchObject({
+      code: "E_INVALID_SERVICE_PATH",
     });
   });
 

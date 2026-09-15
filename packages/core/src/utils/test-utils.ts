@@ -185,7 +185,7 @@ export async function createL3Endpoints<M extends AdapterModel>(
   ): ConnectionHandle<M> => {
     const existing = cache.get(id);
     if (existing) return existing;
-    const session = manager.connections.get(id);
+    const session = manager.getConnection(id);
     if (!session) throw new Error(`Missing test connection "${id}".`);
     const connection = new ConnectionHandle(session, engine(), 5_000);
     cache.set(id, connection);
@@ -204,13 +204,13 @@ export async function createL3Endpoints<M extends AdapterModel>(
         hostConnections,
         id,
       ),
-    providers: Object.fromEntries(
-      Object.entries(hostSetup.providers).map(([name, service]) => [
-        name,
-        { service },
-      ]),
-    ),
   });
+  hostEngine.provideServices(
+    Object.entries(hostSetup.providers).map(([name, service]) => ({
+      name,
+      service,
+    })),
+  );
   hostStack.handlers.onMessage = (msg, connId) =>
     void hostEngine
       .safeOnMessage(msg, connId)
@@ -282,12 +282,15 @@ export async function createL3Endpoints<M extends AdapterModel>(
   }
   const target = clientSetup.connectTo?.[0];
   if (target) {
-    const connected = await clientStack.connectionManager.safeResolveConnection(
-      {
+    const connected =
+      await clientStack.connectionManager.safeResolveConnections({
         target,
-      },
-    );
+      });
     if (connected.isErr()) throw connected.error;
+    if (connected.value.length !== 1)
+      throw new Error(
+        "Expected exactly one test connection for the configured target.",
+      );
   }
 
   await vi.waitFor(() => {
@@ -456,7 +459,7 @@ export async function createStarNetwork<
   await vi.waitFor(
     () => {
       for (const instance of instances.values()) {
-        const cm = (instance.nexus as any).connectionManager;
+        const cm = (instance.nexus as any).lifecycle.manager;
         if (!cm) throw new Error("CM not initialized");
         const connections = Array.from((cm as any).connections.values());
         if (connections.length === 0 && instances.size > 1) {

@@ -100,16 +100,6 @@ describe("State connection acquisition and handshake", () => {
     }
   });
 
-  it("rejects a zero State timeout before connection acquisition", async () => {
-    const safeConnect = vi.fn();
-    const result = await safeConnectNexusStore({ safeConnect }, token, {
-      timeout: 0,
-    });
-
-    expect(result).toMatchObject({ error: { code: "E_STORE_CONNECT" } });
-    expect(safeConnect).not.toHaveBeenCalled();
-  });
-
   it.each(["throw", "reject", "result"] as const)(
     "preserves the cause of a %s acquisition failure",
     async (mode) => {

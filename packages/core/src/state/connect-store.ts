@@ -3,8 +3,6 @@ import type { ConnectOptions } from "../api/types/config";
 import type { AdapterModel } from "../types/adapter-model";
 import { Result, type InferErr } from "better-result";
 import { TimeoutError, withTimeout } from "es-toolkit";
-import { z } from "zod";
-import { safeParsePayload } from "./protocol";
 import {
   NexusStoreConnectError,
   NexusStoreDisconnectedError,
@@ -14,21 +12,6 @@ import {
 } from "./errors";
 import type { RemoteStore, StoreActionKeys, StoreToken } from "./contract";
 import { createRemoteStore } from "./remote-store";
-import { isPlainTarget } from "../api/token";
-
-const ConnectNexusStoreOptionsSchema = z
-  .object({
-    target: z.custom<object>(isPlainTarget).optional(),
-    where: z.function().optional(),
-    timeout: z.number().positive().finite().optional(),
-    signal: z
-      .custom<AbortSignal>(
-        (value) =>
-          typeof AbortSignal !== "undefined" && value instanceof AbortSignal,
-      )
-      .optional(),
-  })
-  .strict();
 
 /** Preserves terminal State failures while adding context to subscription setup errors. */
 const normalizeConnectHandshakeError = (error: unknown) => {
@@ -69,16 +52,6 @@ export const safeConnectNexusStore = async <
   /** Maps connection and catalog failures to the State acquisition boundary. */
   const createError = (cause: unknown) =>
     new NexusStoreConnectError("Failed to acquire store service.", { cause });
-  const parsed = safeParsePayload(
-    ConnectNexusStoreOptionsSchema,
-    options,
-    "Invalid connect store options.",
-  ).mapError(
-    (error) =>
-      new NexusStoreConnectError(error.message, { cause: error.cause }),
-  );
-  if (parsed.isErr()) return parsed;
-  const { timeout } = parsed.value;
   const acquisition = await Result.tryPromise({
     try: () => nexus.safeConnect(options),
     catch: createError,
@@ -87,6 +60,9 @@ export const safeConnectNexusStore = async <
   const connected = acquisition.value.mapError(createError);
   if (connected.isErr()) return connected;
   const connection = connected.value;
+  // Core owns ConnectOptions validation; the same accepted budget separately
+  // bounds State initialization after connection acquisition succeeds.
+  const { timeout } = options;
   const created = connection.safeGet(token).mapError(createError);
   if (created.isErr()) return created;
   const service = created.value;

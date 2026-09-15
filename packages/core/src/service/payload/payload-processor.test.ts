@@ -148,11 +148,13 @@ describe("PayloadProcessor", () => {
     it("should preserve service policy when sanitizing a Function returned from a service", () => {
       const myFunc = () => {};
       const servicePolicy = { canCall: vi.fn(() => false) };
-      resourceManager.registerExposedService(
-        "vault",
-        { getCallback: () => myFunc },
-        servicePolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getCallback: () => myFunc },
+          policy: servicePolicy,
+        },
+      ]);
 
       const result = unwrap(
         payloadProcessor.safeSanitizeFromService(
@@ -177,9 +179,9 @@ describe("PayloadProcessor", () => {
     it("should preserve an explicit undefined service policy snapshot", () => {
       const myFunc = () => {};
       const laterPolicy = { canCall: vi.fn(() => false) };
-      resourceManager.registerExposedService("vault", {
-        getCallback: () => myFunc,
-      });
+      resourceManager.registerExposedServices([
+        { name: "vault", service: { getCallback: () => myFunc } },
+      ]);
 
       const result = unwrap(
         payloadProcessor.safeSanitizeFromService(
@@ -190,11 +192,13 @@ describe("PayloadProcessor", () => {
         ),
       );
 
-      resourceManager.registerExposedService(
-        "vault",
-        { getCallback: () => myFunc },
-        laterPolicy,
-      );
+      resourceManager.registerExposedServices([
+        {
+          name: "vault",
+          service: { getCallback: () => myFunc },
+          policy: laterPolicy,
+        },
+      ]);
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myFunc,
         mockConnectionId,

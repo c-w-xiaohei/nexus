@@ -15,5 +15,4 @@ export {
   type UseRemoteStoreOptions,
   type UseRemoteStoreResult,
 } from "./use-remote-store.js";
-export { useProxyStatus } from "./use-proxy-status.js";
 export { useStoreStatus } from "./use-store-status.js";

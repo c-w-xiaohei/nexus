@@ -4,11 +4,7 @@ import { NexusMessageType } from "@/types/message";
 import type { AdapterModel } from "@/types/adapter-model";
 import { NexusDisconnectedError } from "@/errors/call-errors";
 import { Logger } from "@/logger";
-import {
-  CallProcessor,
-  type CallBinding,
-  type DispatchCallOptions,
-} from "./call-processor";
+import { CallProcessor, type CallBinding } from "./call-processor";
 import { MessageHandler } from "./message/message-handler";
 import { PayloadProcessor } from "./payload/payload-processor";
 import { PendingCallManager } from "./pending-call-manager";
@@ -18,11 +14,9 @@ import {
   getServiceInvocationHook,
   SERVICE_ON_DISCONNECT,
 } from "./service-invocation-hooks";
-import { installProxyLifecycle } from "./proxy-lifecycle";
 import { Result } from "better-result";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import type { Connection } from "@/api/connection";
-import type { NexusCallError } from "@/errors";
 
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
@@ -33,17 +27,10 @@ export class Engine<M extends AdapterModel> {
   private readonly pendingCallManager: PendingCallManager;
   private readonly callProcessor: CallProcessor;
 
-  private readonly disconnectListeners = new Map<string, Set<() => void>>();
-  private readonly staleListeners = new Map<string, Set<() => void>>();
-
   /** Compose service, payload, call, and message processing around one manager. */
   constructor(
     private readonly connectionManagerState: ConnectionManager<M>,
     config: {
-      providers?: Record<
-        string,
-        { service: object; policy?: NexusAuthorizationPolicy<M> }
-      >;
       policy?: NexusAuthorizationPolicy<M>;
       getConnection: (id: string) => Connection<M>;
       callTimeout?: number;
@@ -51,12 +38,14 @@ export class Engine<M extends AdapterModel> {
   ) {
     this.resourceManager = new ResourceManager();
 
-    if (config.providers) {
-      this.registerServices(config.providers);
-    }
-
     this.proxyFactory = new ProxyFactory(
-      this,
+      {
+        // Construction never dispatches: this closes the proxy/payload/call cycle
+        // without making Engine a second call-processing entry point.
+        safeDispatchCall: (options) => this.callProcessor.safeProcess(options),
+        dispatchRelease: (resourceId, connectionId) =>
+          this.dispatchRelease(resourceId, connectionId),
+      },
       this.resourceManager,
       config.getConnection,
       config.callTimeout,
@@ -88,91 +77,26 @@ export class Engine<M extends AdapterModel> {
     });
   }
 
-  /** Create a service proxy and attach observers for its bound session. */
+  /** Creates a lightweight service facade; its session lifecycle belongs to Connection. */
   public createServiceProxy<T extends object>(
     serviceName: string,
     options: CallBinding,
   ): T {
-    const proxy = this.proxyFactory.createServiceProxy<T>(serviceName, options);
-    const { connectionId } = options;
-    installProxyLifecycle(proxy, serviceName, connectionId, {
-      subscribeDisconnect: (callback) =>
-        this.subscribeDisconnect(connectionId, callback),
-      subscribeStale: (callback) => this.subscribeStale(connectionId, callback),
-    });
-    return proxy;
-  }
-
-  /** Observes L3 disconnect cleanup; cancellation removes only this subscription. */
-  private subscribeDisconnect(
-    connectionId: string,
-    callback: () => void,
-  ): () => void {
-    let listeners = this.disconnectListeners.get(connectionId);
-    if (!listeners)
-      this.disconnectListeners.set(connectionId, (listeners = new Set()));
-    listeners.add(callback);
-    return () => {
-      listeners?.delete(callback);
-      if (listeners?.size === 0) this.disconnectListeners.delete(connectionId);
-    };
-  }
-
-  /** Observe identity changes for proxies bound to one session. */
-  private subscribeStale(
-    connectionId: string,
-    callback: () => void,
-  ): () => void {
-    let listeners = this.staleListeners.get(connectionId);
-    if (!listeners)
-      this.staleListeners.set(connectionId, (listeners = new Set()));
-    listeners.add(callback);
-    return () => {
-      listeners?.delete(callback);
-      if (listeners?.size === 0) this.staleListeners.delete(connectionId);
-    };
-  }
-
-  /** Register providers through the safe batch path and throw at this boundary. */
-  public registerServices(
-    providers: Record<
-      string,
-      { service: object; policy?: NexusAuthorizationPolicy<M> }
-    >,
-  ): void {
-    const result = this.safeProvideServicesBatch(providers);
-    if (result.isErr()) {
-      throw result.error;
-    }
+    return this.proxyFactory.createServiceProxy<T>(serviceName, options);
   }
 
   /** Atomically register providers locally, then announce their availability. */
-  public safeProvideServicesBatch(
-    providers: Record<
-      string,
-      { service: object; policy?: NexusAuthorizationPolicy<M> }
-    >,
-  ): Result<void, Error> {
-    return this.resourceManager
-      .safeRegisterExposedServicesBatch(
-        Object.entries(providers).map(([name, registration]) => ({
-          name,
-          service: registration.service,
-          policy: registration.policy,
-        })),
-      )
-      .andThen(() =>
-        this.connectionManagerState.safePublishProviders(
-          Object.keys(providers),
-        ),
-      );
-  }
-
-  /** Dispatches an already-bound proxy operation; acquisition and routing remain outside L3. */
-  public safeDispatchCall(
-    options: DispatchCallOptions,
-  ): Promise<Result<any, NexusCallError>> {
-    return this.callProcessor.safeProcess(options);
+  public provideServices(
+    providers: readonly {
+      name: string;
+      service: object;
+      policy?: NexusAuthorizationPolicy<M>;
+    }[],
+  ): void {
+    this.resourceManager.registerExposedServices(providers);
+    this.connectionManagerState.publishProviders(
+      providers.map(({ name }) => name),
+    );
   }
 
   /** Best-effort notification after local release; logs send failure without waiting for a remote ACK. */
@@ -232,6 +156,7 @@ export class Engine<M extends AdapterModel> {
             error.message,
             "E_CONN_CLOSED",
             error.context,
+            error.cause,
           ),
         );
       }
@@ -243,19 +168,6 @@ export class Engine<M extends AdapterModel> {
   public onDisconnect(connectionId: string): void {
     this.resourceManager.cleanupConnection(connectionId);
     this.pendingCallManager.onDisconnect(connectionId);
-    const listeners = this.disconnectListeners.get(connectionId);
-    if (listeners) {
-      for (const listener of Array.from(listeners)) {
-        try {
-          listener();
-        } catch {
-          // listener isolation
-        }
-      }
-      this.disconnectListeners.delete(connectionId);
-    }
-    this.staleListeners.delete(connectionId);
-
     for (const service of this.resourceManager.listExposedServices()) {
       try {
         getServiceInvocationHook(
@@ -266,19 +178,5 @@ export class Engine<M extends AdapterModel> {
         this.logger.error("Exposed service disconnect hook failed.", error);
       }
     }
-  }
-
-  /** Mark all proxies on a session stale after an accepted identity update. */
-  public onConnectionIdentityUpdated(connectionId: string): void {
-    const listeners = this.staleListeners.get(connectionId);
-    if (!listeners) return;
-    for (const listener of Array.from(listeners)) {
-      try {
-        listener();
-      } catch {
-        // listener isolation
-      }
-    }
-    this.staleListeners.delete(connectionId);
   }
 }

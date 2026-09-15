@@ -1,7 +1,6 @@
 import type {
   AdapterModel,
   ConnectionTargetOf,
-  ConnectionWhere,
   ConnectionMetaOf,
   ContextMetaOf,
 } from "../types/adapter-model";
@@ -14,8 +13,7 @@ import type {
 } from "../api/types/config";
 
 export type ResolveOptions<M extends AdapterModel> = {
-  target?: ConnectionTargetOf<M>;
-  where?: ConnectionWhere<M>;
+  target: ConnectionTargetOf<M>;
   assignmentMetadata?: ContextMetaOf<M>;
 };
 
@@ -154,22 +152,6 @@ export interface LogicalConnectionHandlers<M extends AdapterModel> {
     newIdentity: ContextMetaOf<M>,
     oldIdentity: ContextMetaOf<M>,
   ): void;
-  /**
-   * Notify the owner that a protocol-ready peer's provider catalog has grown.
-   *
-   * Called synchronously after at least one previously unseen provider is added
-   * while isReady() is true. Duplicate-only additions and additions before
-   * protocol readiness do not trigger it; initial catalog data is available at
-   * onReady instead. This can run before owner publication, so ConnectionManager
-   * checks its published index before announcing an availability change.
-   *
-   * @param connection - The affected session. Query hasProvider()/remoteProviders
-   * for the updated catalog; no provider delta is passed to this callback.
-   * @returns Nothing. Optional; omission skips notification, not catalog updates.
-   * Promises are not awaited. A throw leaves the catalog updated and becomes Err
-   * from safeHandleMessage(); managed reception also closes the session.
-   */
-  onProviderCatalogUpdated?(connection: LogicalConnection<M>): void;
   /**
    * Decide whether a candidate peer identity is allowed for this session.
    *

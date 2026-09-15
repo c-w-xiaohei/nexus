@@ -18,45 +18,44 @@ import { Engine } from "@/service/engine";
 import type { AdapterModel, ContextMetaOf } from "@/types/adapter-model";
 import { REF_WRAPPER_SYMBOL, type RefWrapper } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import {
-  getProxyStatus,
-  inspectProxy,
-  subscribeProxyStatus,
-  type ProxyStatus,
-  type ProxyDebugSnapshot,
-} from "../service/proxy-lifecycle.js";
 import { Result } from "better-result";
 import { toSerializedError } from "@/utils/error";
 const { err, ok } = Result;
-import { createEndpointDecorator } from "./decorators/endpoint";
-import { createExposeDecorator } from "./decorators/expose";
+import {
+  createEndpointDecorator,
+  type EndpointRegistration,
+} from "./decorators/endpoint";
+import {
+  createExposeDecorator,
+  type ServiceRegistration,
+} from "./decorators/expose";
 import { buildKernel } from "./kernel";
-import { InstanceDecoratorRegistry, type DecoratorSnapshot } from "./registry";
 import { safeConnect, safeConnectMulticast } from "./acquire";
 import { isPlainTarget, Token } from "./token";
 import type { RemoteValue, NexusInstance } from "./types";
 import {
   composeNexusConfig,
   snapshotConfig,
+  snapshotEndpoint,
   isValidTimeout,
+  validateProviderBatch,
   type AuthorizationPolicy,
   type NexusConfig,
   type ServiceProvider,
 } from "./types/config";
 
-type Lifecycle =
-  | "draft"
-  | "scheduled"
-  | "snapshotting"
-  | "bootstrapping"
-  | "ready"
-  | "failed";
+type Lifecycle<M extends AdapterModel> =
+  | { phase: "draft" | "scheduled" | "starting" }
+  | {
+      phase: "listening" | "ready";
+      engine: Engine<M>;
+      manager: ConnectionManager<M>;
+    }
+  | { phase: "failed"; error: Error };
 
 /** Defers bootstrap one turn so synchronous configuration and decorators share one snapshot. */
-const defer = (work: () => Promise<void>): Promise<void> =>
-  new Promise((resolve, reject) =>
-    setTimeout(() => work().then(resolve, reject), 0),
-  );
+const defer = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Converts a safe result only at the public throw-style boundary. */
 const unwrapResultOrThrow = <T>(result: Result<T, Error>): T => {
@@ -78,38 +77,6 @@ export class Nexus<
   ): Promise<Result<T, NexusCallError>> {
     return safeCall(value);
   }
-  /**
-   * Returns the cached status of an exact ordinary unicast root proxy.
-   *
-   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
-   */
-  public static getProxyStatus(proxy: object): ProxyStatus {
-    return getProxyStatus(proxy);
-  }
-
-  /**
-   * Subscribes to status snapshots of an exact ordinary unicast root.
-   * The listener synchronously receives the current snapshot, then each distinct
-   * future snapshot.
-   *
-   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
-   */
-  public static subscribeProxyStatus(
-    proxy: object,
-    listener: (status: ProxyStatus) => void,
-  ): () => void {
-    return subscribeProxyStatus(proxy, listener);
-  }
-
-  /**
-   * Returns cached diagnostics for an exact ordinary unicast root proxy.
-   *
-   * @throws {NexusUsageError} If `proxy` is not a root created by this Core copy.
-   */
-  public static inspectProxy(proxy: object): ProxyDebugSnapshot {
-    return inspectProxy(proxy);
-  }
-
   /** Releases a remote reference without invoking business stop or unsubscribe methods. */
   public static release(proxy: object): void {
     unwrapResultOrThrow(Nexus.safeRelease(proxy));
@@ -119,13 +86,12 @@ export class Nexus<
   public static safeRelease(proxy: object): Result<void, Error> {
     return safeReleaseProxyCapability(proxy);
   }
-  private readonly decoratorRegistry = new InstanceDecoratorRegistry();
+  private readonly serviceDeclarations = new Map<string, ServiceRegistration>();
+  private endpointDeclaration: EndpointRegistration<M> | null = null;
   private config: NexusConfig<M> = {};
-  private engine: Engine<M> | null = null;
-  private connectionManager: ConnectionManager<M> | null = null;
-  private initialization: Promise<void> | null = null;
-  private failure: Error | null = null;
-  private lifecycle: Lifecycle = "draft";
+  private initialization: Promise<Result<ConnectionManager<M>, Error>> | null =
+    null;
+  private lifecycle: Lifecycle<M> = { phase: "draft" };
   private readonly connections = new Map<string, ConnectionHandle<M>>();
   private readonly connectionObservers = new Set<() => void>();
 
@@ -133,9 +99,15 @@ export class Nexus<
   private connection(session: LogicalConnection<M>): Connection<M> {
     let handle = this.connections.get(session.connectionId);
     if (!handle) {
+      if (
+        this.lifecycle.phase !== "listening" &&
+        this.lifecycle.phase !== "ready"
+      ) {
+        throw new Error("Nexus runtime is not installed.");
+      }
       handle = new ConnectionHandle(
         session,
-        this.engine!,
+        this.lifecycle.engine,
         this.config.callTimeout ?? 5_000,
       );
       this.connections.set(session.connectionId, handle);
@@ -164,8 +136,11 @@ export class Nexus<
     let active = true;
     /** Rechecks readiness immediately before delivery and isolates each observer failure. */
     const scan = () => {
-      for (const session of this.connectionManager?.findReadyConnections() ??
-        []) {
+      const sessions =
+        this.lifecycle.phase === "ready"
+          ? this.lifecycle.manager.findReadyConnections()
+          : [];
+      for (const session of sessions) {
         if (!active || seen.has(session)) continue;
         Result.try({
           try: () => {
@@ -203,7 +178,10 @@ export class Nexus<
   public async safeConnect(
     options: ConnectOptions<M> = {},
   ): Promise<Result<Connection<M>, ConnectionAcquireError>> {
-    const acquired = await safeConnect(() => this.safeReadyManager(), options);
+    const acquired = await safeConnect<M, LogicalConnection<M>>(
+      () => this.safeReadyManager(),
+      options,
+    );
     return acquired.map((session) => this.connection(session));
   }
 
@@ -218,7 +196,7 @@ export class Nexus<
   public async safeConnectMulticast(
     options: ConnectMulticastOptions<M> = {},
   ): Promise<Result<ConnectionCollection<M>, ConnectionAcquireError>> {
-    const acquired = await safeConnectMulticast(
+    const acquired = await safeConnectMulticast<M, LogicalConnection<M>>(
       () => this.safeReadyManager(),
       options,
     );
@@ -230,12 +208,42 @@ export class Nexus<
     );
   }
 
-  public readonly Expose = createExposeDecorator(
-    this.decoratorRegistry,
-  ) as NexusInstance<M>["Expose"];
-  public readonly Endpoint = createEndpointDecorator(
-    this.decoratorRegistry,
-  ) as NexusInstance<M>["Endpoint"];
+  public readonly Expose = createExposeDecorator((registration) => {
+    this.assertDeclarationWindow();
+    const id = registration.token.id;
+    if (this.serviceDeclarations.has(id))
+      throw new NexusConfigurationError(
+        `Nexus: Provider for token ID "${id}" has already been registered on this Nexus instance.`,
+        "E_DUPLICATE_PROVIDER",
+        { token: id },
+      );
+    this.serviceDeclarations.set(id, registration);
+  }) as NexusInstance<M>["Expose"];
+  public readonly Endpoint = createEndpointDecorator((registration) => {
+    this.assertDeclarationWindow();
+    if (this.endpointDeclaration)
+      throw new NexusConfigurationError(
+        "Nexus: @Endpoint decorator has already been registered on this Nexus instance.",
+        "E_ENDPOINT_SOURCE_CONFLICT",
+      );
+    this.endpointDeclaration = registration as EndpointRegistration<M>;
+  }) as NexusInstance<M>["Endpoint"];
+
+  /** Decorators declare bootstrap topology and cannot become silently ignored live writes. */
+  private assertDeclarationWindow(): void {
+    if (this.lifecycle.phase === "failed") throw this.lifecycle.error;
+    if (
+      this.lifecycle.phase !== "draft" &&
+      this.lifecycle.phase !== "scheduled"
+    ) {
+      throw new NexusConfigurationError(
+        "Nexus: decorator registration is closed after bootstrap begins.",
+        this.lifecycle.phase === "ready"
+          ? "E_NEXUS_ALREADY_READY"
+          : "E_NEXUS_BOOTSTRAPPING_LOCKED",
+      );
+    }
+  }
 
   /** Adds bootstrap configuration and schedules initialization after the current synchronous turn. */
   public configure<const T extends NexusConfig<M>>(
@@ -248,52 +256,71 @@ export class Nexus<
   public safeConfigure<const T extends NexusConfig<M>>(
     config: T,
   ): Result<NexusInstance<M>, Error> {
-    if (!isObject(config))
-      return err(
+    return Result.try({
+      try: (): Result<NexusInstance<M>, Error> => {
+        if (!isObject(config))
+          return err(
+            new NexusUsageError(
+              "Nexus: Invalid configure() input.",
+              "E_USAGE_INVALID",
+            ),
+          );
+        if (!isValidTimeout(config.callTimeout))
+          return err(
+            new NexusUsageError("callTimeout must be positive and finite."),
+          );
+        if (config.endpoint !== undefined && !isObject(config.endpoint)) {
+          return err(
+            new NexusUsageError("endpoint must be a configuration object."),
+          );
+        }
+        if (
+          config.endpoint?.connectTo !== undefined &&
+          (!Array.isArray(config.endpoint.connectTo) ||
+            !Array.from(config.endpoint.connectTo).every(isPlainTarget))
+        ) {
+          return err(
+            new NexusUsageError(
+              "Nexus: endpoint.connectTo must be an array of plain exact targets.",
+              "E_USAGE_INVALID",
+            ),
+          );
+        }
+        if (
+          this.lifecycle.phase === "starting" ||
+          this.lifecycle.phase === "listening"
+        ) {
+          return err(
+            new NexusConfigurationError(
+              "Nexus: configure() cannot be called during bootstrapping.",
+              "E_NEXUS_BOOTSTRAPPING_LOCKED",
+            ),
+          );
+        }
+        if (this.lifecycle.phase === "failed") return err(this.lifecycle.error);
+        if (this.lifecycle.phase === "ready" && isStructuralConfig(config)) {
+          return err(
+            new NexusConfigurationError(
+              "Nexus: structural configure() cannot be called after ready. Use updateIdentity() for endpoint meta changes.",
+              "E_NEXUS_ALREADY_READY",
+            ),
+          );
+        }
+        const providersValid = validateProviderBatch(
+          config.providers === undefined ? [] : config.providers,
+        );
+        if (providersValid.isErr()) return providersValid;
+        this.config = composeNexusConfig([this.config, config]);
+        void this.safeReadyManager();
+        return ok(this);
+      },
+      catch: (error) =>
         new NexusUsageError(
           "Nexus: Invalid configure() input.",
           "E_USAGE_INVALID",
+          { cause: toSerializedError(error) },
         ),
-      );
-    if (!isValidTimeout(config.callTimeout))
-      return err(
-        new NexusUsageError("callTimeout must be positive and finite."),
-      );
-    if (
-      config.endpoint?.connectTo !== undefined &&
-      (!Array.isArray(config.endpoint.connectTo) ||
-        !Array.from(config.endpoint.connectTo).every(isPlainTarget))
-    ) {
-      return err(
-        new NexusUsageError(
-          "Nexus: endpoint.connectTo must be an array of plain exact targets.",
-          "E_USAGE_INVALID",
-        ),
-      );
-    }
-    if (
-      this.lifecycle === "snapshotting" ||
-      this.lifecycle === "bootstrapping"
-    ) {
-      return err(
-        new NexusConfigurationError(
-          "Nexus: configure() cannot be called during bootstrapping.",
-          "E_NEXUS_BOOTSTRAPPING_LOCKED",
-        ),
-      );
-    }
-    if (this.lifecycle === "failed") return err(this.failure!);
-    if (this.lifecycle === "ready" && isStructuralConfig(config)) {
-      return err(
-        new NexusConfigurationError(
-          "Nexus: structural configure() cannot be called after ready. Use updateIdentity() for endpoint meta changes.",
-          "E_NEXUS_ALREADY_READY",
-        ),
-      );
-    }
-    this.config = composeNexusConfig([this.config, config]);
-    this.scheduleInitialization();
-    return ok(this);
+    }).andThen((result) => result);
   }
 
   /** Registers an object provider before bootstrap or publishes it live after readiness. */
@@ -316,9 +343,7 @@ export class Nexus<
     service?: T,
     options?: { policy?: AuthorizationPolicy<M> },
   ): this {
-    const result = this.safeProvideNormalized(
-      this.normalizeProviders(input, service, options),
-    );
+    const result = this.safeProvideNormalized(input, service, options);
     return unwrapResultOrThrow(result);
   }
 
@@ -346,11 +371,10 @@ export class Nexus<
     service?: T,
     options?: { policy?: AuthorizationPolicy<M> },
   ): Result<this, Error> {
-    const providers = this.normalizeProviders(input, service, options);
-    return this.safeProvideNormalized(providers);
+    return this.safeProvideNormalized(input, service, options);
   }
-  /** Converts supported provider overloads to the shared registration batch. */
-  private normalizeProviders<T extends object>(
+  /** Validates one submission before composing declarations or publishing live services. */
+  private safeProvideNormalized<T extends object>(
     input:
       | Token<T>
       | Token<T, M>
@@ -358,51 +382,56 @@ export class Nexus<
       | readonly ServiceProvider<object, M>[],
     service?: T,
     options?: { policy?: AuthorizationPolicy<M> },
-  ): readonly ServiceProvider<object, M>[] {
-    if (isProviderList<M>(input)) return input;
-    if (isProvider<M>(input)) return [input];
-    return [{ token: input, service: service!, policy: options?.policy }];
-  }
-  /** Applies registration-window rules before storing or publishing an entire provider batch. */
-  private safeProvideNormalized(
-    providers: readonly ServiceProvider<object, M>[],
   ): Result<this, Error> {
-    if (this.lifecycle === "snapshotting" || this.lifecycle === "bootstrapping")
-      return err(
-        new NexusConfigurationError(
-          "Nexus: provider registration window is closed during bootstrapping.",
-          "E_NEXUS_BOOTSTRAPPING_LOCKED",
-        ),
-      );
-    if (this.lifecycle === "failed") return err(this.failure!);
-    if (
-      providers.some(
-        (provider) =>
-          !provider.token || !provider.token.id || !provider.service,
-      )
-    )
-      return err(
+    return Result.try({
+      try: (): Result<this, Error> => {
+        if (
+          this.lifecycle.phase === "starting" ||
+          this.lifecycle.phase === "listening"
+        )
+          return err(
+            new NexusConfigurationError(
+              "Nexus: provider registration window is closed during bootstrapping.",
+              "E_NEXUS_BOOTSTRAPPING_LOCKED",
+            ),
+          );
+        if (this.lifecycle.phase === "failed") return err(this.lifecycle.error);
+        let providers: readonly ServiceProvider<object, M>[];
+        if (Array.isArray(input)) providers = input;
+        else if (isProvider<M>(input)) providers = [input];
+        else
+          providers = [
+            {
+              token: input as Token<T, M>,
+              service: service!,
+              policy: options?.policy,
+            },
+          ];
+        const valid = validateProviderBatch(providers);
+        if (valid.isErr()) return valid;
+        if (this.lifecycle.phase === "ready") {
+          this.lifecycle.engine.provideServices(
+            providers.map(({ token, service, policy }) => ({
+              name: token.id,
+              service,
+              policy,
+            })),
+          );
+          return ok(this);
+        }
+        this.config = composeNexusConfig([
+          this.config,
+          { providers: [...providers] },
+        ]);
+        return ok(this);
+      },
+      catch: (error) =>
         new NexusConfigurationError(
           "Nexus: provider batch registration failed validation.",
           "E_PROVIDER_BATCH_INVALID",
+          { cause: toSerializedError(error) },
         ),
-      );
-    if (this.lifecycle === "ready" && this.engine) {
-      const result = this.engine.safeProvideServicesBatch(
-        Object.fromEntries(
-          providers.map((provider) => [
-            provider.token.id,
-            { service: provider.service, policy: provider.policy },
-          ]),
-        ),
-      );
-      return result.isErr() ? err(result.error) : ok(this);
-    }
-    this.config = composeNexusConfig([
-      this.config,
-      { providers: [...providers] },
-    ]);
-    return ok(this);
+    }).andThen((result) => result);
   }
 
   /** Waits for local runtime readiness, not for startup targets or remote business services. */
@@ -453,83 +482,92 @@ export class Nexus<
   }
 
   /** Owns the single bootstrap task and installs L4 observers after L3 cleanup wiring. */
-  private scheduleInitialization(): void {
-    if (this.initialization) return;
-    this.lifecycle = "scheduled";
-    this.initialization = defer(async () => {
-      this.lifecycle = "snapshotting";
-      const snapshot = this.snapshot();
-      const kernelResult = await buildKernel<M>(
-        snapshot.config,
-        snapshot.decorators.providers,
-        snapshot.decorators.endpoint,
-        {
-          onDisconnect: (id) => {
-            this.connections.get(id)?.closed();
-            this.connections.delete(id);
-          },
-          onIdentityUpdated: (id, next) =>
-            this.connections.get(id)?.identityUpdated(next),
-        },
-        (id) =>
-          this.connections.get(id) ??
-          this.connection(this.connectionManager!.connections.get(id)!),
-      );
-      const kernel = unwrapResultOrThrow(kernelResult);
-      this.lifecycle = "bootstrapping";
-      this.engine = kernel.engine;
-      this.connectionManager = kernel.connectionManager;
-      unwrapResultOrThrow(await this.connectionManager.safeInitialize());
-      this.connectionManager.subscribeAvailabilityChanged(() => {
-        for (const observer of this.connectionObservers) observer();
-      });
-      this.lifecycle = "ready";
-      for (const observer of this.connectionObservers) observer();
-    }).catch((error) => {
-      this.failure =
-        error instanceof NexusConfigurationError
-          ? error
-          : new NexusConfigurationError(
-              "Nexus bootstrap failed.",
-              "E_NEXUS_BOOTSTRAP_FAILED",
-              { cause: toSerializedError(error) },
+  private safeReadyManager(): Promise<Result<ConnectionManager<M>, Error>> {
+    if (this.initialization) return this.initialization;
+    this.lifecycle = { phase: "scheduled" };
+    this.initialization = defer()
+      .then(() =>
+        Result.tryPromise({
+          try: async () => {
+            this.lifecycle = { phase: "starting" };
+            const config = snapshotConfig(this.config);
+            const providers = [...this.serviceDeclarations.values()].map(
+              (declaration) => ({
+                ...declaration,
+                options: declaration.options
+                  ? { ...declaration.options }
+                  : undefined,
+              }),
             );
-      this.lifecycle = "failed";
-      throw this.failure;
-    });
-  }
-
-  /** Captures mutable bootstrap data while preserving provider and endpoint capability identity. */
-  private snapshot(): {
-    config: NexusConfig<M>;
-    decorators: DecoratorSnapshot<M>;
-  } {
-    const decorators =
-      this.decoratorRegistry.snapshot() as DecoratorSnapshot<M>;
-    return {
-      config: snapshotConfig(this.config),
-      decorators,
-    };
-  }
-  /** Lazily waits for the shared bootstrap and exposes only the ready acquisition dependency. */
-  private async safeReadyManager(): Promise<
-    Result<ConnectionManager<M>, Error>
-  > {
-    if (this.lifecycle === "failed") return err(this.failure!);
-    this.scheduleInitialization();
-    const initialized = await Result.tryPromise({
-      try: () => this.initialization!,
-      catch: (error) =>
-        error instanceof Error ? error : new Error(String(error)),
-    });
-    return initialized.andThen(() =>
-      this.engine && this.connectionManager
-        ? ok(this.connectionManager)
-        : err(
-            this.failure ??
-              new NexusConfigurationError("Nexus initialization failed."),
-          ),
-    );
+            const endpoint = this.endpointDeclaration
+              ? {
+                  ...this.endpointDeclaration,
+                  options: snapshotEndpoint(this.endpointDeclaration.options),
+                }
+              : null;
+            const built = await buildKernel<M>(
+              config,
+              providers,
+              endpoint,
+              {
+                onDisconnect: (id) => {
+                  this.connections.get(id)?.closed();
+                  this.connections.delete(id);
+                },
+                onIdentityUpdated: (id, next) =>
+                  this.connections.get(id)?.identityUpdated(next),
+              },
+              (id) => {
+                const handle = this.connections.get(id);
+                if (handle) return handle;
+                if (
+                  this.lifecycle.phase !== "listening" &&
+                  this.lifecycle.phase !== "ready"
+                ) {
+                  throw new Error("Nexus runtime is not installed.");
+                }
+                const session = this.lifecycle.manager.getConnection(id);
+                if (!session)
+                  throw new Error(`Unknown source connection: ${id}`);
+                return this.connection(session);
+              },
+            );
+            if (built.isErr()) return err(built.error);
+            const { engine, connectionManager: manager } = built.value;
+            // Listening can synchronously deliver messages. Install both dependencies
+            // first, while keeping configuration locked until listener startup settles.
+            this.lifecycle = { phase: "listening", engine, manager };
+            const initialized = await manager.safeInitialize();
+            if (initialized.isErr()) return err(initialized.error);
+            manager.subscribeAvailabilityChanged(() => {
+              for (const observer of this.connectionObservers) observer();
+            });
+            this.lifecycle = { phase: "ready", engine, manager };
+            this.serviceDeclarations.clear();
+            this.endpointDeclaration = null;
+            for (const observer of this.connectionObservers) observer();
+            return ok(manager);
+          },
+          catch: (error) => error,
+        }),
+      )
+      .then((attempt) =>
+        attempt
+          .andThen((result) => result)
+          .mapError((error) => {
+            const failure =
+              error instanceof NexusConfigurationError
+                ? error
+                : new NexusConfigurationError(
+                    "Nexus bootstrap failed.",
+                    "E_NEXUS_BOOTSTRAP_FAILED",
+                    { cause: toSerializedError(error) },
+                  );
+            this.lifecycle = { phase: "failed", error: failure };
+            return failure;
+          }),
+      );
+    return this.initialization;
   }
 }
 
@@ -555,10 +593,6 @@ const isProvider = <M extends AdapterModel>(
   value: unknown,
 ): value is ServiceProvider<object, M> =>
   isObject(value) && "token" in value && "service" in value;
-/** Recognizes the batch overload; individual entries are validated at registration. */
-const isProviderList = <M extends AdapterModel>(
-  value: unknown,
-): value is readonly ServiceProvider<object, M>[] => Array.isArray(value);
 /** Detects changes that would mutate the immutable bootstrap topology or call policy. */
 const isStructuralConfig = <M extends AdapterModel>(
   config: NexusConfig<M>,

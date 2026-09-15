@@ -13,7 +13,6 @@ import type {
 } from "@/state/contract";
 import { createStoreToken } from "@/state/contract";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
-import { installProxyLifecycle } from "@/service/proxy-lifecycle";
 import { relayNexusStore } from "./index";
 import { createNexusStore } from "@/state/bind-store";
 import { createRemoteStore } from "@/state/remote-store";
@@ -22,24 +21,16 @@ type State = { count: number };
 type Actions = { increment(by: number): number };
 type Event = SyncEnvelope<State, State & Actions>;
 
-const connectionFor = (service: object) => ({
+const connectionFor = (
+  service: object,
+  onDisconnected: (listener: () => void) => () => void = () => () => undefined,
+) => ({
   get: () => service,
   safeGet: () => Result.ok(service),
+  onDisconnected,
 });
 
 const definition = createStoreToken<State & Actions>("relay:test-store");
-const lifecycleInstalled = new WeakSet<object>();
-
-const withLifecycle = <T extends object>(service: T): T => {
-  if (lifecycleInstalled.has(service)) return service;
-  installProxyLifecycle(service, definition.id, "upstream", {
-    subscribeDisconnect: () => () => undefined,
-    subscribeStale: () => () => undefined,
-  });
-  lifecycleInstalled.add(service);
-  return service;
-};
-
 const context = (connectionId: string): ServiceInvocationContext => ({
   sourceConnectionId: connectionId,
   sourceIdentity: { context: connectionId },
@@ -50,7 +41,6 @@ const context = (connectionId: string): ServiceInvocationContext => ({
 const makeUpstream = (
   options: {
     onDisconnect?: (callback: () => void) => () => void;
-    onStale?: (callback: () => void) => () => void;
     initialCount?: number;
   } = {},
 ) => {
@@ -86,13 +76,10 @@ const makeUpstream = (
       });
     },
   };
-  installProxyLifecycle(service, definition.id, "upstream", {
-    subscribeDisconnect: options.onDisconnect ?? (() => () => undefined),
-    subscribeStale: options.onStale ?? (() => () => undefined),
-  });
   return {
     service,
     actions,
+    onDisconnected: options.onDisconnect ?? (() => () => undefined),
     emit: (event: Event) =>
       Promise.all([...subscribers].map((listener) => listener(event))),
   };
@@ -104,7 +91,9 @@ const createRelay = (
 ) =>
   relayNexusStore(definition, {
     forwardThrough: {
-      connect: vi.fn(async () => connectionFor(upstream.service)),
+      connect: vi.fn(async () =>
+        connectionFor(upstream.service, upstream.onDisconnected),
+      ),
     } as any,
     forwardTarget: { context: "background" },
     policy,
@@ -163,30 +152,6 @@ describe("relayNexusStore", () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
   });
 
-  it("does not subscribe to an upstream already reported disconnected", async () => {
-    let disconnect!: () => void;
-    const upstream = makeUpstream({
-      onDisconnect: (listener) => {
-        disconnect = listener;
-        return () => {};
-      },
-    });
-    const subscribe = vi.spyOn(upstream.service, "subscribe");
-    disconnect();
-    const relay = createRelay(upstream);
-    const events: Event[] = [];
-    await expect(
-      subscribeRelay(
-        relay.service,
-        (event) => {
-          events.push(event);
-        },
-        context("one"),
-      ),
-    ).rejects.toMatchObject({ code: "E_STORE_DISCONNECTED" });
-    expect(subscribe).not.toHaveBeenCalled();
-    expect(events.map((event) => event.type)).toEqual(["terminal"]);
-  });
   it("keeps a callback alive until an upstream terminal event is acknowledged", async () => {
     const upstream = makeUpstream();
     const relay = createRelay(upstream);
@@ -373,7 +338,7 @@ describe("relayNexusStore", () => {
     );
     const relay = relayNexusStore(definition, {
       forwardThrough: {
-        connect: async () => connectionFor(withLifecycle(provider.service)),
+        connect: async () => connectionFor(provider.service),
       } as any,
       forwardTarget: { context: "background" },
     });
@@ -408,7 +373,6 @@ describe("relayNexusStore", () => {
         await upstream.service.subscribe(callback);
       },
     };
-    withLifecycle(service);
     const relay = relayNexusStore(definition, {
       forwardThrough: {
         connect: async () => connectionFor(service),
@@ -445,7 +409,6 @@ describe("relayNexusStore", () => {
         callbacks.push(callback);
       },
     };
-    withLifecycle(upstream);
     const relay = relayNexusStore(definition, {
       forwardThrough: {
         connect: async () => connectionFor(upstream),
@@ -542,10 +505,6 @@ describe("relayNexusStore", () => {
         });
       },
     };
-    installProxyLifecycle(upstream, definition.id, "upstream", {
-      subscribeDisconnect: () => stopObserver,
-      subscribeStale: () => () => undefined,
-    });
     const relay = relayNexusStore(definition, {
       forwardThrough: {
         connect: async () => connectionFor(upstream),
@@ -635,10 +594,6 @@ describe("relayNexusStore", () => {
         });
       },
     };
-    installProxyLifecycle(upstream, definition.id, "upstream", {
-      subscribeDisconnect: () => stopObserver,
-      subscribeStale: () => () => undefined,
-    });
     const relay = relayNexusStore(definition, {
       forwardThrough: {
         connect: async () => connectionFor(upstream),
@@ -701,7 +656,7 @@ describe("relayNexusStore", () => {
     );
     const relay = relayNexusStore(definition, {
       forwardThrough: {
-        connect: async () => connectionFor(withLifecycle(provider.service)),
+        connect: async () => connectionFor(provider.service),
       } as any,
       forwardTarget: { context: "background" },
     });
@@ -808,46 +763,34 @@ describe("relayNexusStore", () => {
     });
   });
 
-  it.each([
-    ["disconnect", "source-disconnected"],
-    ["stale", "target-changed"],
-  ] as const)(
-    "terminalizes subscribers on upstream %s",
-    async (kind, reason) => {
-      let notify!: () => void;
-      const upstream = makeUpstream(
-        kind === "disconnect"
-          ? {
-              onDisconnect: (callback) => {
-                notify = callback;
-                return () => undefined;
-              },
-            }
-          : {
-              onStale: (callback) => {
-                notify = callback;
-                return () => undefined;
-              },
-            },
-      );
-      const relay = createRelay(upstream);
-      const events: Event[] = [];
-      await subscribeRelay(
-        relay.service,
-        (event) => events.push(event),
-        context("alpha"),
-      );
-      notify();
+  it("terminalizes subscribers when the upstream connection disconnects", async () => {
+    let notify!: () => void;
+    const upstream = makeUpstream({
+      onDisconnect: (callback) => {
+        notify = callback;
+        return () => undefined;
+      },
+    });
+    const relay = createRelay(upstream);
+    const events: Event[] = [];
+    await subscribeRelay(
+      relay.service,
+      (event) => events.push(event),
+      context("alpha"),
+    );
+    notify();
 
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: "terminal", reason }),
-      );
-      const init = initOf(events);
-      await expect(init.actions.increment(1)).rejects.toBeInstanceOf(
-        NexusStoreDisconnectedError,
-      );
-    },
-  );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "terminal",
+        reason: "source-disconnected",
+      }),
+    );
+    const init = initOf(events);
+    await expect(init.actions.increment(1)).rejects.toBeInstanceOf(
+      NexusStoreDisconnectedError,
+    );
+  });
 
   it("terminalizes subscribers when upstream store identity changes", async () => {
     let listener!: (event: Event) => void | PromiseLike<void>;
@@ -868,10 +811,6 @@ describe("relayNexusStore", () => {
               } as Event);
             },
           };
-          installProxyLifecycle(service, definition.id, "upstream", {
-            subscribeDisconnect: () => () => undefined,
-            subscribeStale: () => () => undefined,
-          });
           return connectionFor(service);
         }),
       } as any,

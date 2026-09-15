@@ -2,7 +2,6 @@ import { Result } from "better-result";
 import { Logger } from "@/logger";
 import { NexusError } from "../errors/nexus-error";
 import {
-  NexusConnectionConstraintFailedError,
   NexusConnectionError,
   NexusHandshakeError,
 } from "../errors/connection-errors";
@@ -14,6 +13,7 @@ import type {
   ConnectionTargetOf,
   ContextMetaOf,
   ConnectionMetaOf,
+  ConnectionWhere,
 } from "../types/adapter-model";
 import { NexusMessageType, type NexusMessage } from "../types/message";
 import { toSerializedError } from "../utils/error";
@@ -68,22 +68,25 @@ export class ConnectionManager<M extends AdapterModel> {
     return new Map(this.connectionsMap);
   }
 
+  /** Looks up one published session without copying the entire index. */
+  public getConnection(id: string): LogicalConnection<M> | undefined {
+    return this.connectionsMap.get(id);
+  }
+
   /** Check the published index without initiating connection work. */
   public isConnectionReady(connectionId: string): boolean {
     return this.connectionsMap.get(connectionId)?.isReady() ?? false;
   }
 
   /** Match the adapter target before applying where; never dial. */
-  public getReadyTargetConnections(
+  private getReadyTargetConnections(
     target: ConnectionTargetOf<M>,
-    where?: ResolveOptions<M>["where"],
   ): readonly LogicalConnection<M>[] {
     const matchesTarget = this.transport.endpoint.matchesTarget;
     if (!matchesTarget) return [];
-    const candidates = this.findReadyConnections((identity, meta) =>
+    return this.findReadyConnections((identity, meta) =>
       matchesTarget(target, identity, meta),
     );
-    return candidates.filter((connection) => matchesWhere(connection, where));
   }
 
   /** Return live authorization inputs for one published session, if present. */
@@ -103,7 +106,7 @@ export class ConnectionManager<M extends AdapterModel> {
     };
   }
 
-  /** Observe published-session or provider-catalog changes. */
+  /** Observes session membership or identity changes; provider catalog updates do not affect acquisition. */
   public subscribeAvailabilityChanged(listener: () => void): () => void {
     this.availabilityListeners.add(listener);
     return () => this.availabilityListeners.delete(listener);
@@ -111,7 +114,7 @@ export class ConnectionManager<M extends AdapterModel> {
 
   /** Return currently published sessions satisfying the optional predicate. */
   public findReadyConnections(
-    where?: ResolveOptions<M>["where"],
+    where?: ConnectionWhere<M>,
   ): LogicalConnection<M>[] {
     const matches: LogicalConnection<M>[] = [];
     for (const connection of this.connectionsMap.values()) {
@@ -182,21 +185,9 @@ export class ConnectionManager<M extends AdapterModel> {
     return result;
   }
 
-  /** Acquire the first target match, or null without a target. Requires initialization. */
-  public async safeResolveConnection(
-    options: ResolveOptions<M>,
-  ): Promise<Result<LogicalConnection<M> | null, NexusError>> {
-    if (!options.target)
-      return this.ensureInitialized("safeResolveConnection").map(() => null);
-    return (await this.safeResolveConnections(options)).map(
-      (connections) => connections[0] ?? null,
-    );
-  }
-
   /**
    * Reuse published target matches, or share one in-flight dial for a missing
-   * target. Apply where only after choosing candidates: a constraint miss is not
-   * permission to redial. Without a target, select existing sessions only.
+   * target. Caller selection belongs to L4 and never controls shared dialing.
    * Dial failures release the coalescing slot; they are never cached for retry.
    */
   public async safeResolveConnections(
@@ -205,8 +196,7 @@ export class ConnectionManager<M extends AdapterModel> {
     const initialized = this.ensureInitialized("safeResolveConnections");
     if (initialized.isErr()) return initialized;
     try {
-      const { target, where, assignmentMetadata } = options;
-      if (!target) return ok(this.findReadyConnections(where));
+      const { target, assignmentMetadata } = options;
       let candidates = this.getReadyTargetConnections(target);
       const reused = candidates.length > 0;
       if (!reused) {
@@ -237,19 +227,7 @@ export class ConnectionManager<M extends AdapterModel> {
         if (connected.isErr()) return connected;
         candidates = [connected.value];
       }
-      const accepted = candidates.filter((connection) =>
-        matchesWhere(connection, where),
-      );
-      return accepted.length > 0
-        ? ok(accepted)
-        : err(
-            new NexusConnectionConstraintFailedError(
-              reused
-                ? "A ready connection matched the target but failed its constraint."
-                : "The newly connected target failed its constraint.",
-              { target },
-            ),
-          );
+      return ok(candidates);
     } catch (error) {
       return err(
         connectionError(error, "Failed to resolve connections", { options }),
@@ -316,16 +294,12 @@ export class ConnectionManager<M extends AdapterModel> {
   }
 
   /** Announce providers to all attached peers, even during handshake; peer failures do not roll back registration. */
-  public safePublishProviders(
-    providers: readonly string[],
-  ): Result<void, Error> {
+  public publishProviders(providers: readonly string[]): void {
     for (const provider of providers) this.localProviders.add(provider);
     for (const connection of this.sessionsMap.values()) {
       // A failed peer closes itself; registration still succeeds for other peers.
       connection.publishProviders(providers).unwrapOr(undefined);
     }
-    this.notifyAvailabilityChanged();
-    return ok(undefined);
   }
 
   /** Update every published local identity before broadcasting. Partial sends are not rolled back. */
@@ -439,10 +413,6 @@ export class ConnectionManager<M extends AdapterModel> {
     },
     onMessage: (connection, message) =>
       this.handlers.onMessage(message, connection.connectionId),
-    onProviderCatalogUpdated: (connection) => {
-      if (this.connectionsMap.has(connection.connectionId))
-        this.notifyAvailabilityChanged();
-    },
   };
 
   /** Notify availability observers without allowing one observer to block others. */
@@ -461,7 +431,7 @@ export class ConnectionManager<M extends AdapterModel> {
 /** Apply an optional caller predicate to a session's committed peer identity. */
 function matchesWhere<M extends AdapterModel>(
   connection: LogicalConnection<M>,
-  where?: ResolveOptions<M>["where"],
+  where?: ConnectionWhere<M>,
 ): boolean {
   return (
     connection.remoteIdentity !== undefined &&

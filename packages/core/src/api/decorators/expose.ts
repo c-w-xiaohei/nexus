@@ -1,6 +1,5 @@
 import { Token } from "../token";
 import type { AuthorizationPolicy } from "../types/config";
-import type { InstanceDecoratorRegistry } from "../registry";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { args, fn } from "@/utils/fn";
@@ -30,6 +29,13 @@ export interface ExposeOptions {
    */
   factory?: (context: ExposeFactoryContext) => object | Promise<object>;
 }
+
+/** A deferred class declaration owned by its Nexus instance until bootstrap. */
+export type ServiceRegistration = {
+  token: Token<object, any>;
+  targetClass: new (...args: unknown[]) => object;
+  options?: ExposeOptions;
+};
 
 export type NexusClassDecorator<T extends object = object> = (
   targetClass: new (...args: unknown[]) => T,
@@ -65,7 +71,7 @@ const validateExposeInput = fn(
  * @param options （可选）高级配置选项，如 `factory` 用于依赖注入。
  */
 export function createExposeDecorator(
-  registry: Pick<InstanceDecoratorRegistry, "registerService">,
+  register: (registration: ServiceRegistration) => void,
 ): <T extends object>(
   token: Token<T, any>,
   options?: ExposeOptions,
@@ -93,7 +99,8 @@ export function createExposeDecorator(
       }
 
       // Record the class now; instantiate it when this Nexus instance bootstraps.
-      registry.registerService(token, {
+      register({
+        token,
         targetClass,
         options: validatedOptions,
       });

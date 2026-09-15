@@ -88,8 +88,8 @@ Promise results directly; a separate multicast proxy or report type is unnecessa
 ## Session Lifecycle
 
 Navigation or context teardown invalidates the associated proxies and refs.
-Acquire replacements after the new context is ready; see
-[proxy lifecycle](/nexus/docs/proxy-lifecycle/).
+Observe the acquired connection and acquire replacements after the new context
+is ready; see [connection lifecycle](/nexus/docs/proxy-lifecycle/).
 
 Choose a frame target when the address is a frame slot, or a document target when
 the operation must remain tied to a specific document. Use that address

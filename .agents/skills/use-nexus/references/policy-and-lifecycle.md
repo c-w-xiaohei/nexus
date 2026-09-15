@@ -38,6 +38,7 @@ Raw core handles are lifecycle-scoped.
 - Existing raw proxies do not silently retarget after reconnect, daemon restart, iframe reload, or identity handoff.
 - Reconnect, get fresh proxies, and pass fresh refs after session replacement.
 - Observe session lifetime from the `Connection`: `onDisconnected` reports terminal closure, `nexus.onConnect` reports each ready session once, and `subscribeIdentity` reports the peer's full identity snapshot and updates. None selects a replacement or authorizes recovery.
+- Ordinary proxies have no lifecycle status API. Retain the `Connection` used to acquire the proxy; React's `useStoreStatus` observes Nexus State handles only.
 - `Nexus.release` and `nexus.release` are resource-only operations. Service proxies are not releasable, and `safeRelease` is the Result-returning form for expected release failures.
 - Local same-copy closure can use `instanceof NexusDisconnectedError`; cross-context or duplicate-copy code must check `error.code === "E_CONN_CLOSED"`.
 

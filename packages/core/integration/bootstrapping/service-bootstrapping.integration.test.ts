@@ -57,9 +57,9 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     await hostNexus.ready();
 
-    const service = (hostNexus as any).engine.resourceManager.getExposedService(
-      "service-with-dep",
-    );
+    const service = (
+      hostNexus as any
+    ).lifecycle.engine.resourceManager.getExposedService("service-with-dep");
     expect(service).toBeDefined();
     expect((service as IServiceWithDep).getInjectedValue()).toBe(
       "injected-value",
@@ -113,10 +113,10 @@ describe("Nexus L4 Integration: Service Bootstrapping", () => {
 
     const settingsService = (
       nexus as any
-    ).engine.resourceManager.getExposedService(SettingsToken.id);
+    ).lifecycle.engine.resourceManager.getExposedService(SettingsToken.id);
     const commentService = (
       nexus as any
-    ).engine.resourceManager.getExposedService(CommentToken.id);
+    ).lifecycle.engine.resourceManager.getExposedService(CommentToken.id);
 
     expect(settingsService).toBeDefined();
     expect(commentService).toBeDefined();

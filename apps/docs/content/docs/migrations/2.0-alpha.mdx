@@ -21,6 +21,13 @@ exports. Derive record types from `MockNexus["calls"]` when an annotation is nee
 The obsolete `NexusTargetingError` and provider-wait/default-target error codes
 are removed; connection acquisition now reports its concrete connection errors.
 
+Ordinary proxy lifecycle APIs are removed too: `Nexus.getProxyStatus`,
+`Nexus.subscribeProxyStatus`, `Nexus.inspectProxy`, `ProxyStatus`,
+`ProxyDebugSnapshot`, and React's `useProxyStatus`. Keep the `Connection`
+returned by `connect` and observe it with `onDisconnected` or
+`subscribeIdentity`. `useStoreStatus` remains the React lifecycle observer for
+Nexus State handles.
+
 ## Replace Service Acquisition
 
 Replace a one-step service acquisition:
@@ -157,3 +164,14 @@ session-bound. After disconnect, reload, restart, or session replacement,
 connect again and get fresh handles. `release` and `safeRelease` remain the
 explicit release operations for remote references; they do not close shared
 connections or invoke application cleanup.
+
+## Bootstrap declarations
+
+Register `@nexus.Expose` and `@nexus.Endpoint` classes before bootstrap begins.
+Late decorator application now fails explicitly; use `provide(...)` for live
+service registration after `ready()`. Duplicate provider IDs within a submission,
+or between the final configured providers and decorated classes, fail before
+service factories run. Separate configuration layers retain last-wins behavior.
+Factories receive the effective endpoint metadata, including decorator-defined
+metadata. `safeReady()` returns the same startup failure across subsequent calls;
+it does not retry initialization.

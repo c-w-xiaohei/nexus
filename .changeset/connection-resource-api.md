@@ -6,6 +6,17 @@
 "@nexus-js/node-ipc": minor
 ---
 
+Reject duplicate provider IDs within a single configure/provide submission before
+composition; separate configuration layers continue to use last-wins semantics.
+Unify bootstrap/live registration and keep provider-catalog updates separate from
+connection acquisition notifications.
+
+Keep bootstrap failures in one shared safe result and reject decorator writes once
+bootstrap begins. Validate configured/decorated provider conflicts before running
+constructors or factories, and pass effective endpoint metadata to factories.
+Contain malformed configure/provide inputs at their safe boundaries. Consolidate
+service-table commits and preserve send-failure causes across the RPC boundary.
+
 Prepare the Core 2.0 alpha connection and resource API: connect before getting services, use per-connection collection results, and consume lazy calls explicitly.
 
 Breaking changes: service, ref, and callback calls execute only when consumed;
@@ -32,6 +43,9 @@ provider identity indexes.
 Reject pre-aborted service requests before bootstrap, retain target diagnostics
 when a multicast session closes before delivery, and preserve Date metadata in
 configuration snapshots.
+Share Core acquisition rules with testing: explicit multicast targets dial
+concurrently, request-local aborts cannot deliver a session, and predicates do
+not run after acquisition has terminated.
 Stop upstream Relay subscriptions before waiting for terminal callback delivery,
 while keeping the downstream callback alive until delivery settles. Preserve
 allowlisted framework error diagnostics across JSON and binary transports.
@@ -50,4 +64,10 @@ contract. Replace a `callTimeout: 0` configuration with a positive call timeout.
 
 Nested proxy paths reserve `then`, `catch`, `finally`, and `connection` for
 lazy consumption and provenance. Root proxies reserve only `then`; root
-business methods named `catch` and `finally` remain callable.
+business members named `catch`, `finally`, and `connection` remain accessible.
+
+Remove ordinary proxy lifecycle APIs: `Nexus.getProxyStatus`,
+`Nexus.subscribeProxyStatus`, `Nexus.inspectProxy`, `ProxyStatus`,
+`ProxyDebugSnapshot`, and React's `useProxyStatus`. Retain the acquired
+`Connection` and observe it with `onDisconnected` or `subscribeIdentity`;
+`useStoreStatus` remains available for Nexus State handles.

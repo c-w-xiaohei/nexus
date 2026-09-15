@@ -18,7 +18,13 @@ import {
   type ResourceAcquireError,
   type ResourceOptions,
 } from "@nexus-js/core";
-import { createInMemoryServiceProxy } from "@nexus-js/core/internal/testing";
+import {
+  createInMemoryServiceProxy,
+  safeAcquireConnection,
+  safeAcquireConnections,
+  type AcquisitionSession,
+  type AcquisitionSource,
+} from "@nexus-js/core/internal/testing";
 import { Result } from "better-result";
 
 const { err, ok } = Result;
@@ -67,32 +73,13 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const isToken = <T extends object>(token: unknown): token is Token<T, any> =>
   token instanceof Token;
 
-/** Rejects unknown option keys so the mock follows the public API contract. */
-const hasOnlyKeys = (value: object, keys: readonly string[]) =>
-  Object.keys(value).every((key) => keys.includes(key));
-
 /** Validates positive acquisition and call budgets. */
 const isPositiveFinite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
-/** Identifies native abort signals at the runtime boundary. */
-const isAbortSignal = (value: unknown): value is AbortSignal =>
-  value instanceof globalThis.AbortSignal;
 
-/** Creates a structured invalid-usage error with optional request diagnostics. */
+/** Creates a mock-only validation error outside the shared acquisition contract. */
 const usageError = (message: string, context?: Record<string, unknown>) =>
   new NexusUsageError(message, "E_USAGE_INVALID", { context });
-
-/** Creates a structured connection acquisition error with diagnostics. */
-const serviceError = (
-  message: string,
-  code:
-    | "E_SERVICE_ACQUISITION_TIMEOUT"
-    | "E_SERVICE_NO_MATCH"
-    | "E_SERVICE_AMBIGUOUS"
-    | "E_ABORTED",
-  context?: Record<string, unknown>,
-) => new NexusServiceError(message, code, { context });
-
 /** Creates a connection-only Nexus mock for application-level unit tests. */
 export function createMockNexus<
   M extends AdapterModel = AdapterModel,
@@ -153,7 +140,7 @@ export function createMockNexus<
         if (
           !isToken<T>(token) ||
           !isPlainObject(options) ||
-          !hasOnlyKeys(options, ["callTimeout"]) ||
+          !Object.keys(options).every((key) => key === "callTimeout") ||
           (options.callTimeout !== undefined &&
             !isPositiveFinite(options.callTimeout))
         )
@@ -302,81 +289,43 @@ export function createMockNexus<
     for (const listener of connectionListeners) listener();
   };
 
-  /** Validates connection acquisition options at the mock API boundary. */
-  const validateConnectOptions = (
-    value: unknown,
-    multicast: boolean,
-  ): Result<void, Error> => {
-    const address = multicast ? "targets" : "target";
-    if (
-      !isPlainObject(value) ||
-      !hasOnlyKeys(value, [address, "where", "timeout", "signal"])
-    )
-      return err(
-        usageError("Mock Nexus connect options are invalid.", {
-          target: isPlainObject(value) ? value.target : undefined,
-          targets: isPlainObject(value) ? value.targets : undefined,
-        }),
-      );
-    if (
-      (value.where !== undefined && typeof value.where !== "function") ||
-      (value.timeout !== undefined && !isPositiveFinite(value.timeout)) ||
-      (value.signal !== undefined && !isAbortSignal(value.signal))
-    )
-      return err(
-        usageError("Mock Nexus connect options are invalid.", {
-          target: value.target,
-          targets: value.targets,
-        }),
-      );
-    if (
-      (multicast &&
-        value.targets !== undefined &&
-        (!Array.isArray(value.targets) ||
-          value.targets.length !== Object.keys(value.targets).length ||
-          value.targets.some((target) => !isPlainObject(target)))) ||
-      (!multicast && value.target !== undefined && !isPlainObject(value.target))
-    )
-      return err(
-        usageError("Mock Nexus connect targets must be objects.", {
-          target: value.target,
-          targets: value.targets,
-        }),
-      );
-    return ok(undefined);
+  type MockAcquisitionSession = AcquisitionSession<M> & {
+    readonly connection: Connection<M>;
   };
-
-  /** Returns matching sessions or the predicate failure, preserving the offending session's identity. */
-  const connections = (
-    where?: ConnectOptions<M>["where"],
-  ): Result<Connection<M>[], NexusUsageError> => {
-    const matching: Connection<M>[] = [];
-    for (const connection of connectionHandles.values()) {
-      if (connection.status !== "connected") continue;
-      if (!where) {
-        matching.push(connection);
-        continue;
-      }
-      try {
-        if (where(connection.contextMeta, connection.connectionMeta))
-          matching.push(connection);
-      } catch (cause) {
-        return err(
-          new NexusUsageError(
-            "Mock Nexus connection where predicate threw.",
-            "E_USAGE_INVALID",
-            {
-              context: { connectionId: connection.id },
-              cause:
-                cause instanceof Error
-                  ? { name: cause.name, message: cause.message }
-                  : { name: "Error", message: String(cause) },
-            },
-          ),
+  /** Adapts mock facts to Core's acquisition rules without giving acquisition mock ownership. */
+  const acquisitionSource = (): AcquisitionSource<
+    M,
+    MockAcquisitionSession
+  > => {
+    const sessions = () =>
+      [...connectionHandles.values()].map((connection) => ({
+        connection,
+        connectionId: connection.id,
+        remoteIdentity: connection.contextMeta,
+        context: { connection: connection.connectionMeta },
+        isReady: () => connection.status === "connected",
+      }));
+    return {
+      findReadyConnections: sessions,
+      safeResolveConnections: async ({ target }) => {
+        const matching = sessions().filter((session) =>
+          matchesTarget(session.connection, target),
         );
-      }
-    }
-    return ok(matching);
+        return matching.length
+          ? ok(matching)
+          : err(
+              new NexusServiceError(
+                "Mock Nexus target has no matching connection.",
+                "E_SERVICE_NO_MATCH",
+                { context: { target } },
+              ),
+            );
+      },
+      subscribeAvailabilityChanged: (listener) => {
+        connectionListeners.add(listener);
+        return () => connectionListeners.delete(listener);
+      },
+    };
   };
 
   /** Unwraps a mock Result at a throw-style public boundary. */
@@ -388,136 +337,25 @@ export function createMockNexus<
   const safeConnect = async (
     options: ConnectOptions<M> = {},
   ): Promise<Result<Connection<M>, Error>> => {
-    const valid = validateConnectOptions(options, false);
-    if (valid.isErr()) return valid;
-    if (options.signal?.aborted)
-      return err(
-        serviceError("Connection acquisition was aborted.", "E_ABORTED"),
-      );
-    connectCalls.push({ options });
-    /** Captures predicate failures while selecting from the current ready-session snapshot. */
-    const scan = () =>
-      connections(options.where).map((matching) =>
-        matching.filter(
-          (connection) =>
-            !options.target || matchesTarget(connection, options.target),
-        ),
-      );
-    /** Resolves a unique match, reports ambiguity, or leaves an empty passive scan pending. */
-    const settle = (found: readonly Connection<M>[]) =>
-      found.length === 1
-        ? ok(found[0])
-        : found.length > 1
-          ? err(
-              serviceError(
-                "Mock Nexus connect requires one matching connection.",
-                "E_SERVICE_AMBIGUOUS",
-                {
-                  target: options.target,
-                  matchingConnectionCount: found.length,
-                },
-              ),
-            )
-          : undefined;
-    const initial = scan();
-    if (initial.isErr()) return initial;
-    const settled = settle(initial.value);
-    if (settled) return settled;
-    if (options.target)
-      return err(
-        serviceError(
-          "Mock Nexus target has no matching connection.",
-          "E_SERVICE_NO_MATCH",
-          {
-            target: options.target,
-          },
-        ),
-      );
-    return new Promise<Result<Connection<M>, Error>>((resolve) => {
-      let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
-      let scheduled = false;
-      /** Releases request-local observation before delivering the acquisition outcome. */
-      const finish = (result: Result<Connection<M>, Error>) => {
-        connectionListeners.delete(onRegister);
-        if (timer) globalThis.clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        resolve(result);
-      };
-      /** Coalesces synchronous registrations before evaluating unique-session cardinality. */
-      const onRegister = () => {
-        if (scheduled) return;
-        scheduled = true;
-        globalThis.queueMicrotask(() => {
-          scheduled = false;
-          const result = scan();
-          if (result.isErr()) return finish(result);
-          const next = settle(result.value);
-          if (next) finish(next);
-        });
-      };
-      /** Ends only this pending acquisition when its caller aborts. */
-      const onAbort = () =>
-        finish(
-          err(
-            serviceError("Connection acquisition was aborted.", "E_ABORTED", {
-              target: options.target,
-            }),
-          ),
-        );
-      connectionListeners.add(onRegister);
-      if (options.signal?.aborted) return onAbort();
-      options.signal?.addEventListener("abort", onAbort, { once: true });
-      if (options.timeout !== undefined)
-        timer = globalThis.setTimeout(
-          () =>
-            finish(
-              err(
-                serviceError(
-                  "Mock Nexus connection acquisition timed out.",
-                  "E_SERVICE_ACQUISITION_TIMEOUT",
-                  { target: options.target, timeout: options.timeout },
-                ),
-              ),
-            ),
-          options.timeout,
-        );
-    });
+    const acquired = await safeAcquireConnection(async () => {
+      connectCalls.push({ options });
+      return ok(acquisitionSource());
+    }, options);
+    return acquired.map(({ connection }) => connection);
   };
 
   /** Captures a fixed snapshot of existing mock connections. */
   const safeConnectMulticast = async (
     options: ConnectMulticastOptions<M> = {},
   ): Promise<Result<ConnectionCollection<M>, Error>> => {
-    const valid = validateConnectOptions(options, true);
-    if (valid.isErr()) return valid;
-    if (options.signal?.aborted)
-      return err(
-        serviceError("Connection acquisition was aborted.", "E_ABORTED"),
-      );
-    connectMulticastCalls.push({ options });
-    const matching = connections(options.where);
-    if (matching.isErr()) return matching;
-    if (options.targets === undefined)
-      return ok(new ConnectionCollection(matching.value));
-    const selected = new Set<Connection<M>>();
-    for (const target of options.targets) {
-      const connection = matching.value.find((candidate) =>
-        matchesTarget(candidate, target),
-      );
-      if (!connection) {
-        return err(
-          serviceError(
-            "A target has no mock connection.",
-            "E_SERVICE_NO_MATCH",
-            {
-              targets: options.targets,
-            },
-          ),
-        );
-      }
-      selected.add(connection);
-    }
-    return ok(new ConnectionCollection([...selected]));
+    const acquired = await safeAcquireConnections(async () => {
+      connectMulticastCalls.push({ options });
+      return ok(acquisitionSource());
+    }, options);
+    return acquired.map(
+      (sessions) =>
+        new ConnectionCollection(sessions.map(({ connection }) => connection)),
+    );
   };
 
   const nexus = {
@@ -544,7 +382,12 @@ export function createMockNexus<
       let active = true;
       /** Delivers each unseen ready session once to this observer. */
       const notify = () => {
-        for (const connection of unwrap(connections(where))) {
+        for (const connection of connectionHandles.values()) {
+          if (
+            connection.status !== "connected" ||
+            (where && !where(connection.contextMeta, connection.connectionMeta))
+          )
+            continue;
           if (active && !seen.has(connection)) {
             seen.add(connection);
             try {

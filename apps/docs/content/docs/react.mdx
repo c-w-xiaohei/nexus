@@ -1,18 +1,13 @@
 ---
 title: React Integration
-description: Use Nexus instances, service proxy status, and State from React.
+description: Use Nexus instances and State from React.
 ---
 
-`@nexus-js/react` lets React components access a Nexus instance, observe a
-service proxy, and use Nexus State.
+`@nexus-js/react` lets React components access a Nexus instance and use Nexus
+State.
 
 ```ts
-import {
-  createNexusScope,
-  NexusProvider,
-  useNexus,
-  useProxyStatus,
-} from "@nexus-js/react";
+import { createNexusScope, NexusProvider, useNexus } from "@nexus-js/react";
 ```
 
 For synchronized remote state, continue to the
@@ -62,41 +57,17 @@ Use `ChromeNexus.useNexus()` inside that tree. The scope also exposes typed
 Nexus State hooks and scope factories documented in the
 [Nexus State React guide](/nexus/docs/state/react/).
 
-## `useProxyStatus()`
+## Service Sessions
 
-Observe an existing service proxy returned by `connection.get` or a legacy
-unicast migration entry. The hook does not need `NexusProvider` and does not
-create, release, reconnect, or replace the proxy.
-
-```tsx
-import { useProxyStatus } from "@nexus-js/react";
-
-function OrderStatus({ orders }: { orders: object | null }) {
-  const status = useProxyStatus(orders);
-  return <span>{status?.type ?? "unavailable"}</span>;
-}
-```
-
-Pass a selector to subscribe to a derived value. React compares selected
-snapshots with `Object.is`:
-
-```tsx
-const connected = useProxyStatus(orders, (status) => status.type === "active");
-```
-
-Only `null` and `undefined` mean no proxy and return `null`. Other invalid
-values go through Core validation and throw its original `NexusUsageError`.
-The proxy remains tied to its connection session. Application code decides when
-to create a replacement. See
-[Service Proxy Lifecycle](/nexus/docs/proxy-lifecycle/) for the Core status and
+Keep the `Connection` returned by `nexus.connect(...)` alongside a service
+proxy when the UI must observe its session. Register `connection.onDisconnected`
+to request a replacement from application state; existing proxies never retarget.
+There is no React proxy-status hook. See
+[Connection lifecycle](/nexus/docs/proxy-lifecycle/) for the Core observer and
 replacement rules.
 
-During server rendering the hook returns `null` without reading Core. Hydration
-starts from that same `null` snapshot, then reads and observes the service proxy.
-The planned React 0.8 package requires `@nexus-js/core` ~1.2.0 for both service
-proxy observation and State bindings. Upgrade Core and React together. State
-host stores are ordinary Zustand stores bound with `createNexusStore(...)` or
-`bindNexusStore(...)`; React consumes the remote mirror and does not add a
+State host stores are ordinary Zustand stores bound with `createNexusStore(...)`
+or `bindNexusStore(...)`; React consumes the remote mirror and does not add a
 `withNexusState` middleware.
 
 ## Nexus State

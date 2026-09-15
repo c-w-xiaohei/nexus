@@ -1,10 +1,13 @@
 ---
-title: Connection And Proxy Lifecycle
+title: Connection Lifecycle
 description: Observe shared Nexus connections and recreate session-bound resources.
 ---
 
 A `Connection` is a shared session handle, not a caller-owned lease. Dropping a
 connection, collection, or root service proxy does not close the session.
+Ordinary service proxies do not expose lifecycle status or subscriptions. Retain
+the `Connection` used to acquire a proxy when application code must observe that
+session.
 
 ## Connection Lifetime
 
@@ -74,8 +77,8 @@ disconnected ones, or replace members after reconnect.
 ## Reserved Proxy Names
 
 The root proxy suppresses only `then`, so it is not accidentally awaited. Root
-services may still expose business methods named `catch` or `finally`. On a
-nested property path, `then`, `catch`, `finally`, and `connection` are reserved
-for lazy-call consumption and local provenance. Do not use those names for
-nested remote business members; use a different service method or access the
+services may expose business members named `catch`, `finally`, or `connection`.
+On a nested property path, `then`, `catch`, `finally`, and `connection` are
+reserved for lazy-call consumption and local provenance. Do not use those names
+for nested remote business members; use a different service method or access the
 member through a non-reserved path.

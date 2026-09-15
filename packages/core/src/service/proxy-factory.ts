@@ -85,7 +85,7 @@ export class ProxyFactory {
     );
   }
 
-  /** Captures the session snapshot; Engine installs lifecycle observation on unicast roots. */
+  /** Captures a session-bound call budget and source without installing per-proxy lifecycle observers. */
   public createServiceProxy<T extends object>(
     serviceName: string,
     options: CallBinding,

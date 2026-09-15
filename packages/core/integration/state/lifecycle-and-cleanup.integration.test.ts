@@ -59,7 +59,7 @@ describe("Nexus State lifecycle and cleanup", () => {
     expect(remote.getState()).toEqual({ count: 1 });
 
     const connection = Array.from(
-      (popup as any).connectionManager.connections.values(),
+      (popup as any).lifecycle.manager.connections.values(),
     )[0] as {
       close(): void;
     };
@@ -117,7 +117,7 @@ describe("Nexus State lifecycle and cleanup", () => {
     const connection = Array.from(
       (
         network.get("popup-a")!.nexus as any
-      ).connectionManager.connections.values(),
+      ).lifecycle.manager.connections.values(),
     )[0] as { close(): void };
     connection.close();
     await vi.waitFor(() =>

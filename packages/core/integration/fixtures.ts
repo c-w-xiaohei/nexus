@@ -279,7 +279,7 @@ export function closeAllConnections(
     if (!instance?.nexus) {
       continue;
     }
-    const cm = (instance.nexus as any).connectionManager;
+    const cm = (instance.nexus as any).lifecycle.manager;
     if (!cm) {
       continue;
     }
@@ -293,7 +293,7 @@ export function closeAllConnections(
 export function listLogicalConnections(instance: {
   nexus: NexusInstance<AppAdapterModel>;
 }): Array<LogicalConnection<AppAdapterModel>> {
-  const cm = (instance.nexus as any).connectionManager;
+  const cm = (instance.nexus as any).lifecycle.manager;
   if (!cm) {
     return [];
   }
@@ -315,7 +315,7 @@ export async function injectIncomingMessage(
   sourceConnectionId: string,
   message: NexusMessage,
 ): Promise<void> {
-  const engine = (instance.nexus as any).engine;
+  const engine = (instance.nexus as any).lifecycle.engine;
   if (!engine) {
     throw new Error("Engine not initialized for integration fixture.");
   }
