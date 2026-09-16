@@ -38,7 +38,7 @@ describe("CallProcessor", () => {
     const pending = new PendingCallManager();
     deps = {
       isConnectionReady: vi.fn(() => true),
-      sendMessage: vi.fn((message, connectionId) => {
+      safeSendMessage: vi.fn((message, connectionId) => {
         pending.handleResponse(message.id!, connectionId, null, connectionId);
         return Result.ok(undefined);
       }),
@@ -56,7 +56,7 @@ describe("CallProcessor", () => {
       error: { code: "E_CONN_CLOSED", context: { connectionId: "A" } },
     });
     expect(register).not.toHaveBeenCalled();
-    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.safeSendMessage).not.toHaveBeenCalled();
   });
 
   it("registers before a synchronous response and resolves the response value", async () => {
@@ -72,12 +72,12 @@ describe("CallProcessor", () => {
     await new CallProcessor(deps).safeProcess(call());
 
     expect(
-      vi.mocked(deps.sendMessage).mock.calls.map(([message]) => message.id),
+      vi.mocked(deps.safeSendMessage).mock.calls.map(([message]) => message.id),
     ).toEqual([1, 2, 1]);
   });
 
   it("releases sanitized capabilities when send fails", async () => {
-    vi.mocked(deps.sendMessage).mockReturnValue(
+    vi.mocked(deps.safeSendMessage).mockReturnValue(
       Result.err(new NexusDisconnectedError("closed")),
     );
 
@@ -92,19 +92,21 @@ describe("CallProcessor", () => {
 
   it("registers before a reentrant transport reply", async () => {
     const register = vi.spyOn(deps.pendingCallManager, "register");
-    vi.mocked(deps.sendMessage).mockImplementation((message, connectionId) => {
-      expect(register).toHaveBeenCalledWith(message.id, {
-        connectionId,
-        timeout: 1_000,
-      });
-      deps.pendingCallManager.handleResponse(
-        message.id!,
-        "reentrant",
-        null,
-        connectionId,
-      );
-      return Result.ok(undefined);
-    });
+    vi.mocked(deps.safeSendMessage).mockImplementation(
+      (message, connectionId) => {
+        expect(register).toHaveBeenCalledWith(message.id, {
+          connectionId,
+          timeout: 1_000,
+        });
+        deps.pendingCallManager.handleResponse(
+          message.id!,
+          "reentrant",
+          null,
+          connectionId,
+        );
+        return Result.ok(undefined);
+      },
+    );
 
     await expect(processor.safeProcess(call())).resolves.toEqual(
       Result.ok("reentrant"),
@@ -112,7 +114,7 @@ describe("CallProcessor", () => {
   });
 
   it("removes pending state after a thrown transport handoff", async () => {
-    vi.mocked(deps.sendMessage).mockImplementation(() => {
+    vi.mocked(deps.safeSendMessage).mockImplementation(() => {
       throw new Error("transport threw");
     });
 
@@ -122,7 +124,7 @@ describe("CallProcessor", () => {
   });
 
   it("propagates disconnects through the pending Result", async () => {
-    vi.mocked(deps.sendMessage).mockReturnValue(Result.ok(undefined));
+    vi.mocked(deps.safeSendMessage).mockReturnValue(Result.ok(undefined));
     const result = processor.safeProcess(call());
     deps.pendingCallManager.onDisconnect("A");
 
@@ -137,15 +139,17 @@ describe("CallProcessor", () => {
       code: "E_AUTH_CALL_DENIED",
       message: "denied",
     };
-    vi.mocked(deps.sendMessage).mockImplementation((message, connectionId) => {
-      deps.pendingCallManager.handleResponse(
-        message.id!,
-        null,
-        remoteError,
-        connectionId,
-      );
-      return Result.ok(undefined);
-    });
+    vi.mocked(deps.safeSendMessage).mockImplementation(
+      (message, connectionId) => {
+        deps.pendingCallManager.handleResponse(
+          message.id!,
+          null,
+          remoteError,
+          connectionId,
+        );
+        return Result.ok(undefined);
+      },
+    );
 
     const result = await processor.safeProcess(call());
     expect(result.isErr() && result.error).toBeInstanceOf(NexusRemoteError);

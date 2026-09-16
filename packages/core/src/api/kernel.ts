@@ -5,7 +5,6 @@ import { NexusConfigurationError } from "@/errors";
 import { Engine } from "@/service/engine";
 import { Transport } from "@/transport";
 import type { AdapterModel } from "@/types/adapter-model";
-import type { NexusMessage } from "@/types/message";
 import { Result } from "better-result";
 import { toSerializedError } from "@/utils/error";
 const { err, ok } = Result;
@@ -61,9 +60,7 @@ export async function buildKernel<M extends AdapterModel>(
             implementation: new endpointRegistration.targetClass(),
           }
         : config.endpoint!;
-      const providers = (config.providers ?? []).map(
-        ({ token, service, policy }) => ({ name: token.id, service, policy }),
-      );
+      const providers = [...(config.providers ?? [])];
       for (const { token, targetClass, options } of serviceRegistry) {
         const service = options?.factory
           ? await options.factory({ targetClass, token, localMeta: meta })
@@ -72,15 +69,16 @@ export async function buildKernel<M extends AdapterModel>(
           { token, service, policy: options?.policy },
         ]);
         if (checked.isErr()) return err(checked.error);
-        providers.push({ name: token.id, service, policy: options?.policy });
+        providers.push({ token, service, policy: options?.policy });
       }
-      let engine: Engine<M> | undefined;
+      // Constructors do not start transport traffic; Nexus starts listening only
+      // after both sides of this dependency are installed.
       const handlers: ConnectionManagerHandlers = {
-        onMessage: (message: NexusMessage, connectionId: string) => {
-          void engine?.safeOnMessage(message, connectionId);
+        onMessage: (message, connectionId) => {
+          void engine.onMessage(message, connectionId);
         },
         // Settle calls/resources before public Connection observers see termination.
-        onDisconnect: (connectionId) => engine?.onDisconnect(connectionId),
+        onDisconnect: (connectionId) => engine.onDisconnect(connectionId),
       };
       const manager = new ConnectionManager(
         { policy: config.policy, connectTo: endpoint.connectTo },
@@ -88,7 +86,7 @@ export async function buildKernel<M extends AdapterModel>(
         handlers,
         meta,
       );
-      engine = new Engine(manager, {
+      const engine = new Engine(manager, {
         getConnection: (id) => {
           const session = manager.getConnection(id);
           if (!session) throw new Error(`Unknown source connection: ${id}`);

@@ -26,7 +26,7 @@ L4 initializes and acquires sessions; L3 executes messages on them.
 - **`safeResolveConnections({ target })`**: Reuses ready address matches or shares one adapter dial. It requires a target; L4 applies caller predicates afterward, without redialing on mismatch.
 - **`findReadyConnections(where?)`**: Synchronously scans current ready sessions. L4 builds passive waiting and fixed snapshots on this operation.
 - **`subscribeAvailabilityChanged(listener)`**: Notifies initial session publication and accepted identity updates. Closure and provider catalog updates do not wake connection acquisition.
-- **`safeSendMessage(connectionId, message)`**: Routes a `NexusMessage` to one published connection. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details.
+- **`safeSendMessage(message, connectionId)`**: Routes a `NexusMessage` to one published connection. L3 uses this to send RPC calls, results, and other messages without needing to know about the underlying connection details.
 
 ### Handlers (L2 -> L3)
 
@@ -34,6 +34,10 @@ The L4 kernel supplies handlers when constructing the manager:
 
 - **`onMessage(message, connectionId)`**: Forwards a fully validated, inbound `NexusMessage` from a specific connection to L3 for processing.
 - **`onDisconnect(connectionId)`**: Runs required L3 cleanup after the session leaves L2 indexes. It is an ordered command, not a lifecycle broadcast.
+
+The kernel hands business messages off to Engine, which consumes and logs
+MessageHandler Results locally. L2 does not wait for business execution; RPC
+processing failures do not trigger session failure or a second reply.
 
 On disconnect, L2 removes session indexes first, the kernel invokes L3 cleanup,
 and only then does LogicalConnection notify its own disconnect subscribers.

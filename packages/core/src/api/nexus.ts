@@ -252,13 +252,7 @@ export class Nexus<
         const valid = validateProviderBatch(providers);
         if (valid.isErr()) return valid;
         if (this.lifecycle.phase === "ready") {
-          this.lifecycle.engine.provideServices(
-            providers.map(({ token, service, policy }) => ({
-              name: token.id,
-              service,
-              policy,
-            })),
-          );
+          this.lifecycle.engine.provideServices(providers);
           return ok(this);
         }
         this.config = composeNexusConfig([

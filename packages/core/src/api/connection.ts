@@ -84,7 +84,7 @@ export class ConnectionHandle<
   /** Binds a public handle to one immutable session identity and runtime call budget. */
   constructor(
     private readonly session: LogicalConnection<M>,
-    private readonly engine: Engine<M>,
+    private readonly engine: Pick<Engine<M>, "createServiceProxy">,
     private readonly callTimeout: number,
   ) {}
 

@@ -267,8 +267,8 @@ export class ConnectionManager<M extends AdapterModel> {
 
   /** Sends to one already-published connection; this never discovers or dials. */
   public safeSendMessage(
-    connectionId: string,
     message: NexusMessage,
+    connectionId: string,
   ): Result<void, NexusError> {
     const initialized = this.ensureInitialized("safeSendMessage");
     if (initialized.isErr()) return initialized;

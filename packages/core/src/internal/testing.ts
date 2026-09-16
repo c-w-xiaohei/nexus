@@ -91,7 +91,7 @@ export const createInMemoryServiceProxy = <
       // Shared-memory arguments allocate no outgoing capabilities.
       releaseSanitizedResources: () => {},
     },
-    sendMessage: (message, source) => {
+    safeSendMessage: (message, source) => {
       void requests.safeHandleMessage(message, source).then((result) => {
         if (result.isErr() && message.id !== null)
           pending.fail(message.id, result.error);

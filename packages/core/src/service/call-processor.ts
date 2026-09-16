@@ -30,7 +30,7 @@ export class CallProcessor {
   constructor(
     private readonly deps: {
       isConnectionReady(connectionId: string): boolean;
-      sendMessage(
+      safeSendMessage(
         message: NexusMessage,
         connectionId: string,
       ): Result<void, Error>;
@@ -76,7 +76,7 @@ export class CallProcessor {
         if (encoded.isErr()) return encoded;
         let delivered = false;
         try {
-          const result = this.deps.sendMessage(encoded.value, connectionId);
+          const result = this.deps.safeSendMessage(encoded.value, connectionId);
           delivered = result.isOk();
           return result;
         } finally {

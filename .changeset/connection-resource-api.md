@@ -12,6 +12,9 @@ ordering. Nexus observes manager availability directly and caches handles by
 session identity. Remove unused identity payloads from owner commands.
 Share provider argument types between Nexus and its public interface, and route
 throw-style registration directly through safe registration.
+Align internal L2/L3 send contracts and consume inbound processing results at the
+Engine boundary. Share initial/live provider normalization while preserving
+public RPC errors, resource cleanup, and registration-before-announcement order.
 
 Reject duplicate provider IDs within a single configure/provide submission before
 composition; separate configuration layers continue to use last-wins semantics.

@@ -8,8 +8,15 @@ import { SERVICE_ON_DISCONNECT } from "./service-invocation-hooks";
 import { Nexus } from "@/api/nexus";
 import { NexusDisconnectedError, NexusConnectionError } from "@/errors";
 import { Result } from "better-result";
-import { Logger } from "@/logger";
+import {
+  Logger,
+  LogLevel,
+  configureNexusLogger,
+  resetNexusLoggerForTest,
+} from "@/logger";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import type { ConnectionManager } from "@/connection/connection-manager";
+import { Token } from "@/api/token";
 
 // A mock service to be registered on the host engine for tests.
 const mockTestService = {
@@ -22,6 +29,8 @@ describe("Engine", () => {
   let hostEngine: Engine<any>;
   let clientConnectionId: string;
   let hostConnectionId: string;
+  let clientManager: ConnectionManager<any>;
+  let hostManager: ConnectionManager<any>;
 
   beforeEach(async () => {
     // This helper creates two fully connected L3 engines.
@@ -37,18 +46,18 @@ describe("Engine", () => {
     hostEngine = setup.hostEngine;
     clientConnectionId = setup.clientConnection.connectionId;
     hostConnectionId = setup.hostConnection.connectionId;
+    clientManager = setup.clientCm;
+    hostManager = setup.hostCm;
   });
 
   afterEach(() => {
+    resetNexusLoggerForTest();
     vi.restoreAllMocks();
   });
 
-  it("preserves the transport cause when converting a send failure to a call error", () => {
+  it("preserves the transport cause when converting a send failure to a call error", async () => {
     const cause = { name: "Error", message: "port rejected send" };
-    vi.spyOn(
-      (clientEngine as any).connectionManagerState,
-      "safeSendMessage",
-    ).mockReturnValue(
+    vi.spyOn(clientManager, "safeSendMessage").mockReturnValue(
       Result.err(
         new NexusConnectionError(
           "closed",
@@ -58,40 +67,61 @@ describe("Engine", () => {
         ),
       ),
     );
-    const result = clientEngine.safeSendMessage(
-      {
-        type: NexusMessageType.RELEASE,
-        id: null,
-        resourceId: "released",
+    const proxy = clientEngine.createServiceProxy<any>("testService", {
+      connectionId: clientConnectionId,
+      timeout: 5000,
+    });
+    const result = await Nexus.safeCall(proxy.someMethod());
+    expect(result).toMatchObject({
+      error: {
+        code: "E_CONN_CLOSED",
+        cause,
+        context: { connectionId: clientConnectionId },
       },
-      clientConnectionId,
-    );
-    expect(result).toMatchObject({ error: { code: "E_CONN_CLOSED", cause } });
+    });
     expect(result.isErr() && result.error).toBeInstanceOf(
       NexusDisconnectedError,
     );
   });
 
   it("safeRelease succeeds locally even when the release notification cannot be sent", async () => {
-    const error = new NexusDisconnectedError("connection closed");
+    const nexus = new Nexus();
+    hostEngine.provideServices([
+      {
+        token: new Token("resourceService"),
+        service: { open: () => nexus.ref({ run() {} }) },
+      },
+    ]);
+    const service = clientEngine.createServiceProxy<any>("resourceService", {
+      connectionId: clientConnectionId,
+      timeout: 5000,
+    });
+    const resource = await service.open();
+    const error = new NexusConnectionError(
+      "connection closed",
+      "E_CONN_CLOSED",
+    );
     const send = vi
-      .spyOn(clientEngine, "safeSendMessage")
+      .spyOn(clientManager, "safeSendMessage")
       .mockReturnValue(Result.err(error));
     const warn = vi
       .spyOn(Logger.prototype, "warn")
       .mockImplementation(() => {});
-    const resource: any = (
-      clientEngine as any
-    ).proxyFactory.createRemoteResourceProxy("released", clientConnectionId);
-
     expect(Nexus.safeRelease(resource).isOk()).toBe(true);
     expect(send).toHaveBeenCalledExactlyOnceWith(
-      { type: NexusMessageType.RELEASE, id: null, resourceId: "released" },
+      {
+        type: NexusMessageType.RELEASE,
+        id: null,
+        resourceId: expect.any(String),
+      },
       clientConnectionId,
     );
     expect(warn).toHaveBeenCalledExactlyOnceWith(
-      `Failed to dispatch release for resource #released to ${clientConnectionId}.`,
-      error,
+      expect.stringContaining(`to ${clientConnectionId}.`),
+      expect.objectContaining({
+        code: "E_CONN_CLOSED",
+        message: error.message,
+      }),
     );
     await expect(resource.run()).rejects.toMatchObject({
       code: "E_RESOURCE_ACCESS_DENIED",
@@ -141,10 +171,52 @@ describe("Engine", () => {
     };
 
     // Simulate L2 passing a message to L3
-    await hostEngine.safeOnMessage(message, hostConnectionId);
+    await hostEngine.onMessage(message, hostConnectionId);
 
     expect(handleMessageSpy).toHaveBeenCalledWith(message, hostConnectionId);
   });
+
+  it.each([false, true])(
+    "consumes inbound failure without reply or disconnect (logger throws: %s)",
+    async (throws) => {
+      const failure = new Error("inbound processing failed");
+      const handle = vi.spyOn(MessageHandler.prototype, "safeHandleMessage");
+      handle.mockResolvedValueOnce(Result.err(failure));
+      const log = vi.fn(() => {
+        if (throws) throw new Error("diagnostic sink failed");
+      });
+      configureNexusLogger({
+        enabled: true,
+        level: LogLevel.ERROR,
+        handler: log,
+      });
+      const session = hostManager.getConnection(hostConnectionId)!;
+      const send = vi.spyOn(hostManager, "safeSendMessage");
+      const completed = vi.spyOn(hostEngine, "onMessage");
+      const result = await session.safeHandleMessage({
+        type: NexusMessageType.RELEASE,
+        id: null,
+        resourceId: "unused",
+      });
+      // L2 hands business work off; Engine consumes its own failure.
+      expect(result.isOk()).toBe(true);
+      await expect(completed.mock.results[0]!.value).resolves.toBeUndefined();
+      expect(handle).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        LogLevel.ERROR,
+        "Nexus-L3 --- Engine",
+        "Incoming message handling failed",
+        failure,
+      );
+      expect(send).not.toHaveBeenCalled();
+      const proxy = clientEngine.createServiceProxy<any>("testService", {
+        connectionId: clientConnectionId,
+        timeout: 5000,
+      });
+      await expect(proxy.someMethod()).resolves.toBeUndefined();
+      expect(session.isReady()).toBe(true);
+    },
+  );
 
   it("should notify managers on disconnect", () => {
     const resourceManagerSpy = vi.spyOn(

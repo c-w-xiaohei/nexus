@@ -81,7 +81,7 @@ const sendFromManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
   connectionId: string,
   message: NexusMessage,
-): void => manager.safeSendMessage(connectionId, message).unwrap();
+): void => manager.safeSendMessage(message, connectionId).unwrap();
 
 const updateManagerIdentity = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
@@ -724,7 +724,7 @@ describe("ConnectionManager", () => {
       const [connection] = hostManager.connections.values();
       expect(hostManager.findReadyConnections()).toHaveLength(1);
       expect(
-        hostManager.safeSendMessage(connection.connectionId, message),
+        hostManager.safeSendMessage(message, connection.connectionId),
       ).toEqual(Result.ok(undefined));
       await vi.waitFor(() =>
         expect(client.handlers.onMessage).toHaveBeenCalledWith(
@@ -732,7 +732,7 @@ describe("ConnectionManager", () => {
           expect.any(String),
         ),
       );
-      expect(hostManager.safeSendMessage("unknown", message)).toMatchObject({
+      expect(hostManager.safeSendMessage(message, "unknown")).toMatchObject({
         error: { code: "E_CONN_CLOSED" },
       });
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
@@ -928,13 +928,16 @@ describe("ConnectionManager", () => {
       postA.mockClear();
       postB.mockClear();
 
-      const result = hostManager.safeSendMessage(a.connectionId, {
-        type: NexusMessageType.APPLY,
-        id: 1,
-        resourceId: null,
-        path: [],
-        args: [],
-      });
+      const result = hostManager.safeSendMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 1,
+          resourceId: null,
+          path: [],
+          args: [],
+        },
+        a.connectionId,
+      );
 
       expect(result).toMatchObject({
         error: {

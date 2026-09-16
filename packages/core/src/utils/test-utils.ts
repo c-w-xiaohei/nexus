@@ -214,12 +214,12 @@ export async function createL3Endpoints<M extends AdapterModel>(
   });
   hostEngine.provideServices(
     Object.entries(hostSetup.providers).map(([name, service]) => ({
-      name,
+      token: new Token(name),
       service,
     })),
   );
   hostStack.handlers.onMessage = (msg, connId) =>
-    void hostEngine.safeOnMessage(msg, connId);
+    void hostEngine.onMessage(msg, connId);
   hostStack.handlers.onDisconnect = (connId) => hostEngine.onDisconnect(connId);
 
   // The host's mock endpoint will listen for incoming connections.
@@ -244,7 +244,7 @@ export async function createL3Endpoints<M extends AdapterModel>(
       ),
   });
   clientStack.handlers.onMessage = (msg, connId) =>
-    void clientEngine.safeOnMessage(msg, connId);
+    void clientEngine.onMessage(msg, connId);
   clientStack.handlers.onDisconnect = (connId) =>
     clientEngine.onDisconnect(connId);
 
