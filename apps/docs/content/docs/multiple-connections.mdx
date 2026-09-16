@@ -1,0 +1,85 @@
+---
+title: Multiple Connections
+description: Acquire fixed connection snapshots and combine per-source results with JavaScript.
+---
+
+Use `connectMulticast` when an operation should involve several contexts. It
+returns a fixed `ConnectionCollection`, not a proxy that forwards every method
+call to a changing group.
+
+## Capture Current Connections
+
+```ts
+const collection = await app.connectMulticast({ where: matchesWorkspace });
+```
+
+After local initialization, this captures the current matching ready sessions.
+It does not dial or wait for future members. No matches is a valid empty collection.
+`matchesWorkspace` is an application predicate over your adapter's metadata.
+
+## Acquire Explicit Targets
+
+```ts
+const collection = await app.connectMulticast({ targets: [first, second] });
+```
+
+`first` and `second` are exact adapter targets. Every target must be acquired
+successfully. One failure rejects the collection acquisition; sessions already
+established remain owned by the runtime and can be reused.
+
+For partial connection acquisition, compose the single-connection safe API:
+
+```ts
+const attempts = await Promise.all(
+  targets.map((target) => app.safeConnect({ target })),
+);
+```
+
+## Get And Call Per Source
+
+The collection's `get` returns one `{ connection, result }` per member. A member
+without the service, or one that has disconnected, contributes an Err instead of
+disappearing from the list:
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import { DocumentToken } from "./shared";
+
+const results = await Promise.all(
+  collection.get(DocumentToken).map(async ({ connection, result }) => ({
+    connection,
+    result: result.isErr()
+      ? result
+      : await Nexus.safeCall(result.value.summarize("intro")),
+  })),
+);
+
+for (const { connection, result } of results) {
+  if (result.isErr()) console.error(connection.id, result.error.code);
+  else console.log(connection.id, result.value);
+}
+```
+
+Each successful resource is an ordinary proxy with the same call behavior as
+`connection.get`. Strict connection acquisition and per-member service acquisition
+are separate boundaries.
+
+## Refresh Membership Deliberately
+
+Collection identity and order are fixed. Disconnected members stay in it; newly
+connected contexts do not join it. Calling `collection.get` again checks the
+current service availability of those same members. Calling `connectMulticast`
+again captures a new membership snapshot, reusing existing connections.
+
+For periodic collection, acquire a fresh snapshot each iteration. For one-time
+initialization of each new session, use [onConnect](/nexus/docs/proxy-lifecycle/).
+
+## Choose A Result Strategy
+
+Native `Promise.all`, `allSettled`, `any`, and `race` keep their standard semantics.
+Early completion does not cancel other calls or release their returned refs.
+
+`Nexus.safeCall` returns an Err as a fulfilled value. `Promise.any` therefore
+cannot distinguish it from a successful Result. To wait for the first successful
+RPC, use ordinary rejecting calls with `Promise.any` and retain their source in
+the mapping. See [Errors and timeouts](/nexus/docs/error-handling/).

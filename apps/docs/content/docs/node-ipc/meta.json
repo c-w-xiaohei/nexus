@@ -1,6 +1,6 @@
 {
   "title": "Node IPC",
-  "defaultOpen": true,
+  "defaultOpen": false,
   "pages": [
     "index",
     "quick-start",

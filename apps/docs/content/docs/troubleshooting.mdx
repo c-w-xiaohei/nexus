@@ -1,0 +1,78 @@
+---
+title: Troubleshooting
+description: Diagnose connection, service, callback, and resource-lifecycle problems.
+---
+
+## A Connection Never Completes
+
+Check whether you supplied a target. A targetless `connect` waits passively for
+exactly one matching ready session and has no default timeout. It does not start
+the peer context or dial it. Supply a finite timeout while diagnosing the wait.
+
+Verify both contexts exist, both runtimes are configured, the receiving endpoint
+is listening, and the target and `where` match the intended peer. For startup
+`connectTo`, the receiver must listen before the one-shot dial. Check adapter logs
+for transport or authentication failures.
+
+See [Establishing connections](/nexus/docs/connections/).
+
+## More Than One Connection Matches
+
+`E_SERVICE_AMBIGUOUS` is also the current code for ambiguous passive connection
+acquisition. Narrow `where`, supply an exact target, or use `connectMulticast`
+when the operation intentionally involves multiple peers.
+
+## Connected, But The Service Is Unavailable
+
+`get` checks the current catalog, not future availability. Verify the provider is
+registered on the intended runtime with the same Token ID. For live registration,
+retry `safeGet` after a business-ready signal. Publish the provider before updating
+the ready identity marker.
+
+See [Providing services](/nexus/docs/services/) and
+[Connection lifecycle](/nexus/docs/proxy-lifecycle/).
+
+## A Method Or Callback Does Not Execute
+
+Consume its result. Nexus calls are lazy: `service.run()` followed by ignoring the
+return value, or `void service.run()`, does not send the operation. Use `await`,
+`.catch(reportFailure)`, or a Promise helper.
+
+For local event emitters that ignore returned values, wrap remote callbacks in a
+listener that consumes and observes their results. See
+[Passing callbacks](/nexus/docs/callbacks/).
+
+## An Old Proxy Still Fails After Reconnection
+
+Old proxies and refs remain bound to the terminated session. Get a fresh proxy
+from the new Connection. A retained ConnectionCollection also retains its old
+members; reacquire the collection for a new snapshot.
+
+## Release Did Not Stop A Subscription
+
+Release gives up the remote reference; it does not invoke business cleanup.
+Call the subscription's `stop()` or equivalent before releasing it. The provider
+also needs a business-owned shutdown path for abandoned work or disconnection.
+See [Remote resources](/nexus/docs/remote-resources/).
+
+## Only Some Sources Fail
+
+A collection's `get` reports one Result per connection. Inspect both acquisition
+and call errors with their source connection. A missing service is not a missing
+collection member. Decide whether to retry one source, take another snapshot, or
+display partial results.
+
+See [Multiple contexts](/nexus/docs/multiple-connections/).
+
+## A Timed-Out Operation Still Changed Remote State
+
+The timeout ends local waiting; it is not a remote rollback or cancellation.
+If the operation may be retried, design an application-level idempotency or status
+protocol. See [Errors and timeouts](/nexus/docs/error-handling/).
+
+## An Example Uses Removed APIs
+
+These docs describe the Core 2.0 alpha contract under development. Old examples
+using `create`, `select`, default targets, provider waits, or remote assignment
+need migration. Follow the [migration guide](/nexus/docs/migrations/2.0-alpha/)
+and check which package version the application uses.

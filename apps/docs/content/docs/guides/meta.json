@@ -1,0 +1,19 @@
+{
+  "title": "Core guides",
+  "defaultOpen": false,
+  "pages": [
+    "--- Services and calls ---",
+    "../services",
+    "../remote-calls",
+    "../callbacks",
+    "../remote-resources",
+    "../error-handling",
+    "--- Connection management ---",
+    "../connections",
+    "../proxy-lifecycle",
+    "../multiple-connections",
+    "--- Identity and access ---",
+    "../identity-and-metadata",
+    "../auth-and-policy"
+  ]
+}

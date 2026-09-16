@@ -29,17 +29,4 @@ for (const entry of await getCollection("meta")) {
 export const source = loader({
   baseUrl: "/nexus/docs",
   source: { files },
-  plugins: [
-    {
-      name: "astro-trailing-slash",
-      config(config) {
-        // The loader normalizes `url` options before plugins, removing trailing slashes.
-        const getUrl = config.url;
-        return {
-          ...config,
-          url: (...args) => `${getUrl(...args).replace(/\/$/, "")}/`,
-        };
-      },
-    },
-  ],
 });

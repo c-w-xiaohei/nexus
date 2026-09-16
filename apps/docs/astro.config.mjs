@@ -5,6 +5,26 @@ import { unified } from "@astrojs/markdown-remark";
 import tailwindcss from "@tailwindcss/vite";
 import { rehypeCode, remarkHeading } from "fumadocs-core/mdx-plugins";
 
+// Local bookmarks often omit the GitHub Pages base. Redirect before Astro's
+// base-path guard so /docs and nested links do not fall through to its 404 page.
+function redirectLocalDocs(server) {
+  return () =>
+    server.middlewares.stack.unshift({
+      route: "",
+      handle(request, response, next) {
+        const url = new URL(request.url ?? "/", "http://localhost");
+        if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) {
+          response.writeHead(302, {
+            Location: `/nexus${url.pathname.replace(/\/$/, "")}/${url.search}`,
+          });
+          response.end();
+          return;
+        }
+        next();
+      },
+    });
+}
+
 export default defineConfig({
   site: "https://c-w-xiaohei.github.io",
   base: "/nexus",
@@ -28,5 +48,15 @@ export default defineConfig({
     react(),
     mdx({ extendMarkdownConfig: true, syntaxHighlight: false }),
   ],
-  vite: { plugins: [tailwindcss()] },
+  vite: {
+    plugins: [
+      tailwindcss(),
+      {
+        name: "nexus-local-docs-redirect",
+        enforce: "post",
+        configureServer: redirectLocalDocs,
+        configurePreviewServer: redirectLocalDocs,
+      },
+    ],
+  },
 });

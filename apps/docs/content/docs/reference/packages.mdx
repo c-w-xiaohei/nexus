@@ -1,0 +1,43 @@
+---
+title: Packages And Imports
+description: Find optional packages and Core subpath entrypoints.
+---
+
+For initial setup, use [Installation](/nexus/docs/packages/). This page lists
+additional capabilities and their imports.
+
+## Packages
+
+| Package              | Purpose                                         | Guide                                       |
+| -------------------- | ----------------------------------------------- | ------------------------------------------- |
+| `@nexus-js/core`     | Connections, services, callbacks, and resources | [Quick start](/nexus/docs/getting-started/) |
+| `@nexus-js/chrome`   | Chrome extension communication                  | [Chrome](/nexus/docs/chrome/)               |
+| `@nexus-js/iframe`   | Parent/iframe communication                     | [iframe](/nexus/docs/iframe/)               |
+| `@nexus-js/node-ipc` | Local daemon/client communication               | [Node IPC](/nexus/docs/node-ipc/)           |
+| `@nexus-js/react`    | React bindings                                  | [React](/nexus/docs/react/)                 |
+| `@nexus-js/testing`  | Application-level test doubles                  | [Testing](/nexus/docs/testing/)             |
+
+Install testing utilities as a development dependency. They mock the public
+application seam, not transports or real sessions.
+
+## Core Subpath Imports
+
+These entrypoints are included in `@nexus-js/core`; they are not separate packages
+to install.
+
+| Import                                  | Purpose                                                  |
+| --------------------------------------- | -------------------------------------------------------- |
+| `@nexus-js/core/state`                  | [Synchronized state](/nexus/docs/state/)                 |
+| `@nexus-js/core/relay`                  | [Provider forwarding between graphs](/nexus/docs/relay/) |
+| `@nexus-js/core/transport`              | Transport contracts for adapter authors                  |
+| `@nexus-js/core/transport/virtual-port` | Port multiplexing over message buses                     |
+
+For example:
+
+```ts
+import { connectNexusStore } from "@nexus-js/core/state";
+import { relayService } from "@nexus-js/core/relay";
+```
+
+Applications using an existing adapter normally do not need the low-level
+transport entrypoints.

@@ -1,0 +1,138 @@
+---
+title: Remote Resources
+description: Return objects that stay in their owning context and explicitly manage their remote references.
+---
+
+A remote resource is an object that stays in its owning context while another
+context calls its methods. Use it for a subscription, document session, cursor,
+or other operation with continuing state.
+
+## Describe The Returned Object
+
+Extend the document contract with an observation that returns a subscription.
+Keep these definitions in the shared module alongside the existing Token:
+
+```ts title="shared.ts (contract additions)"
+import type { RefWrapper } from "@nexus-js/core";
+
+export interface DocumentChange {
+  title: string;
+}
+
+export type ChangeListener = (
+  change: DocumentChange,
+) => void | PromiseLike<void>;
+
+export interface DocumentSubscription {
+  stop(): void;
+}
+
+// Add to the existing DocumentService interface:
+export interface DocumentService {
+  watch(
+    documentId: string,
+    onChange: ChangeListener,
+  ): RefWrapper<DocumentSubscription>;
+}
+```
+
+The explicit `RefWrapper` result tells the remote type mapping that this object
+is a reference, rather than a copied data value.
+
+## Return A Reference
+
+The following `watch` method belongs to your provided document service. `app` is
+its configured owner. The application-owned `documentEvents.subscribe` returns a
+synchronous unsubscribe function; `reportFailure` records delivery failures.
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+const watch: DocumentService["watch"] = (documentId, onChange) => {
+  const unsubscribe = documentEvents.subscribe(documentId, (change) => {
+    void Promise.resolve(onChange(change)).catch(reportFailure);
+  });
+  let stopped = false;
+
+  return app.ref({
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      unsubscribe();
+      Nexus.release(onChange);
+    },
+  });
+};
+```
+
+Add `watch` to the provided service object. The returned object captures this observation's
+unsubscribe function and callback. It stays in the provider context. `app.ref`
+marks the object for reference transfer when the response is encoded.
+
+This is an application method excerpt, not a complete event-source implementation.
+A production event source also needs an application-owned shutdown path for
+abandoned observations and delivery failures; releasing a communication reference
+does not automatically unsubscribe a local event listener.
+
+## Use And Release The Subscription
+
+```ts
+import { Nexus } from "@nexus-js/core";
+
+const subscription = await documents.watch("intro", (change) => {
+  panel.apply(change);
+});
+
+try {
+  await waitUntilPanelCloses();
+} finally {
+  try {
+    await subscription.stop();
+  } finally {
+    Nexus.release(subscription);
+  }
+}
+```
+
+`panel` and `waitUntilPanelCloses` belong to the application. Remote methods are
+awaitable even when the provider implements them synchronously.
+
+Two different lifetimes are explicit here:
+
+- `stop()` ends the business observation and releases its received callback.
+- `Nexus.release(subscription)` gives up the consumer's remote reference.
+
+Releasing a reference does not invoke `stop`, `unsubscribe`, or another business
+method. Other local or remote references may keep the object alive; release does
+not promise immediate garbage collection.
+
+## Scope-Based Release
+
+With TypeScript explicit resource management enabled, refs returned through a
+`RefWrapper` contract support `using`:
+
+```ts
+{
+  using subscription = await documents.watch("intro", onChange);
+  try {
+    await waitUntilPanelCloses();
+  } finally {
+    await subscription.stop();
+  }
+} // Releases the reference, without another business stop call.
+```
+
+Scope exit performs the same local, idempotent release as `Nexus.release`. It does
+not wait for a remote business acknowledgement.
+
+## Disconnects And Ownership
+
+Refs and callbacks are session-bound. Disconnect invalidates them and fails
+pending calls, but does not reverse business side effects or detach application
+listeners. Coordinate business cleanup with your application's ownership model.
+
+Ordinary root service proxies are lightweight access descriptions and do not
+require release. Release only remote refs and callbacks actually held by your
+code. See [Connection lifecycle](/nexus/docs/proxy-lifecycle/) and the
+[resource reference](/nexus/docs/reference/resources/).

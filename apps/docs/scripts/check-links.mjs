@@ -26,6 +26,22 @@ for (const [file, $] of pages) {
     base + path.relative(root, file).replace(/index\.html$/, ""),
     origin,
   );
+  if (pageUrl.pathname.startsWith(`${base}docs/`)) {
+    const active = $('#nd-sidebar a[data-active="true"]');
+    if (
+      active.length !== 1 ||
+      new URL(active.attr("href") ?? "", pageUrl).pathname !== pageUrl.pathname
+    ) {
+      failures.push(
+        `${pageUrl.pathname}: sidebar must identify the current page`,
+      );
+    }
+    if (active.parents('[data-state="closed"]').length) {
+      failures.push(
+        `${pageUrl.pathname}: current page is inside a closed sidebar folder`,
+      );
+    }
+  }
   for (const block of $(".prose pre").toArray()) {
     if (!$(block).closest("figure.shiki").find("button[aria-label]").length)
       failures.push(

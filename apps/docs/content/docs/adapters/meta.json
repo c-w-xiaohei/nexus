@@ -1,0 +1,5 @@
+{
+  "title": "Adapters",
+  "defaultOpen": false,
+  "pages": ["../platforms", "../chrome", "../iframe", "../node-ipc"]
+}

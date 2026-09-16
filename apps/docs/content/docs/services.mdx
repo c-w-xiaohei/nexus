@@ -1,0 +1,107 @@
+---
+title: Services
+description: Share contracts and register object or class implementations with a Nexus runtime.
+---
+
+A service is a local object that another context can access through a shared
+contract. The [quick start](/nexus/docs/getting-started/) defines `DocumentService`
+and `DocumentToken` in `shared.ts`; the examples here reuse that module.
+
+## Share The Contract
+
+Keep interfaces and Tokens in code imported by both contexts. If a service type
+already exists, import it rather than repeating its shape beside every Token.
+Use stable, namespaced IDs such as `example:documents`.
+
+A Token identifies the service, not its location. The same contract can be
+provided by several contexts; consumers select a connection before getting it.
+
+## Register An Object
+
+Assume `runtime.ts` exports an already configured local `app` instance:
+
+```ts
+import { app } from "./runtime";
+import { DocumentToken, type DocumentService } from "./shared";
+
+const documents: DocumentService = {
+  async summarize(documentId) {
+    return `Summary of ${documentId}`;
+  },
+};
+
+app.provide(DocumentToken, documents);
+```
+
+This is also the registration path for runtime-created dependencies. `provide`
+registers the actual object; `connection.get` does not construct another instance.
+
+## Register A Class
+
+For class-based services, use the configured owner's instance-bound decorator:
+
+```ts
+import { app } from "./runtime";
+import { DocumentToken, type DocumentService } from "./shared";
+
+@app.Expose(DocumentToken)
+class Documents implements DocumentService {
+  async summarize(documentId: string) {
+    return `Summary of ${documentId}`;
+  }
+}
+```
+
+Load this module during synchronous startup registration, before the bootstrap
+snapshot. Use either this class provider or the object provider for the Token.
+
+## Startup And Live Registration
+
+Configure every participating runtime before acquiring connections. Register
+static providers immediately during startup. `await app.ready()` waits for local
+initialization; it does not wait for other contexts or their services.
+
+For a dependency created asynchronously, finish local startup and register it live:
+
+```ts
+await app.ready();
+const documents = await loadDocumentService();
+app.provide(DocumentToken, documents);
+```
+
+Here `loadDocumentService` is application code returning a `DocumentService`.
+Consumers can call `safeGet` again to check the updated catalog. If consumers need
+a business-ready signal, publish the provider before updating identity; see
+[Connection lifecycle](/nexus/docs/proxy-lifecycle/).
+
+`configure({ providers })` supports bootstrap composition. `provide` also accepts
+a provider descriptor or a batch. Duplicate Token IDs in one submitted batch are
+rejected without partial registration. See [Core API](/nexus/docs/reference/).
+
+## Organize Tokens With TokenSpace
+
+Use a TokenSpace when several services share a namespace:
+
+```ts
+import { TokenSpace, type AdapterModel } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+const workspace = new TokenSpace<AdapterModel>({ name: "workspace" });
+const documents = workspace.space("documents");
+export const WorkspaceDocumentToken =
+  documents.token<DocumentService>("reader");
+// ID: workspace:documents:reader
+```
+
+Use an adapter's model instead of `AdapterModel` when the contracts intentionally
+belong to that model. TokenSpace organizes names and types; it does not store
+targets or discover providers.
+
+## Multiple Runtimes
+
+One JavaScript context can host multiple Nexus instances for separate transport
+graphs. Name each instance after the graph it owns, configure each separately,
+and register providers on the intended owner. Passing a Token between modules
+does not select a runtime or connect the graphs.
+
+Next: [Establishing connections](/nexus/docs/connections/).

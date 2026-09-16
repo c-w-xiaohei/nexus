@@ -1,3 +1,5 @@
 {
-  "pages": ["1.2"]
+  "title": "Migrations",
+  "defaultOpen": false,
+  "pages": ["2.0-alpha", "1.2"]
 }

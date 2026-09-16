@@ -1,0 +1,246 @@
+---
+title: What Is Nexus?
+description: One communication model for services, callbacks, and resources across changing JavaScript contexts.
+---
+
+Nexus gives multi-context JavaScript applications one model for service calls,
+callbacks, remote objects, and the connections they depend on.
+
+<span id="why-nexus-exists" />
+
+## Why Nexus
+
+Imagine a browser extension that summarizes a page in its side panel. A content
+script reads the document; the panel displays the result. These contexts cannot
+directly share functions or objects, so they communicate through messages.
+
+<Mermaid
+  caption="The side panel communicates with a content script in the selected tab and frame."
+  chart={`flowchart LR
+    P[Side panel UI] ---|Extension messaging| C
+    subgraph TAB[Selected tab and frame]
+      C[Content script] -->|Reads| D[Page DOM]
+    end`}
+/>
+
+### When Messages Split A Feature
+
+One request is straightforward: `tabs.sendMessage` can address that content
+script and return its response. An RPC library can express the exchange as
+`await documents.summarize(documentId)`.
+
+Keeping the panel updated is a different problem. Updates must reach the right
+view, the observation must be stopped when it is no longer needed, and a page
+reload must end the old work. With raw messages, one feature grows into event
+handlers, subscription IDs, and cleanup logic on both sides.
+
+**Nexus keeps that relationship in functions and objects, with a session that
+defines how long they can communicate.**
+
+<span id="nexus-in-action" />
+
+<span id="start-with-one-service-call" />
+
+<span id="add-progress-without-an-event-dispatcher" />
+
+### Keep Related Behavior Together
+
+<span id="keep-a-subscription-not-a-subscription-id" />
+
+Here `documents` is the remote service and `panel` is local UI. The callback
+updates this panel; the returned object controls this observation:
+
+```ts
+const observation = await documents.watch(documentId, (change) => {
+  panel.apply(change);
+});
+
+// Later, when this panel no longer needs updates:
+await observation.stop();
+```
+
+The **callback** stays in the side panel, along with the `panel` it captures.
+The service can call it remotely and await its result. No separate event handler
+needs to look up which view should receive the update.
+
+The returned **ref** points to an observation object in the content script.
+`observation.stop()` calls that object's method. Nexus handles object IDs and
+message routing underneath; the application works with the object itself.
+
+<Mermaid
+  caption="Calls travel both ways. The callback and observation object stay in their original contexts."
+  chart={`sequenceDiagram
+    participant UI as Side panel
+    participant CS as Content script
+    UI->>CS: watch(documentId, onChange)
+    CS-->>UI: observation ref
+    CS->>UI: onChange(change)
+    UI-->>CS: Callback result
+    UI->>CS: observation.stop()
+    CS-->>UI: Observation stopped`}
+/>
+
+A cursor, editor session, or task handle can use the same pattern. The provider
+returns the object through `ref(...)`. Stopping its business activity and releasing
+the remote reference are separate actions; see the
+[resource guide](/nexus/docs/remote-resources/) for the complete cleanup pattern.
+
+<span id="then-the-page-navigates" />
+
+### When The Peer Disappears
+
+Extension contexts have independent lifetimes: popups close, frames unload,
+tabs navigate, and the background can restart. A working call or remote object
+can lose its peer at any moment.
+
+Suppose our panel has an active observation and a summary request in flight when
+the page reloads. The panel survives, but the content script is replaced. The
+tab and frame IDs may stay the same, but the old observation and pending request
+do not belong to the replacement document.
+
+<Mermaid
+  caption="The peer disappears without replying. Nexus rejects pending work; later calls through old refs fail locally."
+  chart={`sequenceDiagram
+    participant UI as Side panel
+    participant CS as Content script
+    UI->>CS: summarize(documentId)
+    Note over CS: Page unloads before replying
+    Note over UI: Nexus detects disconnection
+    UI->>UI: Reject pending summary: E_CONN_CLOSED
+    UI->>UI: Clear session-held references
+    Note over UI: Later: await observation.stop()
+    UI->>UI: Fail locally; no message sent`}
+/>
+
+**The connection is a cleanup boundary for calls and references.** Once Nexus
+observes the disconnect, the pending summary rejects with `E_CONN_CLOSED` without
+waiting for its timeout. Calls through the old service proxy or observation ref
+also fail instead of reaching the new page.
+
+Explicitly disconnecting demonstrates the same effect. Here the summary is still
+pending and the observation has not been stopped or released:
+
+```ts
+// Start the call; observe its outcome as a Result.
+const pending = Nexus.safeCall(documents.summarize(documentId));
+connection.disconnect();
+
+const summary = await pending;
+if (summary.isErr()) console.log(summary.error.code); // E_CONN_CLOSED
+
+// The old ref cannot be used after disconnect.
+const stopped = await Nexus.safeCall(observation.stop());
+console.log(stopped.isErr()); // true
+```
+
+With an ordinary `await` instead of `safeCall`, these failures throw. A peer
+unloading triggers the same session cleanup once its disconnection is observed.
+
+Nexus removes the session's pending-call records and releases its holds on callback
+and object references. Each feature no longer needs a separate disconnect loop
+over these records. This does not invoke business `stop()` methods or destroy
+objects still held elsewhere.
+
+The application can reconnect and create a fresh observation. The old handles
+stay invalid: **the same address does not mean the same session.**
+
+<span id="one-model-across-contexts" />
+
+### One Model Across Contexts
+
+Chrome ports, iframe messaging, and process IPC have different APIs. Without a
+common layer, each integration can grow its own way to identify services, invoke
+callbacks, and clean up remote handles.
+
+The business-facing structure stays the same across Nexus adapters:
+
+```ts
+const connection = await app.connect({ target });
+const documents = connection.get(DocumentToken);
+const observation = await documents.watch(documentId, onChange);
+```
+
+The application chooses `target` using the adapter's target type. `DocumentToken`
+identifies the shared service contract. Calls, callbacks, and refs follow the
+same lifecycle rules on each adapter.
+
+<Mermaid
+  caption="Choose the platform adapter; keep the same service and session model."
+  chart={`flowchart TB
+    B[Services, callbacks, refs] --- S[Connection / session]
+    S --- C[Chrome adapter]
+    S --- F[iframe adapter]
+    S --- N[Node IPC adapter]`}
+/>
+
+**One way to address a peer, use its capabilities, and handle its disappearance.**
+Platform setup and target discovery still vary, but each integration does not need
+its own RPC and resource protocol. That shared mental model is what lets a
+plugin-style application grow without every feature inventing new communication
+rules.
+[Core concepts →](/nexus/docs/concepts/)
+
+<span id="nexus-and-alternatives" />
+
+## Alternatives
+
+**Already have a stable channel and a clear owner for its lifetime?** Comlink's
+object proxies or comctx's Provider/Injector services may cover what you need.
+
+**Have multiple peers that come and go, with calls and resources spanning their
+lifetimes?** Nexus combines connection management, callbacks, and remote objects
+in one model across adapters. The distinction is who manages these relationships,
+not whether the libraries can send messages through a complex topology.
+
+**Yes** = built in. **Custom** = requires a custom transfer handler/protocol.
+**—** = no built-in API for this capability.
+
+| Capability                                              | Nexus | Comlink | comctx |
+| ------------------------------------------------------- | ----- | ------- | ------ |
+| Typed remote calls                                      | Yes   | Yes     | Yes    |
+| Remote callbacks                                        | Yes   | Yes¹    | Yes    |
+| Callbacks over data-only transports (no port transfer)  | Yes   | Custom¹ | Yes⁴   |
+| Await a remote callback's result                        | Yes   | Yes     | —⁴     |
+| Explicit callback-reference release                     | Yes   | Yes     | —⁴     |
+| Return objects by reference                             | Yes   | Yes¹    | —      |
+| Explicit remote-reference release                       | Yes   | Yes     | —      |
+| Explicit connection/session API                         | Yes   | —       | —      |
+| Acquire and reuse a session by target                   | Yes   | —       | —      |
+| Filter sessions by peer metadata                        | Yes   | —       | —      |
+| Acquire a fixed snapshot of multiple sessions           | Yes   | —       | —      |
+| Fail pending calls and clear refs on session disconnect | Yes²  | —       | —      |
+| Configurable per-call timeout                           | Yes   | —       | —³     |
+
+Comlink wraps a supplied endpoint; comctx uses a supplied messaging adapter.
+Neither exposes a Connection/session-management layer. Transport lifecycle,
+message namespaces, and individual proxy release are not equivalent to managing
+all calls and references as one peer session.
+
+1. **Comlink references** use its built-in `proxy` transfer handler, which creates
+   a MessageChannel and transfers a MessagePort. Native `window.postMessage` supports
+   that transfer; Chrome extension `runtime.sendMessage` does not. Ordinary Comlink
+   RPC accepts custom endpoints, but callbacks on a data-only transport need a
+   custom reference protocol/handler. Nexus callbacks and object refs use the
+   existing session without transferring a port.
+2. **Nexus cleanup** fails pending calls and clears session communication resources.
+   It does not stop application-owned tasks, undo effects, or automatically reconnect.
+3. **comctx heartbeat** checks provider readiness; it is not a general RPC timeout.
+4. **comctx callbacks** encode top-level function arguments as IDs and invoke them
+   through ordinary adapter messages. They are one-way notifications: callback
+   return values and exceptions are not sent back to the provider. Version 1.7.5
+   has no per-callback release API; callback listeners remain registered until
+   the adapter is cleaned up. Nexus callbacks use request/response calls and
+   support explicit reference release.
+
+<span id="start-building" />
+
+## Next Steps
+
+- [Quick start](/nexus/docs/getting-started/): make your first service call.
+- [Passing callbacks](/nexus/docs/callbacks/): express progress and local closures.
+- [Remote resources](/nexus/docs/remote-resources/): work with objects across contexts.
+- [Core concepts](/nexus/docs/concepts/): understand the model behind these APIs.
+- [Packages](/nexus/docs/packages/) and [adapters](/nexus/docs/platforms/): choose runtime integration.
+
+These guides describe the Core 2.0 alpha contract under development. For an
+existing application, use the [migration guide](/nexus/docs/migrations/2.0-alpha/).

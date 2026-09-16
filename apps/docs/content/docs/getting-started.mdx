@@ -1,153 +1,122 @@
 ---
-title: Getting Started With Nexus
-description: Set up your first typed Nexus service across JavaScript contexts.
+title: Quick Start
+description: Provide a document service in one context and call it from another.
 ---
 
-Call a background service from a Chrome extension content script using a shared
-TypeScript contract. This guide assumes an existing extension project with both
-bundles registered in its manifest.
+This guide connects two JavaScript contexts and calls a shared document service.
+It uses a Chrome extension for a concrete transport: the background owns the
+service and a content script consumes it. The service contract and call pattern
+are the same with other [adapters](/nexus/docs/platforms/).
 
-<Callout type="warn" title="Configure both sides">
-  The background context and content script each need their own Nexus setup.
-</Callout>
+Use an existing TypeScript extension project that bundles a background service
+worker and a content script into its manifest. The browser must load both bundles;
+Nexus configures communication between them.
 
 <Steps>
 <Step>
 
-## Install The Core Package
+## Install
 
 <InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
-
-For other package combinations, see [Packages](/nexus/docs/packages/). For
-adapter-specific setup, see [Platforms](/nexus/docs/platforms/).
 
 </Step>
 <Step>
 
 ## Define A Shared Contract
 
-Put the token in code that both the background and content-script bundles can
-import. If the service type already exists, import it instead of redefining it.
+Both bundles import this module. It contains the service's TypeScript interface
+and its runtime identifier, the Token:
 
-```ts title="service-contract.ts"
-export interface PingService {
-  ping(input: string): Promise<string>;
-}
-```
-
-```ts
+```ts title="shared.ts"
 import { Token } from "@nexus-js/core";
-import type { PingService } from "./service-contract";
 
-export const PingToken = new Token<PingService>("example:ping-service");
+export interface DocumentService {
+  summarize(documentId: string): Promise<string>;
+}
+
+export const DocumentToken = new Token<DocumentService>("example:documents");
 ```
 
-`Token<T>` connects the compile-time service shape to its runtime identity.
+The contract describes a capability. The connection target will be chosen by the
+consumer, separately from the Token.
 
 </Step>
 <Step>
 
-## Publish A Provider
+## Provide The Service
 
-Use the Chrome helper in the background bundle and expose the provider there:
+Configure the background runtime and register an object implementing the contract:
 
-```ts
+```ts title="background.ts"
 import { usingBackgroundScript } from "@nexus-js/chrome";
-import { PingToken } from "./shared";
-import type { PingService } from "./service-contract";
+import { DocumentToken, type DocumentService } from "./shared";
 
-const backgroundNexus = usingBackgroundScript();
+const background = usingBackgroundScript();
 
-@backgroundNexus.Expose(PingToken)
-class PingServiceImpl implements PingService {
-  async ping(input: string): Promise<string> {
-    return `pong:${input}`;
-  }
-}
-```
-
-An already-created object can be registered instead:
-
-```ts
-backgroundNexus.provide(PingToken, {
-  async ping(input) {
-    return `pong:${input}`;
+const documents: DocumentService = {
+  async summarize(documentId) {
+    return `Summary of ${documentId}`;
   },
-});
+};
+
+background.provide(DocumentToken, documents);
 ```
 
-Use the instance-bound decorator for classes and `provide(...)` for object
-providers or live registration.
+Register the provider synchronously after setup so it is included in the startup
+catalog. [Providing services](/nexus/docs/services/) also covers class providers
+and services registered after startup.
 
 </Step>
 <Step>
 
-## Connect And Get A Service
+## Connect And Call
 
-Configure the content script, connect to the background, then get its provider:
+Configure the content-script runtime, acquire a connection, and get the service:
 
-```ts
+```ts title="content.ts"
 import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
-import { PingToken } from "./shared";
+import { DocumentToken } from "./shared";
 
-const contentNexus = usingContentScript();
-const connection = await contentNexus.connect({
-  target: chromeTarget.background(),
-});
-const remote = connection.get(PingToken);
+const content = usingContentScript();
 
-console.log(await remote.ping("hello")); // "pong:hello"
-```
-
-`connect(...)` returns a ready shared session. `connection.get(...)` checks the
-current provider catalog synchronously and returns a lightweight proxy. Use the
-safe forms when either boundary is expected to fail:
-
-```ts
-const connected = await contentNexus.safeConnect({
-  target: chromeTarget.background(),
-});
-
-if (connected.isErr()) {
-  console.error(connected.error.code, connected.error.message);
-} else {
-  const service = connected.value.safeGet(PingToken);
-  if (service.isErr()) console.error(service.error.code);
-  else console.log(await service.value.ping("hello"));
+async function main() {
+  const connection = await content.connect({
+    target: chromeTarget.background(),
+  });
+  const documents = connection.get(DocumentToken);
+  console.log(await documents.summarize("intro"));
 }
+
+void main().catch(console.error);
 ```
 
-`safeGet` covers service acquisition, not calls. A proxy call is lazy: it sends
-only when consumed with `await`, `then`, or a native Promise helper. Use
-`Nexus.safeCall(proxy.method())` when a single RPC failure should be a Result.
+There are three distinct operations:
 
-<Callout type="warn" title="Proxies are session-bound">
-
-- A proxy is bound to the connection that supplied it.
-- Disconnect, reload, daemon restart, or session replacement invalidates it.
-- Connect again and get a new proxy; it does not silently retarget or reconnect.
-
-</Callout>
+1. `connect` asynchronously acquires a ready session.
+2. `get` synchronously checks the service catalog and returns a proxy.
+3. `await` consumes the method call and receives its remote result.
 
 </Step>
 </Steps>
 
-## Know What "Working" Means
+## Run It
 
-The content script should print `pong:hello`. If it fails, check that both helpers ran in the intended bundles, the provider
-uses the same `Token`, and the target resolves to the expected destination.
+Build the extension with your project's build command, load or reload it in
+`chrome://extensions`, and open a page matched by its content-script registration.
+In that page's developer console, expect:
 
-## What To Read Next
+```text
+Summary of intro
+```
 
-- Product mental model: [Concepts](/nexus/docs/concepts/)
-- Platform and adapter overview: [Platforms](/nexus/docs/platforms/)
-- Package map: [Packages](/nexus/docs/packages/)
-- Synchronized state: [State quick start](/nexus/docs/state/quick-start/)
+If it does not appear, check that the background and content bundles both run,
+both import the same shared Token definition, and the extension was reloaded
+after rebuilding. See [Troubleshooting](/nexus/docs/troubleshooting/) for connection
+and service-acquisition failures.
 
-## Migrating Existing Code
+## Next Steps
 
-Core 2.0 alpha removes the one-step acquisition and provider-wait APIs. Replace
-`create`/`safeCreate` with `connect`/`safeConnect`, then use `get`/`safeGet` on
-the returned connection. Replace both old multicast families with
-`connectMulticast(...).get(Token)`. See the [Core 2.0 alpha migration](/nexus/docs/migrations/2.0-alpha/)
-for the full contract and the default-target removal.
+- [Calling services](/nexus/docs/remote-calls/): methods, properties, and execution timing.
+- [Passing callbacks](/nexus/docs/callbacks/): add progress reporting to this service.
+- [Remote resources](/nexus/docs/remote-resources/): return an ongoing document subscription.
+- [Errors and timeouts](/nexus/docs/error-handling/): handle each failure boundary explicitly.

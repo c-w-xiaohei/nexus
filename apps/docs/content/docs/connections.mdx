@@ -1,0 +1,90 @@
+---
+title: Connections
+description: Acquire a shared session by exact target or wait for an incoming peer.
+---
+
+Before getting a service, acquire a Connection. It represents one ready,
+bidirectional session between two configured Nexus runtimes.
+
+Examples below assume `app` is your configured runtime and `target` comes from
+your adapter's exact target constructor. See [Adapters](/nexus/docs/platforms/)
+for the platform setup.
+
+## Connect To A Known Target
+
+```ts
+const connection = await app.connect({ target });
+const documents = connection.get(DocumentToken);
+```
+
+Nexus reuses a ready session matching that address or starts a connection attempt.
+The application chooses the address, including any active-tab, frame, or process
+discovery needed to obtain it. A failed attempt is reported without automatic
+retry.
+
+The remote side can get your services over the same session; physical connection
+direction does not impose client/server RPC roles.
+
+## Constrain The Peer
+
+Add `where` to check the peer identity and locally observed connection facts:
+
+```ts
+const connection = await app.connect({
+  target,
+  where: (contextMeta, connectionMeta) =>
+    matchesWorkspace(contextMeta) && acceptsTransport(connectionMeta),
+});
+```
+
+`matchesWorkspace` and `acceptsTransport` are application predicates over your
+adapter model. Both the target and the predicate must match. A mismatch does not
+make Nexus search elsewhere or redial.
+
+The predicate selects a connection at acquisition time. Later calls use that
+session without re-running it. Use [policy](/nexus/docs/auth-and-policy/) for
+connection admission and per-call authorization.
+
+## Wait For A Peer To Connect
+
+Omit `target` when another context will establish the connection:
+
+```ts
+const connection = await app.connect({
+  where: matchesWorkspace,
+  timeout: 10_000,
+});
+```
+
+This waits for exactly one matching ready session. It never dials or searches for
+a service. More than one match is an ambiguity error. To take all current matches,
+use [multiple connections](/nexus/docs/multiple-connections/).
+
+## Connect During Startup
+
+An endpoint's `connectTo` lists exact targets to dial once after listening starts:
+
+```ts
+app.configure({
+  endpoint: { ...endpointConfig, connectTo: [target] },
+});
+```
+
+`endpointConfig` is your adapter's endpoint configuration. Standard adapter helpers
+can also accept `connectTo`. Startup dialing needs no Token, does not wait for
+providers, and is not awaited by `ready()`. Failures are logged. There is no
+automatic reconnect. Omitting the list starts no outgoing connections; `[]`
+clears an inherited list during configuration composition.
+
+For a parent creating a child context, the parent starts listening first. The
+child can then dial the parent once, while the parent waits passively for it.
+
+## Waiting And Ownership
+
+Concurrent acquisitions can share one connection attempt. A timeout or an aborted
+`signal` ends this caller's wait without closing a shared session. See
+[Errors and timeouts](/nexus/docs/error-handling/) for budgets and cancellation.
+
+The runtime owns the connection. Dropping your local handle does not disconnect
+it. `connection.disconnect()` ends it for every user of that session. See
+[Connection lifecycle](/nexus/docs/proxy-lifecycle/).

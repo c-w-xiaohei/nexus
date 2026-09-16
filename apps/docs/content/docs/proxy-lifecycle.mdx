@@ -1,84 +1,126 @@
 ---
 title: Connection Lifecycle
-description: Observe shared Nexus connections and recreate session-bound resources.
+description: Observe connections, respond to identity changes, and replace disconnected handles.
 ---
 
-A `Connection` is a shared session handle, not a caller-owned lease. Dropping a
-connection, collection, or root service proxy does not close the session.
-Ordinary service proxies do not expose lifecycle status or subscriptions. Retain
-the `Connection` used to acquire a proxy when application code must observe that
-session.
+A Connection is a shared session handle. Keep the handle used to acquire your
+service when the application needs to observe its lifetime.
 
-## Connection Lifetime
+## Observe Existing And New Connections
 
-```ts
-const connection = await nexus.connect({ target });
-
-const stop = connection.onDisconnected((reason) => {
-  recordDisconnect(connection.id, reason);
-});
-
-// Explicitly ends the shared session for every local user.
-connection.disconnect();
-stop();
-```
-
-`connection.status` is `"connected"` or `"disconnected"`. Disconnect is
-terminal: a later connection has a new identity, and existing proxies and refs
-never retarget or revive. `onDisconnected` notifies each subscription at most
-once, including when registered after termination. `disconnect()` is idempotent
-and does not wait for a remote business acknowledgement.
-
-## Observe Connections
-
-Use `onConnect` to receive each existing and future ready session once. It does
-not dial, wait for a Token, or retry application initialization.
+Use `onConnect` to initialize each current or future ready session once:
 
 ```ts
-const stop = nexus.onConnect(matchesReadyContent, (connection) => {
-  void initializeSource(connection).catch(reportSourceFailure);
+import { DocumentToken } from "./shared";
+
+const stopObserving = app.onConnect((connection) => {
+  const acquired = connection.safeGet(DocumentToken);
+  if (acquired.isErr()) {
+    console.error(connection.id, acquired.error.code);
+    return;
+  }
+
+  const stopDisconnect = connection.onDisconnected((reason) => {
+    markSourceOffline(connection.id, reason);
+  });
+
+  void acquired.value.summarize("intro").then(
+    (summary) => {
+      if (connection.status === "connected") {
+        showSummary(connection.id, summary);
+      }
+    },
+    (error) => console.error(connection.id, error),
+  );
+
+  // Application bookkeeping ends these listeners if the view closes first.
+  registerViewCleanup(stopDisconnect);
 });
 ```
 
-The listener may be registered before bootstrap. Stopping it only ends future
-notifications; it neither disconnects sessions nor cancels work already started.
+`app` is configured; `markSourceOffline`, `showSummary`, and `registerViewCleanup`
+belong to the application's view. Stopping `stopObserving` prevents future
+deliveries, but does not undo initialization or stop listeners already registered
+inside it.
 
-## Observe Identity
+For selected peers use `app.onConnect(matchesSource, listener)`. A subscription
+delivers each session at most once, including when an identity update makes a
+previously unmatched session eligible. The listener can be registered before
+bootstrap; it does not initiate dialing or wait for a particular service.
 
-`connection.subscribeIdentity(listener)` immediately receives the remote full
-`ContextMeta`, then every later validated complete update for that session:
+## Observe One Session's Identity
+
+Use `subscribeIdentity` when behavior depends on changes within the same session:
 
 ```ts
 let wasReady = false;
 
-const stop = connection.subscribeIdentity((meta) => {
-  const becameReady = !wasReady && meta.pageReady;
-  wasReady = meta.pageReady;
-  if (becameReady) void initializeSource(connection).catch(reportSourceFailure);
+const stopIdentity = connection.subscribeIdentity((meta) => {
+  const ready = isDocumentSourceReady(meta);
+  if (ready && !wasReady) {
+    void initializeSource(connection).catch(console.error);
+  }
+  wasReady = ready;
 });
 ```
 
-It does not filter fields, deduplicate equal values, or invoke returned cleanup
-functions. A disconnected connection does not issue an identity update; observe
-that transition through `onDisconnected`.
+The application defines `isDocumentSourceReady` and `initializeSource`. The
+listener immediately receives the current full identity, then each accepted
+full update, even when values are equal. It ends on disconnect; a subscription
+to an already disconnected handle receives no identity delivery.
 
-The `where` passed to `connect` is an acquisition filter, not a retained call
-constraint. Identity changes alone do not invalidate ordinary calls. State handles
-separately observe their selection predicate and can become `stale`; authorization
-policy may also close a session or reject a call.
+The framework does not select fields or serialize asynchronous application work.
+Returned cleanup functions are not invoked. See
+[Identity and metadata](/nexus/docs/identity-and-metadata/) for declaring fields.
 
-## Replacement
+## Publish Before Announcing Business Readiness
 
-Service proxies, refs, and callback handles are session-bound. After a reload,
-daemon restart, or disconnect, reconnect and get a new proxy. A
-`ConnectionCollection` is similarly fixed: it does not add new sessions, remove
-disconnected ones, or replace members after reconnect.
+When a provider depends on asynchronous setup, publish it first, then update an
+application-defined ready field:
 
-## Reserved Proxy Names
+```ts
+app.provide(DocumentToken, documents);
+await app.updateIdentity({ documentsReady: true });
+```
 
-The root proxy suppresses only `then`, so it is not accidentally awaited. Root
-services may expose business members named `catch`, `finally`, or `connection`.
-On a nested property path, `then`, `catch`, `finally`, and `connection` are
-reserved for lazy-call consumption and local provenance. Do not use those names
-for nested remote business members; use a different service method or access the
-member through a non-reserved path.
+Declare `documentsReady` in your context metadata model. A peer using
+`onConnect(matchesReadySource, listener)` can then initialize the session once.
+For repeated ready/unready transitions, use `subscribeIdentity` instead.
+
+On the same live session, the earlier catalog update is applied before the later
+identity notification. `updateIdentity` completion is not an acknowledgement that
+every peer has run its application listener. Readiness is a business declaration;
+`get` still checks the real catalog.
+
+## Handle Disconnection
+
+`connection.status` is `"connected"` or `"disconnected"`. `onDisconnected` delivers
+one terminal reason per subscription, including late subscribers. Reasons are
+`"local"`, `"remote"`, and `"protocol"`.
+
+Disconnect removes the session from routing and clears its pending calls and
+communication resources before normal public disconnect notification. Business
+cleanup remains application-owned. A rejected business call by itself does not
+disconnect the session.
+
+After disconnect, acquire a new connection and get a fresh proxy:
+
+```ts
+const replacement = await app.connect({ target });
+const documents = replacement.get(DocumentToken);
+```
+
+Prevent old asynchronous work from updating a replacement view by associating
+results with their connection or an application lifecycle revision. Nexus does
+not automatically retry, retarget handles, or replay methods.
+
+## End A Shared Session Deliberately
+
+```ts
+connection.disconnect();
+```
+
+This is idempotent and affects every local user of that session. It does not wait
+for remote business acknowledgement. Dropping a handle, a collection, or a root
+service proxy does not close the session. A view that only needs to stop observing
+should cancel its subscriptions and release its own refs instead.

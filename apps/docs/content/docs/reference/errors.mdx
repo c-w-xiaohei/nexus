@@ -1,0 +1,53 @@
+---
+title: Error Reference
+description: Error boundaries and commonly handled stable Nexus error codes.
+---
+
+Nexus errors carry a stable `code`, a message, and diagnostic context/cause when
+available. Use the safe entry point's inferred error union for narrowing rather
+than a blanket Error cast. See [Errors and timeouts](/nexus/docs/error-handling/)
+for handling patterns.
+
+## Public Error Unions
+
+| Type                     | Boundary                                           |
+| ------------------------ | -------------------------------------------------- |
+| `ConnectionAcquireError` | `safeConnect` and `safeConnectMulticast`           |
+| `ResourceAcquireError`   | `safeGet` and each collection get Result           |
+| `NexusCallError`         | `Nexus.safeCall` and typed call rejection handlers |
+
+These are unions of concrete errors, not wrapper exceptions. Configuration and
+other safe runtime methods currently return `Result<..., Error>` as declared by
+their signatures.
+
+## Common Codes
+
+| Code                            | Meaning / response                                                     |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `E_USAGE_INVALID`               | Invalid API usage or options; fix the input                            |
+| `E_SERVICE_AMBIGUOUS`           | Passive single acquisition matched multiple sessions; narrow selection |
+| `E_SERVICE_ACQUISITION_TIMEOUT` | Acquisition budget expired                                             |
+| `E_ABORTED`                     | Acquisition wait was aborted                                           |
+| `E_CONN_CLOSED`                 | The bound session disconnected; obtain fresh handles                   |
+| `E_SERVICE_UNAVAILABLE`         | The service is absent from the relevant session                        |
+| `E_AUTH_CONNECT_DENIED`         | Connection admission was denied                                        |
+| `E_AUTH_CALL_DENIED`            | The requested operation was denied                                     |
+| `E_CALL_TIMEOUT`                | Local call waiting expired; remote execution may have occurred         |
+| `E_REMOTE_EXCEPTION`            | Remote business code threw                                             |
+| `E_PROVIDER_DUPLICATE_TOKEN`    | A provider submission contains duplicate IDs                           |
+
+This table lists common application-facing codes, not every transport or protocol
+variant. The exported concrete classes include `NexusUsageError`,
+`NexusDisconnectedError`, `NexusServiceError`, `NexusResourceError`,
+`NexusRemoteError`, `NexusConnectionError`, `NexusConnectionConstraintFailedError`,
+`NexusProtocolIncompatibleError`, `NexusHandshakeError`, `NexusTransportError`,
+`NexusEndpointConnectError`, `NexusEndpointListenError`,
+`NexusEndpointCapabilityError`, and `NexusProtocolError`.
+
+Framework failures keep their own classification when carried back from a peer.
+A business exception cannot impersonate a framework error by using the same code;
+it is reported as `NexusRemoteError`. Its serialized original error is retained
+for diagnosis.
+
+`instanceof` is useful within the same installed Core copy. Prefer `code` when
+handling serialized errors or applications with multiple package copies.

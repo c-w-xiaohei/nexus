@@ -1,0 +1,105 @@
+---
+title: Core API Reference
+description: Runtime setup, providers, Tokens, and the entry points of the Core API.
+---
+
+Import these APIs from `@nexus-js/core`. The reference describes the Core 2.0 alpha
+contract under development. Start with the [quick start](/nexus/docs/getting-started/)
+for a complete application example.
+
+## Nexus And nexus
+
+`new Nexus<M>()` creates an isolated runtime for adapter model `M`. `nexus` is the
+default singleton. Configure each runtime before demand operations.
+
+| Method                              | Return                         | Purpose                                                 |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------- |
+| `configure(config)`                 | Runtime                        | Add bootstrap configuration and schedule initialization |
+| `safeConfigure(config)`             | `Result<runtime, Error>`       | Safe configuration boundary                             |
+| `ready()`                           | `Promise<void>`                | Wait for local initialization                           |
+| `safeReady()`                       | `Promise<Result<void, Error>>` | Observe the same initialization outcome                 |
+| `provide(token, service, options?)` | Runtime                        | Register a provider                                     |
+| `safeProvide(...)`                  | `Result<runtime, Error>`       | Safe provider registration                              |
+| `updateIdentity(partialMeta)`       | `Promise<void>`                | Publish local identity updates                          |
+| `safeUpdateIdentity(partialMeta)`   | `Promise<Result<void, Error>>` | Safe identity-update boundary                           |
+
+Configuration is fixed at bootstrap. Register static providers in the synchronous
+startup window; after ready use `provide` for live registration. `ready` does not
+wait for remote peers or `connectTo` attempts.
+
+Acquisition and observation methods are covered in
+[Connection APIs](/nexus/docs/reference/connections/). `ref`, `release`, and
+`Nexus.safeCall` are covered in [Resources and calls](/nexus/docs/reference/resources/).
+
+## NexusConfig
+
+| Field                     | Meaning                                                          |
+| ------------------------- | ---------------------------------------------------------------- |
+| `endpoint.implementation` | Adapter `IEndpoint<M>` instance                                  |
+| `endpoint.meta`           | Local `ContextMetaOf<M>`                                         |
+| `endpoint.connectTo`      | Optional exact targets to dial once after listening starts       |
+| `providers`               | Bootstrap provider descriptors                                   |
+| `policy`                  | Connection and call authorization hooks                          |
+| `callTimeout`             | Positive finite local call budget in milliseconds; default 5,000 |
+
+A configured endpoint needs an implementation and metadata. Standard adapter
+helpers supply their platform-specific setup. An instance-bound `Endpoint`
+decorator is an alternative endpoint source; do not combine it with an explicit
+`configure({ endpoint })` source.
+
+`defineNexusConfig(config)` preserves inferred literals while checking the shape.
+`composeNexusConfig(layers)` combines layers left-to-right: endpoint fields,
+callTimeout, and provider IDs use later values; a supplied policy replaces the
+earlier policy. `connectTo` replaces the whole previous list.
+
+## Provider Forms
+
+```ts
+app.provide(DocumentToken, documents, { policy });
+app.provide({ token: DocumentToken, service: documents, policy });
+app.provide([{ token: DocumentToken, service: documents, policy }]);
+```
+
+These are alternative registration forms. `serviceProvider(token, service,
+options?)` builds a descriptor without registering it. Duplicate IDs in one
+submission fail atomically. Configuration layers compose by ID; a repeated ID
+in the final combined decorator/configuration startup batch is rejected.
+
+`@app.Expose(Token, options?)` registers a class at bootstrap. Its optional factory
+can provide constructor dependencies. The top-level `Expose` and `Endpoint`
+decorators bind to the default singleton; prefer the configured owner instance.
+
+See [Providing services](/nexus/docs/services/) and
+[Authorization](/nexus/docs/auth-and-policy/) for policy composition.
+
+## Token And TokenSpace
+
+`new Token<T>(id)` associates the runtime ID with the shared service type `T`.
+`Token<T, M>` can bind a contract to an adapter model. A Token's `id` is stable;
+it contains no connection target.
+
+`new TokenSpace<M>({ name })` creates a namespace:
+
+| Member                                  | Meaning                   |
+| --------------------------------------- | ------------------------- |
+| `name`                                  | Current namespace segment |
+| `fullPath`                              | Fully qualified namespace |
+| `token<T>(name)` / `safeToken<T>(name)` | Create a namespaced Token |
+| `space(name)` / `safeSpace(name)`       | Create a child namespace  |
+
+Segments must be nonempty and cannot contain `:`. For example, a `workspace`
+space, a `documents` child, and a `reader` token produce
+`workspace:documents:reader`. State-specific `storeToken` helpers are documented
+with [Nexus State](/nexus/docs/state/).
+
+## Model And Policy Types
+
+`AdapterModel` associates `contextMeta`, `connectionMeta`, and `connectionTarget`.
+Use `ContextMetaOf<M>`, `ConnectionMetaOf<M>`, and `ConnectionTargetOf<M>` when
+writing model-generic code. `NexusInstance<M>` describes the public runtime seam.
+
+`ConnectionWhere<M>` takes remote context metadata and local connection facts.
+`NexusAuthorizationPolicy<M>` / `AuthorizationPolicy<M>` contain optional
+`canConnect` and `canCall` hooks returning a boolean or Promise of a boolean.
+See [Identity](/nexus/docs/identity-and-metadata/) for type associations and
+[Policy](/nexus/docs/auth-and-policy/) for hook contexts and trust boundaries.

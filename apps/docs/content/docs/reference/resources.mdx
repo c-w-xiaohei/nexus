@@ -1,0 +1,82 @@
+---
+title: Resources And Calls
+description: Remote type mappings, lazy call results, reference transfer, and release.
+---
+
+## Remote And RemoteValue
+
+`Remote<T, M>` maps service methods to remote calls and properties to read-only
+remote access paths. `Asyncified<T>` is an alias of `Remote<T>`.
+
+Each operation yields a `RemoteValue<T, M>`:
+
+```ts
+type RemoteValue<T, M extends AdapterModel> = PromiseLike<T> & {
+  readonly connection: Connection<M>;
+  catch<TResult = never>(
+    onRejected?:
+      | ((reason: NexusCallError) => TResult | PromiseLike<TResult>)
+      | null,
+  ): Promise<T | TResult>;
+  finally(onFinally?: (() => void) | null): Promise<T>;
+};
+```
+
+First consumption starts the operation. Repeated observations share one outcome.
+Reading `then` or `connection` alone does not start it. `then`, `catch`, and
+`finally` return native Promises without the source field.
+
+Root service/ref/callback handles are not thenable. They can be returned from
+asynchronous work without accidentally invoking a property read.
+
+See [Calling services](/nexus/docs/remote-calls/).
+
+## Reserved Names
+
+At a root proxy, `then` is suppressed. Root services can have business members
+named `catch`, `finally`, and `connection`.
+
+On nested property paths, `then`, `catch`, `finally`, and `connection` belong to
+local consumption and provenance. Choose other names for nested remotely accessed
+members, or expose a method that returns the intended value. Remote assignment is
+unsupported; model writes as methods.
+
+## Nexus.safeCall
+
+```ts
+Nexus.safeCall<T, M>(call: RemoteValue<T, M>): Promise<Result<T, NexusCallError>>
+```
+
+Consumes one Nexus operation and returns its concrete RPC outcome. It shares that
+operation's execution and does not retry. It accepts neither arrays nor arbitrary
+business Promises. Business Results remain inside the successful RPC Result.
+
+## Reference Transfer
+
+`app.ref<T extends object>(value)` returns `RefWrapper<T>`.
+`app.safeRef(value)` returns `Result<RefWrapper<T>, Error>`.
+
+The marker preserves the local object until a containing call is encoded for
+transfer. Creating it does not initialize a runtime or establish a connection.
+Declare `RefWrapper<T>` in service result types so consumers receive
+`Remote<T, M> & Disposable`. Ordinary supported values are transmitted as data;
+callbacks are automatically reference-transferred.
+
+See [Remote resources](/nexus/docs/remote-resources/) for ownership examples.
+
+## Reference Release
+
+| Entry                      | Return                                      |
+| -------------------------- | ------------------------------------------- |
+| `Nexus.release(proxy)`     | `void`, throws if the release handler fails |
+| `Nexus.safeRelease(proxy)` | `Result<void, Error>`                       |
+| `app.release(proxy)`       | `void`, throws if the release handler fails |
+| `app.safeRelease(proxy)`   | `Result<void, Error>`                       |
+
+Static release does not require the creating instance. A valid reference's release
+is locally final and idempotent; remote notification is best effort. Returned
+disposable refs support `using` for the same release behavior.
+
+Release applies to remote refs and callbacks, not ordinary root service proxies.
+It does not invoke a business destructor, cancel other operations, or guarantee
+immediate garbage collection. Disconnect invalidates session-bound handles.

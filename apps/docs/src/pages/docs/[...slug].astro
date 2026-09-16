@@ -3,6 +3,7 @@ import { render, type CollectionEntry } from "astro:content";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import CodeBlock from "../../components/code-block.astro";
 import InstallCommand from "../../components/install-command.astro";
+import Mermaid from "../../components/mermaid.astro";
 import { Steps, Step } from "fumadocs-ui/components/steps";
 import Layout from "../../components/layout.astro";
 import { Docs } from "../../components/docs";
@@ -45,6 +46,7 @@ const toc = headings.map((heading) => ({
           ...defaultMdxComponents,
           pre: CodeBlock,
           InstallCommand,
+          Mermaid,
           Steps,
           Step,
         }}

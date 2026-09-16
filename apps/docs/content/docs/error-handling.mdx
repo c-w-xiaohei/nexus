@@ -1,0 +1,106 @@
+---
+title: Errors And Timeouts
+description: Handle connection, service-acquisition, and call failures at their own boundaries.
+---
+
+Nexus separates acquiring a connection, getting a service, and executing a call.
+Handle failure at the boundary where your application can make a decision.
+
+| Boundary               | Throw-style                  | Result-style                             |
+| ---------------------- | ---------------------------- | ---------------------------------------- |
+| Connection acquisition | `await app.connect(options)` | `await app.safeConnect(options)`         |
+| Service acquisition    | `connection.get(Token)`      | `connection.safeGet(Token)`              |
+| Remote operation       | `await service.method()`     | `await Nexus.safeCall(service.method())` |
+
+Safe async methods return native Promises of better-result Results. Await first,
+then use `isErr()` or `isOk()` to narrow the result.
+
+## Handle Each Boundary
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import { DocumentToken } from "./shared";
+
+async function summarize() {
+  const connected = await app.safeConnect({ target });
+  if (connected.isErr()) {
+    console.error("Connection:", connected.error.code);
+    return;
+  }
+
+  const acquired = connected.value.safeGet(DocumentToken);
+  if (acquired.isErr()) {
+    console.error("Service:", acquired.error.code);
+    return;
+  }
+
+  const called = await Nexus.safeCall(acquired.value.summarize("intro"));
+  if (called.isErr()) console.error("Call:", called.error.code);
+  else console.log(called.value);
+}
+```
+
+`app` and `target` come from your runtime setup. `safeGet` does not make the
+returned proxy's methods return Results. `safeCall` consumes one Nexus operation;
+it does not accept arbitrary Promises or arrays and does not resend the call.
+
+If a service itself returns a business Result, the outer safeCall Result reports
+RPC success and the inner value reports the business outcome.
+
+## Distinguish Business And Communication Failures
+
+An exception thrown by the remote business method becomes `NexusRemoteError`
+with code `E_REMOTE_EXCEPTION`. Disconnect, authorization, unavailable resources,
+and protocol failures keep their framework classifications. Local processing
+after awaiting the result can still throw a local error.
+
+Use stable `error.code` values for cross-context or duplicate-package handling.
+Error `context` and `cause` supply diagnostic details. See the
+[error reference](/nexus/docs/reference/errors/).
+
+## Time Budgets
+
+| Operation                         | Default                  | Starts                                                 |
+| --------------------------------- | ------------------------ | ------------------------------------------------------ |
+| Active connection acquisition     | 30 seconds               | At API invocation, including local initialization      |
+| Passive single connection         | No limit unless supplied | At API invocation                                      |
+| Connection collection acquisition | 30 seconds               | At API invocation; no future-member wait for snapshots |
+| Remote call                       | 5 seconds                | At first consumption                                   |
+
+`timeout` and `callTimeout` must be positive finite milliseconds. Zero, negative
+numbers, NaN, and Infinity are invalid. A multi-target acquisition shares one
+budget across its targets.
+
+Set a local runtime default before bootstrap, or override it for one service handle:
+
+```ts
+app.configure({ ...runtimeConfig, callTimeout: 10_000 });
+
+const documents = connection.get(DocumentToken, { callTimeout: 30_000 });
+```
+
+`runtimeConfig` includes the endpoint setup. An override does not modify the shared
+Connection. Refs returned from that handle inherit its budget; callbacks received
+by the peer use that peer's local default.
+
+## Cancel A Connection Wait
+
+```ts
+const controller = new AbortController();
+const pending = app.safeConnect({ target, signal: controller.signal });
+controller.abort();
+const result = await pending;
+```
+
+The signal controls this acquisition wait. It does not close a shared session,
+cancel another caller's acquisition, or control later RPC calls.
+
+## Decide Whether To Retry
+
+A call timeout ends local waiting; it does not prove that the remote operation
+never ran or that its effects were rolled back. Retry only when the business
+operation makes that safe, for example with an application idempotency key.
+
+After disconnect, acquire a new connection and fresh service or resource handles.
+Old handles never silently retarget. Business exceptions alone do not disconnect
+the session. See [Connection lifecycle](/nexus/docs/proxy-lifecycle/).

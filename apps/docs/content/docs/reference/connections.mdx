@@ -1,0 +1,89 @@
+---
+title: Connection APIs
+description: Acquisition options, shared Connection handles, and fixed ConnectionCollections.
+---
+
+## Runtime Acquisition
+
+```ts
+app.connect(options?): Promise<Connection<M>>
+app.safeConnect(options?): Promise<Result<Connection<M>, ConnectionAcquireError>>
+app.connectMulticast(options?): Promise<ConnectionCollection<M>>
+app.safeConnectMulticast(options?): Promise<Result<ConnectionCollection<M>, ConnectionAcquireError>>
+```
+
+These are abbreviated signatures; `M` is the configured adapter model.
+
+| Option            | Single connection                | Collection                                   |
+| ----------------- | -------------------------------- | -------------------------------------------- |
+| Exact destination | `target?: ConnectionTargetOf<M>` | `targets?: readonly ConnectionTargetOf<M>[]` |
+| Constraint        | `where?: ConnectionWhere<M>`     | Same                                         |
+| Wait budget       | `timeout?: number`               | Same, shared across all targets              |
+| Cancellation      | `signal?: AbortSignal`           | Same                                         |
+
+With a target, acquisition reuses or dials that address. Without one, single
+acquisition waits for exactly one matching session; collection acquisition takes
+a current ready-session snapshot. Explicit collection targets require all-target
+success. Duplicate sessions are included once.
+
+Active and collection acquisition default to 30,000 milliseconds; passive single
+acquisition has no default limit. An explicit timeout must be positive and finite.
+The signal only cancels the caller's wait. See
+[Establishing connections](/nexus/docs/connections/).
+
+## Connection
+
+| Member                        | Type / behavior                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| `id`                          | Opaque session ID                                                                                 |
+| `status`                      | `"connected"` or `"disconnected"`                                                                 |
+| `disconnectReason`            | `"local"`, `"remote"`, `"protocol"`, or undefined                                                 |
+| `contextMeta`                 | Read-only current remote identity                                                                 |
+| `connectionMeta`              | Read-only local adapter facts                                                                     |
+| `get<T>(token, options?)`     | Synchronously returns `Remote<T, M>` or throws                                                    |
+| `safeGet<T>(token, options?)` | Synchronously returns `Result<Remote<T, M>, ResourceAcquireError>`                                |
+| `disconnect()`                | Ends the shared session; idempotent                                                               |
+| `onDisconnected(listener)`    | Returns a cancel function; delivers the terminal reason once, including late registration         |
+| `subscribeIdentity(listener)` | Returns a cancel function; delivers the current identity and each accepted update while connected |
+
+Get options are `ResourceOptions = { callTimeout?: number }`. The override belongs
+to the returned handle, not the shared Connection. Get checks current readiness,
+valid options, and service catalog availability without dialing or waiting.
+
+Identity listeners receive complete snapshots without value deduplication. A
+disconnected handle supplies no identity replay. Listener synchronous errors are
+isolated; applications observe their asynchronous failures themselves.
+
+See [Connection lifecycle](/nexus/docs/proxy-lifecycle/).
+
+## ConnectionCollection
+
+`connections` is a read-only, fixed, ordered list of Connection handles. The
+constructor `new ConnectionCollection(connections)` captures the supplied handles
+and removes repeated handle objects; normal acquisition handles session reuse.
+
+`collection.get<T>(token, options?)` returns:
+
+```ts
+readonly {
+  connection: Connection<M>;
+  result: Result<Remote<T, M>, ResourceAcquireError>;
+}[]
+```
+
+Each member has an entry even when get fails. Empty collections return `[]`.
+Membership does not change on disconnect or new connections. There is no
+collection-level dispose, safeGet, or multicast business proxy.
+See [Multiple contexts](/nexus/docs/multiple-connections/).
+
+## Runtime Observation
+
+```ts
+app.onConnect(listener): () => void
+app.onConnect(where, listener): () => void
+```
+
+Each subscription observes a session at most once when ready and matching,
+including existing sessions and later first matches after identity updates.
+Observation does not dial or wait for a Token. Cancelling prevents subsequent
+notifications; it does not close sessions or cancel business work already started.

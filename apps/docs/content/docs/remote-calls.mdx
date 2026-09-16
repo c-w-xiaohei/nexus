@@ -1,0 +1,100 @@
+---
+title: Remote Calls
+description: Get a service, invoke methods, read properties, and understand when a remote call runs.
+---
+
+After [connecting](/nexus/docs/connections/), get a service using its shared Token:
+
+```ts
+import { DocumentToken } from "./shared";
+
+const documents = connection.get(DocumentToken);
+const summary = await documents.summarize("intro");
+```
+
+## Getting A Service
+
+`get` synchronously checks that the session is connected and its current catalog
+contains the Token. It returns a lightweight proxy. It neither contacts another
+peer nor waits for a future service publication.
+
+Use `safeGet` to receive the acquisition failure as a Result. A successful get
+describes availability at that moment; a later call can still fail or disconnect.
+See [Errors and timeouts](/nexus/docs/error-handling/).
+
+## Methods And Properties
+
+Remote methods return awaitable call results. Reading a property also produces a
+remote read when consumed. For a contract with a `title` property:
+
+```ts
+const title = await document.title;
+await document.setTitle("New title");
+```
+
+Use methods for writes. Remote property assignment is unsupported.
+
+Ordinary supported values are serialized; they are not shared mutable memory.
+Use [callbacks](/nexus/docs/callbacks/) for functions and
+[remote resources](/nexus/docs/remote-resources/) for objects that should stay
+in their owning context. Supported by-value data depends on the transport's
+serializer; do not assume arbitrary class instances preserve their behavior.
+
+## Calls Start When Consumed
+
+```ts
+const call = documents.summarize("intro"); // No message sent yet.
+
+const first = await call; // Starts the operation.
+const again = await call; // Observes the same result.
+```
+
+Calling the method again creates a new operation. The same result shares its
+first success or failure across all observations.
+
+`await`, `then`, `catch`, `finally`, `Promise.resolve`, and native Promise helpers
+consume a call. Ignoring it, writing `void call`, or merely reading its `then`
+property does not start it.
+
+To start work without awaiting it in the current function, consume it and handle
+rejection:
+
+```ts
+void documents.summarize("intro").catch(console.error);
+```
+
+Arguments retain their references until the first consumption encodes them. Copy
+mutable input yourself if you need a snapshot at declaration time.
+
+## Compose With JavaScript
+
+```ts
+const summaries = await Promise.all([
+  documents.summarize("intro"),
+  documents.summarize("guide"),
+]);
+```
+
+Calls execute independently. `race` and `any` do not cancel the remaining calls
+or roll back effects. A call result's `connection` identifies its source;
+`then`, `catch`, and `finally` return native Promises without that source field.
+
+## Session And Call Budget
+
+The proxy stays bound to the connection from which it was obtained. After
+disconnect, reconnect and get a new proxy. An existing proxy does not switch to
+the replacement session.
+
+Override the call budget on an acquired handle when needed:
+
+```ts
+const documents = connection.get(DocumentToken, { callTimeout: 30_000 });
+```
+
+The default is 5 seconds from first consumption. Returned refs inherit this handle's
+budget. See [Errors and timeouts](/nexus/docs/error-handling/) for runtime defaults.
+
+Proxy member-name constraints are listed in the
+[resource API reference](/nexus/docs/reference/resources/).
+
+Next: [Passing callbacks](/nexus/docs/callbacks/).

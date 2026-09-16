@@ -1,0 +1,100 @@
+---
+title: Callbacks
+description: Keep operation-specific behavior in local closures while another context calls it remotely.
+---
+
+A callback lets another context invoke a function defined in your context. This
+keeps the response to an operation beside the local state it affects, rather than
+in a separate event handler with a request-ID lookup.
+
+## Add Progress To The Contract
+
+Extend the `DocumentService` from the [quick start](/nexus/docs/getting-started/):
+
+```ts title="shared.ts"
+import { Token } from "@nexus-js/core";
+
+export type ProgressListener = (percent: number) => void | PromiseLike<void>;
+
+export interface DocumentService {
+  summarize(documentId: string, onProgress?: ProgressListener): Promise<string>;
+}
+
+export const DocumentToken = new Token<DocumentService>("example:documents");
+```
+
+The callback contract allows an asynchronous result so the provider can wait for
+delivery. Callbacks are transferred as references automatically.
+
+## Invoke The Callback From The Provider
+
+Use the configured provider runtime from the quick start:
+
+```ts title="document-service.ts"
+import { Nexus } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+export const documents: DocumentService = {
+  async summarize(documentId, onProgress) {
+    try {
+      if (onProgress) await onProgress(0);
+      const summary = `Summary of ${documentId}`;
+      if (onProgress) await onProgress(100);
+      return summary;
+    } finally {
+      // This operation has finished using the received callback reference.
+      if (onProgress) Nexus.release(onProgress);
+    }
+  },
+};
+```
+
+Register `documents` with the shared Token as in the quick start. The operation
+owns the received callback reference until it finishes; it releases that reference
+on success or failure. This does not destroy the caller's original function.
+
+In this example a failed progress callback fails `summarize`. If progress is
+optional for your business, catch its failure explicitly and decide whether to
+continue.
+
+## Capture Local State
+
+```ts
+const panel = createDocumentPanel("intro");
+
+const summary = await documents.summarize("intro", (percent) => {
+  panel.showProgress(percent);
+});
+
+panel.showSummary(summary);
+```
+
+`createDocumentPanel` is your UI code. The callback closes over this specific panel
+and runs locally when invoked remotely. Neither the panel nor the closure is
+copied into the provider's context.
+
+Several simultaneous summaries can each have their own closure. Nexus handles
+reference routing; the application does not need a global map from progress-event
+IDs to panels.
+
+## Consume Remote Callback Results
+
+Remote callbacks use the same lazy semantics as service calls. The provider's
+`await onProgress(...)` starts the callback operation. A plain call whose result
+is ignored does not execute remotely.
+
+If a local event source ignores listener return values, wrap the remote callback.
+For a source with `on` returning an unsubscribe function:
+
+```ts
+const unsubscribe = source.on((change) => {
+  void Promise.resolve(onChange(change)).catch(reportCallbackFailure);
+});
+```
+
+`Promise.resolve` consumes either a local callback result or a remote thenable.
+The application still chooses ordering, backpressure, and how to handle a callback
+failure. Unsubscribe from the source before releasing a callback it retains.
+
+For a callback used beyond one method call, return a resource representing that
+relationship. Continue with [Remote resources](/nexus/docs/remote-resources/).
