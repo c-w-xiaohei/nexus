@@ -1,131 +1,384 @@
 ---
 title: Core Concepts
-description: The small set of ideas behind Nexus services, connections, and remote references.
+description: From platform endpoints to connections, services, and session-bound resources.
 ---
 
-Nexus connects isolated JavaScript contexts through typed services. The examples
-below use a document service; runtime setup is covered in the
-[quick start](/nexus/docs/getting-started/).
+Each Nexus instance connects platform channels to a common model of sessions,
+services, and remote resources:
 
-## Context And Runtime
+<Mermaid
+  showCaption={false}
+  compact
+  caption="Solid arrows carry messages from A to B; dashed arrows carry messages from B to A."
+  chart={`flowchart TB
+    subgraph A[Nexus instance A]
+      SA[" Resources "] --> CA[" Connection "]
+      CA --> EA[" Endpoint  "]
+      SA <-.- CA
+      CA <-.- EA
+    end
+    subgraph B[Nexus instance B]
+      SB[" Resources "] -.-> CB[" Connection "]
+      CB -.-> EB[" Endpoint  "]
+      SB <--- CB
+      CB <--- EB
+    end
+    CHANNEL["　　　　　Platform channel　　　　　"]
+    EA --> CHANNEL
+    EA <-.- CHANNEL
+    EB -.-> CHANNEL
+    EB <--- CHANNEL`}
+/>
 
-A **context** is an isolated JavaScript environment, such as a page or process.
-A **Nexus instance** is the runtime that owns local providers, connections, and
-communication resources. The application creates the contexts; an adapter supplies
-the transport that connects them.
+Resources include service proxies, remote refs, and callbacks. Either runtime can
+provide and call services. Endpoints supply the ports that carry messages over
+the platform channel.
+
+## The Nexus Instance
+
+A **context** is a JavaScript execution environment, such as an extension page,
+iframe, or process. A **Nexus instance** manages connections and resources for
+one communication domain within that context.
+
+Think of it as a virtual network interface with service and resource management
+above it: local providers, peer sessions, pending calls, and remote references.
 
 ```ts
 import { Nexus } from "@nexus-js/core";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
 
-const app = new Nexus(); // Configure its endpoint before connecting.
+const app = new Nexus<ChromeAdapterModel>();
 ```
 
-Both contexts have their own runtime. Either side can provide services and call
-the other over the same bidirectional connection.
+This creates the runtime. Configure its endpoint before connecting;
+`ChromeAdapterModel` supplies the platform-specific types described below.
+
+A context can host separate instances for extension and iframe communication.
+Each owns its configuration, providers, and sessions, without automatic routing
+between instances. A domain here is a communication graph, not a DNS name.
+
+## Endpoints And Adapters
+
+An **Endpoint** provides Core with a **reliable, bidirectional, point-to-point
+communication abstraction** over the platform transport. It establishes or
+accepts channels and exposes their local ends as **Ports**.
+
+An **adapter** provides the platform's Endpoint implementation, target types, and
+setup helpers. Which peers can connect directly depends on that platform.
+
+### Port: An Established Channel
+
+A **Port** (`IPort`) is the local send/receive handle for one established channel
+to one peer. Each end has its own Port; messages sent through one arrive at the
+other. It may wrap a native `chrome.runtime.Port` or `MessagePort`, or a channel
+constructed by the adapter.
+
+Its responsibilities are small:
+
+```ts
+port.postMessage(message); // Send to this channel's peer.
+port.onMessage(handleMessage); // Receive from that peer.
+port.onDisconnect(handleDisconnect); // Observe channel loss.
+port.close(); // Close the channel.
+```
+
+Endpoint supplies the channel; Port carries its messages. Core then adds the
+handshake, identity, and service protocol. An open Port is not yet a ready Nexus
+Connection. Channel reliability does not mean automatic reconnection or RPC retries.
+
+### Endpoint: Providing Ports
+
+The essential implementation looks like this:
+
+```ts
+// Conceptual implementation: openChannel, onIncomingChannel, and observe
+// stand for platform-specific code supplied by the adapter.
+const endpoint: IEndpoint<Model> = {
+  async connect(target) {
+    const port = await openChannel(target);
+    return { port, connectionMeta: observe(port) };
+  },
+
+  listen(accept) {
+    onIncomingChannel((port) => {
+      accept(port, observe(port));
+    });
+  },
+};
+```
+
+`connect(target)` returns an outgoing port; `listen(accept)` delivers incoming
+ports through the callback. Each comes with local `connectionMeta`. An endpoint
+may support either direction or both.
+
+This sketch omits setup, target matching, and shutdown. Applications normally use
+an adapter helper such as `usingBackgroundScript()` instead of implementing it.
 
 <Mermaid
-  caption="One bidirectional connection lets either context provide and call services."
-  chart={`flowchart LR
-    subgraph A[Context A]
-      R1[Nexus runtime]
-    end
-    subgraph B[Context B]
-      R2[Nexus runtime]
-    end
-    R1 ---|Connection| R2`}
+  showCaption={false}
+  caption="connect returns a port to the initiating Core; listen delivers an accepted port to the receiving Core. Both include local connection facts."
+  chart={`sequenceDiagram
+    participant A as Core A
+    participant EA as Endpoint A
+    participant EB as Endpoint B
+    participant B as Core B
+    B->>EB: listen(accept)
+    A->>EA: connect(target)
+    EA->>EB: Open platform channel
+    EB->>B: accept(<b>portB</b>, connectionMetaB)
+    EA-->>A: { <b>portA</b>, connectionMetaA }`}
 />
+
+## The Adapter Model
+
+An **AdapterModel** defines the domain's address, identity, and connection-fact
+types: `ConnectionTarget`, `ContextMeta`, and `ConnectionMeta`. Chrome and Node IPC
+use different shapes, but the roles are the same.
+
+The target starts acquisition; the two metadata values describe the peer session.
+For a background connecting to a content script:
+
+<Mermaid
+  caption="Logical acquisition steps: the handshake uses the returned port. The two metadata values stay separate on the local Connection."
+  chart={`sequenceDiagram
+    participant L as Background Nexus
+    participant E as Local endpoint
+    participant R as Content script
+    L->>E: connect(<b>target</b>)
+    E->>R: Open platform channel
+    E-->>L: port + <b>ConnectionMeta</b>
+    R-->>L: <b>ContextMeta</b> via Core handshake
+    Note over L: where(<b>contextMeta</b>, <b>connectionMeta</b>)`}
+/>
+
+### Target: An Address
+
+**Target is a topology address, like a URL: “where should I connect?”** Use the
+adapter's exact constructor:
+
+```ts
+chromeTarget.contentFrame({ tabId, frameId: 0 });
+```
+
+This addresses the content script in a tab's top frame. The application chooses
+`tabId` and ensures the script is running. The address is not a live session.
+
+### ContextMeta: Declared Identity
+
+**ContextMeta answers “who does the peer say it is?”** It can include a context
+role, workspace, or readiness flag. `connection.contextMeta` holds the peer's
+accepted identity. The peer can update it with `updateIdentity`; local consumers
+observe changes with `subscribeIdentity`.
+
+### ConnectionMeta: Locally Observed Facts
+
+**ConnectionMeta answers “what did my adapter observe?”** It contains facts such
+as Chrome sender details or an IPC authentication result. Identity updates do not
+change these facts. In a Chrome background:
+
+```ts
+connection.contextMeta.context; // Remote context's declared role.
+connection.connectionMeta.observed.tabId; // Adapter-observed tab, when present.
+```
+
+Declared identity is not automatically trusted. AdapterModel associates types;
+authentication depends on the adapter and policy.
+See [Identity and metadata](/nexus/docs/identity-and-metadata/).
+
+## Connections
+
+A **Connection** is a shared handle to one bidirectional session, held by the
+runtime rather than leased exclusively to a caller. `connect` returns a ready
+handle, reusing an eligible session. Either side can provide and call services.
+
+<span id="connection-acquisition" />
+
+### Targeting And Filtering
+
+**`target` supplies the address; `where` constrains the actual peer**, using its
+declared identity and local connection facts:
+
+```ts
+const connection = await app.connect({
+  target: chromeTarget.contentFrame({ tabId, frameId: 0 }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    connectionMeta.observed.tabId === tabId,
+});
+```
+
+Both constraints must pass. A metadata mismatch does not make Nexus search for
+another destination.
+
+Without a target, `connect({ where })` passively waits for exactly one matching
+ready session. It does not discover providers or open connections. Multiple
+matches are an ambiguity error.
+
+`where` selects a connection at acquisition time; it is not a per-call permission
+check. Use `policy.canConnect` for session admission and `policy.canCall` for
+operation authorization. See [Connections](/nexus/docs/connections/) and
+[Authorization](/nexus/docs/auth-and-policy/).
 
 <span id="services-and-calls" />
 
-## Service Contract And Token
+## Services And Proxies
 
-A **service contract** is the TypeScript interface describing the capability.
-A **Token** associates that type with a stable runtime service ID:
+A connection identifies the peer. A **Token** identifies a service that peer
+provides, associating a shared TypeScript contract with a stable runtime ID:
 
 ```ts title="shared.ts"
 import { Token } from "@nexus-js/core";
 
-export interface DocumentService {
-  summarize(id: string): Promise<string>;
+export interface Documents {
+  read(id: string): Promise<string>;
 }
 
-export const DocumentToken = new Token<DocumentService>("example:documents");
+export const DocumentsToken = new Token<Documents>("app:documents");
 ```
 
-Both sides import this shared definition. `DocumentService` supplies compile-time
-types; `"example:documents"` identifies the service at runtime. The type parameter
-is not a runtime schema validator. A Token contains no address, connection, or
-implementation, and the same Token can be provided by multiple contexts.
-
-## Provider
-
-A **provider** registers a local implementation under a Token on its owning runtime:
+A **provider** registers the actual local implementation. A **service proxy** is
+the consumer's access to it through a particular connection:
 
 ```ts
-app.provide(DocumentToken, {
-  async summarize(id) {
-    return `Summary of ${id}`;
-  },
+// Provider context: register the implementation on its configured runtime.
+owner.provide(DocumentsToken, implementation);
+
+// Consumer context: get a proxy on an acquired connection.
+const documents = connection.get(DocumentsToken);
+```
+
+`get` checks the session and its current service catalog synchronously, then
+creates a lightweight proxy. It neither contacts a new peer nor creates a remote
+business instance. A missing service fails acquisition rather than waiting.
+
+Tokens contain no address or implementation. Several peers can provide the same
+Token, and one connection can provide access to several services. The contract
+supplies compile-time types, not runtime schema validation.
+See [Services](/nexus/docs/services/).
+
+<Mermaid
+  caption="get is local. Consuming a method call sends an RPC to the provider."
+  chart={`sequenceDiagram
+    participant APP as Consumer application
+    participant C as Local Nexus
+    participant P as Peer Nexus
+    Note over C,P: Session ready; service catalog received
+    APP->>C: connection.get(DocumentsToken)
+    C-->>APP: Local service proxy
+    APP->>C: await documents.read(id)
+    C->>P: RPC request
+    Note over P: Invoke local provider.read(id)
+    P-->>C: RPC response
+    C-->>APP: Resolve result`}
+/>
+
+## Remote References And Callbacks
+
+**Services, refs, and callbacks provide different ways to obtain a proxy resource.**
+Their calls behave alike; their origin and reference ownership differ.
+
+Ordinary values travel as serialized data. References keep behavior at its owner:
+
+- A **callback** is a function passed for the peer to invoke. Its function and
+  closure stay where it was defined.
+- A **remote ref** accesses an object exported through `ref(...)`. Its methods
+  execute where the object lives.
+
+For a service extending the basic contract with `watch`, the two work together:
+
+```ts
+const observation = await documents.watch(documentId, change => {
+  panel.apply(change); // Runs here, with this local panel.
 });
+await observation.stop(); // Runs on the remote observation object.
 ```
 
-Other contexts access this object through a proxy; they do not receive a copy of
-the implementation. See [Services](/nexus/docs/services/) for object and class providers.
+The provider returns that object through `app.ref(observation)` and declares a
+`RefWrapper<Observation>` result in the shared contract. An ordinary returned
+object does not automatically become a remote ref.
 
-<span id="connection-acquisition" />
+<Mermaid
+  caption="The callback stays with the consumer; the object stays with the provider. Arrows show calls and their responses."
+  chart={`sequenceDiagram
+    participant C as Consumer context
+    participant P as Provider context
+    Note over C: Owns onChange and its closure
+    C->>P: watch(id, onChange reference)
+    Note over P: Creates observation object
+    P-->>C: Ref to observation object
+    P->>C: onChange(change)
+    C-->>P: Callback result
+    C->>P: observation.stop()
+    P-->>C: Method result`}
+/>
 
-## Connection And Proxy
+A root service proxy is a lightweight access handle and needs no release.
+Received object and callback refs have reference lifetimes and can be released.
+See [Callbacks](/nexus/docs/callbacks/) and
+[Remote resources](/nexus/docs/remote-resources/) for complete examples.
 
-A **Connection** represents one ready session with a peer. A **service proxy**
-represents access to one of that peer's services:
+## Remote Operations
+
+Service methods, ref methods, property reads, and remote callback invocations
+declare **lazy remote operations**. Their result is a thenable, not an already
+running Promise: first consumption starts execution.
 
 ```ts
-const connection = await app.connect({ target });
-const documents = connection.get(DocumentToken);
-const summary = await documents.summarize("intro");
+const call = documents.read("intro"); // Declared, not sent.
+await call; // Starts execution.
+await call; // Observes the same operation, without sending again.
 ```
 
-The adapter-specific `target` answers **where to connect**; the Token answers
-**which service to use**. `get` checks the peer's current service catalog and
-returns a proxy synchronously. It does not wait for a future provider.
+Call the method again to create another operation. Remote callbacks also require
+consumption: `await onChange(change)`. A closed-session or released-ref error is
+delivered when consumed, not when the operation is declared.
 
-Proxy operations are asynchronous and lazy: declaring `documents.summarize(...)`
-alone sends nothing; consuming the result with `await` starts the call.
-See [Connections](/nexus/docs/connections/) and [Remote calls](/nexus/docs/remote-calls/).
+Connection acquisition, service acquisition, and execution can fail independently.
+`safeGet` returns an acquisition Result, not a safe proxy. Use
+`Nexus.safeCall(call)` for an individual operation's Result.
+See [Remote calls](/nexus/docs/remote-calls/) and
+[Errors and timeouts](/nexus/docs/error-handling/).
 
-## Values, Callbacks, And Remote Resources
+## Lifetimes And Ownership
 
-Ordinary supported values travel as serialized data. To interact with behavior
-that stays in the other context, Nexus uses references:
+A runtime owns its shared connections. Dropping a local Connection variable does
+not close the session. Calling `connection.disconnect()` ends it for all users
+of that session.
 
-- A **callback** refers to a function in its original context. Its closure stays
-  there, so it can access the local state it captured.
-- A **remote resource** refers to an object explicitly marked with `ref(...)`.
-  The object stays with its owner; the consumer calls its methods remotely.
-
-For a document service exposing a `watch` method, this lets one operation connect
-a local callback with a remote subscription:
+Business activity, reference ownership, and session lifetime are distinct:
 
 ```ts
-const subscription = await documents.watch("intro", (change) =>
-  panel.apply(change),
-);
-await subscription.stop(); // Invoke the remote business operation.
-Nexus.release(subscription); // Give up this reference.
+await observation.stop(); // End the business observation.
+Nexus.release(observation); // Give up this remote reference.
+connection.disconnect(); // End the shared session, affecting other users too.
 ```
 
-`watch` extends the basic contract above. Its provider returns a subscription
-object through `app.ref(subscription)` and declares a `RefWrapper<Subscription>`
-return type. See [Callbacks](/nexus/docs/callbacks/) and
-[Remote resources](/nexus/docs/remote-resources/) for the complete contract and ownership.
+These lines illustrate different responsibilities, not a mandatory cleanup sequence.
+Release does not invoke `stop()`. Disconnect does not undo remote side effects.
 
-## Session Lifetime
+Disconnect fails pending calls, invalidates access through old proxies and refs,
+and clears session-held references. Handles can be released earlier, but never
+move to a replacement session. Reconnect and get fresh handles to resume.
 
-Service proxies, callbacks, and remote resources remain bound to their connection.
-After disconnect, acquire a new connection and fresh handles. Reconnection does
-not revive old handles or replay business operations.
+<Mermaid
+  caption="The peer exits without replying. Local Nexus rejects the pending call and refuses later calls through the old ref."
+  chart={`sequenceDiagram
+    participant APP as Consumer application
+    participant C as Local Nexus
+    participant P as Peer Nexus
+    APP->>C: await documents.read(id)
+    C->>P: RPC request
+    Note over P: Context exits before replying
+    Note over C: Adapter reports disconnect
+    Note over C: Clear session-held references
+    C-->>APP: Reject pending call: E_CONN_CLOSED
+    APP->>C: await oldRef.stop()
+    C-->>APP: Reject locally; no RPC sent`}
+/>
 
-Stopping a business operation, releasing a reference, and disconnecting the shared
-session are separate actions. See [Connection lifecycle](/nexus/docs/proxy-lifecycle/)
-for cleanup, and [Errors and timeouts](/nexus/docs/error-handling/) for handling
-failures at connection, service acquisition, and call boundaries.
+A **ConnectionCollection** is a fixed, ordered snapshot of session handles. It
+neither adds newcomers nor removes or replaces disconnected members. Its `get`
+returns one `{ connection, result }` per member; each success is an ordinary
+single-connection proxy, not a multicast proxy. See
+[Multiple connections](/nexus/docs/multiple-connections/) and
+[Connection lifecycle](/nexus/docs/proxy-lifecycle/).
