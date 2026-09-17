@@ -34,8 +34,9 @@ Endpoint 提供 Port，供 Core 通过平台通道收发消息。
 
 ## Nexus 实例 [#the-nexus-instance]
 
-**上下文（Context）**是一个 JavaScript 执行环境，例如扩展页面、iframe 或进程。
-**Nexus 实例**管理当前上下文中某个通信域的连接和资源。
+<strong>上下文（Context）</strong>是一个 JavaScript
+执行环境，例如扩展页面、iframe 或进程。
+<strong>Nexus 实例</strong>管理当前上下文中某个通信域的连接和资源。
 
 可以把它理解为一张“虚拟网卡”，同时负责管理本地服务、与对端的会话、待完成的调用和远程引用。
 
@@ -53,15 +54,17 @@ const app = new Nexus<ChromeAdapterModel>();
 
 ## Endpoint 和适配器 [#endpoints-and-adapters]
 
-**Endpoint** 在平台传输之上为 Core 提供**可靠、双向、点对点的通信抽象**。
+**Endpoint** 在平台传输之上为 Core 提供<strong>可靠、双向、点对点的通信抽象</strong>。
 它建立或接受通信通道，并通过 **Port** 提供该通道在本端的收发接口。
 
-**适配器（Adapter）**提供平台对应的 Endpoint 实现、连接目标类型和初始化辅助函数。哪些对端可以直接连接，取决于平台本身。
+<strong>适配器（Adapter）</strong>提供平台对应的 Endpoint
+实现、连接目标类型和初始化辅助函数。哪些对端可以直接连接，取决于平台本身。
 
 ### Port：通道的本端收发接口 [#port-an-established-channel]
 
-**Port**（`IPort`）是已建立的点对点通道在本端的收发句柄。
-每一端都有自己的 Port；从一端发送的消息会抵达另一端。它可以封装原生 `chrome.runtime.Port` 或 `MessagePort`，也可以封装适配器构造的通道。
+<strong>Port</strong>（`IPort`）是已建立的点对点通道在本端的收发句柄。
+每一端都有自己的 Port；从一端发送的消息会抵达另一端。它可以封装原生
+`chrome.runtime.Port` 或 `MessagePort`，也可以封装适配器构造的通道。
 
 它只负责四件事：
 
@@ -207,7 +210,8 @@ export interface Documents {
 export const DocumentsToken = new Token<Documents>("app:documents");
 ```
 
-**服务提供方**注册本地实现；**服务代理**让调用方通过某条连接访问该实现：
+<strong>服务提供方</strong>注册本地实现；<strong>服务代理</strong>
+让调用方通过某条连接访问该实现：
 
 ```ts
 // 提供方上下文：在已配置的运行时上注册实现。
@@ -246,8 +250,9 @@ Token 不包含地址或实现。多个对端可以提供同一个 Token 对应�
 
 普通值经过序列化后传输；引用对应的行为仍在资源所属的上下文中执行：
 
-- **回调**是供对端调用的函数，函数及其闭包仍留在定义它的上下文中。
-- **远程引用**用于访问通过 `ref(...)` 导出的对象，方法在对象所在的上下文中执行。
+- <strong>回调</strong>是供对端调用的函数，函数及其闭包仍留在定义它的上下文中。
+- <strong>远程引用</strong>用于访问通过 `ref(...)`
+  导出的对象，方法在对象所在的上下文中执行。
 
 为服务增加 `watch` 方法后，就可以让回调与远程引用配合使用：
 
