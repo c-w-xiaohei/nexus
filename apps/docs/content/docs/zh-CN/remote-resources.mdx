@@ -1,0 +1,120 @@
+---
+title: 远程资源
+description: 通过引用访问留在原上下文中的对象，并显式管理引用的生命周期。
+---
+
+远程资源是留在原上下文中的对象，其他上下文通过引用调用它的方法。
+它适合表示订阅、文档会话、游标等需要持续保存状态的资源。
+
+## 描述返回对象 [#describe-the-returned-object]
+
+扩展文档服务契约，让 `watch` 返回一个订阅对象的引用。将这些定义与已有 Token 放在同一个共享模块中：
+
+```ts title="shared.ts (contract additions)"
+import type { RefWrapper } from "@nexus-js/core";
+
+export interface DocumentChange {
+  title: string;
+}
+export type ChangeListener = (
+  change: DocumentChange,
+) => void | PromiseLike<void>;
+export interface DocumentSubscription {
+  stop(): void;
+}
+
+// 添加到已有 DocumentService 接口：
+export interface DocumentService {
+  watch(
+    documentId: string,
+    onChange: ChangeListener,
+  ): RefWrapper<DocumentSubscription>;
+}
+```
+
+显式声明 `RefWrapper` 返回类型，告诉远程类型映射：这个对象通过引用访问，而不是作为数据复制。
+
+## 返回引用 [#return-a-reference]
+
+下面的 `watch` 方法属于文档服务，`app` 是服务所属且已配置的 Nexus 实例。
+`documentEvents.subscribe` 由应用实现，返回同步取消订阅的函数；`reportFailure` 记录回调投递失败。
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+const watch: DocumentService["watch"] = (documentId, onChange) => {
+  const unsubscribe = documentEvents.subscribe(documentId, (change) => {
+    void Promise.resolve(onChange(change)).catch(reportFailure);
+  });
+  let stopped = false;
+
+  return app.ref({
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      unsubscribe();
+      Nexus.release(onChange);
+    },
+  });
+};
+```
+
+将 `watch` 加入注册的服务对象。返回对象持有本次订阅的取消函数和回调，仍留在服务提供方的上下文中。
+`app.ref` 将对象标记为按引用传递，供响应编码时使用。
+
+这只是业务方法示例，并非完整的事件源实现。实际应用还需为事件源提供关闭与清理逻辑，处理无人使用的订阅和回调投递失败；释放通信引用不会自动移除本地事件监听器。
+
+## 使用并释放订阅 [#use-and-release-the-subscription]
+
+```ts
+import { Nexus } from "@nexus-js/core";
+
+const subscription = await documents.watch("intro", (change) => {
+  panel.apply(change);
+});
+
+try {
+  await waitUntilPanelCloses();
+} finally {
+  try {
+    await subscription.stop();
+  } finally {
+    Nexus.release(subscription);
+  }
+}
+```
+
+`panel` 和 `waitUntilPanelCloses` 由应用实现。即使提供方的方法是同步的，远程调用仍需等待结果。
+
+这里显式区分两个生命周期：
+
+- `stop()` 结束业务观察并释放其收到的回调。
+- `Nexus.release(subscription)` 释放调用方持有的远程引用。
+
+释放引用不会调用 `stop`、`unsubscribe` 或其他业务方法。其他本地或远程引用可能使对象继续存在；释放不保证立即垃圾回收。
+
+## 基于作用域释放 [#scope-based-release]
+
+启用 TypeScript 显式资源管理后，通过 `RefWrapper` 契约返回的引用支持 `using`：
+
+```ts
+{
+  using subscription = await documents.watch("intro", onChange);
+  try {
+    await waitUntilPanelCloses();
+  } finally {
+    await subscription.stop();
+  }
+} // 释放引用，不再调用一次业务 stop。
+```
+
+离开作用域执行与 `Nexus.release` 相同的本地幂等释放，不等待远程业务确认。
+
+## 断开与所有权 [#disconnects-and-ownership]
+
+远程引用和回调绑定到会话。断开连接会使它们失效，并让待完成的调用失败，但不会撤销业务副作用或移除应用的监听器。
+业务资源应由应用按其所有权关系负责清理。
+
+普通根服务代理是轻量访问句柄，不需要释放。只需释放代码实际持有的远程对象引用和回调引用。
+参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)和[资源参考](/nexus/docs/reference/resources/)。

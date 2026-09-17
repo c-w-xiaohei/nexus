@@ -1,0 +1,88 @@
+---
+title: 回调
+description: 让对端调用本地函数，用闭包处理与本次操作相关的状态。
+---
+
+回调允许另一个上下文调用在你的上下文中定义的函数。
+这样，处理结果的逻辑可以直接访问相关的本地状态，无需在独立事件处理器中通过请求 ID 查找它。
+
+## 为契约添加进度 [#add-progress-to-the-contract]
+
+扩展[快速开始](/nexus/docs/getting-started/)中的 `DocumentService`：
+
+```ts title="shared.ts"
+import { Token } from "@nexus-js/core";
+
+export type ProgressListener = (percent: number) => void | PromiseLike<void>;
+
+export interface DocumentService {
+  summarize(documentId: string, onProgress?: ProgressListener): Promise<string>;
+}
+
+export const DocumentToken = new Token<DocumentService>("example:documents");
+```
+
+回调契约允许异步返回值，因此服务提供方可以等待回调执行完成。回调会自动按引用传递。
+
+## 在服务提供方调用回调 [#invoke-the-callback-from-the-provider]
+
+沿用快速开始中已配置的服务端运行时：
+
+```ts title="document-service.ts"
+import { Nexus } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+export const documents: DocumentService = {
+  async summarize(documentId, onProgress) {
+    try {
+      if (onProgress) await onProgress(0);
+      const summary = `Summary of ${documentId}`;
+      if (onProgress) await onProgress(100);
+      return summary;
+    } finally {
+      // 此操作已完成对收到的回调引用的使用。
+      if (onProgress) Nexus.release(onProgress);
+    }
+  },
+};
+```
+
+像快速开始一样用共享 Token 注册 `documents`。操作在结束前拥有收到的回调引用，并在成功或失败时释放它。
+这不会销毁调用者的原始函数。
+
+本例中，失败的进度回调会使 `summarize` 失败。如果进度对业务是可选的，请显式捕获失败并决定是否继续。
+
+## 捕获本地状态 [#capture-local-state]
+
+```ts
+const panel = createDocumentPanel("intro");
+
+const summary = await documents.summarize("intro", (percent) => {
+  panel.showProgress(percent);
+});
+
+panel.showSummary(summary);
+```
+
+`createDocumentPanel` 是你的 UI 代码。回调捕获这个特定面板，并在远程调用时在本地运行。
+面板和闭包都不会被复制到服务提供方的上下文中。
+
+多个摘要任务可以同时进行，每个任务使用自己的闭包。Nexus 负责引用路由，应用无需维护进度事件 ID 到面板的全局映射。
+
+## 触发远程回调执行 [#consume-remote-callback-results]
+
+远程回调与服务调用一样采用惰性执行。服务提供方执行 `await onProgress(...)` 时，才会发出回调请求。
+只调用函数却不等待或处理返回值，不会触发远程执行。
+
+如果本地事件源不处理监听器的返回值，需要显式触发远程回调执行。例如，事件源的 `on` 方法返回取消订阅函数时：
+
+```ts
+const unsubscribe = source.on((change) => {
+  void Promise.resolve(onChange(change)).catch(reportCallbackFailure);
+});
+```
+
+`Promise.resolve` 既能处理本地回调的返回值，也能触发远程可等待对象执行。调用顺序、背压和失败处理仍由应用负责。
+释放持有的回调前，先取消对事件源的订阅。
+
+如果方法返回后还需要继续使用回调，可以返回一个远程资源来管理这段关系。继续阅读[远程资源](/nexus/docs/remote-resources/)。

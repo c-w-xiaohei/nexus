@@ -1,0 +1,253 @@
+---
+title: Nexus State Core API
+description: 不依赖 UI 的 Nexus State 存储与订阅 API 参考。
+---
+
+本页介绍 `@nexus-js/core/state` 的公共接口。
+
+## 导出 [#exports]
+
+当前公共入口：
+
+```ts
+import {
+  createStoreToken,
+  createNexusStore,
+  bindNexusStore,
+  connectNexusStore,
+  safeConnectNexusStore,
+  safeInvokeStoreAction,
+} from "@nexus-js/core/state";
+```
+
+类型和错误也从相同子路径导出。
+
+`relayNexusStore` 从 `@nexus-js/core/relay` 导出，也通过 `@nexus-js/core/state` 重新导出，便于状态相关代码使用。
+只有桥接上下文需要向下游通信网络映射上游权威存储时，才使用它。具体行为见[Relay](/nexus/docs/relay/)。
+
+## 共享 Store Token [#shared-store-token]
+
+声明一个包含数据和方法的共享存储类型。Token 会推导快照和远程动作类型，调用方无需手动定义底层通信服务。
+
+```ts
+interface CounterStore {
+  count: number;
+  increment(by?: number): number;
+}
+
+const counterStore = createStoreToken<CounterStore>("app:counter");
+```
+
+### 职责 [#responsibilities]
+
+StoreToken 携带：
+
+- 存储标识
+- 共享存储契约
+- 通过 `validation` 提供的可选状态与动作校验
+
+### 说明 [#notes]
+
+- 将 StoreToken 直接传给 State API，无需包成 `{ token }`
+- 连接目标通过 State 连接选项传入，不放在 StoreToken 中
+- 宿主状态和动作以原生 Zustand `StateCreator` 的形式单独传给 `createNexusStore()`
+- 动作的参数与结果必须可序列化
+- 状态同步发布完整快照
+
+`RemoteStore<CounterStore>` 从同一契约推导只读数据和异步方法。
+`createStoreToken<Store, Model>(id, options)` 支持绑定适配器模型，以及可选的 `validation: { state, actionResults }` 校验模式。
+使用 TokenSpace 的 `space.storeToken<Store>(name, options?)` 或 `space.safeStoreToken<Store>(...)` 继承命名空间 ID。
+本地存储可以包含额外的私有字段；运行时实际共享的数据和动作仍由 `snapshot` 与 `expose` 决定。
+
+## `createNexusStore()` [#createnexusstore]
+
+`createNexusStore()` 创建权威宿主存储，返回 Nexus 服务提供者、原始 Zustand 存储，以及绑定的生命周期方法。
+
+```ts
+const { provider, store, destroy } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
+    },
+  }),
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment"],
+  },
+);
+
+nexus.configure({
+  providers: [provider],
+});
+
+console.log(store.getState());
+console.log(store.getInitialState());
+```
+
+通过 `nexus.configure({ providers: [provider] })` 注册 `provider`。`store` 留在宿主上下文中，用于直接读取权威状态、订阅变化和调用本地动作。
+
+`store` 是 Zustand 返回的原始 `Mutate<StoreApi<...>>`，保留创建器的中间件变更类型与扩展能力。
+本地动作仍通过 `store.getState().action()` 调用，不等待 Nexus 发布状态。
+
+```ts
+const { store } = createNexusStore(counterStore, creator, options);
+```
+
+返回的绑定对象通过 `[Symbol.dispose]()` 支持 `using`。离开作用域时，执行与 `destroy()` 相同的同步、幂等清理。
+销毁绑定不会销毁原始 Zustand 存储。
+
+绑定不替换或重建 Zustand API。`snapshot` 函数生成完整的共享数据投影，`expose` 是运行时动作白名单。
+校验模式只验证传输数据；解析过程中变换后的输出不会写回源存储或远程镜像。
+
+### `bindNexusStore()` [#bindnexusstore]
+
+已有 Zustand 存储时，使用 `bindNexusStore(token, existingStore, options)`，包括通过 `persist`、`immer`、`devtools` 或 `subscribeWithSelector` 组合的存储。
+两种创建方式使用相同选项。
+
+```ts
+const binding = bindNexusStore(counterStore, store, {
+  snapshot: (local) => ({ count: local.count }),
+  expose: ["increment"],
+});
+
+binding.destroy(); // store 仍可使用
+```
+
+`publishWindowMs` 定义从首次更新开始的固定发布窗口，默认 200 毫秒，不是防抖间隔；动作完成也不会强制提前发布。
+`maxPendingSnapshots` 默认 32。超过待确认快照上限，或回调在五秒内未获确认时，对应订阅会终止，但不影响共享连接上的其他服务。
+终止通知尽力发送，不保证送达；State 不会自动重试失败动作或重放快照。
+
+## `connectNexusStore()` [#connectnexusstore]
+
+连接远程 Nexus State 存储，返回 `RemoteStore`。
+
+```ts
+import { chromeTarget } from "@nexus-js/chrome";
+
+const remote = await connectNexusStore(nexus, counterStore, {
+  target: chromeTarget.background(),
+});
+```
+
+### 关键行为 [#key-behavior]
+
+- 接受 Core `ConnectOptions`：`target`、`where`、正有限数 `timeout` 和 `signal`
+- 先获取连接，再检查当前服务目录，不等待缺失的服务提供者
+- 通过一次初始化回调同时建立初始快照与持续订阅
+- 根据基线快照初始化本地镜像
+- 握手失败时不返回存储句柄
+
+初始化回调提供初始状态、每个动作对应的原始 Core 函数代理，以及幂等的取消订阅方法。
+State 不添加按动作名分发的协议，也不再包装动作代理。因此直接调用动作时，失败会保留 `E_CONN_CLOSED`、`E_CALL_TIMEOUT`、`E_RESOURCE_ACCESS_DENIED` 等 Core 错误码；只有 `safeInvokeStoreAction()` 可能在返回公共 Result 时将错误归一化。
+
+两个阶段分别计时：`timeout` 先限制获取连接的时间，再单独限制初始化回调的时间，并非整个流程共用一个截止时间。
+`signal` 只取消连接获取，不取消已开始的订阅握手，也不销毁返回的存储。
+动作调用使用 Core 资源调用的默认超时；State 不会将获取超时转换成 Core 的 `callTimeout`。
+
+生命周期边界：
+
+- 返回的 `RemoteStore` 句柄绑定当前会话
+- 底层会话被替换后，需要用 `connectNexusStore(...)` 创建新句柄
+- 已进入终态的句柄不会原地恢复
+- 身份更新后不再满足 `where` 时，State 句柄变为 `stale`；普通 Connection 代理则不会持续检查该条件
+
+## `safeConnectNexusStore()` [#safeconnectnexusstore]
+
+`connectNexusStore()` 的安全版本，以 Result 返回结果。
+
+```ts
+const result = await safeConnectNexusStore(nexus, counterStore, options);
+
+if (result.isErr()) {
+  console.error(result.error);
+} else {
+  const remote = result.value;
+}
+```
+
+需要显式组合 Result，而不是通过异常控制流程时，可以使用这个接口。
+
+## 选择异常接口还是安全接口 [#choosing-throw-vs-safe]
+
+以下情况适合使用抛出异常的接口：
+
+- 希望调用点最直接
+- 已经用 `try/catch` 处理错误
+- 编写应用代码，优先优化可读性
+
+以下情况适合使用返回 Result 的安全接口：
+
+- 代码库已经组合 better-result `Result` / `Promise<Result>`
+- 需要无异常的显式错误分支
+- 编写流程编排或基础设施代码，失败处理本身就是流程的一部分
+
+## 存储句柄类型 [#store-handle-types]
+
+`RemoteStore` 是 `connectNexusStore()` 和 `safeConnectNexusStore()` 成功时返回的客户端存储接口。
+
+`RemoteStore` 能力：
+
+- `getState()`
+- `subscribe(listener)`
+- `getStatus()`
+- `subscribeStatus(listener)`
+- `destroy()`
+- `actions.*`
+
+`RemoteStore` 支持 `getInitialState()` 和通过 `[Symbol.dispose]()` 使用 JavaScript `using`。
+`createNexusStore()` 返回的本地 `store` 保留原始 Zustand API；`destroy()` 和 `[Symbol.dispose]()` 位于绑定对象上，不在存储本身上。
+
+远程存储句柄绑定一个连接会话。进入 `disconnected`、`stale` 或 `destroyed` 后，需要创建新句柄替换，不能继续复用。
+
+`RemoteStore.getInitialState()` 返回握手成功时的基线快照，后续快照不会改变它。
+初始状态和当前状态都应视为不可变数据；重复读取同一个快照时，对象引用保持一致。
+
+### 示例 [#example]
+
+```ts
+using remote = await connectNexusStore(nexus, counterStore, options);
+
+const stop = remote.subscribe((state) => {
+  console.log(state.count);
+});
+
+await remote.actions.increment(1);
+
+console.log(remote.getStatus());
+
+stop();
+```
+
+`using` 执行与 `destroy()` 相同的同步、幂等终止操作。
+它会尝试向远端取消订阅，但不额外等待确认，也不保证异步清理完成。
+
+## `safeInvokeStoreAction()` [#safeinvokestoreaction]
+
+调用 Nexus State 动作的统一安全辅助函数。
+
+```ts
+const result = await safeInvokeStoreAction(remote, "increment", [1]);
+
+if (result.isErr()) {
+  console.error(result.error.code, result.error.message);
+} else {
+  console.log(result.value);
+}
+```
+
+因此无需为每个存储再生成一套重复的 `safeActions.*` 接口。
+
+## 错误 [#errors]
+
+重要的 Nexus State 公共错误包括：
+
+- `NexusStoreConnectError`
+- `NexusStoreDisconnectedError`
+- `NexusStoreActionError`
+- `NexusStoreProtocolError`
+
+需要区分连接失败、连接断开、远程动作失败和协议异常时，可以使用这些错误类型。

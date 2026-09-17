@@ -1,0 +1,119 @@
+---
+title: 寻址
+description: 配置和排查 Node IPC 的 Unix 套接字寻址。
+---
+
+Node IPC 的地址解析将精确的 `NodeIpcConnectionTarget` 映射到文件系统中的 Unix 套接字路径。
+
+## 默认 ConnectionTarget [#default-connectiontarget]
+
+守护进程的目标类型为：
+
+```ts
+{
+  context: "node-ipc-daemon";
+  appId: string;
+  instance?: string;
+}
+```
+
+`instance` 默认为 `default`。
+
+同一应用需要运行多个不同角色的守护进程时，通过 `instance` 区分：
+
+```ts
+usingNodeIpcDaemon({ appId: "example-app", instance: "indexer" });
+usingNodeIpcDaemon({ appId: "example-app", instance: "sync" });
+```
+
+## 默认文件系统路径 [#default-filesystem-paths]
+
+设置了 `XDG_RUNTIME_DIR` 时，默认路径为：
+
+```text
+$XDG_RUNTIME_DIR/nexus/<appId>/<instance>.sock
+```
+
+未设置 `XDG_RUNTIME_DIR` 时，使用以下备用路径：
+
+```text
+/tmp/nexus-<uid>/<appId>/<instance>.sock
+```
+
+示例：
+
+```text
+/run/user/1000/nexus/example-app/default.sock
+/tmp/nexus-1000/example-app/default.sock
+```
+
+## 路径片段校验 [#segment-validation]
+
+默认解析器会拒绝不安全的 `appId` 和 `instance` 路径片段。
+
+拒绝示例：
+
+- 空字符串
+- `.`
+- `..`
+- 包含 `/` 的值
+- 包含 `\` 的值
+- 导致最终套接字路径超过平台长度限制的值
+
+这些检查用于防止目标参数引发路径遍历。
+
+## 自定义地址解析器 [#custom-resolver]
+
+需要由应用管理套接字路径布局时，可以使用自定义解析器。
+
+```ts
+usingNodeIpcClient({
+  appId: "example-app",
+  resolveAddress(target) {
+    if (target.context !== "node-ipc-daemon") return null;
+    if (target.appId !== "example-app") return null;
+    return { kind: "path", path: "/run/user/1000/example-app.sock" };
+  },
+});
+```
+
+返回 `null` 表示无法解析该目标。Nexus 会报告地址错误，不会猜测其他路径。
+
+自定义路径必须是绝对文件系统路径，并满足平台的套接字路径长度限制。
+
+## 运行目录安全 [#runtime-directory-safety]
+
+守护进程启动时，会尽可能以仅当前用户可访问的权限创建适配器管理的目录。
+
+绑定前适配器检查自己拥有的目录：
+
+- 拒绝指向目录的符号链接
+- 拒绝不是目录的路径
+- 拒绝存在不安全组写入或全局写入权限的运行根目录
+- 对于 `/`、`/run`、`/run/user` 和 `/tmp` 等系统祖先目录，在所有权规则安全时允许使用
+
+适配器不会擅自修改不归自己管理的目录权限。自定义路径所在目录不安全时，应由应用或安装程序显式修正所有权和权限。
+
+## 路径已存在时 [#existing-socket-paths]
+
+套接字路径已存在时，守护进程会在启动时检查是否已有进程正在使用它。
+
+结果：
+
+- 正在使用的套接字：返回 `E_IPC_ADDRESS_IN_USE`
+- 已失效的残留套接字文件：移除后开始监听
+- 普通文件：启动失败
+- 符号链接：启动失败
+- 清理失败：返回 `E_IPC_STALE_SOCKET_CLEANUP_FAILED`
+
+适配器不会盲目删除未知的文件系统条目。
+
+## 抽象套接字地址 [#abstract-socket-addresses]
+
+公共地址类型保留了抽象套接字的形式：
+
+```ts
+{ kind: "abstract", name: string }
+```
+
+默认支持的是文件系统路径形式的套接字。除非所用版本的文档和测试明确覆盖抽象命名空间，否则应将其视为预留功能。

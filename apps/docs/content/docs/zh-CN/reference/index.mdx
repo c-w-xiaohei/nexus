@@ -1,0 +1,88 @@
+---
+title: Core API 参考
+description: 运行时配置、服务注册、Token 及其他 Core API 入口。
+---
+
+从 `@nexus-js/core` 导入这些 API。参考描述开发中的 Core 2.0 alpha 契约。
+完整应用示例请从[快速开始](/nexus/docs/getting-started/)开始。
+
+## Nexus 和 nexus [#nexus-and-nexus]
+
+`new Nexus<M>()` 为适配器模型 `M` 创建独立的运行时，`nexus` 是默认单例。
+获取连接或发起其他按需操作之前，先配置对应运行时。
+
+| 方法                                | 返回值                         | 用途                       |
+| ----------------------------------- | ------------------------------ | -------------------------- |
+| `configure(config)`                 | 运行时实例                     | 添加启动配置并安排初始化   |
+| `safeConfigure(config)`             | `Result<runtime, Error>`       | 以 Result 返回配置结果     |
+| `ready()`                           | `Promise<void>`                | 等待本地初始化             |
+| `safeReady()`                       | `Promise<Result<void, Error>>` | 观察相同初始化结果         |
+| `provide(token, service, options?)` | 运行时实例                     | 注册服务                   |
+| `safeProvide(...)`                  | `Result<runtime, Error>`       | 以 Result 返回服务注册结果 |
+| `updateIdentity(partialMeta)`       | `Promise<void>`                | 发布本地身份更新           |
+| `safeUpdateIdentity(partialMeta)`   | `Promise<Result<void, Error>>` | 以 Result 返回身份更新结果 |
+
+配置在启动时固定。静态服务应在同步启动阶段注册；就绪后使用 `provide` 动态注册。
+`ready` 不等待远程对端就绪，也不等待 `connectTo` 连接尝试完成。
+
+获取和观察方法见[Connection API](/nexus/docs/reference/connections/)；`ref`、`release` 和 `Nexus.safeCall` 见[资源和调用](/nexus/docs/reference/resources/)。
+
+## NexusConfig [#nexusconfig]
+
+| 字段                      | 含义                                         |
+| ------------------------- | -------------------------------------------- |
+| `endpoint.implementation` | 适配器 `IEndpoint<M>` 实例                   |
+| `endpoint.meta`           | 本地 `ContextMetaOf<M>`                      |
+| `endpoint.connectTo`      | 开始监听后各尝试连接一次的可选精确目标列表   |
+| `providers`               | 启动时注册的服务描述对象                     |
+| `policy`                  | 连接与调用授权钩子                           |
+| `callTimeout`             | 单次调用超时，必须是正有限毫秒数；默认 5,000 |
+
+Endpoint 配置需要包含实现和元数据，标准适配器辅助函数会提供平台初始化配置。
+也可以用实例绑定的 `Endpoint` 装饰器提供端点，但不能与显式的 `configure({ endpoint })` 混用。
+
+`defineNexusConfig(config)` 在检查配置结构的同时保留推断出的字面量类型。
+`composeNexusConfig(layers)` 从左到右合并配置：Endpoint 字段、`callTimeout` 和同 ID 服务采用后面的值；显式提供的策略替换先前策略。`connectTo` 会整体替换原列表。
+
+## 服务注册形式 [#provider-forms]
+
+```ts
+app.provide(DocumentToken, documents, { policy });
+app.provide({ token: DocumentToken, service: documents, policy });
+app.provide([{ token: DocumentToken, service: documents, policy }]);
+```
+
+以上是等价的注册形式。`serviceProvider(token, service, options?)` 只创建描述对象，不执行注册。
+单次提交中存在重复 ID 时，整批注册失败。配置层之间按 ID 合并，但装饰器与配置最终形成的启动注册批次不能包含重复 ID。
+
+`@app.Expose(Token, options?)` 在启动时注册类服务，可通过可选工厂函数提供构造依赖。
+顶层 `Expose` 和 `Endpoint` 装饰器绑定默认单例；更推荐使用服务所属的已配置实例。
+
+服务注册和策略组合详见[提供服务](/nexus/docs/services/)与[授权](/nexus/docs/auth-and-policy/)。
+
+## Token 和 TokenSpace [#token-and-tokenspace]
+
+`new Token<T>(id)` 将运行时 ID 与共享服务类型 `T` 关联。
+`Token<T, M>` 可以将契约绑定到适配器模型。Token 的 `id` 应保持稳定，且不包含连接目标。
+
+`new TokenSpace<M>({ name })` 创建命名空间：
+
+| 成员                                    | 含义               |
+| --------------------------------------- | ------------------ |
+| `name`                                  | 当前命名空间片段   |
+| `fullPath`                              | 完整限定命名空间   |
+| `token<T>(name)` / `safeToken<T>(name)` | 创建命名空间 Token |
+| `space(name)` / `safeSpace(name)`       | 创建子命名空间     |
+
+名称片段不能为空，也不能包含 `:`。例如，`workspace` 命名空间下的 `documents` 子空间中的 `reader` Token，其 ID 为 `workspace:documents:reader`。
+State 专用的 `storeToken` 辅助函数见[Nexus State](/nexus/docs/state/)。
+
+## 模型与策略类型 [#model-and-policy-types]
+
+`AdapterModel` 关联 `contextMeta`、`connectionMeta` 和 `connectionTarget`。
+编写模型泛型代码时使用 `ContextMetaOf<M>`、`ConnectionMetaOf<M>` 和 `ConnectionTargetOf<M>`。
+`NexusInstance<M>` 描述运行时的公共接口。
+
+`ConnectionWhere<M>` 接收对端上下文元数据和本地连接事实。
+`NexusAuthorizationPolicy<M>` / `AuthorizationPolicy<M>` 包含可选的 `canConnect` 和 `canCall` 钩子，返回 `boolean` 或 `Promise<boolean>`。
+类型关系见[身份与元数据](/nexus/docs/identity-and-metadata/)，钩子上下文和信任边界见[授权](/nexus/docs/auth-and-policy/)。

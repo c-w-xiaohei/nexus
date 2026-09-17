@@ -1,0 +1,124 @@
+---
+title: 认证
+description: 为 Node IPC 连接配置共享密钥预认证。
+---
+
+Node IPC 提供适配器专属的共享密钥预认证。所有适配器通用的 Core 授权策略另见[授权](/nexus/docs/auth-and-policy/)。
+
+## 共享密钥预认证的作用 [#what-shared-secret-pre-auth-does]
+
+共享密钥预认证在套接字交给 Nexus Core 之前执行。
+
+客户端发送认证消息，守护进程验证其中的认证令牌。令牌正确时，双方继续进行 Nexus 握手。
+
+消息格式：
+
+```json
+{ "type": "nexus-ipc-auth", "version": 1, "token": "..." }
+```
+
+成功响应：
+
+```json
+{ "type": "nexus-ipc-auth-ok" }
+```
+
+认证消息使用以换行符分隔的 JSON 格式。收到不完整的套接字数据块时，实现会先缓存，直到收到换行符再解析。
+
+## 配置认证令牌 [#configure-tokens]
+
+守护进程：
+
+```ts
+usingNodeIpcDaemon({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
+});
+```
+
+客户端：
+
+```ts
+usingNodeIpcClient({
+  appId: "example-app",
+  authToken: process.env.NEXUS_IPC_TOKEN,
+});
+```
+
+认证令牌不能为空。如果守护进程要求认证，而客户端发送了错误的令牌，连接会失败并返回 `E_IPC_AUTH_FAILED`。
+
+## 超时和限制 [#timeouts-and-limits]
+
+认证交互有超时限制，对端一直不响应时不会无限等待。
+
+单行认证消息也有大小上限。消息过大或格式错误时会失败，不会无限缓存。
+
+常见失败：
+
+- 认证令牌错误：`E_IPC_AUTH_FAILED`
+- 超时前未收到认证消息：`E_IPC_AUTH_FAILED`
+- JSON 或协议消息格式错误：`E_IPC_PROTOCOL_ERROR`
+- 认证消息行过大：`E_IPC_PROTOCOL_ERROR`
+
+## ConnectionMeta [#connectionmeta]
+
+预认证完成后，Node IPC 向 Nexus Core 提供连接元数据：
+
+```ts
+{
+  observed: {
+    socket: { kind: "path", path: "..." },
+    authenticated: true,
+    authMethod: "shared-secret"
+  }
+}
+```
+
+未配置共享密钥时，`observed.authenticated` 为 `false`，`observed.authMethod` 为 `"none"`。
+
+Core 策略可以据此使用适配器的预认证结果。
+
+## 与 Core 授权策略组合 [#combine-with-core-policy]
+
+使用 `canConnect` 要求预认证成功，使用 `canCall` 限制服务操作。配置守护进程时，可以这样组合：
+
+```ts
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+
+nexus.configure(
+  composeNexusConfig([
+    usingNodeIpcDaemon({
+      appId: "example-app",
+      authToken: process.env.NEXUS_IPC_TOKEN,
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ connection }) {
+          return connection.observed.authenticated === true;
+        },
+        canCall({ serviceName, operation }) {
+          return serviceName === "example:admin" && operation === "APPLY";
+        },
+      },
+    },
+  ]),
+);
+```
+
+`canConnect`、`canCall`、服务级策略和元数据信任边界见[授权](/nexus/docs/auth-and-policy/)。
+
+## 预认证的能力边界 [#what-pre-auth-does-not-prove]
+
+共享密钥预认证只能证明对端持有配置的认证令牌。
+
+它不能证明：
+
+- 对端进程运行的是哪个可执行文件
+- 操作系统用户 ID
+- 操作系统用户组 ID
+- 进程 ID 的真实性
+- 用户意图
+
+除非应用另外验证这些声明，否则不能把自行声明的 `pid` 或身份标签作为安全边界。

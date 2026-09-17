@@ -1,0 +1,137 @@
+---
+title: Core 2.0 Alpha 迁移
+description: 将服务获取和 target 迁移到 connection-resource API。
+---
+
+Core 2.0 alpha 使连接变得显式。旧服务获取 API 被移除，不保留兼容 alias。
+本页描述尚未发布的 alpha 迁移契约，不表示已有发布的 package 已经有该版本。
+
+移除的 entry 是 `create`、`safeCreate`、`select`、`safeSelect`、`createMulticast`、`safeCreateMulticast`、`selectMulticast` 和 `safeSelectMulticast`。
+
+关联的 `CreateOptions`、`SelectOptions`、multicast option type、`RuntimeCreateTokenParam` 和 default-target option type 也被移除。
+使用 `ConnectOptions`、`ConnectMulticastOptions` 和每个 handle 的 `ResourceOptions`。
+State 也直接使用 `ConnectOptions`；`ConnectNexusStoreOptions` 被移除。
+Mock call record 保留其 object shape，不再有独立的 `MockNexus*Call` export。需要 annotation 时从 `MockNexus["calls"]` 推导 record type。
+过时的 `NexusTargetingError` 和 provider-wait/default-target error code 被移除；连接获取现在报告具体 connection error。
+
+普通 proxy lifecycle API 也被移除：`Nexus.getProxyStatus`、`Nexus.subscribeProxyStatus`、`Nexus.inspectProxy`、`ProxyStatus`、`ProxyDebugSnapshot` 以及 React 的 `useProxyStatus`。
+保留 `connect` 返回的 `Connection`，用 `onDisconnected` 或 `subscribeIdentity` 观察它。
+`useStoreStatus` 仍是 Nexus State handle 的 React lifecycle observer。
+
+## 替换服务获取 [#replace-service-acquisition]
+
+替换一次服务获取：
+
+```ts
+const service = await nexus.create(SettingsToken, { target });
+```
+
+改为显式连接后再同步查询 catalog：
+
+```ts
+const connection = await nexus.connect({ target });
+const service = connection.get(SettingsToken);
+```
+
+Safe 形式分离两个失败边界：
+
+```ts
+const connected = await nexus.safeConnect({ target });
+if (connected.isErr()) {
+  report(connected.error);
+} else {
+  const service = connected.value.safeGet(SettingsToken);
+  if (service.isErr()) report(service.error);
+  else await service.value.read();
+}
+```
+
+`get` 和 `safeGet` 不拨号、不等待 provider、不创建远程业务对象。它们检查已经 ready 的 connection 的 provider catalog。
+
+现有 `Asyncified<T>` type 仍是 lazy remote service value 的类型级映射。`RemoteValue<T, M>` 仍是带 connection provenance 的结构化 thenable；两者都不增加 cancellation 或 connection ownership。
+
+## 被动连接获取 [#passive-connection-acquisition]
+
+没有 `target` 的 `connect({ where, timeout, signal })` 等待恰好一个已有的匹配 ready connection。
+它绝不发现 provider，也不会从 Token、TokenSpace、endpoint 或适配器默认值推导 target。多个匹配是歧义；timeout 或 abort 只结束当前 caller 的等待。
+
+`where(contextMeta, connectionMeta)` 是获取约束。它不会针对每个 RPC 重新评估，也不能替代授权 policy：
+
+- `policy.canConnect` 授权逻辑连接建立。
+- `where` 选择符合应用约束的已获取 connection。
+- `policy.canCall` 授权每个服务或资源操作。
+
+如果 peer 在初始 session 后发布服务，请在改变 peer 的应用 readiness marker 前发布 provider。
+等待 marker 的 peer 可以在 `where` 中传入该 marker；仍应使用 `get` 或 `safeGet` 检查真实 catalog。
+
+## 替换 Multicast API [#replace-multicast-apis]
+
+使用 `connectMulticast` 获取固定连接快照：
+
+```ts
+const collection = await nexus.connectMulticast({
+  targets,
+  where: matchesWorker,
+});
+
+const resources = collection.get(TaskToken);
+const results = await Promise.all(
+  resources.map(async ({ connection, result }) => ({
+    connection,
+    result: result.isErr()
+      ? result
+      : await Nexus.safeCall(result.value.run(input)),
+  })),
+);
+```
+
+有显式 `targets` 时，每个 target 都必须获取。没有 `targets` 时，操作为当前匹配的 ready connection 建立快照，可以返回空 collection。
+Collection 不会改变成员关系。每个 `get` item 保留 source connection 和自己的获取 `Result`；失败成员不会静默过滤。
+
+移除的 `createMulticast`、`safeCreateMulticast`、`selectMulticast` 和 `safeSelectMulticast` API 没有直接兼容替代。
+使用 `(await nexus.connectMulticast(...)).get(Token)` 和普通 Promise helper。
+
+## 移除默认 target 和 provider wait [#remove-default-targets-and-provider-wait]
+
+从以下位置移除 `defaultTarget`：
+
+- `Token` 和 `TokenSpace` 定义
+- endpoint 配置和 decorator
+- 适配器 helper options
+- State token 和 State connection options
+
+将精确的适配器 target 传给 `connect` 或 `connectMulticast`。
+只有当应用需要独立于服务获取的一次启动拨号时，才使用 endpoint 显式的 `connectTo` startup list。
+它不等待 provider，也不会让 `ready()` 等待拨号。
+
+provider-level `wait` 配置没有替代。等待 connection 使用带正 `timeout` 和可选 `signal` 的被动 `connect`。
+等待延迟服务时，在 peer ready marker 前发布它，然后获取 connection 并调用 `get`。
+
+## State 选项 [#state-options]
+
+`connectNexusStore` 和 `safeConnectNexusStore` 仍可用。它们的 options 遵循 `ConnectOptions`：精确 `target`、获取 `where`、正 `timeout` 和可选 `signal`。
+它们不接受 Token 或 endpoint default target、provider wait setting，也不接受单独的 State targeting model。
+State action call 保留自己的 Core resource-call timeout 行为。
+
+State 仍在获取后观察选定 peer 的 identity：如果 `where` predicate 不再匹配，State handle 会变成 `stale`。
+这是 State lifecycle 行为，不是共享 Connection 保留的 predicate，也不是应用于普通服务调用的授权检查。
+
+## Resource 和调用规则 [#resource-and-call-rules]
+
+`RemoteValue<T, M>` 是带只读 `connection` provenance 字段的结构化 thenable type。
+声明方法调用或读取远程属性是 lazy 的；消费时才开始操作。需要 Result 时对一次调用使用 `Nexus.safeCall`。
+使用业务方法，不要远程属性赋值。
+
+迁移不会移除现有的 `Asyncified<T>` type mapping、实例 `release`/`safeRelease` method 或顶层 `Expose`/`Endpoint` decorator shorthand。
+这些 API 保留可用；移除仅限旧获取族、default-target 配置和上文所述的 provider wait 配置。
+
+Connection、service proxy、ref、回调和 State handle 都绑定 session。断开、reload、restart 或 session replacement 后，重新连接并取得新的 handle。
+`release` 和 `safeRelease` 仍是远程引用的显式释放操作；不会关闭共享 connection 或调用应用清理。
+
+## Bootstrap 声明 [#bootstrap-declarations]
+
+在 bootstrap 开始前注册 `@nexus.Expose` 和 `@nexus.Endpoint` class。
+延迟 decorator 应用现在会显式失败；ready() 后的实时服务注册使用 `provide(...)`。
+一次提交内，或最终配置 provider 与 decorated class 之间的重复 provider ID，会在 service factory 运行前失败。
+独立配置层仍保留 last-wins 行为。Factory 接收有效 endpoint metadata，包括 decorator 定义的 metadata。
+`safeReady()` 在后续调用中返回相同启动失败；不会重试初始化。

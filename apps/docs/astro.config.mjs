@@ -5,6 +5,25 @@ import { unified } from "@astrojs/markdown-remark";
 import tailwindcss from "@tailwindcss/vite";
 import { rehypeCode, remarkHeading } from "fumadocs-core/mdx-plugins";
 
+// Localize links at compilation for both Markdown and MDX. A React Link
+// override cannot reach Astro's separately rendered content islands.
+function localizeMarkdownLinks() {
+  return (tree, file) => {
+    if (!file.path?.replaceAll("\\", "/").includes("/zh-CN/")) return;
+    function walk(node) {
+      const href = node.properties?.href;
+      if (node.tagName === "a" && typeof href === "string") {
+        node.properties.href = href.replace(
+          /^\/nexus\/docs(?=\/|[?#]|$)(?!\/zh-CN(?:\/|[?#]|$))/,
+          "/nexus/docs/zh-CN",
+        );
+      }
+      node.children?.forEach(walk);
+    }
+    walk(tree);
+  };
+}
+
 // Local bookmarks often omit the GitHub Pages base. Redirect before Astro's
 // base-path guard so /docs and nested links do not fall through to its 404 page.
 function redirectLocalDocs(server) {
@@ -37,6 +56,7 @@ export default defineConfig({
     processor: unified({
       remarkPlugins: [remarkHeading],
       rehypePlugins: [
+        localizeMarkdownLinks,
         [
           rehypeCode,
           { themes: { light: "github-light", dark: "github-dark" } },

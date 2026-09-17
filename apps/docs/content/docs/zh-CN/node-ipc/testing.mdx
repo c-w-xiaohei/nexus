@@ -1,0 +1,105 @@
+---
+title: 测试
+description: 验证 Node IPC 适配器行为及真实套接字集成。
+---
+
+Node IPC 包包含单元测试和基于真实 Unix 套接字的集成测试。
+
+运行该包的测试：
+
+```bash
+pnpm --filter @nexus-js/node-ipc test
+```
+
+## 使用 Mock Nexus 的单元测试 [#unit-tests-with-mock-nexus]
+
+如果应用单元测试只需验证代码如何调用 Nexus 服务，可以使用 `@nexus-js/testing`。
+
+```ts
+const mock = createMockNexus();
+mock.service(EchoToken, echoService);
+
+const connection = await mock.nexus.connect({
+  target: {
+    context: "node-ipc-daemon",
+    appId: "example-app",
+  },
+});
+const echo = connection.get(EchoToken);
+```
+
+这不验证 Node IPC 适配器本身。测试替身不会打开套接字、解析路径、执行消息分帧、运行共享密钥认证、检测残留套接字，也不覆盖守护进程重启行为。
+
+## 测试范围 [#test-areas]
+
+该包的测试覆盖：
+
+- 二进制帧的半包和粘包处理
+- 地址解析与路径校验
+- Unix 套接字端口的读写和断开行为
+- 残留套接字清理与已有守护进程保护
+- 创建辅助函数的配置行为
+- 共享密钥认证协议的健壮性
+- 真实守护进程与客户端之间的 RPC
+- Core `canConnect` 和 `canCall` 的集成
+- 守护进程关闭与重建
+- 构建产物的导入冒烟测试
+
+## 集成测试结构 [#integration-test-shape]
+
+优先使用真实套接字集成测试验证适配器行为。
+
+好的 node-ipc 集成测试应：
+
+1. 使用 `mkdtemp` 创建临时套接字根目录
+2. 使用 `usingNodeIpcDaemon` 启动守护进程
+3. 使用 `usingNodeIpcClient` 启动客户端
+4. 通过 Nexus Core 注册真实服务
+5. 使用 `nexus.connect()` 和 `connection.get()` 连接并获取服务
+6. 关闭两个运行时并删除临时目录
+
+这些测试能发现模拟端点无法覆盖的适配器与 Core 集成问题。`createMockNexus()` 不负责这一层，应保留真实套接字测试。
+
+## 避免不稳定的套接字测试 [#avoiding-flaky-socket-tests]
+
+有明确的完成信号时，应等待该信号，而不是随意休眠一段时间。
+
+优先：
+
+- 等待套接字文件出现
+- 等待 `listen` 返回的 Promise 完成
+- 等待回调触发
+- 在超时测试中显式设置较短的适配器超时
+
+在 `os.tmpdir()` 下创建临时路径，并在每个测试结束后清理。
+
+## 测试认证失败 [#testing-auth-failures]
+
+认证测试应同时验证认证行为和资源清理。
+
+共享密钥预认证需要覆盖：
+
+- 正确令牌通过认证
+- 错误令牌认证失败
+- 格式错误的认证消息被拒绝
+- 正确缓存拆分到多个数据块中的消息
+- 对端无响应时超时
+- 过大的认证消息行被拒绝
+- 客户端认证失败后销毁套接字
+
+Core 授权策略需要覆盖：
+
+- `canConnect` 允许与拒绝连接
+- `canCall` 允许与拒绝调用
+- `canCall` 拒绝时不会执行服务实现
+
+## 测试守护进程重启 [#testing-daemon-restart]
+
+重启测试应验证句柄与会话的绑定行为：
+
+1. 获取代理并成功调用
+2. 关闭守护进程
+3. 验证旧代理调用失败
+4. 启动新的守护进程
+5. 获取新的代理
+6. 验证新代理调用成功

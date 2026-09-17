@@ -1,0 +1,153 @@
+---
+title: Nexus State 生命周期和错误
+description: 理解 Nexus State 的状态、断开、句柄替换和错误。
+---
+
+本页解释 Nexus State 的关键运行时行为。
+
+## 生命周期状态 [#status-states]
+
+`RemoteStoreStatus` 是可辨识联合类型。
+
+主要状态：
+
+- `initializing`
+- `ready`
+- `disconnected`
+- `stale`
+- `destroyed`
+
+## `ready` [#ready]
+
+存储已完成：
+
+- 订阅握手
+- 本地镜像初始化
+- 开始处理正常状态更新
+
+## `disconnected` [#disconnected]
+
+以下情况使用它：
+
+- 底层连接关闭
+- 传输通道消失，操作无法继续
+
+公开的断开状态包含：
+
+- `lastKnownVersion`
+- 可选 `cause`
+
+## 初始连接失败与重连失败 [#initial-connect-failure-vs-reconnect-failure]
+
+需要区分 Core 层与 React Hook 层的行为。
+
+Core 层（`connectNexusStore` / `safeConnectNexusStore`）：
+
+- 初始连接失败发生在可用 `RemoteStore` 存在之前
+- 异常接口：`connectNexusStore(...)` 以连接类错误拒绝 Promise
+- 安全接口：`safeConnectNexusStore(...)` 返回 `Err`
+
+已经取得 `RemoteStore` 后，传输断开会使实例进入 `disconnected`，对端身份不再符合筛选条件则可能使其进入 `stale`。这两种状态都需要创建新实例替换，不能恢复旧句柄。
+
+`useRemoteStore()` 提供获取状态（`pending`、`error`、`store`）和 `reconnect()` 方法。
+已获取句柄的生命周期通过 `useStoreStatus` 或 `Scope.useStatus` 监听；没有句柄时，两者返回 `null`。
+首次获取或替换尝试失败时，会设置获取错误，不会构造一个虚假的断开状态。
+替换开始时，React 会销毁旧句柄，无论新尝试最终是否成功。`reconnectKey`、`reconnect()`、选择器回退值和目标变化的行为，见[Nexus State React 指南](/nexus/docs/state/react/)。
+
+## `stale` [#stale]
+
+表示当前句柄已不再对应应用所需的目标。
+
+典型原因：
+
+- 对端身份更新后，不再匹配句柄的 `where` 条件
+- 终止事件报告 `target-changed` 或 `target-replaced`
+
+改变 React 的目标属性是另一回事：负责管理句柄的组件会销毁旧句柄并重新获取，不会将旧句柄标记为 `stale`。
+同一目标的会话替换也不等于 `stale`。
+
+同一目标建立新会话时，旧 RemoteStore 会在失去原连接后进入 `disconnected`。
+`stale` 与 `disconnected` 是不同的状态。
+
+## `destroyed` [#destroyed]
+
+表示调用方主动结束了句柄的生命周期。
+
+之后：
+
+- 不再处理更新
+- 动作调用失败
+- 清理本地订阅
+
+## 动作语义 [#action-semantics]
+
+这是 Nexus State 的核心保证之一：
+
+```ts
+await remote.actions.increment(1);
+```
+
+这会等待普通 Core 函数调用完成，并等待调用方确认目标快照。它提供的是固定发布窗口下的同步边界，不是事务提交回执。
+
+初始化回调直接传递动作对应的 Core 函数代理。State 不增加按动作名称分发的层，也不再包装一层动作代理。因此，直接调用动作的失败保留 Core 错误码，包括 `E_CONN_CLOSED`、`E_CALL_TIMEOUT` 和 `E_RESOURCE_ACCESS_DENIED`。
+需要 State 专属错误联合类型时，可以使用 State 安全辅助函数，在返回公共 `Result` 时将错误归一化。
+
+State 连接选项中的 `timeout` 分别限制连接获取和回调初始化，不设置后续 Core 资源调用的超时；动作调用仍使用 Core 运行时默认值。
+
+因此下面是安全的：
+
+```ts
+await remote.actions.increment(1);
+console.log(remote.getState());
+```
+
+## 动作执行期间断开 [#disconnect-during-in-flight-action]
+
+动作执行期间连接失效时，Nexus State 会向调用方报告失败。
+但此时动作可能已经修改状态，调用方无法仅凭失败判断它是否生效，因此不要自动重试非幂等动作。
+快照确认失败不会回滚源存储的更新。State 不提供草稿、回滚、队列或回执协议。
+
+源存储的首次更新会开启固定发布窗口，默认 200 毫秒。窗口内的后续更新不会延长窗口，动作完成也不会强制提前发布。
+`maxPendingSnapshots` 默认 32。超过待确认快照上限时，仅终止对应订阅，不会阻塞整个存储。
+
+只有成功动作才等待发布确认。业务错误可能先于此前的状态更新到达调用方，而这些更新仍会按正常窗口发布。
+捕获到错误，不代表已经发生的写入被丢弃。
+
+## 清理语义 [#cleanup-semantics]
+
+清理发生在多个位置：
+
+- 远程句柄执行 `destroy()` 时，清理镜像监听器
+- 绑定对象执行 `destroy()` 时，停止发布，但原始 Zustand 存储仍可使用
+- 客户端进入终态时，尽力执行 `unsubscribe()`
+- 宿主端在连接断开时，移除该连接持有的订阅
+- 通过多上下文集成测试验证宿主端清理行为
+
+## 替换与恢复 [#replacement-vs-recovery]
+
+这是两个不同概念：
+
+- 替换：为新的获取尝试或目标输入创建新句柄
+- 恢复：让已经进入终态的旧句柄重新可用
+
+Nexus State 支持替换，不会让终态 `RemoteStore` 实例自动原地恢复。
+React 的替换控制不会增加 Core 重试策略，也不会重放动作。详见[Nexus State React 指南](/nexus/docs/state/react/)。
+
+Core 句柄也遵循同样的区分：服务代理绑定连接会话，远程资源绑定创建它时使用的连接。
+会话变化后，需要重新获取服务代理或远程资源，不能复用旧句柄。
+
+## 错误类型 [#error-types]
+
+使用以下 Nexus State 错误类型区分失败类别：
+
+- `NexusStoreConnectError`
+- `NexusStoreDisconnectedError`
+- `NexusStoreActionError`
+- `NexusStoreProtocolError`
+
+经验规则：
+
+- 连接或初始化失败 -> `NexusStoreConnectError`
+- 底层连接丢失 -> `NexusStoreDisconnectedError`
+- 远程动作失败 -> `NexusStoreActionError`
+- 协议数据格式或消息顺序异常 -> `NexusStoreProtocolError`

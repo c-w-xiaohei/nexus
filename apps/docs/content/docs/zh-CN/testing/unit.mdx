@@ -1,0 +1,140 @@
+---
+title: 使用 createMockNexus 进行单元测试
+description: 使用可注入的 mock 对消费 Nexus 的应用代码进行单元测试。
+---
+
+当被测试代码接受或读取 `NexusInstance`，且你希望在没有真实 Nexus 拓扑的情况下进行确定性单元测试时，使用 `createMockNexus()`。
+
+## 安装 [#install]
+
+<InstallCommand packages="@nexus-js/testing" dev />
+
+## 消费服务的模块 [#service-consuming-modules]
+
+应用代码可以直接接受 `NexusInstance`：
+
+```ts
+import type { NexusInstance } from "@nexus-js/core";
+import { UserToken } from "./shared";
+
+export async function loadUserName(nexus: NexusInstance, id: string) {
+  const connection = await nexus.connect({
+    target: { context: "background" },
+  });
+  const users = connection.get(UserToken);
+
+  return (await users.getUser(id)).name;
+}
+```
+
+单元测试在同一个 Token 后注册服务：
+
+```ts
+import { createMockNexus } from "@nexus-js/testing";
+import { UserToken, type UserService } from "./shared";
+import { loadUserName } from "./load-user-name";
+
+const mock = createMockNexus();
+
+const users: UserService = {
+  async getUser(id) {
+    return { id, name: "Ada" };
+  },
+};
+
+mock.service(UserToken, users);
+
+await expect(loadUserName(mock.nexus, "u1")).resolves.toBe("Ada");
+
+expect(mock.calls.connect()).toHaveLength(1);
+```
+
+## React 组件测试 [#react-component-tests]
+
+直接使用 `NexusProvider`。测试 package 不添加 React 子路径或单独的 provider abstraction。
+
+```tsx
+import { render } from "@testing-library/react";
+import { NexusProvider } from "@nexus-js/react";
+import { createMockNexus } from "@nexus-js/testing";
+
+const mock = createMockNexus();
+mock.service(UserToken, users);
+
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <NexusProvider nexus={mock.nexus}>{children}</NexusProvider>
+);
+
+render(<UserPanel />, { wrapper });
+```
+
+## 测试连接边界 [#testing-connection-boundaries]
+
+mock 的 connection seam 让应用测试可以检验 connection acquisition 和 service lookup 的形状。
+连接失败、handshake、授权、断开和重连请使用 Core 或适配器集成测试；mock 不模拟这些 runtime 行为。
+
+```ts
+const connection = await mock.nexus.connect({
+  target: { context: "background" },
+});
+const result = connection.safeGet(UserToken);
+
+if (result.isErr()) throw result.error;
+await result.value.getUser("u1");
+```
+
+## 在测试中配置服务 [#configuring-services-in-tests]
+
+`mock.nexus.configure({ providers })` 记录配置并注册 provider：
+
+```ts
+mock.nexus.configure({
+  providers: [{ token: UserToken, service: users }],
+});
+
+expect(mock.calls.configure()).toHaveLength(1);
+```
+
+`mock.service(Token, implementation)` 是无 scope 的注册。当测试需要在连接获取期间进行 `where` filtering 时，将 provider metadata 作为第三个可选参数传入。
+
+mock 保存 `config.policy` 供断言，但不会执行 `canConnect` 或 `canCall`。
+
+## Release 和清理断言 [#release-and-cleanup-assertions]
+
+`release` 和 `safeRelease` 适用于远程引用，不适用于普通服务 proxy。
+用被测服务返回的远程引用测试这些调用；丢弃根 service proxy 不会关闭共享 connection。
+
+## 选择和 Multicast [#selection-and-multicast]
+
+`connect({ target, where, timeout, signal })` 获取一个 ready mock session；没有 target 时模拟被动获取，永远不会发现 provider。
+`connectMulticast(...)` 返回固定 collection，其 `get(Token)` 方法返回每个 connection 的 Result。
+mock 不模拟真实 connection acquisition 或 provider-catalog negotiation。
+
+新的 connection lifecycle 请使用 Core 或适配器集成测试。mock 不建立真实连接、不执行 `onConnect` 或 `subscribeIdentity`，也不验证 collection snapshot。
+
+真实获取、provider-catalog protocol、`where(contextMeta, connectionMeta)` 和适配器拓扑请使用 core 或适配器集成测试。
+
+## 在测试之间清除状态 [#clearing-state-between-tests]
+
+```ts
+afterEach(() => {
+  mock.clear();
+});
+```
+
+`clear(token)` 移除该 token 注册的 service 和 connection record。
+`clear()` 移除所有已注册 service、注入的 failure、connection record、configure record、release record 和 update-identity record。
+
+## 边界 [#boundaries]
+
+`createMockNexus()` 在 Nexus API seam 测试应用行为。它不验证：
+
+- endpoint implementation 正确性
+- browser `postMessage`
+- Chrome runtime port
+- Node socket path、framing 或 auth
+- 适配器 metadata 收集
+- 真实断开或重连顺序
+- daemon restart 或 iframe reload 行为
+- Core authorization policy 执行
+- transport graph、动态 discovery 或适配器 connection-metadata evaluation

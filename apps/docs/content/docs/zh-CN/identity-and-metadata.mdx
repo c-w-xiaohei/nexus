@@ -1,0 +1,95 @@
+---
+title: 身份与元数据
+description: 识别对端、筛选连接，并区分对端声明的身份与本地观察到的事实。
+---
+
+多个上下文参与通信时，应用需要区分它们的角色、所属工作区或就绪状态。Nexus 在握手时交换一个小型身份对象，并通过 Connection 提供访问。
+
+## 三种不同的输入 [#three-different-inputs]
+
+| 输入             | 提供者         | 用途                       |
+| ---------------- | -------------- | -------------------------- |
+| ConnectionTarget | 发起连接的应用 | 由适配器接受的精确地址     |
+| ContextMeta      | 远程应用       | 声明的身份、角色和应用标签 |
+| ConnectionMeta   | 本地适配器     | 本次会话中观察或验证的事实 |
+
+目标地址决定连接到哪里，元数据描述对端和已建立的连接。它们来自不同位置，信任边界也不同。
+
+## 声明本地身份 [#declare-local-identity]
+
+显式配置 Endpoint 时，在 `endpoint.meta` 中声明身份：
+
+```ts
+app.configure({
+  endpoint: {
+    implementation: endpoint,
+    meta: {
+      context: "document-source",
+      workspace: "drafts",
+      documentsReady: false,
+    },
+  },
+});
+```
+
+这是一个配置片段：`app` 和 `endpoint` 必须使用同一个声明了这些字段的模型。官方适配器辅助函数会配置标准身份信息；参阅对应的[适配器指南](/nexus/docs/platforms/)。
+
+身份信息应精简且可序列化。可以包含角色、工作区标签和就绪状态，不应包含密钥、可变业务数据或本应由适配器观察得到的事实。
+
+## 读取元数据并筛选对端 [#read-and-select-peers]
+
+`connection.contextMeta` 保存最新接受的对端身份信息，`connection.connectionMeta` 保存本地适配器对该会话观察到的事实。
+
+在连接谓词中同时使用两者：
+
+```ts
+const connection = await app.connect({
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.workspace === "drafts" &&
+    connectionMeta.observed.authenticated === true,
+  timeout: 10_000,
+});
+```
+
+示例假定适配器模型声明了这些字段。不指定 `target` 时，只会被动等待恰好一个匹配的会话。
+`where` 仅筛选获取到的连接，不发现服务提供者，也不负责后续调用的授权。
+
+`groups` 等标签只是应用元数据，不是内置路由组；其含义由应用的筛选函数决定。
+固定的 ConnectionCollection 不会随标签变化而改变成员。
+
+## 更新身份 [#update-identity]
+
+```ts
+await app.updateIdentity({ documentsReady: true });
+```
+
+更新只改变本地 Endpoint 声明的身份，不改变适配器事实或连接目标。
+使用 `connection.subscribeIdentity(listener)` 监听对端身份；它先通知当前完整身份，再通知后续接受的完整快照。
+服务注册与就绪通知的顺序请参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+## 信任边界 [#understand-trust]
+
+除非适配器明确提供额外验证，否则 ContextMeta 只是对端自行声明的信息。ConnectionMeta 可以包含本地观察到的发送方详情或认证结果，其可信程度取决于适配器的具体保证。
+
+访问控制应使用[授权策略](/nexus/docs/auth-and-policy/)。`role: "admin"` 这样的应用标签本身不是权限证明。
+
+## 将类型与 AdapterModel 关联 [#associate-types-with-adaptermodel]
+
+AdapterModel 关联三类类型：
+
+```ts
+import type { AdapterModel } from "@nexus-js/core";
+
+interface DocumentModel extends AdapterModel {
+  contextMeta: {
+    context: "document-source" | "viewer";
+    workspace: string;
+    documentsReady: boolean;
+  };
+  connectionMeta: { observed: { authenticated: boolean } };
+  connectionTarget: { address: string };
+}
+```
+
+这只是自定义模型的示例，不包含适配器实现。使用现有适配器时，请采用其官方模型和精确目标构造函数。
+`Nexus<M>`、`IEndpoint<M>` 和绑定模型的 Token 共享这一关联。它提供编译期一致性，不提供运行时验证或认证。

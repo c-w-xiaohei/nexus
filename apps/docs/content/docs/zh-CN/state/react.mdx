@@ -1,0 +1,127 @@
+---
+title: Nexus State React 指南
+description: 在 React 中使用 Nexus State 远程存储并管理其生命周期。
+---
+
+本页介绍 `@nexus-js/react` 中的 Nexus State 集成。Nexus Provider 和带类型约束的 React 作用域见 [React](/nexus/docs/react/)。
+
+## 公共 API [#public-surface]
+
+```ts
+import {
+  createRemoteStoreScope,
+  NexusProvider,
+  useRemoteStore,
+  useStoreStatus,
+} from "@nexus-js/react";
+import type { RemoteStore } from "@nexus-js/core/state";
+import { useStore } from "zustand";
+```
+
+示例复用共享契约代码中的 `counterStore` 和 `CounterStore`，以及已配置的 `nexus` 实例。
+
+## 在组件子树中共享句柄 [#shared-subtree-ownership]
+
+多个组件使用同一存储时，使用 `createRemoteStoreScope()`。Provider 为子树统一管理一个 RemoteStore 句柄及其远程订阅。子组件通过作用域 Hook 访问，不再各自创建句柄和订阅。
+
+```tsx
+const CounterScope = createRemoteStoreScope(counterStore);
+
+function CounterPanel() {
+  return (
+    <NexusProvider nexus={nexus}>
+      <CounterScope.Provider options={{ target: chromeTarget.background() }}>
+        <CounterButton />
+        <CounterStatus />
+      </CounterScope.Provider>
+    </NexusProvider>
+  );
+}
+
+function CounterButton() {
+  const count = CounterScope.useSelector((state) => state.count, {
+    fallback: 0,
+  });
+  const actions = CounterScope.useActions();
+  return (
+    <button disabled={!actions} onClick={() => actions?.increment(1)}>
+      {count}
+    </button>
+  );
+}
+
+function CounterStatus() {
+  const { pending, error } = CounterScope.useRemoteStore();
+  const phase = CounterScope.useStatus((status) => status.type);
+  return <span>{pending ? "connecting" : (error?.message ?? phase)}</span>;
+}
+```
+
+作用域中的 RemoteStore 句柄为 `null` 时，`useSelector(selector, { fallback })` 始终返回显式指定的回退值，包括获取前、替换中和获取失败后。它不会保留从旧句柄中选出的值。
+`useRemoteStore`、`useActions` 和 `useError` 读取 Provider 的获取结果。
+`useStatus(selector?)` 单独监听当前句柄的生命周期；没有句柄或服务端渲染期间返回 `null`。
+
+远程快照和生命周期通知不会改变 Provider 的上下文值。只有选中数据或状态确实发生变化的组件，才会重新渲染。
+只关心生命周期阶段时，选择 `status.type`；订阅完整状态对象，还会收到快照版本推进引起的更新。
+
+不同存储需要各自的 RemoteStore 句柄。使用同一存储的组件应共享作用域，而不是分别调用 `useRemoteStore()`。
+
+## 直接读取句柄中的状态 [#direct-handle-selection]
+
+`useRemoteStore(token, options)` 负责异步获取、替换和清理 IPC 句柄；并发尝试以最新一次为准。它返回 `{ store, pending, error, reconnect }`，不订阅数据或生命周期更新。
+获取期间，`pending` 为 `true`，`store` 和 `error` 为 `null`。一次尝试最终得到存储或获取错误；后续连接断开不会改写这个获取结果。
+
+读取具体的本地或远程存储时，直接使用 Zustand 的 `useStore(store, selector?)`。Nexus 不提供自己的 `useStore` 或选择器缓存；使用该接口时，将 `zustand` 加入应用依赖。
+
+直接读取和作用域的 `useSelector` 都遵循 Zustand 5 的快照稳定性规则。优先选择已有状态引用或基本类型值；如果选择器构造新对象或数组，并希望浅比较相等时保持结果稳定，使用 `zustand/react/shallow` 的 `useShallow`。
+存储应在两次更新之间返回相同的状态引用，而不是每次读取都复制状态。
+
+当前 React 集成要求 Core ~1.2.0 和基于回调的 State 契约。请一起升级这两个包和所有 State 端点。
+获取的 `RemoteStore` 句柄包含 `getInitialState`、`getStatus` 和 `subscribeStatus`。应通过 `useStoreStatus(store, selector?)` 订阅生命周期，而不是轮询状态。
+宿主存储是通过 `createNexusStore(...)` 或 `bindNexusStore(...)` 绑定的普通 Zustand 存储，不需要也不提供 `withNexusState` 中间件。
+
+取得具体的 RemoteStore 句柄后再渲染子组件，让每个组件内部的 Hook 都能无条件调用。
+
+```tsx
+function CounterRemote() {
+  const remote = useRemoteStore(counterStore, {
+    target: chromeTarget.background(),
+  });
+
+  if (!remote.store) {
+    return <span>{remote.pending ? "connecting" : remote.error.message}</span>;
+  }
+
+  return <CounterValue store={remote.store} />;
+}
+
+function CounterValue({ store }: { store: RemoteStore<CounterStore> }) {
+  const count = useStore(store, (state) => state.count);
+  const phase = useStoreStatus(store, (status) => status.type);
+  if (phase !== "ready") return <span>{phase}</span>;
+  return <button onClick={() => store.actions.increment(1)}>{count}</button>;
+}
+```
+
+`useStoreStatus` 只负责监听，不获取或销毁句柄。没有句柄或服务端渲染期间返回 `null`，之后在客户端读取当前状态。其选择器同样需要保持输出稳定。
+
+## 生命周期控制 [#lifecycle-controls]
+
+应用得知同一目标已有新会话时，可以改变 `reconnectKey`；也可以在事件处理器、回调或定时器中调用 `remote.reconnect()` 请求替换。
+两种方式都会使用最新输入创建新句柄，不恢复终态句柄、不重放动作，也不保证新获取一定成功。重叠尝试以最新一次为准。
+
+目标值、Token、Nexus 实例或超时变化时，也会重新获取。仅内联 `where` 函数的引用变化不会触发重连；下一次尝试会使用当前筛选函数。共享 Token 应在组件渲染函数之外定义。
+
+替换开始时，会立即隐藏旧句柄并让选择器返回回退值。Effect 清理会销毁旧句柄，不等待新获取完成。过时请求或组件卸载后才返回的句柄也会被销毁。
+React 不会在等待替换期间将旧句柄保留为 `stale`。
+
+```tsx
+function ReconnectButton() {
+  const { reconnect } = CounterScope.useRemoteStore();
+  return <button onClick={reconnect}>Reconnect</button>;
+}
+```
+
+RemoteStore 句柄绑定到会话。通过 `useStoreStatus` 或作用域的 `useStatus` 监听 `disconnected`、`stale` 和 `destroyed`，再通过管理句柄的 Hook 或作用域 Provider 请求替换。
+`remote.error` 和 `Scope.useError()` 只报告获取失败，不报告后续传输断开或动作失败。
+对端身份不再匹配时，Core 仍可将句柄标记为 `stale`；React 属性变化则会直接销毁旧句柄。

@@ -1,0 +1,89 @@
+---
+title: 远程调用
+description: 获取服务、调用方法、读取属性，并理解远程调用何时执行。
+---
+
+在[连接](/nexus/docs/connections/)后，使用共享 Token 获取服务：
+
+```ts
+import { DocumentToken } from "./shared";
+
+const documents = connection.get(DocumentToken);
+const summary = await documents.summarize("intro");
+```
+
+## 获取服务 [#getting-a-service]
+
+`get` 同步检查会话是否仍连接、当前服务目录是否包含该 Token，然后返回轻量代理。
+它不会连接其他对端，也不会等待服务在将来注册。
+
+使用 `safeGet` 可以通过 `Result` 处理获取失败。获取成功只代表服务当时可用；后续调用仍可能失败，连接也可能断开。
+参阅[错误和超时](/nexus/docs/error-handling/)。
+
+## 方法和属性 [#methods-and-properties]
+
+远程方法返回可通过 `await` 等待的操作。读取远程属性同样是惰性的，需要等待结果才会发出读取请求。
+对于含 `title` 属性的契约：
+
+```ts
+const title = await document.title;
+await document.setTitle("New title");
+```
+
+写操作使用方法。远程属性赋值不受支持。
+
+支持的普通值通过序列化传递，两端并不共享可变内存。
+传递函数请使用[回调](/nexus/docs/callbacks/)；需要留在原上下文中执行的对象请使用[远程资源](/nexus/docs/remote-resources/)。
+能够按值传输哪些数据，取决于传输层的序列化器；不要假定任意类实例在传输后都能保留原有行为。
+
+## 等待结果时才执行 [#calls-start-when-consumed]
+
+```ts
+const call = documents.summarize("intro"); // 尚未发送消息。
+
+const first = await call; // 开始操作。
+const again = await call; // 观察同一个结果。
+```
+
+再次调用方法会创建新的操作。多次等待同一个操作，则会得到同一次执行的结果，无论成功还是失败。
+
+`await`、`then`、`catch`、`finally`、`Promise.resolve` 和原生 Promise 组合函数都能触发操作执行。
+忽略它、写成 `void call`，或只是读取其 `then` 属性，都不会启动它。
+
+如果想启动操作而不在当前函数中等待结果，请显式触发执行并处理失败：
+
+```ts
+void documents.summarize("intro").catch(console.error);
+```
+
+参数会一直保留原引用，直到首次执行时才编码。如果需要保留声明操作时的值，请事先复制可变参数。
+
+## 与 JavaScript 组合 [#compose-with-javascript]
+
+```ts
+const summaries = await Promise.all([
+  documents.summarize("intro"),
+  documents.summarize("guide"),
+]);
+```
+
+调用独立执行。`race` 和 `any` 不会取消剩余调用，也不会回滚副作用。
+操作上的 `connection` 标识来源连接；`then`、`catch` 和 `finally` 返回原生 Promise，不再包含这个来源字段。
+
+## 会话与调用超时 [#session-and-call-budget]
+
+代理绑定到获取它时使用的连接。断开后，需要重新连接并获取新的代理。
+旧代理不会自动切换到新会话。
+
+可以在获取服务代理时指定调用超时：
+
+```ts
+const documents = connection.get(DocumentToken, { callTimeout: 30_000 });
+```
+
+默认超时为 5 秒，从首次触发执行时开始计算。通过该代理返回的远程引用会继承它的超时设置。
+运行时的默认配置请参阅[错误和超时](/nexus/docs/error-handling/)。
+
+代理成员的命名限制见[资源 API 参考](/nexus/docs/reference/resources/)。
+
+下一步：[传递回调](/nexus/docs/callbacks/)。

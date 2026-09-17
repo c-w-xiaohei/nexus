@@ -1,0 +1,113 @@
+---
+title: 快速开始
+description: 在一个上下文中提供文档服务，并从另一个上下文调用它。
+---
+
+本指南连接两个 JavaScript 上下文，并调用共享的文档服务。
+示例使用 Chrome 扩展演示通信：后台提供服务，内容脚本调用服务。
+服务契约和调用模式与其他[适配器](/nexus/docs/platforms/)相同。
+
+准备一个 TypeScript 扩展项目，构建后台 Service Worker 和内容脚本，并在 manifest 中声明相应入口。
+浏览器需要分别加载这两个入口；Nexus 负责它们之间的通信。
+
+<Steps>
+<Step>
+
+## 安装 [#install]
+
+<InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
+
+</Step>
+<Step>
+
+## 定义共享契约 [#define-a-shared-contract]
+
+后台和内容脚本都导入这个共享模块，其中定义服务的 TypeScript 接口和运行时标识符 Token：
+
+```ts title="shared.ts"
+import { Token } from "@nexus-js/core";
+
+export interface DocumentService {
+  summarize(documentId: string): Promise<string>;
+}
+
+export const DocumentToken = new Token<DocumentService>("example:documents");
+```
+
+契约描述服务提供的能力。连接目标由调用方选择，不放在 Token 中。
+
+</Step>
+<Step>
+
+## 提供服务 [#provide-the-service]
+
+配置后台运行时，并注册一个实现该契约的对象：
+
+```ts title="background.ts"
+import { usingBackgroundScript } from "@nexus-js/chrome";
+import { DocumentToken, type DocumentService } from "./shared";
+
+const background = usingBackgroundScript();
+
+const documents: DocumentService = {
+  async summarize(documentId) {
+    return `Summary of ${documentId}`;
+  },
+};
+
+background.provide(DocumentToken, documents);
+```
+
+初始化后立即同步注册服务，使其纳入启动时的服务目录。[提供服务](/nexus/docs/services/)还介绍了类服务，以及启动完成后动态注册服务的方式。
+
+</Step>
+<Step>
+
+## 连接并调用 [#connect-and-call]
+
+配置内容脚本运行时，获取连接并取得服务代理：
+
+```ts title="content.ts"
+import { chromeTarget, usingContentScript } from "@nexus-js/chrome";
+import { DocumentToken } from "./shared";
+
+const content = usingContentScript();
+
+async function main() {
+  const connection = await content.connect({
+    target: chromeTarget.background(),
+  });
+  const documents = connection.get(DocumentToken);
+  console.log(await documents.summarize("intro"));
+}
+
+void main().catch(console.error);
+```
+
+这里有三个不同的操作：
+
+1. `connect` 异步获取一个已就绪的会话。
+2. `get` 同步检查服务目录并返回代理。
+3. `await` 触发远程操作执行，并等待结果。
+
+</Step>
+</Steps>
+
+## 运行 [#run-it]
+
+使用项目的构建命令构建扩展，在 `chrome://extensions` 中加载或重新加载它，并打开与内容脚本注册匹配的页面。
+在该页面的开发者控制台中应看到：
+
+```text
+Summary of intro
+```
+
+如果没有输出，请检查后台和内容脚本是否都在运行、是否导入了同一个共享 Token 定义，以及重新构建后是否已重新加载扩展。
+连接和服务获取失败请参阅[故障排除](/nexus/docs/troubleshooting/)。
+
+## 后续步骤 [#next-steps]
+
+- [调用服务](/nexus/docs/remote-calls/)：方法、属性和执行时机。
+- [传递回调](/nexus/docs/callbacks/)：为此服务添加进度报告。
+- [远程资源](/nexus/docs/remote-resources/)：返回持续存在的文档订阅。
+- [错误和超时](/nexus/docs/error-handling/)：显式处理每个失败边界。

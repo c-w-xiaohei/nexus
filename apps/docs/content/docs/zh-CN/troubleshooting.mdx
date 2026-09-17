@@ -1,0 +1,60 @@
+---
+title: 故障排除
+description: 诊断连接、服务、回调和资源生命周期问题。
+---
+
+## 连接始终无法完成 [#a-connection-never-completes]
+
+检查是否提供了 `target`。不指定目标的 `connect` 只会被动等待恰好一个匹配的已就绪会话，默认没有超时限制。
+它不会启动对端上下文，也不会主动连接。排查无限等待时，先设置一个有限的 `timeout`。
+
+确认两个上下文都存在、运行时均已配置、接收端 Endpoint 已开始监听，并且目标地址和 `where` 条件匹配预期对端。
+使用启动配置 `connectTo` 时，接收端必须在这次连接尝试之前开始监听。检查适配器日志中是否有传输或认证失败。
+
+参阅[建立连接](/nexus/docs/connections/)。
+
+## 匹配了多个连接 [#more-than-one-connection-matches]
+
+`E_SERVICE_AMBIGUOUS` 目前也是被动连接获取产生歧义时的代码。
+收窄 `where` 条件、提供精确目标，或者在确实需要操作多个对端时使用 `connectMulticast`。
+
+## 已连接但服务不可用 [#connected-but-the-service-is-unavailable]
+
+`get` 只检查当前服务目录，不等待服务将来可用。确认服务已在预期运行时中注册，且两端使用相同的 Token ID。
+对于动态注册的服务，在收到业务就绪信号后重试 `safeGet`。提供方应先注册服务，再更新身份中的就绪标记。
+
+参阅[提供服务](/nexus/docs/services/)和[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+## 方法或回调不执行 [#a-method-or-callback-does-not-execute]
+
+需要显式触发执行。Nexus 调用是惰性的：调用 `service.run()` 后忽略返回值，或写成 `void service.run()`，都不会发送请求。
+请使用 `await`、`.catch(reportFailure)` 或 Promise 组合函数处理返回值。
+
+如果本地事件源忽略监听器返回值，请在监听器中显式执行并处理远程回调的结果。参阅[传递回调](/nexus/docs/callbacks/)。
+
+## 重连后旧代理仍然失败 [#an-old-proxy-still-fails-after-reconnection]
+
+旧代理和引用仍绑定到已结束的会话，需要从新 Connection 获取新的代理。
+已有的 ConnectionCollection 也只保留旧成员；需要新快照时，请重新获取集合。
+
+## 释放没有停止订阅 [#release-did-not-stop-a-subscription]
+
+释放是放弃远程引用，不会调用业务清理。在释放前调用订阅的 `stop()` 或等价方法。
+提供方还需自行实现业务清理逻辑，处理无人使用的任务或连接断开。参阅[远程资源](/nexus/docs/remote-resources/)。
+
+## 只有部分来源失败 [#only-some-sources-fail]
+
+集合的 `get` 为每条连接返回一个 `Result`。结合来源连接检查服务获取和调用错误。
+服务不存在，不意味着该成员已从集合移除。应用应决定是重试该来源、重新获取快照，还是显示部分结果。
+
+参阅[多个上下文](/nexus/docs/multiple-connections/)。
+
+## 超时的操作仍改变了远程状态 [#a-timed-out-operation-still-changed-remote-state]
+
+超时只结束本地等待，不会回滚或取消远程操作。如果操作可能被重试，请在应用层设计幂等机制或状态确认协议。
+参阅[错误和超时](/nexus/docs/error-handling/)。
+
+## 示例使用了已移除的 API [#an-example-uses-removed-apis]
+
+本文档描述开发中的 Core 2.0 alpha 契约。旧示例中的 `create`、`select`、默认连接目标、等待服务提供者以及远程属性赋值等用法，需要迁移。
+请遵循[迁移指南](/nexus/docs/migrations/2.0-alpha/)，并确认应用使用的包版本。

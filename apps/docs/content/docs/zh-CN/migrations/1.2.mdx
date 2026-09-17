@@ -1,0 +1,52 @@
+---
+title: Core 1.2 迁移
+description: 将应用代码迁移到计划中的 Nexus Core 1.2 release。
+---
+
+这个快速迭代 release 尽管是 minor 版本，仍包含 breaking change。请 pin package version；Core 1.x 目前不承诺跨 minor 的稳定 SemVer 兼容性。已发布版本及其 changelog 不变。
+
+<Callout type="warn" title="Breaking release">
+  Core 1.2 尽管是 minor 版本仍包含 breaking change。请一起升级参与的 package
+  以及 State host、client 和 relay。
+</Callout>
+
+## 包版本 [#package-versions]
+
+计划的 release 是 Core 1.2、React 0.8、iframe 0.5、Chrome 0.5 和 Node IPC 0.6。
+React 和 iframe 要求 Core ~1.2.0。Chrome 和 Node IPC 的启动拨号需要 Core 1.2；它们现有声明的 Core range 不变。
+验证覆盖匹配的 Core source，而不是旧 Core release 的新测试矩阵。本 release 中 Testing 没有独立 API 变化。
+
+## 原生 State store [#native-state-stores]
+
+- 用 `createStoreToken<Store>(id, options?)` 替换 `defineNexusStore(...)`。在一个共享 Store type 中声明数据和方法。验证属于 token options；State API 直接接受该 token，不使用 definition wrapper。
+- 将原生 Zustand creator 和必需 options 传给 `createNexusStore(token, creator, { snapshot, expose })`，或使用 `bindNexusStore(token, store, options)` 绑定已有 store。
+- 通过 `store.getState().action()` 调用本地 action。返回的 store 是 Zustand 原始 API；`destroy()` 和 `[Symbol.dispose]` 属于 binding。
+- 远程 action 仍是异步的，但不再 serialize 或 rollback。被拒绝的 action 可能已经修改 source；不要盲目重试。
+- 默认 publication 使用固定 200ms window，而不是 action-completion flush。成功的远程 action 只等待 caller 的 snapshot acknowledgement，不等待缓慢 sibling。默认 in-flight budget 是每个 subscription 32。
+- State service 用一个携带 init、snapshot 和 termination 的 `subscribe(callback)` channel 替换 dispatch 和 subscription ID。所有参与的 State host、client 和 relay 一起升级。
+
+完整示例见[State API](/nexus/docs/state/core-api/)。普通 RPC 和 virtual-port wire format 仍兼容；State wire format 不兼容。
+
+## React [#react]
+
+- 从 `zustand` 导入 `useStore`，不要从 `@nexus-js/react` 导入。
+- 使用 `RemoteStore<Store>`，不要使用 `RemoteStoreWithInitialState` 或分开的 state/actions type argument。
+- 从 `{ store, pending, error, reconnect }` 读取获取状态。获取错误不是已有 handle 的断开状态。
+- 用 `useStoreStatus(remote.store, selector)` 或 `Scope.useStatus(selector)` 替换 `remote.status`。没有 handle 或 SSR 期间返回 null。
+- 只选择 phase 时选择 `status.type`；选择完整 status 会观察版本。
+- 替换会立即隐藏旧 handle，并在 effect cleanup 中销毁它。新 handle 等待期间不再保留 stale handle。
+- 选择稳定值，或使用 Zustand 的 `useShallow`。Nexus 不再补偿每次读取都生成新对象的 getter 或 selector。
+
+参阅[React State](/nexus/docs/state/react/)中的获取和订阅示例。
+
+## Router 和启动 [#router-and-startup]
+
+自定义适配器作者将静态 VirtualPortRouter context operation 替换为 `new VirtualPortRouter(options)` 以及实例的 `safeListen`、`safeConnect` 和 `safeClose` 方法。使用 class 本身作为实例类型。使用 iframe adapter 的应用不需要自行构造 router。
+
+可选的 `endpoint.connectTo` 在 listen 后执行一次精确启动拨号。它不会推断默认 target、阻塞 `ready()` 或添加 retry。
+使用 `groups` 的 Node IPC 应用必须将 label 移到应用拥有的 context metadata，并改用 `where` predicate。
+
+## 错误 [#errors]
+
+对普通 proxy 调用 await 或 catch。Nexus 不再为它们安装自动 rejection observer；忽略的失败遵循 runtime 的 unhandled-rejection 行为。
+原始 State action callback 保留 Core error。需要 State-specific safe result 时使用 `safeInvokeStoreAction`。

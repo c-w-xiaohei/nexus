@@ -1,0 +1,39 @@
+---
+title: 错误参考
+description: 错误边界以及常见的稳定 Nexus 错误代码。
+---
+
+Nexus 错误包含稳定的 `code`、错误消息，以及可用时的诊断字段 `context` 和 `cause`。
+应使用安全接口推断出的错误联合类型进行类型收窄，不要统一断言为 `Error`。处理方式见[错误和超时](/nexus/docs/error-handling/)。
+
+## 公共错误联合类型 [#public-error-unions]
+
+| 类型                     | 边界                                       |
+| ------------------------ | ------------------------------------------ |
+| `ConnectionAcquireError` | `safeConnect` 和 `safeConnectMulticast`    |
+| `ResourceAcquireError`   | `safeGet` 和连接集合中各成员的服务获取结果 |
+| `NexusCallError`         | `Nexus.safeCall` 和带类型的调用失败处理器  |
+
+这些类型是具体错误类型的联合，不是额外的异常包装。配置及其他运行时安全方法目前按签名返回 `Result<..., Error>`。
+
+## 常见代码 [#common-codes]
+
+| Code                            | 含义 / 响应                              |
+| ------------------------------- | ---------------------------------------- |
+| `E_USAGE_INVALID`               | API 使用或选项无效；修复输入             |
+| `E_SERVICE_AMBIGUOUS`           | 被动获取单连接时匹配多个会话；需收窄条件 |
+| `E_SERVICE_ACQUISITION_TIMEOUT` | 获取连接的等待超时                       |
+| `E_ABORTED`                     | 获取等待被中止                           |
+| `E_CONN_CLOSED`                 | 绑定的会话已断开；需获取新句柄           |
+| `E_SERVICE_UNAVAILABLE`         | 当前会话中没有该服务                     |
+| `E_AUTH_CONNECT_DENIED`         | 连接准入被拒绝                           |
+| `E_AUTH_CALL_DENIED`            | 请求的操作被拒绝                         |
+| `E_CALL_TIMEOUT`                | 本地调用等待过期；远程执行可能已发生     |
+| `E_REMOTE_EXCEPTION`            | 远程业务代码抛出异常                     |
+| `E_PROVIDER_DUPLICATE_TOKEN`    | 提交注册的服务包含重复 Token ID          |
+
+此表列出常见面向应用的代码，不是每种传输或协议变体。导出的具体 class 包括 `NexusUsageError`、`NexusDisconnectedError`、`NexusServiceError`、`NexusResourceError`、`NexusRemoteError`、`NexusConnectionError`、`NexusConnectionConstraintFailedError`、`NexusProtocolIncompatibleError`、`NexusHandshakeError`、`NexusTransportError`、`NexusEndpointConnectError`、`NexusEndpointListenError`、`NexusEndpointCapabilityError` 和 `NexusProtocolError`。
+
+对端返回的框架错误保留原有分类。业务异常即使使用相同错误码，也不会被当作框架错误，而是报告为 `NexusRemoteError`，并保留序列化后的原始错误供诊断。
+
+同一份 Core 包内可以使用 `instanceof`。处理序列化错误或存在多份包副本时，应优先使用 `code`。

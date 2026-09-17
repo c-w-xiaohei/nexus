@@ -11,10 +11,11 @@ import {
 } from "fumadocs-ui/components/dialog/search";
 import { useDocsSearch } from "fumadocs-core/search/client";
 import { staticClient } from "fumadocs-core/search/client/orama-static";
-
-const client = staticClient({ from: "/nexus/api/search.json" });
+import { useI18n } from "fumadocs-ui/contexts/i18n";
 
 export default function Search(props: SharedProps) {
+  const { locale } = useI18n();
+  const client = staticClient({ from: "/nexus/api/search.json", locale });
   const { search, setSearch, query } = useDocsSearch({ client });
   return (
     <SearchDialog

@@ -1,0 +1,192 @@
+---
+title: Iframe
+description: 配置父页面与子 iframe 之间的 Nexus 通信。
+---
+
+`@nexus-js/iframe` 在 `postMessage` 之上提供 Nexus RPC，连接父窗口与子 iframe。
+它适合需要与一个或多个嵌入式框架进行类型安全服务调用的浏览器页面。
+
+在父页面和子页面项目中都安装：
+
+<InstallCommand packages="@nexus-js/core @nexus-js/iframe" />
+
+## 何时使用 [#when-to-use-it]
+
+父页面持有 iframe 元素，并且知道子页面的确切来源（origin）时，可以使用此适配器。其他通信场景请[选择其他适配器](/nexus/docs/platforms/)。
+
+## 共享契约 [#shared-contracts]
+
+两端都导入相同的服务契约和 Token；共享契约的组织方式见[快速开始](/nexus/docs/getting-started/)。
+
+共享 TokenSpace 不包含连接目标，连接时再指定精确的子页面目标：
+
+```ts
+import { TokenSpace } from "@nexus-js/core";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+import type { GreetingService } from "./service-contract";
+
+const appSpace = new TokenSpace<IframeAdapterModel>({
+  name: "iframe-demo",
+});
+
+const childServices = appSpace.space("child-services");
+
+export const GreetingToken = childServices.token<GreetingService>("greeting");
+```
+
+连接多个子页面时，可向 `connectMulticast` 传入精确目标列表，或不指定目标，直接获取当前已就绪连接的快照。
+超时和 Result 行为见[Core 连接获取语义](/nexus/docs/concepts/#connection-acquisition)。以下示例显式指定目标。
+
+## 配置父页面 [#parent-setup]
+
+创建代理前，在父页面中配置每个 iframe 元素及其子页面的确切预期来源。
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { usingIframeParent } from "@nexus-js/iframe";
+import { GreetingToken } from "./shared";
+
+const iframe = document.querySelector<HTMLIFrameElement>("#preview");
+if (!iframe) throw new Error("Missing #preview iframe");
+
+usingIframeParent({
+  appId: "iframe-demo",
+  frames: [
+    {
+      frameId: "preview",
+      iframe,
+      origin: "https://child.example.com",
+      nonce: "session-nonce",
+    },
+  ],
+});
+
+const connection = await nexus.connect({
+  target: {
+    context: "iframe-child",
+    appId: "iframe-demo",
+    frameId: "preview",
+    origin: "https://child.example.com",
+  },
+});
+const greeting = connection.get(GreetingToken);
+
+await greeting.greet("parent");
+```
+
+父页面辅助函数不会注册具名连接目标。应用应自行保存精确的 `IframeConnectionTarget` 值，并在调用 `connect` 时传入。
+
+## 配置子页面 [#child-setup]
+
+在子页面中配置父页面的确切预期来源。类服务使用已配置实例的 `@childNexus.Expose(...)` 装饰器；对象服务、State 和 Relay 提供者使用 `provide(...)` 注册。
+
+```ts
+import { usingIframeChild } from "@nexus-js/iframe";
+import { GreetingToken } from "./shared";
+
+const childNexus = usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
+});
+
+@childNexus.Expose(GreetingToken)
+class GreetingServiceImpl {
+  async greet(name) {
+    return `hello ${name}`;
+  }
+}
+```
+
+如果已有构造好的服务对象，可以这样注册：
+
+```ts
+usingIframeChild({
+  appId: "iframe-demo",
+  frameId: "preview",
+  parentOrigin: "https://parent.example.com",
+  nonce: "session-nonce",
+}).provide(GreetingToken, greetingService);
+```
+
+## 启动连接 [#startup-connections]
+
+另一种方式是父页面先启动监听、创建子页面，再用 `connect({ where, timeout: 10_000 })` 被动等待子页面就绪。
+为子页面辅助函数指定启动连接目标：`connectTo: [{ context: "iframe-parent", appId: "iframe-demo", origin: "https://parent.example.com" }]`。
+子页面无需调用父页面的服务，就能先建立连接。父页面通过对端身份和已验证的框架信息筛选目标子页面。
+启动连接只尝试一次，不阻塞子页面的 `ready()`，也不依赖服务获取。
+
+子页面会等文档加载完成，再将连接尝试推迟到后续任务执行，让父页面先完成 iframe 导航清理；即使子页面在加载事件处理器中启动，也遵循这一顺序。
+阻塞加载的子资源会推迟连接尝试；关闭或卸载会取消它。应用无需额外实现就绪握手。
+
+## 配置组合 [#configuration-composition]
+
+只有需要将适配器配置与授权策略、自定义 Endpoint、启动批量服务注册或自定义 Nexus 实例组合时，才使用 `configure: false`。
+没有 `configure: false` 时，`usingIframeChild(...)` 和 `usingIframeParent(...)` 直接配置共享 `nexus` 实例并返回该实例。
+
+组合配置时使用 `composeNexusConfig([...])`，不要直接用对象展开语法合并：
+
+```ts
+import { composeNexusConfig, nexus } from "@nexus-js/core";
+import { usingIframeParent } from "@nexus-js/iframe";
+
+nexus.configure(
+  composeNexusConfig([
+    usingIframeParent({
+      appId: "iframe-demo",
+      frames: [
+        { frameId: "preview", iframe, origin: "https://child.example.com" },
+      ],
+      configure: false,
+    }),
+    {
+      policy: {
+        canConnect({ remoteIdentity }) {
+          return remoteIdentity.context === "iframe-child";
+        },
+      },
+    },
+  ]),
+);
+```
+
+配置从左到右合并，同一配置领域以后面的值为准。
+
+应在运行时生成启动快照前完成结构配置。Nexus 实例就绪后，不再接受结构性 `configure(...)`；此时动态注册或替换服务应使用 `provide(...)`，而不是 `configure({ providers })`。
+
+不同配置领域按以下规则合并：
+
+- 省略字段保留之前的层
+- 明确提供时，`endpoint.meta`、`endpoint.implementation` 和 `endpoint.connectTo` 是整字段替换
+- 显式提供 `policy` 时整体替换；省略则保留前面的策略
+- 显式设置 `policy: undefined` 会清除继承的策略
+- `providers` 按 `token.id` 替换；后面的描述对象同时替换服务实现和策略
+
+## 安全说明 [#security-notes]
+
+- 尽可能为父页面的 `frames[].origin` 和子页面的 `parentOrigin` 指定确切来源。
+- `origin` 和 `parentOrigin` 必须与浏览器的 `MessageEvent.origin` 完全匹配，包括协议、主机和端口。
+- `allowAnyOrigin: true` 允许通配来源，只应用于明确允许公开访问的框架。
+- 父页面承载多个框架会话，或需要额外绑定通道身份时，使用 `nonce`。
+- 消息来源窗口、来源、应用 ID、通道和 nonce 检查属于适配器的传输准入检查。
+- 应用授权仍由 Core 的 `policy.canConnect` 和 `policy.canCall` 负责，不能用适配器检查替代。
+
+## 生命周期 [#lifecycle]
+
+浏览器 `postMessage` 不保证提供原生断开信号。iframe 适配器通过 Core 虚拟端口的心跳检测无响应连接。默认沿用 Core 的设置：间隔 5000 毫秒，连续丢失 3 次判定断开；具体以 Core 当前公开值为准。仅在测试或确实需要调整检测速度时覆盖 `heartbeat`。
+
+iframe 重载会替换子窗口和 Nexus 会话。代理与引用绑定到会话，因此重载、重连或会话替换后，需要重新连接、获取新的代理并传递新的引用。
+
+父页面替换 iframe 元素后，应先在父页面配置中注册新元素，再获取新代理。已有代理不会自动切换到替换后的会话。
+
+## 测试边界 [#testing-boundary]
+
+调用 iframe 服务的应用代码可以使用[应用测试替身](/nexus/docs/testing/)。`postMessage` 校验、安全准入、心跳、重载和元素替换行为，应通过浏览器集成测试验证。
+
+## 二进制传输包 [#binary-transport-packets]
+
+iframe Endpoint 默认声明支持 Nexus 二进制传输包和可转移对象。Core 因而可以将内部传输包序列化为 `ArrayBuffer`，并在双方都支持时将缓冲区放入浏览器 `postMessage` 的转移列表。
+
+这只影响 Nexus 的内部传输包，不会以可转移对象的方式移动或分离用户传入的 RPC 数据对象。
+只有运行环境无法处理二进制传输包时，才在父、子两端的 Endpoint 选项中同时设置 `binaryPackets: false`。

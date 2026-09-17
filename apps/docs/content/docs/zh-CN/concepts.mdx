@@ -1,0 +1,336 @@
+---
+title: 核心概念
+description: 从平台通信端点出发，理解连接、服务以及绑定会话的资源。
+---
+
+Nexus 实例在平台通信通道之上，统一管理连接会话、服务和远程资源：
+
+<Mermaid
+  showCaption={false}
+  compact
+  caption="实线箭头将消息从 A 传到 B；虚线箭头将消息从 B 传到 A。"
+  chart={`flowchart TB
+    subgraph A[Nexus 实例 A]
+      SA[" 资源 "] --> CA[" 连接 "]
+      CA --> EA[" Endpoint  "]
+      SA <-.- CA
+      CA <-.- EA
+    end
+    subgraph B[Nexus 实例 B]
+      SB[" 资源 "] -.-> CB[" 连接 "]
+      CB -.-> EB[" Endpoint  "]
+      SB <--- CB
+      CB <--- EB
+    end
+    CHANNEL["　　　　　平台通信通道　　　　　"]
+    EA --> CHANNEL
+    EA <-.- CHANNEL
+    EB -.-> CHANNEL
+    EB <--- CHANNEL`}
+/>
+
+资源包括服务代理、远程引用和回调。任一运行时都可以同时提供服务和调用服务。
+Endpoint 提供 Port，供 Core 通过平台通道收发消息。
+
+## Nexus 实例 [#the-nexus-instance]
+
+**上下文（Context）**是一个 JavaScript 执行环境，例如扩展页面、iframe 或进程。
+**Nexus 实例**管理当前上下文中某个通信域的连接和资源。
+
+可以把它理解为一张“虚拟网卡”，同时负责管理本地服务、与对端的会话、待完成的调用和远程引用。
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+
+const app = new Nexus<ChromeAdapterModel>();
+```
+
+这会创建一个运行时。建立连接前需要配置 Endpoint；`ChromeAdapterModel` 提供下文介绍的平台专用类型。
+
+同一个上下文可以分别创建实例，用于扩展通信和 iframe 通信。每个实例拥有自己的配置、服务提供者和会话，实例之间不会自动转发消息。
+这里的“通信域”指一组相互通信的节点，不是 DNS 域名。
+
+## Endpoint 和适配器 [#endpoints-and-adapters]
+
+**Endpoint** 在平台传输之上为 Core 提供**可靠、双向、点对点的通信抽象**。
+它建立或接受通信通道，并通过 **Port** 提供该通道在本端的收发接口。
+
+**适配器（Adapter）**提供平台对应的 Endpoint 实现、连接目标类型和初始化辅助函数。哪些对端可以直接连接，取决于平台本身。
+
+### Port：通道的本端收发接口 [#port-an-established-channel]
+
+**Port**（`IPort`）是已建立的点对点通道在本端的收发句柄。
+每一端都有自己的 Port；从一端发送的消息会抵达另一端。它可以封装原生 `chrome.runtime.Port` 或 `MessagePort`，也可以封装适配器构造的通道。
+
+它只负责四件事：
+
+```ts
+port.postMessage(message); // 向对端发送消息。
+port.onMessage(handleMessage); // 接收对端的消息。
+port.onDisconnect(handleDisconnect); // 监听通道断开。
+port.close(); // 关闭通道。
+```
+
+Endpoint 提供通道，Port 负责收发消息，Core 在此基础上实现握手、身份交换和服务调用协议。
+Port 已打开，并不意味着 Nexus 连接已就绪。通道可靠也不代表会自动重连或重试 RPC。
+
+### Endpoint：提供 Port [#endpoint-providing-ports]
+
+下面用一个简化示例说明它的职责：
+
+```ts
+// 概念实现：openChannel、onIncomingChannel 和 observe 代表适配器提供的平台专用代码。
+const endpoint: IEndpoint<Model> = {
+  async connect(target) {
+    const port = await openChannel(target);
+    return { port, connectionMeta: observe(port) };
+  },
+
+  listen(accept) {
+    onIncomingChannel((port) => {
+      accept(port, observe(port));
+    });
+  },
+};
+```
+
+`connect(target)` 返回主动连接得到的 Port；`listen(accept)` 通过回调交付接受连接得到的 Port。
+每个 Port 都附带本地的 `connectionMeta`。Endpoint 可以只支持主动连接或接受连接，也可以同时支持两者。
+
+示例省略了初始化、目标匹配和关闭逻辑。应用通常使用 `usingBackgroundScript()` 等适配器辅助函数，无需自行实现 Endpoint。
+
+<Mermaid
+  showCaption={false}
+  caption="connect 向发起方 Core 返回 Port；listen 向接收方 Core 交付 Port。两者都附带本地观察到的连接信息。"
+  chart={`sequenceDiagram
+    participant A as Core A
+    participant EA as Endpoint A
+    participant EB as Endpoint B
+    participant B as Core B
+    B->>EB: listen(accept)
+    A->>EA: connect(target)
+    EA->>EB: 打开平台通信通道
+    EB->>B: accept(<b>portB</b>, connectionMetaB)
+    EA-->>A: { <b>portA</b>, connectionMetaA }`}
+/>
+
+## 适配器模型 [#the-adapter-model]
+
+**AdapterModel** 定义通信域中的地址、身份和连接事实三类信息，分别对应 `ConnectionTarget`、`ContextMeta` 和 `ConnectionMeta`。
+Chrome 和 Node IPC 的具体数据结构不同，但这三类信息的职责相同。
+
+目标地址用于发起连接，两类元数据用于描述与对端建立的会话。以后台连接内容脚本为例：
+
+<Mermaid
+  caption="Core 在返回的 Port 上完成握手。本地 Connection 分别保存对端声明的身份和本地观察到的连接事实。"
+  chart={`sequenceDiagram
+    participant L as 后台 Nexus
+    participant E as 本地 Endpoint
+    participant R as 内容脚本
+    L->>E: connect(<b>target</b>)
+    E->>R: 打开平台通信通道
+    E-->>L: port + <b>ConnectionMeta</b>
+    R-->>L: 通过 Core 握手传递 <b>ContextMeta</b>
+    Note over L: where(<b>contextMeta</b>, <b>connectionMeta</b>)`}
+/>
+
+### Target：连接到哪里 [#target-an-address]
+
+**Target 是拓扑地址，类似 URL，回答“连接到哪里”。** 使用适配器提供的精确目标构造函数：
+
+```ts
+chromeTarget.contentFrame({ tabId, frameId: 0 });
+```
+
+这个地址指向指定标签页顶层框架中的内容脚本。应用负责选择 `tabId`，并确保脚本已经运行。地址本身不代表一个已建立的会话。
+
+### ContextMeta：对端声明的身份 [#contextmeta-declared-identity]
+
+**ContextMeta 回答“对端声称自己是谁”。** 它可以包含上下文角色、所属工作区或就绪标记。
+`connection.contextMeta` 保存本地已接受的对端身份信息。对端可以用 `updateIdentity` 更新身份，本地调用方可以用 `subscribeIdentity` 订阅变化。
+
+### ConnectionMeta：本地观察的事实 [#connectionmeta-locally-observed-facts]
+
+**ConnectionMeta 回答“本地适配器观察到了什么”。** 它包含 Chrome 消息发送方信息、IPC 认证结果等事实。
+对端更新身份不会改变这些事实。例如，在 Chrome 扩展后台中：
+
+```ts
+connection.contextMeta.context; // 对端声明的上下文角色。
+connection.connectionMeta.observed.tabId; // 适配器观察到的标签页 ID（如果存在）。
+```
+
+对端声明的身份不应被自动信任。AdapterModel 只关联这些类型；身份认证由适配器和策略负责。
+参阅[身份与元数据](/nexus/docs/identity-and-metadata/)。
+
+## 连接 [#connections]
+
+**Connection** 是一个双向会话的共享句柄，由运行时持有，并非调用方独占的连接。
+`connect` 返回已就绪的连接句柄，并会复用符合条件的会话。连接两端都可以提供服务和调用服务。
+
+<span id="connection-acquisition" />
+
+### 指定目标与筛选连接 [#targeting-and-filtering]
+
+**`target` 指定地址；`where` 根据对端声明的身份和本地连接事实，筛选符合条件的连接**：
+
+```ts
+const connection = await app.connect({
+  target: chromeTarget.contentFrame({ tabId, frameId: 0 }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    connectionMeta.observed.tabId === tabId,
+});
+```
+
+两个条件都必须满足。元数据不匹配时，Nexus 不会改为搜索其他目标。
+
+不指定 `target` 时，`connect({ where })` 只会被动等待恰好一个匹配的已就绪会话。
+它不会发现服务提供者，也不会主动建立连接。存在多个匹配项时，会返回歧义错误。
+
+`where` 只在获取连接时筛选会话，不负责逐次调用的权限检查。会话准入由 `policy.canConnect` 控制，操作授权由 `policy.canCall` 控制。
+参阅[连接](/nexus/docs/connections/)和[授权](/nexus/docs/auth-and-policy/)。
+
+<span id="services-and-calls" />
+
+## 服务与代理 [#services-and-proxies]
+
+Connection 标识与哪个对端通信。**Token** 标识对端提供的服务，将共享的 TypeScript 契约与稳定的运行时 ID 关联起来：
+
+```ts title="shared.ts"
+import { Token } from "@nexus-js/core";
+
+export interface Documents {
+  read(id: string): Promise<string>;
+}
+
+export const DocumentsToken = new Token<Documents>("app:documents");
+```
+
+**服务提供方**注册本地实现；**服务代理**让调用方通过某条连接访问该实现：
+
+```ts
+// 提供方上下文：在已配置的运行时上注册实现。
+owner.provide(DocumentsToken, implementation);
+
+// 调用方上下文：通过已获取的连接取得代理。
+const documents = connection.get(DocumentsToken);
+```
+
+`get` 同步检查会话及其当前服务目录，然后创建一个轻量代理。
+它不会连接新的对端，也不会创建远程业务实例。服务不存在时，获取会立即失败，不会继续等待。
+
+Token 不包含地址或实现。多个对端可以提供同一个 Token 对应的服务，一条连接也可以访问多个服务。
+契约提供编译期类型检查，不提供运行时数据校验。参阅[服务](/nexus/docs/services/)。
+
+<Mermaid
+  caption="get 是本地操作。等待远程方法的结果时，才会向服务提供方发送 RPC。"
+  chart={`sequenceDiagram
+    participant APP as 调用方应用
+    participant C as 本地 Nexus
+    participant P as 对端 Nexus
+    Note over C,P: 会话已就绪；已收到服务目录
+    APP->>C: connection.get(DocumentsToken)
+    C-->>APP: 本地服务代理
+    APP->>C: await documents.read(id)
+    C->>P: RPC 请求
+    Note over P: 调用本地服务的 read(id)
+    P-->>C: RPC 响应
+    C-->>APP: 返回结果`}
+/>
+
+## 远程引用和回调 [#remote-references-and-callbacks]
+
+**服务、远程引用和回调是三种不同来源的代理资源。**
+它们的调用行为相似；来源和引用所有权不同。
+
+普通值经过序列化后传输；引用对应的行为仍在资源所属的上下文中执行：
+
+- **回调**是供对端调用的函数，函数及其闭包仍留在定义它的上下文中。
+- **远程引用**用于访问通过 `ref(...)` 导出的对象，方法在对象所在的上下文中执行。
+
+为服务增加 `watch` 方法后，就可以让回调与远程引用配合使用：
+
+```ts
+const observation = await documents.watch(documentId, (change) => {
+  panel.apply(change); // 在本地更新面板。
+});
+await observation.stop(); // 在远程观察对象上执行。
+```
+
+提供方通过 `app.ref(observation)` 返回对象引用，并在共享契约中将返回类型声明为 `RefWrapper<Observation>`。
+直接返回普通对象，不会自动得到远程引用。
+
+<Mermaid
+  caption="回调留在调用方，对象留在提供方。箭头表示调用及其响应。"
+  chart={`sequenceDiagram
+    participant C as 调用方上下文
+    participant P as 提供方上下文
+    Note over C: 拥有 onChange 及其闭包
+    C->>P: watch(id, onChange 引用)
+    Note over P: 创建观察对象
+    P-->>C: 观察对象的远程引用
+    P->>C: onChange(change)
+    C-->>P: 回调结果
+    C->>P: observation.stop()
+    P-->>C: 方法结果`}
+/>
+
+根服务代理是轻量访问句柄，不需要释放。收到的对象引用和回调引用则有各自的引用生命周期，可以显式释放。
+完整示例见[回调](/nexus/docs/callbacks/)和[远程资源](/nexus/docs/remote-resources/)。
+
+## 远程操作 [#remote-operations]
+
+调用服务方法、引用对象的方法、读取远程属性或调用远程回调，都会声明一个**惰性远程操作**。
+返回值是可等待对象（thenable），而不是已经开始执行的 Promise。第一次通过 `await`、`.then()` 等方式获取结果时，操作才会执行。
+
+```ts
+const call = documents.read("intro"); // 已声明，尚未发送。
+await call; // 开始执行。
+await call; // 观察同一操作，不再次发送。
+```
+
+再次调用方法会创建新的操作。调用远程回调也需要触发执行，例如 `await onChange(change)`。
+会话已关闭、引用已释放等错误，会在等待操作结果时报告，而不是在声明操作时报告。
+
+获取连接、获取服务和执行操作是三个独立的步骤，都可能失败。
+`safeGet` 以 `Result` 返回获取服务的结果，不会让代理上的所有调用都返回 `Result`。要以 `Result` 接收单次操作的结果，请使用 `Nexus.safeCall(call)`。
+参阅[远程调用](/nexus/docs/remote-calls/)和[错误和超时](/nexus/docs/error-handling/)。
+
+## 生命周期和所有权 [#lifetimes-and-ownership]
+
+共享连接由运行时持有。丢弃本地 Connection 变量不会关闭会话。
+调用 `connection.disconnect()` 则会结束整个会话，影响它的所有使用者。
+
+业务活动、引用所有权和会话生命周期是不同的概念：
+
+```ts
+await observation.stop(); // 结束业务观察。
+Nexus.release(observation); // 放弃此远程引用。
+connection.disconnect(); // 结束共享会话，也影响其他使用者。
+```
+
+这三行代码用于说明各自的职责，并非强制的清理顺序。释放引用不会调用 `stop()`，断开连接也不会撤销远程操作已经产生的副作用。
+
+断开连接会让尚未完成的调用失败，使旧代理和引用失效，并清理会话持有的引用。
+句柄可以在断开前释放，但不会自动转移到新的会话。恢复通信时，需要重新连接并获取新的句柄。
+
+<Mermaid
+  caption="对端在回复前退出。本地 Nexus 使待完成的调用失败，并阻止后续通过旧引用发起的调用。"
+  chart={`sequenceDiagram
+    participant APP as 调用方应用
+    participant C as 本地 Nexus
+    participant P as 对端 Nexus
+    APP->>C: await documents.read(id)
+    C->>P: RPC 请求
+    Note over P: 对端上下文在回复前退出
+    Note over C: 适配器报告连接断开
+    Note over C: 清理会话持有的引用
+    C-->>APP: 待完成的调用失败：E_CONN_CLOSED
+    APP->>C: await oldRef.stop()
+    C-->>APP: 本地拒绝；不发送 RPC`}
+/>
+
+**ConnectionCollection** 是固定、有序的会话句柄快照。它不会添加新成员，也不会移除或替换已断开的成员。
+它的 `get` 方法为每个成员返回一个 `{ connection, result }`。成功结果中包含的是普通的单连接代理，而不是多播代理。
+参阅[多个连接](/nexus/docs/multiple-connections/)和[连接生命周期](/nexus/docs/proxy-lifecycle/)。

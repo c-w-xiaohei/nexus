@@ -1,0 +1,5 @@
+{
+  "title": "Core API",
+  "defaultOpen": false,
+  "pages": ["index", "connections", "resources", "errors", "packages"]
+}

@@ -1,0 +1,198 @@
+---
+title: 什么是 Nexus？
+description: 在不断变化的 JavaScript 上下文之间，为服务、回调和资源提供统一的通信模型。
+---
+
+Nexus 为跨上下文的 JavaScript 应用提供统一的通信模型，涵盖服务调用、回调、远程对象，以及承载这些交互的连接。
+
+<span id="why-nexus-exists" />
+
+## 为什么需要 Nexus [#why-nexus]
+
+想象一个在侧边栏中总结页面的浏览器扩展。内容脚本读取文档；面板显示结果。
+这些上下文不能直接共享函数或对象，因此通过消息通信。
+
+<Mermaid
+  caption="侧边栏与指定标签页、框架中的内容脚本通信。"
+  chart={`flowchart LR
+    P[侧边栏界面] ---|扩展消息通信| C
+    subgraph TAB[指定标签页与框架]
+      C[内容脚本] -->|读取| D[页面 DOM]
+    end`}
+/>
+
+### 一个功能被拆成多组消息 [#when-messages-split-a-feature]
+
+单次请求很简单：`tabs.sendMessage` 可以向指定的内容脚本发送消息并接收响应。
+RPC 库还能把这次交互写成 `await documents.summarize(documentId)`。
+
+但让面板持续更新就复杂了：更新要送到正确的视图，不再需要时要停止监听，页面重载后还要结束旧的通信。
+直接使用消息 API 时，一个完整的功能往往会被拆散成两端的事件处理器、订阅 ID 和清理逻辑。
+
+**Nexus 用函数和对象表达这些交互，用会话划定它们的通信生命周期。**
+
+<span id="nexus-in-action" />
+<span id="start-with-one-service-call" />
+<span id="add-progress-without-an-event-dispatcher" />
+
+### 将相关行为放在一起 [#keep-related-behavior-together]
+
+这里 `documents` 是远程服务，`panel` 是本地 UI。回调更新面板；返回的对象控制此次观察：
+
+<span id="keep-a-subscription-not-a-subscription-id" />
+
+```ts
+const observation = await documents.watch(documentId, (change) => {
+  panel.apply(change);
+});
+
+// 稍后，当此面板不再需要更新时：
+await observation.stop();
+```
+
+**回调**与它捕获的 `panel` 一起留在侧边栏中。服务可以远程调用回调并等待结果。
+不需要另一个事件处理器去查找应接收更新的视图。
+
+返回的**远程引用**指向内容脚本中的观察对象。`observation.stop()` 调用该对象的方法。
+Nexus 在底层处理对象 ID 和消息路由，应用通过对象接口操作即可。
+
+<Mermaid
+  caption="调用会双向传递。回调和观察对象留在它们原本的上下文中。"
+  chart={`sequenceDiagram
+    participant UI as 侧边栏
+    participant CS as 内容脚本
+    UI->>CS: watch(documentId, onChange)
+    CS-->>UI: 观察对象的引用
+    CS->>UI: onChange(change)
+    UI-->>CS: 回调结果
+    UI->>CS: observation.stop()
+    CS-->>UI: 已停止观察`}
+/>
+
+游标、编辑器会话或任务句柄也可以采用这种方式。
+提供方通过 `ref(...)` 返回对象引用。停止业务活动和释放远程引用是两个独立动作；完整的清理方式见[资源指南](/nexus/docs/remote-resources/)。
+
+<span id="then-the-page-navigates" />
+
+### 当对端断开时 [#when-the-peer-disappears]
+
+扩展中的各个上下文有独立的生命周期：弹出页会关闭，框架会卸载，标签页会跳转，后台可能重启。
+正在执行的调用或持有的远程引用，随时可能因对端退出而失效。
+
+假设面板正在监听文档变化，同时等待一个摘要请求，此时页面发生重载。
+面板仍然存在，但内容脚本已被替换。标签页和框架 ID 可能没变，旧的观察对象和未完成请求却属于上一份文档。
+
+<Mermaid
+  caption="对端在回复前退出。Nexus 使待完成的调用失败；之后通过旧引用发起的调用也会在本地失败。"
+  chart={`sequenceDiagram
+    participant UI as 侧边栏
+    participant CS as 内容脚本
+    UI->>CS: summarize(documentId)
+    Note over CS: 页面在回复前卸载
+    Note over UI: Nexus 检测到连接断开
+    UI->>UI: 摘要调用失败：E_CONN_CLOSED
+    UI->>UI: 清理会话持有的引用
+    Note over UI: 稍后：await observation.stop()
+    UI->>UI: 在本地失败，不发送消息`}
+/>
+
+**连接是调用和引用的清理边界。** Nexus 检测到断开后，尚未完成的摘要调用会以 `E_CONN_CLOSED` 错误结束，不会一直等到超时。
+通过旧服务代理或观察对象引用发起的调用也会失败，不会被发送到新页面。
+
+显式断开会产生相同效果。这里摘要仍在等待，观察尚未停止或释放：
+
+```ts
+// 开始调用，并用 Result 接收结果。
+const pending = Nexus.safeCall(documents.summarize(documentId));
+connection.disconnect();
+
+const summary = await pending;
+if (summary.isErr()) console.log(summary.error.code); // E_CONN_CLOSED
+
+// 断开后不能使用旧引用。
+const stopped = await Nexus.safeCall(observation.stop());
+console.log(stopped.isErr()); // true
+```
+
+直接 `await` 操作而不使用 `safeCall` 时，这些失败会抛出异常。对端卸载时，Nexus 也会在检测到断开后执行同样的会话清理。
+
+Nexus 移除会话中的待完成调用记录，并解除对回调和对象的引用。
+各个功能无需再分别编写这些记录和引用的断线清理逻辑。这不会调用业务 `stop()` 方法，也不会销毁其他地方仍持有的对象。
+
+应用可以重新连接并创建新的观察对象。旧句柄仍然无效：**同一个地址不代表同一个会话。**
+
+<span id="one-model-across-contexts" />
+
+### 跨上下文的统一模型 [#one-model-across-contexts]
+
+Chrome Port、iframe 消息通信和进程间通信使用不同的 API。缺少统一抽象时，每种集成都要自行设计服务标识、回调调用和远程句柄清理机制。
+
+Nexus 适配器之间面向业务的结构保持不变：
+
+```ts
+const connection = await app.connect({ target });
+const documents = connection.get(DocumentToken);
+const observation = await documents.watch(documentId, onChange);
+```
+
+应用使用适配器提供的目标类型指定 `target`，用 `DocumentToken` 标识共享服务契约。
+调用、回调和远程引用在各个适配器上遵循相同的生命周期规则。
+
+<Mermaid
+  caption="平台适配器不同，服务和会话模型保持一致。"
+  chart={`flowchart TB
+    B[服务、回调、远程引用] --- S[连接 / 会话]
+    S --- C[Chrome 适配器]
+    S --- F[iframe 适配器]
+    S --- N[Node IPC 适配器]`}
+/>
+
+**用同一套方式连接对端、调用其能力，并处理断开。** 平台配置和目标发现仍由各平台与应用负责，但无需为每种集成重新设计 RPC 和资源协议。
+[核心概念 →](/nexus/docs/concepts/)
+
+<span id="nexus-and-alternatives" />
+
+## 替代方案 [#alternatives]
+
+**已有稳定的通信通道，并且应用能管理好它的生命周期？** Comlink 的对象代理或 comctx 的 Provider/Injector 服务模型可能已经够用。
+
+**需要与多个随时加入、退出的对端通信，并管理相关调用和资源？** Nexus 用统一模型管理不同适配器上的连接、回调和远程对象。
+区别在于谁管理这些关系，而不在于库是否能通过复杂拓扑发送消息。
+
+**Yes** = 内置支持。**Custom** = 需要自定义传输处理器或协议。**—** = 没有对应的内置 API。
+
+| 能力                                    | Nexus | Comlink | comctx |
+| --------------------------------------- | ----- | ------- | ------ |
+| 类型化远程调用                          | Yes   | Yes     | Yes    |
+| 远程回调                                | Yes   | Yes¹    | Yes    |
+| 仅支持数据传输时的回调（不能转移 Port） | Yes   | Custom¹ | Yes⁴   |
+| 等待远程回调结果                        | Yes   | Yes     | —⁴     |
+| 显式释放回调引用                        | Yes   | Yes     | —⁴     |
+| 按引用返回对象                          | Yes   | Yes¹    | —      |
+| 显式释放远程引用                        | Yes   | Yes     | —      |
+| 显式连接与会话 API                      | Yes   | —       | —      |
+| 按目标获取并复用会话                    | Yes   | —       | —      |
+| 按对端元数据筛选会话                    | Yes   | —       | —      |
+| 获取多个会话的固定快照                  | Yes   | —       | —      |
+| 断开时使待完成的调用失败并清理引用      | Yes²  | —       | —      |
+| 可配置的每次调用超时                    | Yes   | —       | —³     |
+
+Comlink 封装传入的通信端点，comctx 使用传入的消息适配器。两者都没有独立的连接与会话管理层。
+管理传输生命周期、划分消息命名空间或释放单个代理，并不等于按对端会话统一管理所有调用和引用。
+
+1. **Comlink 引用**使用内置的 `proxy` 传输处理器，创建 MessageChannel 并转移 MessagePort。原生 `window.postMessage` 支持这种转移，Chrome 扩展的 `runtime.sendMessage` 不支持。普通 Comlink RPC 可使用自定义通信端点，但在仅能传输数据的通道上使用回调，需要自行实现引用协议或处理器。Nexus 的回调和对象引用复用已有会话，无需转移 Port。
+2. **Nexus 的断线清理**会让待完成的调用失败，并清理会话持有的通信资源；不会停止应用自身的任务、撤销副作用或自动重连。
+3. **comctx 的心跳机制**检查服务提供方是否就绪，不是通用的 RPC 超时机制。
+4. **comctx 回调**将顶层函数参数编码为 ID，通过适配器的普通消息调用。它们是单向通知，返回值和异常不会传回服务提供方。1.7.5 版本没有逐个释放回调的 API，回调监听器会一直保留到适配器清理时。Nexus 回调采用请求/响应模式，并支持显式释放引用。
+
+<span id="start-building" />
+
+## 后续步骤 [#next-steps]
+
+- [快速开始](/nexus/docs/getting-started/)：进行第一次服务调用。
+- [传递回调](/nexus/docs/callbacks/)：接收进度通知，并使用本地闭包。
+- [远程资源](/nexus/docs/remote-resources/)：处理跨上下文对象。
+- [核心概念](/nexus/docs/concepts/)：理解这些 API 背后的模型。
+- [安装](/nexus/docs/packages/)和[适配器](/nexus/docs/platforms/)：选择适合运行环境的集成方式。
+
+这些指南描述开发中的 Core 2.0 alpha 契约。已有应用请使用[迁移指南](/nexus/docs/migrations/2.0-alpha/)。

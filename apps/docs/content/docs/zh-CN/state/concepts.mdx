@@ -1,0 +1,125 @@
+---
+title: Nexus State 概念
+description: 理解 Nexus State 背后的模型和语义。
+---
+
+本 Nexus State 指南解释同步远程状态背后的心智模型。
+
+## 远程存储不等于本地存储 [#remote-store-not-fake-local-store]
+
+Nexus State 不假装远程状态是本地内存。
+
+相反，Nexus State 提供一组明确规则：
+
+- 宿主端持有权威状态
+- 客户端保存本地快照镜像
+- 读取本地镜像是同步的
+- 写入通过远程调用在宿主端执行
+- 状态更新通过订阅通知传来
+
+因此，客户端的 `getState()` 是同步的，而动作调用是异步的。
+
+## 宿主端与客户端 [#host-and-client]
+
+Nexus State 始终有两侧。
+
+### 宿主端 [#host]
+
+宿主端：
+
+- 持有真实存储状态
+- 执行动作
+- 推进版本
+- 向已订阅的客户端发布快照更新
+- 断开时清理该连接持有的订阅
+
+### 客户端 [#client]
+
+客户端：
+
+- 通过普通 Nexus 连接目标获取连接
+- 原子地建立订阅并取得基线快照
+- 在同一次初始化中取得初始快照和持续更新订阅
+- 维护本地镜像
+- 像本地存储一样提供 `getState()` 和 `subscribe()`
+- 用明确的生命周期状态表示连接丢失
+
+## 一个具体流程 [#one-concrete-flow]
+
+最小有用的 Nexus State 端到端流程是：
+
+1. 定义存储契约
+2. 在一个 Nexus 上下文中承载它
+3. 从另一个上下文连接它
+4. 接收初始快照并创建本地镜像
+5. 用 `getState()` 同步读取镜像
+6. 异步调用宿主端动作
+7. 通过订阅更新接收后续快照
+
+## 为什么不直接代理存储对象？ [#why-not-just-proxy-a-store-object]
+
+直接使用远程对象代理，容易让人误解它的行为。
+
+直接代理存储对象，容易让使用者以为：
+
+- 读取是本地的
+- 写入立即发生
+- 无需关注连接生命周期
+
+跨上下文时这些都不正确。
+
+Nexus State 明确区分本地镜像与远程操作，同时省去重复编写订阅和动作协议的工作。
+
+## 状态模型 [#status-model]
+
+`RemoteStore` 暴露可观察的 `initializing`、`ready`、`disconnected`、`stale` 和 `destroyed` 状态。
+状态含义和失败行为见[生命周期和错误](/nexus/docs/state/lifecycle-and-errors/)。
+
+## Core 与 React Hook 的生命周期 [#headless-core-vs-hook-level-lifecycle]
+
+保持两层分离：
+
+- 不依赖 UI 的 Core 层（`connectNexusStore` / `RemoteStore`）
+- React 层的句柄管理（`useRemoteStore` 和作用域选择器）；直接读取句柄时使用 Zustand 的 `useStore`
+
+Core 层的行为：
+
+- 初始连接失败时，`connectNexusStore(...)` 拒绝 Promise，安全接口则返回 `Err`
+- 失败尝试不会创建 `RemoteStore` 实例
+- `RemoteStore` 进入终态（`disconnected`、`stale`、`destroyed`）后，只能创建新实例来替换
+
+Hook 层的行为：
+
+- 管理句柄的 Hook 提供 `pending`、`store` 和获取错误 `error`；生命周期状态通过 `useStoreStatus` 或 `Scope.useStatus` 单独订阅
+- Hook 可以创建新的 `RemoteStore` 句柄，但不会让已进入终态的旧句柄恢复可用
+
+`reconnectKey`、`reconnect()`、选择器回退值和连接目标变化的行为，见[Nexus State React 指南](/nexus/docs/state/react/)。
+
+## 完整快照 [#full-snapshots]
+
+Nexus State 同步完整快照，不对外提供增量补丁流。
+
+这意味着：
+
+- 语义更简单
+- 更容易验证
+- 更容易分析正确性
+- 更少的协议边界情况
+
+实现保留了未来采用增量优化的空间，但当前公共模型以快照为基础。
+
+## 为什么动作要等待状态发布 [#why-actions-wait-for-publication]
+
+调用：
+
+```ts
+await remoteStore.actions.increment(1);
+```
+
+返回的 Promise 会等待普通 Core 函数调用完成，以及调用方对应的固定发布窗口得到确认。
+这不是额外的回执或等待者协议。即使调用随后失败，动作也可能已经修改宿主状态，因此不要自动重试非幂等动作。
+
+成功 `await` 后，调用方的镜像已确认目标快照；此后宿主仍可能继续更新，后续快照可能已经发布，也可能正在等待发布。
+快照包含完整的数据投影，可能跳过中间版本；客户端会忽略旧版本。
+
+这是理解 State 一致性的关键。终态句柄、句柄替换，以及 Core 句柄与会话的绑定规则，见[生命周期和错误](/nexus/docs/state/lifecycle-and-errors/)。

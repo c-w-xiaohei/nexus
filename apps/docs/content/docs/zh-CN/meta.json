@@ -1,17 +1,17 @@
 {
   "pages": [
-    "--- Getting started ---",
-    "[What is Nexus?](/nexus/docs)",
+    "--- 入门 ---",
+    "index",
     "packages",
     "getting-started",
     "concepts",
-    "--- Guides ---",
+    "--- 指南 ---",
     "guides",
     "adapters",
     "integrations",
     "state",
     "testing",
-    "--- Resources ---",
+    "--- 资源 ---",
     "reference",
     "troubleshooting",
     "migrations"

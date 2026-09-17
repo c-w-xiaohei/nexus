@@ -5,20 +5,64 @@ import "@fontsource-variable/space-grotesk";
 interface Props {
   title: string;
   description: string;
+  locale?: string;
+  alternates?: { locale: string; url: string }[];
 }
-const { title, description } = Astro.props;
+const { title, description, locale = "en", alternates = [] } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
 ---
 
 <!doctype html>
-<html lang="en" class="dark">
+<html lang={locale}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#090c0b" />
+    <meta name="theme-color" content="#fafbf5" />
+    <!-- Match next-themes before any content paints, also on the Astro homepage. -->
+    <script is:inline>
+      (() => {
+        const root = document.documentElement;
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const apply = () => {
+          let theme = "system";
+          try {
+            theme = localStorage.getItem("theme") || "system";
+          } catch {}
+          const dark = theme === "dark" || (theme !== "light" && media.matches);
+          root.classList.toggle("dark", dark);
+          root.classList.toggle("light", !dark);
+          root.style.colorScheme = dark ? "dark" : "light";
+        };
+        const syncColor = () => {
+          document
+            .querySelector('meta[name="theme-color"]')
+            ?.setAttribute(
+              "content",
+              root.classList.contains("dark") ? "#090c0b" : "#fafbf5",
+            );
+        };
+        apply();
+        syncColor();
+        media.addEventListener("change", apply);
+        window.addEventListener("storage", (event) => {
+          if (event.key === "theme" || event.key === null) apply();
+        });
+        new MutationObserver(syncColor).observe(root, {
+          attributes: true,
+          attributeFilter: ["class"],
+        });
+      })();
+    </script>
     <title>{title} | Nexus</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
+    {alternates.map((alternate) => (
+      <link
+        rel="alternate"
+        hreflang={alternate.locale}
+        href={new URL(alternate.url, Astro.site)}
+      />
+    ))}
     <link rel="icon" type="image/png" sizes="32x32" href="/nexus/favicon.png" />
     <meta property="og:title" content={`${title} | Nexus`} />
     <meta property="og:description" content={description} />

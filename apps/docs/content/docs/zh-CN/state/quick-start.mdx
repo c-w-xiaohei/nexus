@@ -1,0 +1,168 @@
+---
+title: Nexus State 快速开始
+description: 使用 Nexus 创建可跨上下文同步的远程状态存储。
+---
+
+## 开始前 [#before-you-start]
+
+先配置两个相互通信的 Nexus 上下文，方法见[快速开始](/nexus/docs/getting-started/)。一个持有权威存储，另一个读取本地镜像并调用远程动作。
+
+## 要安装什么 [#what-to-install]
+
+不依赖 UI 的 API 从 `@nexus-js/core/state` 导入；只有需要 React 集成时才额外安装 `@nexus-js/react`。`@nexus-js/core/state` 是导入路径，不是独立的包。
+
+## 1. 定义存储契约 [#1-define-a-store]
+
+```ts
+import { createStoreToken } from "@nexus-js/core/state";
+
+export interface CounterStore {
+  count: number;
+  increment(by?: number): number;
+  reset(): void;
+}
+
+export const counterStore = createStoreToken<CounterStore>(
+  "example:counter-store",
+);
+```
+
+## 2. 创建宿主存储 [#2-host-the-store]
+
+像注册普通 Nexus 服务一样注册 State 存储。
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { createNexusStore } from "@nexus-js/core/state";
+import { counterStore } from "./counter-store";
+
+const { provider, store } = createNexusStore(
+  counterStore,
+  (set, get) => ({
+    count: 0,
+    increment(by = 1) {
+      const count = get().count + by;
+      set({ count });
+      return count;
+    },
+    reset() {
+      set({ count: 0 });
+    },
+  }),
+  {
+    snapshot: (local) => ({ count: local.count }),
+    expose: ["increment", "reset"],
+  },
+);
+
+nexus.configure({
+  providers: [provider],
+});
+
+console.log(store.getState().count);
+```
+
+`provider` 用于注册远程服务，`store` 是原始的本地 Zustand 存储。已有 Zustand 存储时，使用 `bindNexusStore(...)`。
+
+原生存储生命周期、`ConnectOptions` 和返回 `Result` 的安全接口，见[Core API](/nexus/docs/state/core-api/)。
+
+## 3. 从另一个上下文连接 [#3-connect-from-another-context]
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { connectNexusStore } from "@nexus-js/core/state";
+import { counterStore } from "./counter-store";
+
+const remoteCounter = await connectNexusStore(nexus, counterStore, {
+  target: { context: "background" },
+});
+```
+
+返回的 `RemoteStore` 持有本地镜像。会话替换后，需要用 `connectNexusStore(...)` 创建新句柄。
+
+## 4. 读取、订阅和调用动作 [#4-read-subscribe-and-invoke-actions]
+
+```ts
+console.log(remoteCounter.getState().count);
+
+const stop = remoteCounter.subscribe((state) => {
+  console.log("count changed", state.count);
+});
+
+await remoteCounter.actions.increment(2);
+
+stop();
+remoteCounter.destroy();
+```
+
+## 非 React 环境中的生命周期与清理 [#headless-lifecycle-and-cleanup-recipe]
+
+在不使用 React 的服务、Worker 或脚本中，可以采用以下模式：
+
+```ts
+const remote = await connectNexusStore(nexus, counterStore, options);
+
+const unsubscribe = remote.subscribe((state) => {
+  // 处理远程更新。
+  console.log(state);
+});
+
+try {
+  await remote.actions.increment(1);
+  const snapshot = remote.getState();
+  console.log(snapshot.count);
+} finally {
+  // 始终取消监听并销毁句柄。
+  unsubscribe();
+  remote.destroy();
+}
+```
+
+`RemoteStore` 句柄进入终态后，需要创建新句柄，不能继续复用旧句柄。断开后不要自动重试动作，因为它可能已在宿主端完成。
+完整规则见[生命周期和错误](/nexus/docs/state/lifecycle-and-errors/)。
+
+## 5. React 用法 [#5-react-usage]
+
+在 React 中，用 `NexusProvider` 包裹组件树，并通过作用域共享远程句柄：
+
+```tsx
+import { createRemoteStoreScope, NexusProvider } from "@nexus-js/react";
+
+const CounterScope = createRemoteStoreScope(counterStore);
+
+function App({ sessionEpoch }: { sessionEpoch: number }) {
+  return (
+    <NexusProvider nexus={nexus}>
+      <CounterScope.Provider
+        options={{
+          target: { context: "background" },
+          reconnectKey: sessionEpoch,
+        }}
+      >
+        <CounterView />
+      </CounterScope.Provider>
+    </NexusProvider>
+  );
+}
+
+function CounterView() {
+  const { pending, reconnect } = CounterScope.useRemoteStore();
+  const count = CounterScope.useSelector((state) => state.count, {
+    fallback: 0,
+  });
+  const actions = CounterScope.useActions();
+  const phase = CounterScope.useStatus((status) => status.type);
+
+  if (pending) return <span>Connecting</span>;
+  if (!actions || phase !== "ready") {
+    return <button onClick={reconnect}>Reconnect</button>;
+  }
+
+  return <button onClick={() => actions.increment(1)}>{count}</button>;
+}
+```
+
+作用域 Provider 为子树管理一个共享的 `RemoteStore` 句柄。叶组件使用该作用域的 `useSelector`、`useActions` 和 `useStatus`，无需各自调用 `useRemoteStore(...)`。
+如果组件直接管理远程句柄，应在 `remote.store` 存在后再渲染子组件，并在子组件中使用 Zustand 的 `useStore(remote.store, selector)` 读取状态。
+
+`reconnectKey`、`reconnect()`、句柄替换和选择器回退值的行为，见[Nexus State React](/nexus/docs/state/react/)。

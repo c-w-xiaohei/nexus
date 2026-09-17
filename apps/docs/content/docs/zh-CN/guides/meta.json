@@ -1,0 +1,19 @@
+{
+  "title": "Core 指南",
+  "defaultOpen": false,
+  "pages": [
+    "--- 服务和调用 ---",
+    "../services",
+    "../remote-calls",
+    "../callbacks",
+    "../remote-resources",
+    "../error-handling",
+    "--- 连接管理 ---",
+    "../connections",
+    "../proxy-lifecycle",
+    "../multiple-connections",
+    "--- Identity 和访问 ---",
+    "../identity-and-metadata",
+    "../auth-and-policy"
+  ]
+}

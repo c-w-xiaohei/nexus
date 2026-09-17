@@ -1,0 +1,19 @@
+{
+  "pages": [
+    "--- Getting started ---",
+    "index",
+    "packages",
+    "getting-started",
+    "concepts",
+    "--- Guides ---",
+    "guides",
+    "adapters",
+    "integrations",
+    "state",
+    "testing",
+    "--- Resources ---",
+    "reference",
+    "troubleshooting",
+    "migrations"
+  ]
+}

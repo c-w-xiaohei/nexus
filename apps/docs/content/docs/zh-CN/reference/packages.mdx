@@ -1,0 +1,39 @@
+---
+title: 包和导入
+description: 查找可选包和 Core 子路径入口。
+---
+
+初始配置请使用[安装](/nexus/docs/packages/)。本页列出其他能力及其导入方式。
+
+## 包 [#packages]
+
+| 包                   | 用途                     | 指南                                     |
+| -------------------- | ------------------------ | ---------------------------------------- |
+| `@nexus-js/core`     | 连接、服务、回调和资源   | [快速开始](/nexus/docs/getting-started/) |
+| `@nexus-js/chrome`   | Chrome 扩展通信          | [Chrome](/nexus/docs/chrome/)            |
+| `@nexus-js/iframe`   | 父页面/iframe 通信       | [iframe](/nexus/docs/iframe/)            |
+| `@nexus-js/node-ipc` | 本地守护进程与客户端通信 | [Node IPC](/nexus/docs/node-ipc/)        |
+| `@nexus-js/react`    | React 集成               | [React](/nexus/docs/react/)              |
+| `@nexus-js/testing`  | 应用级测试替身           | [测试](/nexus/docs/testing/)             |
+
+将测试工具安装为开发依赖。它们模拟公共应用接口，不模拟传输层或真实会话。
+
+## Core 子路径导入 [#core-subpath-imports]
+
+这些入口包含在 `@nexus-js/core` 中，无需安装独立的包。
+
+| 导入路径                                | 用途                                     |
+| --------------------------------------- | ---------------------------------------- |
+| `@nexus-js/core/state`                  | [同步状态](/nexus/docs/state/)           |
+| `@nexus-js/core/relay`                  | [跨通信网络转发服务](/nexus/docs/relay/) |
+| `@nexus-js/core/transport`              | 适配器作者使用的传输契约                 |
+| `@nexus-js/core/transport/virtual-port` | 在消息总线上复用端口                     |
+
+例如：
+
+```ts
+import { connectNexusStore } from "@nexus-js/core/state";
+import { relayService } from "@nexus-js/core/relay";
+```
+
+使用现有适配器的应用通常无需导入底层传输入口。

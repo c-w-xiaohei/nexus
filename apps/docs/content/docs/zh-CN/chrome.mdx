@@ -1,0 +1,84 @@
+---
+title: Chrome 扩展
+description: 配置扩展上下文，精确连接后台脚本或指定文档中的内容脚本。
+---
+
+`@nexus-js/chrome` 用于连接 Chrome 扩展中的各个上下文。使用对应的辅助函数初始化：`usingBackgroundScript()`、`usingContentScript()`、`usingPopup()` 等。
+
+<InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
+
+[快速开始指南](/nexus/docs/getting-started/)演示如何定义共享契约、在后台提供服务，并从内容脚本调用。
+
+## 精确连接目标 [#exact-targets]
+
+使用 `chromeTarget` 指定后台脚本、框架或文档的地址：
+
+```ts
+import { chromeTarget } from "@nexus-js/chrome";
+
+const exactBackground = chromeTarget.background();
+const exactContent = chromeTarget.contentDocument({
+  tabId: 42,
+  documentId: "document-1",
+});
+```
+
+例如，应用确定目标文档后，已配置的后台上下文可以连接它并获取服务：
+
+```ts
+import { chromeTarget, usingBackgroundScript } from "@nexus-js/chrome";
+import { CaptureToken } from "./shared-contracts";
+
+const backgroundNexus = usingBackgroundScript();
+const tabId = 42;
+const documentId = "document-1";
+
+const connection = await backgroundNexus.connect({
+  target: chromeTarget.contentDocument({ tabId, documentId }),
+  where: (contextMeta, connectionMeta) =>
+    contextMeta.context === "content-script" &&
+    contextMeta.isVisible === true &&
+    connectionMeta.observed.documentId === documentId,
+});
+const capture = connection.get(CaptureToken);
+```
+
+应用负责选择当前标签页、注入内容脚本，再将得到的地址交给 Nexus。
+`tabId`、`frameId` 和 `documentId` 是平台地址。经过验证的发送方信息通过 `ChromeConnectionMeta` 提供，与对端自行声明的身份分开保存。
+
+内容脚本初始化函数不会自动选择服务所在的连接目标。需要连接后台时，将 `chromeTarget.background()` 传给 `connect`。
+
+## 多个连接 [#multiple-connections]
+
+使用 `connectMulticast` 获取已可用连接的快照，然后从每个成员取得服务：
+
+```ts
+const captures = await backgroundNexus.connectMulticast({
+  where: (contextMeta, _connectionMeta) =>
+    contextMeta.context === "content-script" && contextMeta.isVisible === true,
+});
+const resources = captures.get(CaptureToken);
+```
+
+如果需要 Nexus 主动获取连接，直接提供 `targets`，无需先为每个目标调用 `connect`。
+所有目标必须连接成功，但每个成员上的服务获取仍分别返回 `Result`。可以一起处理服务缺失和调用失败：
+
+```ts
+const outcomes = await Promise.allSettled(
+  resources.map(async ({ result }) => {
+    if (result.isErr()) throw result.error;
+    return await result.value.capture();
+  }),
+);
+```
+
+示例假定共享的 `CaptureToken` 契约声明了 `capture()`。直接组合原生 Promise 即可，无需额外的多播代理或结果报告类型。
+
+## 会话生命周期 [#session-lifecycle]
+
+页面跳转或上下文销毁会使相关代理和引用失效。应监听已获取的连接，并在新上下文就绪后重新获取连接与代理；参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+按框架位置寻址时，使用框架目标；操作必须绑定某一份文档时，使用文档目标。同一流程应保持寻址方式一致：框架目标与文档目标并不等价，交替使用它们访问同一上下文可能建立多个会话。
+页面跳转后，文档目标不会自动指向新文档。
+
+离屏文档也需要显式连接 `chromeTarget.background()`。应用负责调用 `chrome.offscreen.createDocument()` 并确认页面就绪；`usingOffscreenDocument()` 只配置 Nexus，不创建页面。

@@ -2,6 +2,7 @@
 import { highlight } from "fumadocs-core/highlight";
 import { renderToStaticMarkup } from "react-dom/server";
 import { InstallCommand } from "./install-command";
+import { localeFromPath } from "../lib/i18n";
 
 interface Props {
   packages: string;
@@ -27,4 +28,8 @@ const commands = await Promise.all(
 );
 ---
 
-<InstallCommand commands={commands} client:load />
+<InstallCommand
+  commands={commands}
+  locale={localeFromPath(Astro.url.pathname)}
+  client:load
+/>

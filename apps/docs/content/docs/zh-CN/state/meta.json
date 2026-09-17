@@ -1,0 +1,14 @@
+{
+  "title": "Nexus State",
+  "defaultOpen": false,
+  "pages": [
+    "index",
+    "quick-start",
+    "concepts",
+    "core-api",
+    "react",
+    "lifecycle-and-errors",
+    "testing",
+    "faq"
+  ]
+}

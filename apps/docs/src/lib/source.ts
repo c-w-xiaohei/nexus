@@ -1,6 +1,7 @@
 import { getCollection, type CollectionEntry } from "astro:content";
 import { loader, type StaticSource } from "fumadocs-core/source";
 import path from "node:path";
+import { docsUrl, i18n } from "./i18n";
 
 const files: StaticSource<{
   pageData: CollectionEntry<"docs">["data"] & {
@@ -28,5 +29,7 @@ for (const entry of await getCollection("meta")) {
 
 export const source = loader({
   baseUrl: "/nexus/docs",
+  i18n,
+  url: docsUrl,
   source: { files },
 });

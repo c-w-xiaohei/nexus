@@ -27,6 +27,51 @@ for (const [file, $] of pages) {
     origin,
   );
   if (pageUrl.pathname.startsWith(`${base}docs/`)) {
+    const locale = pageUrl.pathname.startsWith(`${base}docs/zh-CN/`)
+      ? "zh-CN"
+      : "en";
+    if ($("html").attr("lang") !== locale)
+      failures.push(`${pageUrl.pathname}: incorrect document language`);
+    const counterpart =
+      locale === "en"
+        ? pageUrl.pathname.replace(`${base}docs/`, `${base}docs/zh-CN/`)
+        : pageUrl.pathname.replace(`${base}docs/zh-CN/`, `${base}docs/`);
+    const counterpartPage = pages.get(
+      path.join(root, counterpart.slice(base.length), "index.html"),
+    );
+    if (!counterpartPage) {
+      failures.push(
+        `${pageUrl.pathname}: missing translated counterpart ${counterpart}`,
+      );
+    } else if (locale === "en") {
+      const headingIds = (page) =>
+        page(".prose :is(h1,h2,h3,h4,h5,h6)[id]")
+          .toArray()
+          .map((node) => page(node).attr("id"));
+      if (
+        JSON.stringify(headingIds($)) !==
+        JSON.stringify(headingIds(counterpartPage))
+      )
+        failures.push(
+          `${pageUrl.pathname}: translated section anchors do not match`,
+        );
+    }
+    if (locale === "zh-CN") {
+      for (const element of $(
+        ".prose a[href], #nd-sidebar a[href]",
+      ).toArray()) {
+        const href = $(element).attr("href");
+        const target = new URL(href, pageUrl);
+        if (
+          target.origin === origin &&
+          target.pathname.startsWith(`${base}docs/`) &&
+          !target.pathname.startsWith(`${base}docs/zh-CN/`)
+        )
+          failures.push(
+            `${pageUrl.pathname}: link escapes Chinese documentation: ${href}`,
+          );
+      }
+    }
     const active = $('#nd-sidebar a[data-active="true"]');
     if (
       active.length !== 1 ||

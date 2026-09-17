@@ -1,0 +1,95 @@
+---
+title: 服务
+description: 定义共享契约，并在 Nexus 运行时中注册对象或类服务。
+---
+
+服务是一个本地对象，另一个上下文可以通过共享契约访问它。[快速开始](/nexus/docs/getting-started/)在 `shared.ts` 中定义了 `DocumentService` 和 `DocumentToken`；此处示例复用该模块。
+
+## 共享契约 [#share-the-contract]
+
+将接口和 Token 放在两个上下文共同导入的模块中。如果已有服务类型，直接导入，不必在每个 Token 定义旁重复声明。
+为 Token 使用稳定且带命名空间的 ID，例如 `example:documents`。
+
+Token 标识服务，而不是服务的位置。多个上下文可以提供同一契约的实现；调用方先选择连接，再获取服务。
+
+## 注册对象 [#register-an-object]
+
+假设 `runtime.ts` 导出一个已经配置好的本地 `app` 实例：
+
+```ts
+import { app } from "./runtime";
+import { DocumentToken, type DocumentService } from "./shared";
+
+const documents: DocumentService = {
+  async summarize(documentId) {
+    return `Summary of ${documentId}`;
+  },
+};
+
+app.provide(DocumentToken, documents);
+```
+
+运行时创建的依赖也通过这种方式注册。`provide` 注册已有对象；`connection.get` 不会再创建另一个业务实例。
+
+## 注册类服务 [#register-a-class]
+
+对于用类实现的服务，使用所属 Nexus 实例提供的装饰器：
+
+```ts
+import { app } from "./runtime";
+import { DocumentToken, type DocumentService } from "./shared";
+
+@app.Expose(DocumentToken)
+class Documents implements DocumentService {
+  async summarize(documentId: string) {
+    return `Summary of ${documentId}`;
+  }
+}
+```
+
+在启动阶段同步加载这个模块，确保类在生成启动快照前完成注册。同一个 Token 使用类注册或对象注册，二选一即可。
+
+## 启动时注册与动态注册 [#startup-and-live-registration]
+
+获取连接之前，先配置各个参与通信的运行时，并在启动阶段立即注册静态服务。
+`await app.ready()` 等待本地初始化完成；不会等待其他上下文或其服务。
+
+异步创建的依赖可以在本地启动完成后动态注册：
+
+```ts
+await app.ready();
+const documents = await loadDocumentService();
+app.provide(DocumentToken, documents);
+```
+
+这里 `loadDocumentService` 是返回 `DocumentService` 的应用代码。
+调用方可以再次调用 `safeGet` 检查更新后的服务目录。如果通过身份信息通知业务已就绪，应先注册服务，再更新身份；参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+也可以通过 `configure({ providers })` 在启动配置中集中注册服务。`provide` 还接受服务提供者描述对象，或一次提交的一批描述对象。
+如果一批描述对象中存在重复的 Token ID，整批注册都会被拒绝，不会只注册其中一部分。参阅[Core API](/nexus/docs/reference/)。
+
+## 使用 TokenSpace 组织 Token [#organize-tokens-with-tokenspace]
+
+多个服务共享命名空间时使用 TokenSpace：
+
+```ts
+import { TokenSpace, type AdapterModel } from "@nexus-js/core";
+import type { DocumentService } from "./shared";
+
+const workspace = new TokenSpace<AdapterModel>({ name: "workspace" });
+const documents = workspace.space("documents");
+export const WorkspaceDocumentToken =
+  documents.token<DocumentService>("reader");
+// ID: workspace:documents:reader
+```
+
+如果契约专用于某个适配器，请将 `AdapterModel` 换成该适配器的模型类型。
+TokenSpace 用于组织名称和类型，不保存连接目标，也不负责发现服务提供者。
+
+## 多个运行时 [#multiple-runtimes]
+
+一个 JavaScript 上下文可以创建多个 Nexus 实例，分别管理不同的通信网络。
+按各实例负责的通信范围命名、分别配置，并在对应实例上注册服务。
+在模块之间传递 Token 不会自动选定运行时，也不会连通这些通信网络。
+
+下一步：[建立连接](/nexus/docs/connections/)。

@@ -1,0 +1,87 @@
+---
+title: 概览
+description: 配置本地守护进程与客户端之间的 Nexus 进程间通信。
+---
+
+`@nexus-js/node-ipc` 通过文件系统路径形式的 Unix 域套接字连接本地守护进程和客户端进程。
+它适用于由一个长期运行的本地进程提供 Nexus 服务、一个或多个本地客户端调用这些服务的场景。
+
+本节介绍适配器专属行为。所有适配器共用的授权钩子见[授权策略](/nexus/docs/auth-and-policy/)。
+
+## 从这里开始 [#start-here]
+
+- 新配置：[快速开始](/nexus/docs/node-ipc/quick-start/)
+- 心智模型：[概念](/nexus/docs/node-ipc/concepts/)
+- 套接字路径规则：[寻址](/nexus/docs/node-ipc/addressing/)
+- 适配器预认证：[认证](/nexus/docs/node-ipc/auth/)
+- 守护进程重启与错误：[生命周期和错误](/nexus/docs/node-ipc/lifecycle-and-errors/)
+- Node 和 Bun 支持情况：[运行时兼容性](/nexus/docs/node-ipc/runtime-compatibility/)
+- 测试指导：[测试](/nexus/docs/node-ipc/testing/)
+
+## 所需依赖 [#package-routing]
+
+- 核心运行时：`@nexus-js/core`
+- 本地 IPC 适配器：`@nexus-js/node-ipc`
+
+在守护进程和客户端项目中都安装：
+
+<InstallCommand packages="@nexus-js/core @nexus-js/node-ipc" />
+
+## 何时使用 [#when-to-use-it]
+
+当应用具有以下条件时使用 node-ipc：
+
+- 一个提供服务的本地守护进程
+- 一个或多个本地客户端，例如命令行程序或辅助进程
+- 仅同机通信
+- 用于标识守护进程实例的 Unix 套接字路径
+
+它不适用于浏览器上下文或跨机器通信，也不提供在守护进程重启后仍可直接使用、无需重新获取的持久句柄。
+
+## 适配器提供什么 [#what-the-adapter-provides]
+
+- 守护进程与客户端的创建辅助函数
+- 默认套接字地址解析
+- 自定义地址解析器
+- 基于文件系统 Unix 套接字的服务端与客户端 Endpoint
+- 套接字字节流上的二进制消息分帧
+- 可选的共享密钥预认证
+- 运行目录与残留套接字的安全检查
+- Node IPC 的端点与连接元数据、精确目标类型和地址辅助函数
+
+## Core 负责的能力 [#what-core-still-owns]
+
+适配器不会替代 Core Nexus 行为。
+
+以下能力仍由 Core 负责：
+
+- Token 和服务契约
+- 服务注册与暴露
+- 代理创建
+- 连接目标解析
+- 逻辑连接握手
+- `policy.canConnect` 和 `policy.canCall`
+- 资源引用生命周期
+- 代理与会话绑定的行为
+
+## 运行时支持范围 [#runtime-scope]
+
+当前验证范围是 Linux 和类 Unix 系统上的 Node，使用文件系统 Unix 域套接字。
+仓库 CI 尚未验证 Bun，因此这里不承诺其兼容性，也不据此判定它不可用。
+详见[运行时兼容性](/nexus/docs/node-ipc/runtime-compatibility/)。
+
+## 测试边界 [#testing-boundary]
+
+如果调用守护进程服务的应用代码依赖 `NexusInstance`，可以用 `@nexus-js/testing` 和 `createMockNexus()` 编写单元测试。
+
+不要用测试替身验证 Node IPC 适配器本身。它不覆盖 Unix 套接字寻址、文件系统权限、消息分帧、共享密钥预认证、残留套接字清理、守护进程关闭与重建，以及真实断开时序。
+
+适配器和真实套接字的集成测试指导见[测试](/nexus/docs/node-ipc/testing/)。
+
+## 相关页面 [#related-pages]
+
+- 产品文档首页：[Nexus 文档](/nexus/docs/)
+- 安装依赖：[安装](/nexus/docs/packages/)
+- 平台选择：[平台](/nexus/docs/platforms/)
+- 测试应用代码：[测试](/nexus/docs/testing/)
+- 通用授权策略：[授权](/nexus/docs/auth-and-policy/)

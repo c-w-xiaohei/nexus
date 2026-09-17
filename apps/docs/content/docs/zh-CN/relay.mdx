@@ -1,0 +1,180 @@
+---
+title: Nexus Relay
+description: 跨相邻通信网络转发显式选定的 Nexus 服务和状态。
+---
+
+Nexus Relay 在一个 Nexus 通信网络中注册服务提供者，将选定的服务或 State 操作转发到相邻网络。
+
+Relay 必须显式配置，不提供透明的多跳路由，不转发原始消息封包，也不会自动建立通往任意目标的隧道。
+
+## 何时使用 Relay [#when-to-use-relay]
+
+当一个运行环境中有多个已配置的 `Nexus<M>` 实例，下游调用方需要经由这个中间节点访问指定的上游服务时，可以使用 Relay。
+如果两个上下文可以在同一通信网络中直接连接，请使用普通的 `connect()`/`get()` 或 `connectNexusStore()`。
+
+## 服务 Relay [#service-relay]
+
+以下示例只展示转发配置，省略完整启动代码。假定 `chromeNexus`、`iframeParentNexus` 和 `iframeChildNexus` 已分别通过 Chrome 和 iframe 适配器完成配置。
+
+```ts
+import { Nexus, Token } from "@nexus-js/core";
+import { chromeTarget, type ChromeAdapterModel } from "@nexus-js/chrome";
+import { relayService } from "@nexus-js/core/relay";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+
+interface UserProfileService {
+  update(input: { name: string }): Promise<void>;
+}
+
+const UpstreamUserProfileToken = new Token<
+  UserProfileService,
+  ChromeAdapterModel
+>("example:user-profile");
+const DownstreamUserProfileToken = new Token<
+  UserProfileService,
+  IframeAdapterModel
+>("example:user-profile");
+
+declare const chromeNexus: Nexus<ChromeAdapterModel>;
+declare const iframeParentNexus: Nexus<IframeAdapterModel>;
+declare const iframeChildNexus: Nexus<IframeAdapterModel>;
+
+iframeParentNexus.provide(
+  relayService(DownstreamUserProfileToken, {
+    forwardThrough: chromeNexus,
+    forwardTarget: chromeTarget.background(),
+  }),
+);
+
+// 上游网络使用绑定自身模型的 Token，注册相同的服务 ID。
+chromeNexus.provide(UpstreamUserProfileToken, {
+  async update(input) {
+    console.log(input.name);
+  },
+});
+```
+
+下游调用方在自己的通信网络中使用精确目标连接：
+
+```ts
+const connection = await iframeChildNexus.connect({
+  target: {
+    context: "iframe-parent",
+    appId: "portal",
+    instance: "default",
+    origin: "https://parent.example.com",
+  },
+});
+const profile = connection.get(DownstreamUserProfileToken);
+
+await profile.update({ name: "Ada" });
+```
+
+Relay 不会根据下游契约或连接查找推导 `forwardTarget`；必须显式配置上游的 `forwardThrough` 和 `forwardTarget`。
+
+默认情况下，`relayService()` 只转发可序列化的方法调用，拒绝 `SET`、回调、远程引用及其他携带可调用能力的数据。
+需要转发这些能力时，应设计显式的服务契约，而不是依赖透明隧道。
+
+## State Relay [#state-relay]
+
+需要让下游调用方访问上游的权威 State 存储时，使用 `relayNexusStore()`。
+
+以下配置沿用上面服务示例中已配置的 Nexus 实例，不创建新的运行时。
+
+```ts
+import { Nexus, Token } from "@nexus-js/core";
+import {
+  connectNexusStore,
+  createNexusStore,
+  createStoreToken,
+} from "@nexus-js/core/state";
+import { relayNexusStore } from "@nexus-js/core/relay";
+import { chromeTarget } from "@nexus-js/chrome";
+import type { ChromeAdapterModel } from "@nexus-js/chrome";
+import type { IframeAdapterModel } from "@nexus-js/iframe";
+
+declare const chromeNexus: Nexus<ChromeAdapterModel>;
+declare const iframeParentNexus: Nexus<IframeAdapterModel>;
+declare const iframeChildNexus: Nexus<IframeAdapterModel>;
+
+interface SessionStore {
+  name: string;
+  rename(name: string): void;
+}
+
+const upstreamSessionStore = createStoreToken<SessionStore, ChromeAdapterModel>(
+  "example:session-store",
+);
+const downstreamSessionStore = createStoreToken<
+  SessionStore,
+  IframeAdapterModel
+>("example:session-store");
+const { provider: sessionProvider } = createNexusStore(
+  upstreamSessionStore,
+  (set) => ({
+    name: "Ada",
+    rename(name: string) {
+      set({ name });
+    },
+  }),
+  {
+    snapshot: (local) => ({ name: local.name }),
+    expose: ["rename"],
+  },
+);
+chromeNexus.provide(sessionProvider);
+
+iframeParentNexus.provide(
+  relayNexusStore<SessionStore, IframeAdapterModel, ChromeAdapterModel>(
+    downstreamSessionStore,
+    {
+      forwardThrough: chromeNexus,
+      forwardTarget: chromeTarget.background(),
+    },
+  ),
+);
+```
+
+下游 State 代码使用精确的 iframe 目标连接转发服务：
+
+```ts
+const store = await connectNexusStore(
+  iframeChildNexus,
+  downstreamSessionStore,
+  {
+    target: {
+      context: "iframe-parent",
+      appId: "portal",
+      instance: "default",
+      origin: "https://parent.example.com",
+    },
+  },
+);
+```
+
+Relay 向下游映射上游权威存储的状态。它使用自己的下游会话标识，保留上游版本，并为每个订阅等待初始基线快照。上游会话断开或被替换时，下游订阅也会终止，需要重新创建句柄。
+
+每个下游订阅对应一个上游回调订阅。动作只等待调用方所固定订阅窗口的快照确认，不会等待其他较慢的订阅者。
+Relay 沿用上游的快照投影和动作白名单，不额外引入事务、回执、重试或回滚协议。
+关闭下游句柄时，会移除上游监听器并释放其回调引用。
+
+## 授权策略上下文 [#policy-context]
+
+Relay 的授权策略接收下游网络中直接调用方的 `ContextMeta` 和 `ConnectionMeta`。
+安全决策应依据连接事实；业务授权可以参考对端身份，但必须遵循文档说明的信任边界。
+
+## Relay 不做什么 [#what-relay-does-not-do]
+
+- 合并通信网络
+- 全局发现服务提供者
+- 转发原始 Nexus 消息
+- 提供透明的多跳路由
+- 隐式转发引用、回调或远程资源
+- 在上游替换后修复旧的下游服务代理或 State 句柄
+
+## 相关页面 [#related-pages]
+
+- [核心概念](/nexus/docs/concepts/)
+- [平台与桥接上下文](/nexus/docs/platforms/)
+- [授权策略](/nexus/docs/auth-and-policy/)
+- [Nexus State](/nexus/docs/state/)

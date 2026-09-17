@@ -1,0 +1,52 @@
+---
+title: 安装
+description: 为应用安装 Core 以及连接 JavaScript 上下文的适配器。
+---
+
+安装 `@nexus-js/core` 以及连接 JavaScript 上下文的适配器。
+选择以下一种配置。
+
+## Chrome 扩展 [#chrome-extensions]
+
+用于后台脚本、内容脚本和扩展页面之间的通信：
+
+<InstallCommand packages="@nexus-js/core @nexus-js/chrome" />
+
+继续阅读[快速开始](/nexus/docs/getting-started/)，提供并调用你的第一个服务。
+
+## 父页面和 iframe [#parent-pages-and-iframes]
+
+用于父窗口与嵌入式 iframe 之间的通信：
+
+<InstallCommand packages="@nexus-js/core @nexus-js/iframe" />
+
+使用[iframe 指南](/nexus/docs/iframe/)配置两个上下文。
+
+## 本地 Node 进程 [#local-node-processes]
+
+用于本地守护进程与客户端通过 Unix 套接字通信：
+
+<InstallCommand packages="@nexus-js/core @nexus-js/node-ipc" />
+
+使用 [Node IPC 快速开始](/nexus/docs/node-ipc/quick-start/)配置守护进程和客户端。
+
+## 其他传输方式 [#other-transports]
+
+如果应用自行实现 Endpoint，只需安装 Core：
+
+<InstallCommand packages="@nexus-js/core" />
+
+传输接口请参阅[平台与自定义 Endpoint](/nexus/docs/platforms/)。普通应用代码可以直接使用现有适配器。
+
+## 下一步 [#next-step]
+
+两个上下文配置完成后，Core 工作流相同：
+
+```ts
+const connection = await app.connect({ target });
+const service = connection.get(ServiceToken);
+const result = await service.method();
+```
+
+[快速开始](/nexus/docs/getting-started/)提供包含共享契约、服务提供方和调用方的完整示例。
+之后可以添加其他能力；参阅[包参考](/nexus/docs/reference/packages/)。

@@ -1,0 +1,80 @@
+---
+title: 授权
+description: 决定哪些对端可以连接，以及哪些操作允许执行。
+---
+
+Nexus 的授权策略控制会话准入，以及对服务和资源引用的访问。应在提供受保护能力的运行时上配置策略。
+
+## 允许连接和调用 [#allow-connections-and-calls]
+
+以下配置假定 `runtimeConfig` 已包含 Endpoint，模型已声明身份字段 `workspace`，以及经适配器验证的 `observed.authenticated` 字段：
+
+```ts
+app.configure({
+  ...runtimeConfig,
+  policy: {
+    canConnect({ remoteIdentity, connection }) {
+      return (
+        remoteIdentity.workspace === "drafts" &&
+        connection.observed.authenticated === true
+      );
+    },
+    canCall({ serviceName, operation }) {
+      return serviceName === "example:documents" && operation === "APPLY";
+    },
+  },
+});
+```
+
+两个策略钩子都是可选的；未配置时，默认允许相应操作。配置后，只有返回 `true` 才会放行；返回 `false`、抛出异常或返回被拒绝的 Promise 都会拒绝操作。
+
+## 连接准入：canConnect [#connection-admission-canconnect]
+
+`canConnect` 接收 `localIdentity`、`remoteIdentity`、连接事实，以及物理连接方向 `direction`（`"incoming"` 或 `"outgoing"`）。
+它在握手授权时执行，也会在后续身份更新提交前执行。
+
+握手被拒绝时，会话无法进入就绪状态。身份更新被拒绝时，新身份不会生效，会话也会关闭。
+拒绝代码是 `E_AUTH_CONNECT_DENIED`。
+
+部分适配器会在 Core 准入检查之前进行认证或来源检查，具体机制见[适配器文档](/nexus/docs/platforms/)。
+通过适配器检查，并不会跳过已配置的 Core 授权策略。
+
+## 操作授权：canCall [#operation-authorization-cancall]
+
+`canCall` 接收双方身份、连接事实，以及 `connectionId`、`serviceName`、`path` 和 `operation`。
+它检查传入的服务和资源操作。拒绝会返回 `E_AUTH_CALL_DENIED`，不会调用业务实现。
+
+当前代理会产生 `GET` 和 `APPLY` 操作。导出的策略类型虽然也包含 `SET`，但代理不支持远程属性赋值；修改状态请提供写入方法。
+类型中存在 `SET`，并不代表代理提供了对应的写入 API。
+
+`connectionId` 是用于诊断和策略判断的不透明会话标识符，不能作为重新获取连接的目标地址。
+
+获取连接时使用的 `where` 不替代 `canCall`。后续调用会独立授权，与调用方如何选择连接无关。
+
+## 设置服务级策略 [#set-a-service-policy]
+
+```ts
+app.provide(DocumentToken, documents, {
+  policy: {
+    canCall(context) {
+      return allowWorkspaceCall(context) && allowDocumentOperation(context);
+    },
+  },
+});
+```
+
+服务级 `canCall` 会**替换**全局调用策略对该服务的检查；未配置时才使用全局策略。
+如果要求两条规则同时满足，必须显式组合，框架不会自动将两者取逻辑与。
+
+服务返回的远程引用保留创建它时所用的调用策略快照。重新注册服务不会改变已有引用的策略。
+启动配置 `configure({ providers })` 中的服务描述对象也可以携带服务级策略。
+
+## 选择可信输入 [#choose-trusted-inputs]
+
+对端声明的身份适合表达角色、标签和筛选条件。安全决策应依据适配器观察或验证的事实，并遵循适配器文档中的保证。
+自行声明的用户 ID、角色、来源或进程 ID 不会自动获得认证。参阅[身份与元数据](/nexus/docs/identity-and-metadata/)。
+
+## 处理拒绝 [#handle-denial]
+
+连接被拒绝时，获取连接失败；调用被拒绝时，对应操作失败。安全接口让应用通过 `Result` 处理这两类结果。
+拒绝后，Nexus 不会自动寻找其他服务提供者或重试。参阅[错误和超时](/nexus/docs/error-handling/)。

@@ -1,0 +1,92 @@
+---
+title: 错误和超时
+description: 在各自边界处理连接、服务获取和调用失败。
+---
+
+获取连接、获取服务和执行调用是三个独立步骤。应用可以分别处理各阶段的失败，决定后续行为。
+
+| 阶段     | 抛出异常的接口               | 返回 Result 的接口                       |
+| -------- | ---------------------------- | ---------------------------------------- |
+| 连接获取 | `await app.connect(options)` | `await app.safeConnect(options)`         |
+| 服务获取 | `connection.get(Token)`      | `connection.safeGet(Token)`              |
+| 远程操作 | `await service.method()`     | `await Nexus.safeCall(service.method())` |
+
+安全异步方法返回原生 Promise，兑现值为 better-result 的 `Result`。先 `await`，再用 `isErr()` 或 `isOk()` 判断并收窄类型。
+
+## 处理每个边界 [#handle-each-boundary]
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import { DocumentToken } from "./shared";
+
+async function summarize() {
+  const connected = await app.safeConnect({ target });
+  if (connected.isErr()) {
+    console.error("Connection:", connected.error.code);
+    return;
+  }
+
+  const acquired = connected.value.safeGet(DocumentToken);
+  if (acquired.isErr()) {
+    console.error("Service:", acquired.error.code);
+    return;
+  }
+
+  const called = await Nexus.safeCall(acquired.value.summarize("intro"));
+  if (called.isErr()) console.error("Call:", called.error.code);
+  else console.log(called.value);
+}
+```
+
+`app` 和 `target` 来自运行时配置。`safeGet` 不会改变代理方法的返回类型，使其自动返回 `Result`。
+`safeCall` 等待一个 Nexus 操作的结果；不接受任意 Promise 或数组，也不会重复发送调用。
+
+如果服务本身返回业务 `Result`，外层 `safeCall` 的 `Result` 表示 RPC 是否成功，内层 `value` 则表示业务结果。
+
+## 区分业务和通信失败 [#distinguish-business-and-communication-failures]
+
+远程业务方法抛出的异常会变成 code 为 `E_REMOTE_EXCEPTION` 的 `NexusRemoteError`。
+断开、授权、资源不可用和协议失败保留框架分类。等待结果后的本地处理仍可能抛出本地错误。
+
+跨上下文或存在多份包副本时，应通过稳定的 `error.code` 判断错误类型。`context` 和 `cause` 提供诊断细节。参阅[错误参考](/nexus/docs/reference/errors/)。
+
+## 超时设置 [#time-budgets]
+
+| 操作         | 默认值         | 开始时间                       |
+| ------------ | -------------- | ------------------------------ |
+| 主动获取连接 | 30 秒          | API 调用时，包括本地初始化     |
+| 被动单连接   | 未提供时无限制 | API 调用时                     |
+| 获取连接集合 | 30 秒          | API 调用时；快照不等待未来成员 |
+| 远程调用     | 5 秒           | 首次触发执行时                 |
+
+`timeout` 和 `callTimeout` 必须是正的有限毫秒数。零、负数、NaN 和 Infinity 都无效。
+一次获取多个目标时，所有目标共用同一个超时时限。
+
+可以在启动前设置运行时默认值，也可以在获取某个服务代理时单独指定：
+
+```ts
+app.configure({ ...runtimeConfig, callTimeout: 10_000 });
+
+const documents = connection.get(DocumentToken, { callTimeout: 30_000 });
+```
+
+单独指定超时不会修改共享 Connection。代理返回的远程引用继承该超时设置；对端收到的回调引用则使用对端运行时的默认值。
+
+## 取消连接等待 [#cancel-a-connection-wait]
+
+```ts
+const controller = new AbortController();
+const pending = app.safeConnect({ target, signal: controller.signal });
+controller.abort();
+const result = await pending;
+```
+
+`signal` 只控制本次获取连接的等待，不会关闭共享会话、取消其他调用方的获取，也不控制后续 RPC。
+
+## 决定是否重试 [#decide-whether-to-retry]
+
+调用超时结束本地等待；不能证明远程操作没有运行，也不能证明副作用已回滚。
+只有业务操作允许安全重试时才应重试，例如通过应用级幂等键避免重复执行。
+
+断开后，需要获取新的连接以及新的服务或资源句柄。旧句柄不会自动转移到新会话。
+单次业务异常不会断开会话。参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。

@@ -1,0 +1,79 @@
+---
+title: 连接
+description: 通过精确目标获取共享会话，或被动等待对端连接。
+---
+
+获取服务之前，先获取 Connection。它代表两个已配置的 Nexus 运行时之间，一个已就绪的双向会话。
+
+以下示例假定 `app` 是已配置的运行时，`target` 由适配器提供的精确目标构造函数创建。
+平台配置请参阅[适配器](/nexus/docs/platforms/)。
+
+## 连接到已知目标 [#connect-to-a-known-target]
+
+```ts
+const connection = await app.connect({ target });
+const documents = connection.get(DocumentToken);
+```
+
+Nexus 会复用匹配该地址的已就绪会话，或尝试建立一次连接。
+应用负责选择地址，包括查询当前标签页、筛选框架或发现目标进程。
+失败的尝试会被报告，不会自动重试。
+
+对端也可以通过同一个会话获取你的服务。谁主动建立连接，并不决定谁只能调用服务、谁只能提供服务。
+
+## 筛选对端 [#constrain-the-peer]
+
+通过 `where` 检查对端声明的身份以及本地观察到的连接事实：
+
+```ts
+const connection = await app.connect({
+  target,
+  where: (contextMeta, connectionMeta) =>
+    matchesWorkspace(contextMeta) && acceptsTransport(connectionMeta),
+});
+```
+
+`matchesWorkspace` 和 `acceptsTransport` 是应用根据适配器模型定义的判断函数。
+连接必须同时匹配目标地址和筛选条件。不匹配时，Nexus 不会搜索其他地址或重新发起连接。
+
+筛选条件只在获取连接时执行。后续调用使用已选定的会话，不会重新检查这些条件。
+连接准入和逐次调用的授权由[策略](/nexus/docs/auth-and-policy/)负责。
+
+## 等待对端连接 [#wait-for-a-peer-to-connect]
+
+当另一个上下文将建立连接时省略 `target`：
+
+```ts
+const connection = await app.connect({
+  where: matchesWorkspace,
+  timeout: 10_000,
+});
+```
+
+这会被动等待恰好一个匹配的已就绪会话，不会主动连接或搜索服务。
+有多个匹配项时，会返回歧义错误。要取得当前所有匹配项，请参阅[多个连接](/nexus/docs/multiple-connections/)。
+
+## 启动期间连接 [#connect-during-startup]
+
+Endpoint 配置中的 `connectTo` 列出启动监听后要各尝试连接一次的精确目标：
+
+```ts
+app.configure({
+  endpoint: { ...endpointConfig, connectTo: [target] },
+});
+```
+
+`endpointConfig` 是适配器的 Endpoint 配置。标准适配器辅助函数也支持 `connectTo`。
+启动时的连接尝试不需要 Token，也不等待服务提供者出现；`ready()` 不会等待这些尝试完成。失败会记入日志。
+Nexus 不会自动重连。未配置该列表时，不会在启动时主动连接；合并配置时，`[]` 可清空继承的列表。
+
+如果父上下文负责创建子上下文，应由父上下文先启动监听。随后子上下文向父上下文发起一次连接，父上下文被动等待即可。
+
+## 等待与所有权 [#waiting-and-ownership]
+
+并发获取连接时，可以共享同一次连接尝试。超时或通过 `signal` 中止，只会结束当前调用方的等待，不会关闭共享会话。
+超时限制和取消行为请参阅[错误和超时](/nexus/docs/error-handling/)。
+
+连接由运行时持有，丢弃本地句柄不会断开连接。
+`connection.disconnect()` 则会结束整个会话，影响它的所有使用者。
+参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。

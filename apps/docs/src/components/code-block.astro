@@ -1,5 +1,6 @@
 ---
 import { CodeExample } from "./code-example";
+import { localeFromPath } from "../lib/i18n";
 
 const { className, class: classValue, style, ...props } = Astro.props;
 const html = await Astro.slots.render("default");
@@ -25,5 +26,6 @@ const styles =
   className={className ?? classValue}
   style={styles}
   html={html}
+  locale={localeFromPath(Astro.url.pathname)}
   client:load
 />

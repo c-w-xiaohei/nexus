@@ -1,0 +1,154 @@
+---
+title: 概念
+description: 理解 Node IPC 中守护进程、客户端、套接字和会话的关系。
+---
+
+本页解释适配器心智模型。如果希望先看可运行代码再了解概念，请先阅读[快速开始](/nexus/docs/node-ipc/quick-start/)。
+
+## 守护进程与客户端 [#daemon-and-client-roles]
+
+Node IPC 适配器连接一个本地守护进程与一个或多个本地客户端。
+
+守护进程：
+
+- 监听文件系统 Unix 套接字
+- 提供 Nexus 服务
+- 管理套接字生命周期
+
+客户端：
+
+- 连接守护进程的套接字
+- 从已获取的连接取得 Nexus 服务代理
+- 调用守护进程提供的服务
+
+两端都是普通的 Nexus 运行时，适配器负责端点连接和元数据。
+
+### 客户端提供服务与启动连接 [#client-provided-services-and-startup-dials]
+
+客户端也可以向守护进程提供服务。如果客户端由守护进程创建，应先启动监听，再创建客户端进程，并通过 `daemonNexus.connect({ where, timeout: 10_000 })` 被动等待连接。
+
+```ts
+usingNodeIpcClient({
+  appId: "worker-B",
+  connectTo: [{ context: "node-ipc-daemon", appId: "owner-A" }],
+}).provide(WorkerToken, workerService);
+```
+
+在 `where` 中匹配新客户端的唯一身份。被动获取等待的是已授权且就绪的会话，不会发现服务提供者，也不只是等待套接字打开。
+守护进程需要立即使用服务时，客户端应先注册服务，再发布业务就绪标记。
+`connectTo` 只尝试连接一次，不阻塞 `ready()`，不重试，也不获取服务；守护进程无需为此额外提供服务。
+
+## 连接目标与套接字地址 [#connectiontarget-vs-socket-address]
+
+Nexus 使用 `NodeIpcConnectionTarget` 表示连接目标，由适配器将精确目标映射到套接字地址。
+
+ConnectionTarget 示例：
+
+```ts
+{ context: "node-ipc-daemon", appId: "example-app", instance: "default" }
+```
+
+套接字地址示例：
+
+```ts
+{ kind: "path", path: "/run/user/1000/nexus/example-app/default.sock" }
+```
+
+明确区分：
+
+- 精确目标表达应用想连接到哪里
+- 套接字地址是适配器使用的具体传输地址
+
+应用通常使用导出的 Node IPC 目标类型。如果需要自行管理套接字路径布局，可以提供自定义地址解析器。
+
+## 适配器预认证与 Core 授权策略 [#adapter-pre-auth-vs-core-policy]
+
+共享密钥预认证是适配器的准入检查，在将套接字交给 Nexus Core 之前，验证对端是否持有配置的认证令牌。
+
+Core 策略是 Nexus 的通用授权层，决定对端是否能完成逻辑握手，以及是否允许调用服务；无论是否启用预认证，都可以使用。
+
+常见流程：
+
+1. Node IPC 验证共享密钥
+2. node-ipc 记录 `connection.observed.authenticated`
+3. `policy.canConnect` 检查连接事实
+4. `policy.canCall` 检查服务访问权限
+
+## ContextMeta 与 ConnectionMeta [#contextmeta-vs-connectionmeta]
+
+端点元数据是进程自行声明的逻辑身份。
+
+守护进程的元数据结构：
+
+```ts
+{
+  context: "node-ipc-daemon";
+  appId: string;
+  instance?: string;
+  pid: number;
+}
+```
+
+客户端的元数据结构：
+
+```ts
+{
+  context: "node-ipc-client";
+  appId: string;
+  pid: number;
+}
+```
+
+连接元数据是适配器观察到的数据：
+
+```ts
+{
+  observed: {
+    socket: NodeIpcSocketAddress;
+    authenticated: boolean;
+    authMethod?: "none" | "shared-secret";
+  };
+}
+```
+
+当前适配器不提供经操作系统验证的对端 `pid`、`uid` 或 `gid`。端点元数据中的 `pid` 只是进程自行声明的诊断信息，不能当作对端凭据。
+
+## 消息分帧与序列化 [#framing-vs-serialization]
+
+Unix 套接字传输字节流，适配器需要先恢复消息包边界，再将完整消息包交给 Nexus Core。
+
+帧格式：
+
+```text
+[uint32 byteLength][ArrayBuffer packet bytes]
+```
+
+分帧不定义 Nexus 消息的含义，只用于区分相邻消息包的边界。
+
+序列化仍由 Core 负责。当前 `BinarySerializer` 将紧凑格式的 Nexus JSON 编码为 UTF-8 字节，并非 MessagePack。
+
+## 绑定会话的句柄 [#session-bound-handles]
+
+Nexus 的连接代理和远程引用绑定到创建它们时使用的逻辑连接。
+
+守护进程重启或套接字断开后：
+
+- 旧代理的调用会失败
+- 旧远程引用失效
+- 客户端需要重新连接并获取新的代理
+
+这样会话生命周期的边界始终明确。Core 代理不会自动转向守护进程的新会话。
+
+## 能力边界 [#runtime-boundary]
+
+该适配器用于本地进程间通信，不是跨机器网络适配器。
+
+它不提供：
+
+- 跨机器传输
+- TLS
+- 应用目标到套接字映射之外的全局服务或目标发现
+- 可跨重连持续使用的代理句柄
+- 基于操作系统对端凭据的授权
+
+这些能力可以在其他层扩展，但不属于当前包的契约。

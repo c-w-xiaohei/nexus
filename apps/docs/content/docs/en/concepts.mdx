@@ -287,7 +287,7 @@ Ordinary values travel as serialized data. References keep behavior at its owner
 For a service extending the basic contract with `watch`, the two work together:
 
 ```ts
-const observation = await documents.watch(documentId, change => {
+const observation = await documents.watch(documentId, (change) => {
   panel.apply(change); // Runs here, with this local panel.
 });
 await observation.stop(); // Runs on the remote observation object.

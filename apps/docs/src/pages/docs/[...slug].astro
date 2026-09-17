@@ -8,21 +8,37 @@ import { Steps, Step } from "fumadocs-ui/components/steps";
 import Layout from "../../components/layout.astro";
 import { Docs } from "../../components/docs";
 import { source } from "../../lib/source";
+import { docsUrl, i18n, type Locale } from "../../lib/i18n";
 
 interface Props {
   entry: CollectionEntry<"docs">;
+  locale: Locale;
+  slugs: string[];
 }
 
 export function getStaticPaths() {
   return source.getPages().map((page) => ({
-    params: { slug: page.slugs.join("/") || undefined },
-    props: { entry: page.data.entry },
+    params: {
+      slug:
+        page.url.slice("/nexus/docs/".length).replace(/\/$/, "") || undefined,
+    },
+    props: { entry: page.data.entry, locale: page.locale, slugs: page.slugs },
   }));
 }
 
-const { entry } = Astro.props;
+const { entry, locale, slugs } = Astro.props;
 const { Content, headings } = await render(entry);
-const slugs = Astro.params.slug?.split("/") ?? [];
+const languageUrls = Object.fromEntries(
+  i18n.languages.map((language) => {
+    const page =
+      source.getPage(slugs, language) ?? source.getPage([], language);
+    return [language, page ? docsUrl(page.slugs, language) : undefined];
+  }),
+);
+const alternates = i18n.languages.flatMap((language) => {
+  const page = source.getPage(slugs, language);
+  return page ? [{ locale: language, url: docsUrl(page.slugs, language) }] : [];
+});
 const toc = headings.map((heading) => ({
   depth: heading.depth,
   title: heading.text,
@@ -30,12 +46,19 @@ const toc = headings.map((heading) => ({
 }));
 ---
 
-<Layout title={entry.data.title} description={entry.data.description}>
+<Layout
+  title={entry.data.title}
+  description={entry.data.description}
+  locale={locale}
+  alternates={alternates}
+>
   <Docs
-    tree={source.getPageTree()}
+    tree={source.getPageTree(locale)}
     pathname={Astro.url.pathname}
     slugs={slugs}
     toc={toc}
+    locale={locale}
+    languageUrls={languageUrls}
     client:load
   >
     <h1 class="doc-title">{entry.data.title}</h1>
@@ -56,7 +79,7 @@ const toc = headings.map((heading) => ({
       class="edit-link"
       href={`https://github.com/c-w-xiaohei/nexus/edit/main/apps/docs/${entry.filePath}`}
     >
-      Edit this page on GitHub
+      {locale === "zh-CN" ? "在 GitHub 上编辑此页" : "Edit this page on GitHub"}
     </a>
   </Docs>
 </Layout>

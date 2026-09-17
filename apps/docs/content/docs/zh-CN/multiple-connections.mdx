@@ -1,0 +1,76 @@
+---
+title: 多个连接
+description: 获取固定连接快照，并用 JavaScript 合并每个来源的结果。
+---
+
+需要同时操作多个上下文时，可以使用 `connectMulticast`。它返回成员固定的 `ConnectionCollection`，而不是一个会把每次调用广播给动态成员的代理。
+
+## 捕获当前连接 [#capture-current-connections]
+
+```ts
+const collection = await app.connectMulticast({ where: matchesWorkspace });
+```
+
+本地初始化完成后，它获取当前匹配的已就绪会话快照，不会主动连接或等待新成员。没有匹配项时，返回空集合。
+`matchesWorkspace` 是应用根据适配器元数据定义的筛选函数。
+
+## 获取显式目标 [#acquire-explicit-targets]
+
+```ts
+const collection = await app.connectMulticast({ targets: [first, second] });
+```
+
+`first` 和 `second` 是适配器的精确连接目标，每个目标都必须连接成功。
+任一目标失败，整个集合获取就会失败；已经建立的会话仍由运行时持有，可以继续复用。
+
+如果允许部分目标失败，可以组合单连接的安全接口：
+
+```ts
+const attempts = await Promise.all(
+  targets.map((target) => app.safeConnect({ target })),
+);
+```
+
+## 按来源获取并调用 [#get-and-call-per-source]
+
+集合的 `get` 方法为每个成员返回一个 `{ connection, result }`。
+服务不存在或连接已断开时，对应结果为 `Err`，该成员不会从列表中消失：
+
+```ts
+import { Nexus } from "@nexus-js/core";
+import { DocumentToken } from "./shared";
+
+const results = await Promise.all(
+  collection.get(DocumentToken).map(async ({ connection, result }) => ({
+    connection,
+    result: result.isErr()
+      ? result
+      : await Nexus.safeCall(result.value.summarize("intro")),
+  })),
+);
+
+for (const { connection, result } of results) {
+  if (result.isErr()) console.error(connection.id, result.error.code);
+  else console.log(connection.id, result.value);
+}
+```
+
+每个成功结果中都是普通的单连接代理，调用行为与 `connection.get` 相同。
+获取全部连接与逐个获取服务是两个独立步骤：前者全部成功，不代表每个成员都提供目标服务。
+
+## 显式刷新成员快照 [#refresh-membership-deliberately]
+
+集合成员及其顺序固定。已断开的成员仍保留其中，新连接的上下文不会自动加入。
+再次调用 `collection.get` 会检查这些相同成员当前的服务可用性。
+再次调用 `connectMulticast` 会捕获新的成员快照，并复用已有连接。
+
+周期性执行任务时，应在每轮重新获取快照。如果只需为每个新会话初始化一次，使用 [onConnect](/nexus/docs/proxy-lifecycle/)。
+
+## 选择结果策略 [#choose-a-result-strategy]
+
+原生 `Promise.all`、`allSettled`、`any` 和 `race` 保持标准语义。
+提前返回结果不会取消其他调用，也不会释放它们返回的远程引用。
+
+`Nexus.safeCall` 将 `Err` 作为正常兑现的 Promise 值返回，所以 `Promise.any` 不会把它当成失败。
+要等待第一个成功的 RPC，请将失败时会拒绝的普通调用传给 `Promise.any`，并在映射结果时保留来源连接。
+参阅[错误和超时](/nexus/docs/error-handling/)。

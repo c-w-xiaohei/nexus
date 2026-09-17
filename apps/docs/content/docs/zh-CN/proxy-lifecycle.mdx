@@ -1,0 +1,108 @@
+---
+title: 连接生命周期
+description: 监听连接与身份变化，在断开后获取新的连接句柄。
+---
+
+Connection 是共享会话的句柄。如果应用需要跟踪服务的连接状态，应保留获取该服务时使用的连接句柄。
+
+## 观察已有和新连接 [#observe-existing-and-new-connections]
+
+使用 `onConnect`，为当前已就绪以及今后就绪的每个会话执行一次初始化：
+
+```ts
+import { DocumentToken } from "./shared";
+
+const stopObserving = app.onConnect((connection) => {
+  const acquired = connection.safeGet(DocumentToken);
+  if (acquired.isErr()) {
+    console.error(connection.id, acquired.error.code);
+    return;
+  }
+
+  const stopDisconnect = connection.onDisconnected((reason) => {
+    markSourceOffline(connection.id, reason);
+  });
+
+  void acquired.value.summarize("intro").then(
+    (summary) => {
+      if (connection.status === "connected") {
+        showSummary(connection.id, summary);
+      }
+    },
+    (error) => console.error(connection.id, error),
+  );
+
+  // 如果视图先关闭，由应用的清理逻辑取消这些监听。
+  registerViewCleanup(stopDisconnect);
+});
+```
+
+`app` 已配置；`markSourceOffline`、`showSummary` 和 `registerViewCleanup` 属于应用视图。
+调用 `stopObserving()` 会停止后续通知，但不会撤销已完成的初始化，也不会取消回调中另外注册的监听器。
+
+要筛选对端，使用 `app.onConnect(matchesSource, listener)`。每个订阅对同一个会话最多通知一次；原本不匹配的会话因身份更新而符合条件时，也会收到通知。
+监听器可以在启动前注册，但不会主动建立连接，也不会等待某个特定服务。
+
+## 监听会话中的身份变化 [#observe-one-sessions-identity]
+
+需要响应同一个会话内的身份变化时，使用 `subscribeIdentity`：
+
+```ts
+let wasReady = false;
+
+const stopIdentity = connection.subscribeIdentity((meta) => {
+  const ready = isDocumentSourceReady(meta);
+  if (ready && !wasReady) {
+    void initializeSource(connection).catch(console.error);
+  }
+  wasReady = ready;
+});
+```
+
+`isDocumentSourceReady` 和 `initializeSource` 由应用定义。监听器立即收到当前完整身份信息，随后收到每次被接受的完整更新，即使新旧值相同。
+订阅在断开时结束；已断开的句柄不会再发送身份通知。
+
+框架不会替应用筛选字段，也不会把异步回调排队串行执行。回调返回的清理函数不会被自动调用。
+如何声明字段，请参阅[身份与元数据](/nexus/docs/identity-and-metadata/)。
+
+## 先注册服务，再通知业务就绪 [#publish-before-announcing-business-readiness]
+
+服务依赖异步初始化时，先完成注册，再更新应用定义的就绪字段：
+
+```ts
+app.provide(DocumentToken, documents);
+await app.updateIdentity({ documentsReady: true });
+```
+
+在上下文元数据模型中声明 `documentsReady`。对端可以用 `onConnect(matchesReadySource, listener)` 在符合条件时初始化会话一次。
+如果要跟踪就绪与未就绪之间的反复切换，使用 `subscribeIdentity`。
+
+在同一个有效会话中，先发送的服务目录更新会先于后发送的身份通知生效。
+`updateIdentity` 完成不代表每个对端都已执行相应的应用监听器。就绪标记只是业务声明，`get` 仍会检查实际服务目录。
+
+## 处理断开 [#handle-disconnection]
+
+`connection.status` 是 `"connected"` 或 `"disconnected"`。`onDisconnected` 为每个订阅投递一次终止原因，包括晚注册的订阅。
+原因是 `"local"`、`"remote"` 和 `"protocol"`。
+
+断开时，会话会从路由中移除，并在向应用发送断开通知前清理待完成的调用和通信资源。
+业务资源仍由应用负责清理。单次业务调用被拒绝，不会因此断开会话。
+
+断开后，需要重新获取连接和服务代理：
+
+```ts
+const replacement = await app.connect({ target });
+const documents = replacement.get(DocumentToken);
+```
+
+为避免旧异步任务更新已经替换的视图，应将结果与连接或应用的生命周期版本关联。
+Nexus 不会自动重试、将旧句柄转移到新会话或重放方法调用。
+
+## 显式结束共享会话 [#end-a-shared-session-deliberately]
+
+```ts
+connection.disconnect();
+```
+
+这个操作是幂等的，会影响该会话的所有本地使用者，不等待远程业务确认。
+丢弃句柄、连接集合或根服务代理不会关闭会话。如果视图只想停止监听，应取消自己的订阅并释放自己持有的引用。

@@ -1,0 +1,87 @@
+---
+title: 快速开始
+description: 通过本地 Unix 套接字连接 Nexus 守护进程和客户端。
+---
+
+配置一个提供回显服务的守护进程，再从客户端进程调用它。
+
+## 1. 安装包 [#1-install-packages]
+
+<InstallCommand packages="@nexus-js/core @nexus-js/node-ipc" />
+
+<Callout type="info" title="认证为可选配置">
+  本例使用默认的本地套接字配置，不设置共享密钥。如果不能信任所有本地客户端，
+  应在提供服务前配置适配器预认证。
+</Callout>
+
+## 2. 从共享契约开始 [#2-start-from-a-shared-contract]
+
+两个进程从共享模块导入 `EchoToken`，遵循[共享契约模式](/nexus/docs/getting-started/#define-a-shared-contract)。服务接口声明 `echo(input: string): Promise<string>`。
+
+## 3. 配置守护进程 [#3-configure-the-daemon]
+
+守护进程负责监听端点并提供服务实现。
+
+```ts
+import { usingNodeIpcDaemon } from "@nexus-js/node-ipc";
+import { EchoToken } from "./shared";
+
+usingNodeIpcDaemon({ appId: "example-app" }).provide(EchoToken, {
+  async echo(input) {
+    return `echo:${input}`;
+  },
+});
+```
+
+守护进程通过 `NodeIpcContextMeta` 声明身份。客户端使用精确的 `NodeIpcConnectionTarget` 连接，其中包含 `appId` 和可选的 `instance`。
+
+## 4. 配置客户端 [#4-configure-the-client]
+
+客户端配置主动连接端点，并连接守护进程的精确地址。
+
+```ts
+import { nexus } from "@nexus-js/core";
+import { usingNodeIpcClient } from "@nexus-js/node-ipc";
+import { EchoToken } from "./shared";
+
+usingNodeIpcClient({
+  appId: "example-app",
+});
+
+const connection = await nexus.connect({
+  target: { context: "node-ipc-daemon", appId: "example-app" },
+});
+const echo = connection.get(EchoToken);
+
+console.log(await echo.echo("hello"));
+```
+
+通过 `timeout` 限制获取连接的等待时间；向 `get` 传入 `callTimeout`，可覆盖运行时默认的调用超时：
+
+```ts
+const connection = await nexus.connect({
+  target: {
+    context: "node-ipc-daemon",
+    appId: "example-app",
+  },
+  timeout: 30_000,
+});
+const echo = connection.get(EchoToken, { callTimeout: 5_000 });
+```
+
+## 可选工作流 [#optional-workflows]
+
+- 客户端向守护进程提供服务，并在启动时尝试连接一次：见 [Node IPC 概念](/nexus/docs/node-ipc/concepts/)。
+- 共享密钥预认证及其与 Core 授权策略的组合：见[认证](/nexus/docs/node-ipc/auth/)和[授权](/nexus/docs/auth-and-policy/)。
+
+## 首次失败检查清单 [#first-failure-checklist]
+
+第一次调用失败时依次检查：
+
+1. 守护进程是否仍在运行？
+2. 客户端连接目标中的 `appId` 和 `instance` 是否与守护进程匹配？
+3. 套接字路径是否解析到预期位置？见[寻址](/nexus/docs/node-ipc/addressing/)。
+4. 如果配置了 `authToken`，两端是否使用相同的非空认证令牌？
+5. `policy.canConnect` 是否允许该客户端连接？
+6. `policy.canCall` 是否允许该服务和操作？
+7. 守护进程重启后是否还在使用旧代理？需要重新连接并获取新代理。

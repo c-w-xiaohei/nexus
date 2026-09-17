@@ -1,0 +1,64 @@
+---
+title: React 集成
+description: 在 React 中使用 Nexus 实例和 State。
+---
+
+`@nexus-js/react` 让 React 组件访问 Nexus 实例并使用 Nexus State。
+
+```ts
+import { createNexusScope, NexusProvider, useNexus } from "@nexus-js/react";
+```
+
+同步远程状态请继续阅读[Nexus State React 指南](/nexus/docs/state/react/)。
+
+## `NexusProvider` [#nexusprovider]
+
+向 React 组件树提供 Nexus 实例：
+
+```tsx
+<NexusProvider nexus={nexus}>
+  <App />
+</NexusProvider>
+```
+
+## `useNexus()` [#usenexus]
+
+`useNexus()` 返回最近一层 `NexusProvider` 提供的 Nexus 实例。在 Provider 之外调用会立即报错。
+
+## `createNexusScope()` [#createnexusscope]
+
+应用使用多个适配器时，可以创建带类型约束的 React 作用域。
+作用域可以防止把一个适配器的连接目标或 State StoreToken 误用于另一个适配器的 Nexus 实例：
+
+```tsx
+import { createNexusScope } from "@nexus-js/react";
+import {
+  usingBackgroundScript,
+  type ChromeAdapterModel,
+} from "@nexus-js/chrome";
+
+const ChromeNexus = createNexusScope<ChromeAdapterModel>();
+const chromeNexus = usingBackgroundScript();
+
+function ChromeApp() {
+  return (
+    <ChromeNexus.NexusProvider nexus={chromeNexus}>
+      <App />
+    </ChromeNexus.NexusProvider>
+  );
+}
+```
+
+在对应组件树中使用 `ChromeNexus.useNexus()`。这个作用域还提供 Nexus State 的 Hook 和作用域工厂，见[Nexus State React 指南](/nexus/docs/state/react/)。
+
+## 服务会话 [#service-sessions]
+
+如果界面需要跟踪会话状态，应同时保存 `nexus.connect(...)` 返回的 `Connection` 和服务代理。
+通过 `connection.onDisconnected` 监听断开，并由应用更新状态、获取新的连接和代理；旧代理不会自动切换到新会话。
+React 包不提供服务代理状态 Hook。Core 的监听接口与替换规则见[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+State 的宿主存储是通过 `createNexusStore(...)` 或 `bindNexusStore(...)` 绑定的普通 Zustand 存储。React 使用远程镜像，无需添加 `withNexusState` 中间件。
+
+## Nexus State [#nexus-state]
+
+关于 `createRemoteStoreScope()`、`useRemoteStore()`、`useStoreStatus()`、Zustand 的 `useStore()`，以及 State 的加载、替换和选择器行为，请参阅[Nexus State React 指南](/nexus/docs/state/react/)。

@@ -1,0 +1,78 @@
+---
+title: 连接 API
+description: 连接获取选项、共享 Connection 句柄和固定的 ConnectionCollection。
+---
+
+## 获取连接 [#runtime-acquisition]
+
+```ts
+app.connect(options?): Promise<Connection<M>>
+app.safeConnect(options?): Promise<Result<Connection<M>, ConnectionAcquireError>>
+app.connectMulticast(options?): Promise<ConnectionCollection<M>>
+app.safeConnectMulticast(options?): Promise<Result<ConnectionCollection<M>, ConnectionAcquireError>>
+```
+
+这些是缩略签名；`M` 是配置的适配器模型。
+
+| 选项       | 单连接                           | 连接集合                                     |
+| ---------- | -------------------------------- | -------------------------------------------- |
+| 精确目的地 | `target?: ConnectionTargetOf<M>` | `targets?: readonly ConnectionTargetOf<M>[]` |
+| 约束       | `where?: ConnectionWhere<M>`     | 相同                                         |
+| 等待超时   | `timeout?: number`               | 相同，所有目标共用一个时限                   |
+| 取消       | `signal?: AbortSignal`           | 相同                                         |
+
+指定目标时，会复用已有会话或向该地址发起连接。未指定目标时，单连接获取等待恰好一个匹配会话；集合获取返回当前已就绪会话的快照。
+显式指定集合目标列表时，所有目标都必须成功。同一个会话只会包含一次。
+
+主动连接和连接集合获取的默认超时为 30,000 毫秒；被动单连接获取默认无限等待。显式 `timeout` 必须是正有限数。
+`signal` 只取消当前调用方的等待。参阅[建立连接](/nexus/docs/connections/)。
+
+## Connection [#connection]
+
+| 成员                          | 类型 / 行为                                           |
+| ----------------------------- | ----------------------------------------------------- |
+| `id`                          | 不透明会话 ID                                         |
+| `status`                      | `"connected"` 或 `"disconnected"`                     |
+| `disconnectReason`            | `"local"`、`"remote"`、`"protocol"` 或 undefined      |
+| `contextMeta`                 | 只读的当前对端身份信息                                |
+| `connectionMeta`              | 只读的本地适配器事实                                  |
+| `get<T>(token, options?)`     | 同步返回 `Remote<T, M>` 或抛出异常                    |
+| `safeGet<T>(token, options?)` | 同步返回 `Result<Remote<T, M>, ResourceAcquireError>` |
+| `disconnect()`                | 结束共享会话；幂等                                    |
+| `onDisconnected(listener)`    | 返回取消函数；投递一次终止原因，包括晚注册            |
+| `subscribeIdentity(listener)` | 返回取消函数；连接有效时通知当前身份及后续接受的更新  |
+
+获取选项为 `ResourceOptions = { callTimeout?: number }`。超时覆盖仅作用于返回的句柄，不修改共享 Connection。
+获取时会检查连接是否就绪、选项是否合法和当前服务目录，不会主动连接或等待。
+
+身份监听器接收完整快照，不会跳过值相同的更新。对已断开的句柄注册监听，不会重放身份信息。
+监听器的同步异常会被隔离，异步失败则需应用自行处理。
+
+参阅[连接生命周期](/nexus/docs/proxy-lifecycle/)。
+
+## ConnectionCollection [#connectioncollection]
+
+`connections` 是只读、成员固定且有序的 Connection 句柄列表。`new ConnectionCollection(connections)` 保存传入句柄的快照，并按对象去重；常规连接获取则会复用会话。
+
+`collection.get<T>(token, options?)` 返回：
+
+```ts
+readonly {
+  connection: Connection<M>;
+  result: Result<Remote<T, M>, ResourceAcquireError>;
+}[]
+```
+
+即使服务获取失败，每个成员也有对应结果项。空集合返回 `[]`。
+连接断开或新连接加入不会改变已有集合的成员。集合不提供整体释放、`safeGet` 或多播业务代理。
+参阅[多个上下文](/nexus/docs/multiple-connections/)。
+
+## 监听运行时连接 [#runtime-observation]
+
+```ts
+app.onConnect(listener): () => void
+app.onConnect(where, listener): () => void
+```
+
+每个订阅对同一已就绪且匹配的会话最多通知一次，包括已有会话，以及身份更新后首次符合条件的会话。
+监听不会发起连接，也不等待某个 Token 的服务。取消订阅只阻止后续通知，不关闭会话，也不取消已开始的业务任务。

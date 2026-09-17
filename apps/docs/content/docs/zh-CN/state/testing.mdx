@@ -1,0 +1,151 @@
+---
+title: 测试 Nexus State
+description: 测试 Nexus State 存储、订阅和生命周期行为。
+---
+
+Nexus State 有四个有用的测试层。
+
+## 1. 应用单元测试 [#1-application-unit-tests]
+
+通用的 `createMockNexus()` 配置和 React Provider 示例见[应用测试指南](/nexus/docs/testing/)。本页只介绍 State 特有的测试内容。
+
+测试 Nexus State 应用代码时，优先使用共享的 StoreToken 注册 `createNexusStore(...)` 返回的真实服务提供者，不要手写底层通信服务对象：
+
+```ts
+const mock = createMockNexus();
+const { provider, store } = createNexusStore(counterStore, creator, {
+  snapshot: (local) => ({ count: local.count }),
+  expose: ["increment"],
+});
+
+mock.nexus.configure({
+  providers: [provider],
+  endpoint: {
+    meta: { context: "background" },
+  },
+});
+
+const remote = await connectNexusStore(mock.nexus, counterStore, {
+  target: { context: "background" },
+});
+
+expect(store.getState()).toEqual(remote.getState());
+```
+
+这验证应用与存储服务契约的协作，不覆盖跨运行时的真实消息投递、浏览器扩展行为、断开时序或适配器生命周期。
+
+## 2. 存储运行时测试 [#2-store-runtime-tests]
+
+以下行为适合用针对性的 State 运行时测试验证：
+
+- 宿主运行时行为
+- 版本顺序
+- 握手语义
+- 断开原因分类
+- 动作确认行为
+- 固定发布窗口和待确认快照上限
+- 显式快照投影和动作白名单
+- 销毁绑定后源存储仍可使用
+
+当前示例位于：
+
+- `packages/core/src/state/bind-store.test.ts`
+- `packages/core/src/state/bind-store.creation.test.ts`
+- `packages/core/src/state/bind-store.actions.test.ts`
+- `packages/core/src/state/connect-store.test.ts`
+- `packages/core/src/state/remote-store.test.ts`
+- `packages/core/src/state/protocol.test.ts`
+- `packages/core/src/state/errors.test.ts`
+
+## 3. React 集成接口测试 [#3-react-binding-tests]
+
+以下行为使用 React 测试验证：
+
+- 远程存储作用域的接入
+- `useRemoteStore()` 获取和清理语义
+- 通过 `useStoreStatus` / `Scope.useStatus` 选择生命周期状态
+- `reconnectKey` 变化与引用稳定的 `reconnect()` 方法
+- 旧获取请求晚于新请求完成时，对旧句柄的清理
+- 作用域共享，包括共享重连控制
+- 选择器回退值行为
+- 替换失败后的回退值、获取错误和空状态
+- 目标切换期间持续使用回退值，直到新句柄就绪
+- 选中数据或状态未变的组件，以及只使用动作的组件，不因快照更新而重新渲染
+
+当前示例位于：
+
+- `packages/react/src/react.test.tsx`
+- `packages/react/src/create-remote-store-scope.test.tsx`
+- `packages/react/src/use-store-status.test.tsx`
+- `packages/react/integration/react.integration.test.tsx`（Zustand 使用真实句柄）
+- `packages/react/integration/render-isolation.integration.test.tsx`（分别检查状态发布与断开引起的渲染次数）
+
+## 4. 多上下文集成测试 [#4-multi-context-integration-tests]
+
+这是 Nexus State 跨上下文正确性最重要的层级。
+
+需要证明以下内容时使用集成测试：
+
+- 一个上下文持有宿主存储
+- 多个隔离上下文连接它
+- 更新正确分发给所有订阅者
+- 已断开的上下文停止接收更新
+- 宿主端清理断开客户端留下的远程资源与订阅
+- 重连时创建新的 `RemoteStore` 句柄，而不是复用终态句柄
+- 连接会话变化后必须获取新的 `RemoteStore` 句柄
+
+Hook 的句柄替换行为通过 React 接口测试验证；重启、传输和连接会话行为通过真实多上下文集成测试验证。
+
+当前示例位于：
+
+- `packages/core/integration/state/lifecycle-and-cleanup.integration.test.ts`
+- `packages/core/integration/state/background-restart.integration.test.ts`
+- `packages/core/integration/state/protocol-and-errors.integration.test.ts`
+- `packages/core/integration/state/targeting-and-handoff.integration.test.ts`
+- `packages/core/integration/state/callback-lifecycle.integration.test.ts`
+
+## 一个小型示例测试 [#a-small-example-test]
+
+应用级 Nexus State 测试最有用的断言模式通常是：
+
+```ts
+const remote = await connectNexusStore(nexus, counterStore, options);
+
+expect(remote.getState().count).toBe(0);
+
+await remote.actions.increment(1);
+
+expect(remote.getState().count).toBe(1);
+expect(remote.getStatus().type).toBe("ready");
+```
+
+再添加需要覆盖的失败场景断言，例如：
+
+```ts
+await expect(remote.actions.increment(1)).rejects.toMatchObject({
+  name: "NexusStoreDisconnectedError",
+});
+```
+
+这只是常见的失败断言示例。根据被测路径，也可以断言协议类或连接类错误。
+
+## 推荐策略 [#recommended-strategy]
+
+添加新的 Nexus State 行为时：
+
+1. 只涉及 Nexus 公共接口时，从 `createMockNexus()` 开始
+2. 依赖 State 内部行为时，添加针对性的运行时测试
+3. 影响 Hook 时，添加 React 测试
+4. 涉及用户可见的跨上下文语义时，添加或扩展多上下文集成测试
+
+## 有价值的集成问题 [#good-integration-questions]
+
+可以提出：
+
+- 每个已连接客户端最终是否收敛到相同状态？
+- 断开的客户端是否停止接收快照？
+- 一个上下文销毁后，其余客户端是否继续更新？
+- 已断开的句柄是否明确拒绝动作调用？
+- 会话替换后，应用是否获取新句柄，而不是依赖旧句柄自动恢复？
+
+这些问题比只检查内部记录更有价值。

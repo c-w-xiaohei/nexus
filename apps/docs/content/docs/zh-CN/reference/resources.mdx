@@ -1,0 +1,70 @@
+---
+title: 资源和调用
+description: 远程类型映射、惰性调用结果，以及引用的传递和释放。
+---
+
+## Remote 和 RemoteValue [#remote-and-remotevalue]
+
+`Remote<T, M>` 将服务方法映射为远程调用，将属性映射为只读远程访问路径。
+`Asyncified<T>` 是 `Remote<T>` 的别名。
+
+每个操作产生一个 `RemoteValue<T, M>`：
+
+```ts
+type RemoteValue<T, M extends AdapterModel> = PromiseLike<T> & {
+  readonly connection: Connection<M>;
+  catch<TResult = never>(
+    onRejected?:
+      ((reason: NexusCallError) => TResult | PromiseLike<TResult>) | null,
+  ): Promise<T | TResult>;
+  finally(onFinally?: (() => void) | null): Promise<T>;
+};
+```
+
+首次等待或处理结果时，操作才开始执行。多次等待共享同一次执行结果。单独读取 `then` 或 `connection` 不会触发执行。
+`then`、`catch` 和 `finally` 返回原生 Promise，不再附带来源连接字段。
+
+根服务代理、对象引用和回调句柄本身不是可等待对象。异步函数可以直接返回这些句柄，不会意外触发远程属性读取。
+参阅[调用服务](/nexus/docs/remote-calls/)。
+
+## 保留名称 [#reserved-names]
+
+根代理不会暴露 `then`。根服务仍可定义名为 `catch`、`finally` 和 `connection` 的业务成员。
+
+在嵌套属性路径上，`then`、`catch`、`finally` 和 `connection` 用于本地执行控制和来源信息。
+嵌套远程成员应选择其他名称，或暴露返回预期值的方法。远程赋值不受支持；将写操作建模为方法。
+
+## Nexus.safeCall [#nexussafecall]
+
+```ts
+Nexus.safeCall<T, M>(call: RemoteValue<T, M>): Promise<Result<T, NexusCallError>>
+```
+
+等待一个 Nexus 操作，并以 Result 返回 RPC 结果。它复用该操作的执行，不会重试。
+它既不接受数组，也不接受任意业务 Promise。业务 Result 保留在成功的 RPC Result 内。
+
+## 引用传递 [#reference-transfer]
+
+`app.ref<T extends object>(value)` 返回 `RefWrapper<T>`。
+`app.safeRef(value)` 返回 `Result<RefWrapper<T>, Error>`。
+
+这个标记持有本地对象，供包含它的调用在编码传输时使用。创建标记不会初始化运行时，也不会建立连接。
+服务返回类型声明为 `RefWrapper<T>` 时，调用方得到 `Remote<T, M> & Disposable`。
+普通支持的值作为数据传输；回调自动作为引用传递。
+
+所有权示例见[远程资源](/nexus/docs/remote-resources/)。
+
+## 引用释放 [#reference-release]
+
+| 入口                       | 返回值                           |
+| -------------------------- | -------------------------------- |
+| `Nexus.release(proxy)`     | `void`，释放处理器失败时抛出异常 |
+| `Nexus.safeRelease(proxy)` | `Result<void, Error>`            |
+| `app.release(proxy)`       | `void`，释放处理器失败时抛出异常 |
+| `app.safeRelease(proxy)`   | `Result<void, Error>`            |
+
+静态释放方法不需要访问创建引用的 Nexus 实例。有效引用在本地一旦释放就不可恢复，重复释放无影响；对远端的释放通知尽力发送，不保证送达。
+返回的可释放引用支持 `using`，释放行为相同。
+
+释放适用于远程对象引用和回调，不适用于普通根服务代理。它不会调用业务析构方法、取消其他操作，也不保证对象立即被垃圾回收。
+连接断开会使绑定该会话的句柄失效。

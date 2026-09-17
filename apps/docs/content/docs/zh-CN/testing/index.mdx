@@ -1,0 +1,78 @@
+---
+title: 测试 Nexus 应用
+description: 测试通过 NexusInstance 消费 Nexus 的应用代码。
+---
+
+`@nexus-js/testing` 为通过 `NexusInstance` 消费 Nexus 的应用代码提供用户级单元测试工具。
+
+当组件、hook、消费服务的模块或清理路径需要可注入的 Nexus 实例，而不应启动真实 runtime 上下文、endpoint、transport 或适配器时，使用 `createMockNexus()`。
+
+## 安装 [#install]
+
+<InstallCommand packages="@nexus-js/testing" dev />
+
+## 主要路径 [#main-path]
+
+```ts
+import { createMockNexus } from "@nexus-js/testing";
+import { UserToken, type UserService } from "../shared/user";
+
+const mock = createMockNexus();
+
+const userService: UserService = {
+  async getUser(id) {
+    return { id, name: "Ada" };
+  },
+};
+
+mock.service(UserToken, userService);
+
+const connection = await mock.nexus.connect({
+  target: { context: "background" },
+});
+const user = connection.get(UserToken);
+
+await expect(user.getUser("u1")).resolves.toEqual({ id: "u1", name: "Ada" });
+```
+
+## React 组件 [#react-components]
+
+```tsx
+import { NexusProvider } from "@nexus-js/react";
+import { createMockNexus } from "@nexus-js/testing";
+
+const mock = createMockNexus();
+mock.service(UserToken, userService);
+
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <NexusProvider nexus={mock.nexus}>{children}</NexusProvider>
+);
+```
+
+## 覆盖范围 [#what-this-covers]
+
+- 调用 `nexus.connect(...)` 并从 connection 获取服务的应用代码
+- 通过 `NexusProvider` 接收 Nexus 的 React 组件和 hook
+- 调用 `configure(...)` 的 setup code
+- 调用 `release(...)` 的清理代码
+- connection 或 service acquisition failure 的错误路径
+- 针对已记录调用的断言
+
+## 不覆盖的内容 [#what-this-does-not-cover]
+
+- endpoint 或 transport 行为
+- connection handshake
+- adapter auth、origin、socket、tab、frame 或 runtime-port 行为
+- 真实 disconnect、reconnect、reload 或 daemon restart timing
+- connection lifecycle、collection snapshot 或 identity subscription
+
+这些行为请使用适配器或集成测试。
+
+## 相关指南 [#related-guides]
+
+- 单元测试指南：[单元测试](/nexus/docs/testing/unit/)
+- 包地图：[包](/nexus/docs/packages/)
+- 平台测试边界：[平台](/nexus/docs/platforms/)
+- Nexus State 测试：[Nexus State 测试](/nexus/docs/state/testing/)
+- Iframe 适配器：[Iframe](/nexus/docs/iframe/)
+- Node IPC 测试：[Node IPC 测试](/nexus/docs/node-ipc/testing/)
