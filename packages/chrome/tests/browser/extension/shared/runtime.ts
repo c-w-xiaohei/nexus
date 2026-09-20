@@ -281,17 +281,31 @@ export function fixtureErrorCode(error: unknown): string {
 
 export function sanitizeFixtureError(error: unknown): string {
   try {
-    if (
-      error &&
-      (typeof error === "object" || typeof error === "function") &&
-      typeof (error as { message?: unknown }).message === "string"
-    ) {
-      return sanitizeFixtureText((error as { message: string }).message);
-    }
+    const message = findFixtureErrorMessage(error);
+    if (message) return sanitizeFixtureText(message);
   } catch {
     // Error objects may expose throwing accessors.
   }
   return fixtureErrorCode(error);
+}
+
+function findFixtureErrorMessage(
+  error: unknown,
+  depth = 0,
+): string | undefined {
+  if (
+    !error ||
+    (typeof error !== "object" && typeof error !== "function") ||
+    depth > 4
+  )
+    return undefined;
+  const candidate = error as { message?: unknown; cause?: unknown };
+  if (typeof candidate.message === "string" && candidate.message.length > 0) {
+    if (candidate.message !== "Nexus bootstrap failed.") {
+      return candidate.message;
+    }
+  }
+  return findFixtureErrorMessage(candidate.cause, depth + 1);
 }
 
 export async function initializeBackgroundRun(runId: string): Promise<boolean> {
@@ -308,8 +322,9 @@ export async function sendRunInit(
     readonly nonce: string;
   },
   ui?: {
-    readonly participant: "popup" | "workspace";
+    readonly participant: "popup" | "options" | "workspace";
     readonly sessionId: string;
+    readonly windowId?: number;
   },
 ): Promise<void> {
   if (!isFixtureRunId(runId)) return;

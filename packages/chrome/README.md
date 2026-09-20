@@ -146,6 +146,7 @@ Pure config factories:
 - `createContentScriptConfig(options?)`
 - `createPopupConfig(options?)`
 - `createOptionsPageConfig(options?)`
+- `createSidePanelConfig(options?)`
 - `createDevToolsPageConfig(options?)`
 - `createOffscreenDocumentConfig(options)`
 - `createExtensionPageConfig(meta, options?)`
@@ -154,11 +155,12 @@ Effectful runtime helpers:
 
 - `usingBackgroundScript(options?)` - Configure for background script/service worker
 - `usingContentScript(options?)` - Configure for content script, including visibility metadata updates
-- `usingPopup(options?)` - Configure for popup; pass caller-discovered `tabId` or `windowId` if your app needs them
-- `usingOptionsPage(options?)` - Configure for options page
-- `usingDevToolsPage(options?)` - Configure for devtools page
-- `usingOffscreenDocument(options)` - Configure for offscreen document
-- `usingExtensionPage(meta, options?)` - Configure for a custom extension page connected to background
+- `usingPopup()` - Configure for popup; the helper resolves its current `windowId`
+- `usingOptionsPage()` - Configure the profile's designated options receiver
+- `usingSidePanel()` - Configure the currently running side panel for the current browser window
+- `usingDevToolsPage()` - Configure for devtools; the helper reads the inspected tab
+- `usingOffscreenDocument({ reason })` - Configure for offscreen document
+- `usingExtensionPage(meta, options?)` - Configure for a custom extension page
 
 Pass explicit startup targets as `options.connectTo`. Custom page helpers keep
 arbitrary identity metadata in the first argument and connection options in the
@@ -174,11 +176,48 @@ usingExtensionPage(
 Startup targets are explicit `connectTo` entries and are independent of service
 acquisition; omitting them does not dial.
 
+Built-in helpers identify their receiver from the local Chrome context, while
+callers choose targets independently. Use `chromeTarget.popup({ windowId })`,
+`chromeTarget.sidePanel({ windowId })`, and
+`chromeTarget.devToolsPage({ inspectedTabId })` when exact caller-side routing is
+needed. Use `chromeTarget.optionsPage()` and
+`chromeTarget.offscreenDocument()` for their designated profile receivers. Use
+`chromeTarget.contentFrame({ tabId, frameId })` or
+`chromeTarget.contentDocument({ tabId, documentId })` for native content routing.
+The Side Panel target is window-level; tab-specific/global panel configuration is
+application UI configuration. Ordinary extension pages can also dial exact
+content targets; offscreen documents and content scripts cannot initiate
+`tabs.connect()`. Connections remain bidirectional after acquisition.
+Only one live Options page can own `chromeTarget.optionsPage()`; duplicate
+receivers fail readiness, and a replacement can acquire the target after the
+owner closes.
+
+Opening or creating a built-in page is separate from acquisition. `connect({
+target })` only connects to an existing ready receiver; it does not open Popup,
+Options, Side Panel, or DevTools, create Offscreen, or inject Content.
+
+Routing ownership is split deliberately: applications choose and discover the
+target instance, the Chrome adapter enforces platform capabilities and opens the
+native Port, and Core owns handshake, authorization, Connection lifecycle, RPC,
+and Relay. Targets are routing; ContextMeta is identity; policy remains
+authorization. Built-in pages use their dedicated target constructors, while
+custom extension pages use `chromeTarget.extensionPage({ endpointId })`.
+
+Incoming ports are filtered by versioned destination names before Core receives
+them. Upgrade all peers together: legacy unnamed Nexus ports are ignored. Names
+provide adapter routing, not authentication or Chrome-native unicast.
+
 ### Target Constructors And Predicates
 
 - `chromeTarget.background()` - Exact background target
 - `chromeTarget.contentFrame({ tabId, frameId })` - Exact content-script frame target
 - `chromeTarget.contentDocument({ tabId, documentId })` - Exact content-script document target
+- `chromeTarget.offscreenDocument()` - Singleton offscreen document target
+- `chromeTarget.devToolsPage({ inspectedTabId })` - Exact DevTools page target
+- `chromeTarget.popup({ windowId })` - Exact popup target
+- `chromeTarget.sidePanel({ windowId })` - Exact window-level side-panel target
+- `chromeTarget.optionsPage()` - Designated options-page receiver
+- `chromeTarget.extensionPage({ endpointId })` - Exact application-addressed extension page
 - `whereBackground` - Select background endpoints
 - `whereContentScript` - Select content-script endpoints
 - `whereContentScriptByOrigin(origin)` - Select content scripts by origin
@@ -292,15 +331,15 @@ pnpm --filter @nexus-js/chrome typecheck:browser
 ## Other Contexts
 
 ```typescript
-// Options page
+// Options page. Opening/focusing remains a separate runtime.openOptionsPage() call.
 import { usingOptionsPage } from "@nexus-js/chrome";
 usingOptionsPage();
 
-// DevTools page
+// DevTools page. Its inspected tab is the structural route.
 import { usingDevToolsPage } from "@nexus-js/chrome";
 usingDevToolsPage();
 
-// Offscreen document
+// Offscreen document. It is the singleton per profile; no endpointId is needed.
 import { usingOffscreenDocument } from "@nexus-js/chrome";
 usingOffscreenDocument({ reason: "audio-processing" });
 ```

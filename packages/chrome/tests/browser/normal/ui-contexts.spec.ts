@@ -491,6 +491,181 @@ test("CE-21/22 offscreen lifecycle recreates a distinct provider session", async
   expect(secondSessionId).not.toBe(firstSessionId);
 });
 
+test("Wave 2 popup entrypoint exact target selects a fresh session after close", async ({
+  hostPage,
+  openExtensionPage,
+  dispatchHostCommandAndResult,
+  waitForBarrier,
+}) => {
+  const runId = "wave2-popup-exact-target";
+  await openContent(hostPage, runId, waitForBarrier);
+  // The harness opens the popup entrypoint as a normal extension page; it does
+  // not claim to drive the browser action's transient UI close behavior.
+  const popup = await openExtensionPage("popup", runId);
+
+  const first = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-popup-target"))
+      .value,
+  );
+  expect(first).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: {
+      participant: "popup",
+      sessionId: expect.any(String),
+    },
+  });
+  const firstConnectionId = first?.connectionId;
+  const firstSessionId = first?.receiver?.sessionId;
+  expect(firstConnectionId).toEqual(expect.any(String));
+  expect(firstSessionId).toEqual(expect.any(String));
+
+  await popup.close();
+  const afterClose = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-retained-call"))
+      .value,
+  );
+  expect(afterClose).toMatchObject({ code: "E_CONN_CLOSED" });
+
+  const replacement = await openExtensionPage("popup", runId);
+  const second = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-popup-target"))
+      .value,
+  );
+  expect(second).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "popup", sessionId: expect.any(String) },
+  });
+  expect(second?.connectionId).not.toBe(firstConnectionId);
+  expect(second?.receiver?.sessionId).not.toBe(firstSessionId);
+  await replacement.close();
+});
+
+test("Wave 2 options exact target replaces its session on reload", async ({
+  hostPage,
+  openExtensionPage,
+  dispatchHostCommandAndResult,
+  waitForBarrier,
+}) => {
+  const runId = "wave2-options-exact-target";
+  await openContent(hostPage, runId, waitForBarrier);
+  const options = await openExtensionPage("options", runId);
+
+  const first = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-options-target"))
+      .value,
+  );
+  expect(first).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "options", sessionId: expect.any(String) },
+  });
+
+  await options.reload();
+  const afterReload = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-retained-call"))
+      .value,
+  );
+  expect(afterReload).toMatchObject({ code: "E_CONN_CLOSED" });
+
+  const second = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-options-target"))
+      .value,
+  );
+  expect(second).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "options", sessionId: expect.any(String) },
+  });
+  expect(second?.connectionId).not.toBe(first?.connectionId);
+  expect(second?.receiver?.sessionId).not.toBe(first?.receiver?.sessionId);
+  await options.close();
+});
+
+test("Wave 2 options receiver lock rejects duplicates and permits replacement", async ({
+  hostPage,
+  openExtensionPage,
+  extensionId,
+  dispatchHostCommandAndResult,
+  waitForBarrier,
+}) => {
+  const runId = "wave2-options-duplicate-target";
+  await openContent(hostPage, runId, waitForBarrier);
+  const firstOptions = await openExtensionPage("options", runId);
+  const secondOptions = await hostPage.context().newPage();
+  await secondOptions.goto(
+    `chrome-extension://${extensionId}/options.html?runId=${runId}`,
+  );
+  await expect(secondOptions.locator("[data-status]")).toContainText(
+    "options:error:",
+  );
+  await expect(secondOptions.locator("[data-status]")).toContainText(
+    "already active",
+  );
+
+  const firstOwner = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-options-target"))
+      .value,
+  );
+  expect(firstOwner).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "options", sessionId: expect.any(String) },
+  });
+
+  await firstOptions.close();
+  await secondOptions.close();
+
+  const replacement = await openExtensionPage("options", runId);
+  const replacementOwner = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-options-target"))
+      .value,
+  );
+  expect(replacementOwner).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "options", sessionId: expect.any(String) },
+  });
+  expect(replacementOwner?.connectionId).not.toBe(firstOwner?.connectionId);
+  expect(replacementOwner?.receiver?.sessionId).not.toBe(
+    firstOwner?.receiver?.sessionId,
+  );
+  await replacement.close();
+});
+
+test("Wave 2 offscreen exact target replaces its connection after document close", async ({
+  hostPage,
+  dispatchHostCommandAndResult,
+  waitForBarrier,
+}) => {
+  const runId = "wave2-offscreen-exact-target";
+  await openContent(hostPage, runId, waitForBarrier);
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-create");
+
+  const first = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-offscreen-target"))
+      .value,
+  );
+  expect(first).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "offscreen", sessionId: expect.any(String) },
+  });
+
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-close");
+  const afterClose = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-retained-call"))
+      .value,
+  );
+  expect(afterClose).toMatchObject({ code: "E_CONN_CLOSED" });
+
+  await dispatchHostCommandAndResult(hostPage, runId, "offscreen-create");
+  const second = parsed(
+    (await dispatchHostCommandAndResult(hostPage, runId, "ui-offscreen-target"))
+      .value,
+  );
+  expect(second).toMatchObject({
+    connectionId: expect.any(String),
+    receiver: { participant: "offscreen", sessionId: expect.any(String) },
+  });
+  expect(second?.connectionId).not.toBe(first?.connectionId);
+  expect(second?.receiver?.sessionId).not.toBe(first?.receiver?.sessionId);
+});
+
 async function openContent(
   hostPage: Page,
   runId: string,

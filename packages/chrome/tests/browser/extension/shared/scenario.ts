@@ -37,6 +37,10 @@ export const scenarioCommands = [
   "worker-pending",
   "offscreen-create",
   "offscreen-close",
+  "ui-popup-target",
+  "ui-options-target",
+  "ui-offscreen-target",
+  "ui-retained-call",
   "policy-deny",
   "policy-allow",
   "abort-acquire",
@@ -61,6 +65,13 @@ export const scenarioCommands = [
   "capability-reference-invoke",
   "document-route-facts",
   "pre-ready-port-close",
+  "addressed-call-alpha",
+  "addressed-call-beta",
+  "addressed-call-alpha-twice",
+  "addressed-call-absent",
+  "addressed-direct-alpha",
+  "addressed-retain-alpha",
+  "addressed-invoke-retained",
 ] as const;
 
 export type ScenarioCommand = (typeof scenarioCommands)[number];

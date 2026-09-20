@@ -3,7 +3,9 @@ import type {
   ChromeConnectionTarget,
   ChromeContextMeta,
   ChromeObservedConnectionFacts,
+  ChromePageTarget,
 } from "../types/meta";
+import { chromePortName } from "../ports/chrome-port-name";
 
 const selectedRoutes = new WeakMap<
   ChromeObservedConnectionFacts,
@@ -20,6 +22,9 @@ export function createChromeConnectionMeta(
         ...(sender.tab.windowId === undefined
           ? {}
           : { windowId: sender.tab.windowId }),
+        ...(sender.tab.incognito === undefined
+          ? {}
+          : { incognito: sender.tab.incognito }),
       })
     : undefined;
   const observedSender = sender
@@ -30,6 +35,11 @@ export function createChromeConnectionMeta(
           ? {}
           : { documentId: sender.documentId }),
         ...(sender.url === undefined ? {} : { url: sender.url }),
+        ...(sender.id === undefined ? {} : { id: sender.id }),
+        ...(sender.origin === undefined ? {} : { origin: sender.origin }),
+        ...(sender.documentLifecycle === undefined
+          ? {}
+          : { documentLifecycle: sender.documentLifecycle }),
       })
     : undefined;
   const observed = Object.freeze({
@@ -42,6 +52,9 @@ export function createChromeConnectionMeta(
     ...(sender?.documentId === undefined
       ? {}
       : { documentId: sender.documentId }),
+    ...(sender?.tab?.incognito === undefined
+      ? {}
+      : { incognito: sender.tab.incognito }),
   });
   if (selectedTarget) {
     selectedRoutes.set(observed, snapshotSelectedTarget(selectedTarget));
@@ -52,22 +65,7 @@ export function createChromeConnectionMeta(
 function snapshotSelectedTarget(
   target: ChromeConnectionTarget,
 ): ChromeConnectionTarget {
-  switch (target.kind) {
-    case "background":
-      return Object.freeze({ kind: "background" });
-    case "content-frame":
-      return Object.freeze({
-        kind: "content-frame",
-        tabId: target.tabId,
-        frameId: target.frameId,
-      });
-    case "content-document":
-      return Object.freeze({
-        kind: "content-document",
-        tabId: target.tabId,
-        documentId: target.documentId,
-      });
-  }
+  return Object.freeze({ ...target }) as ChromeConnectionTarget;
 }
 
 export function matchesChromeTarget(
@@ -75,12 +73,23 @@ export function matchesChromeTarget(
   contextMeta: ChromeContextMeta,
   connectionMeta: ChromeConnectionMeta,
 ): boolean {
-  if (target.kind === "background") return contextMeta.context === "background";
+  const selectedRoute = selectedRoutes.get(connectionMeta.observed);
+  if (target.kind === "background") {
+    return selectedRoute
+      ? selectedRoute.kind === "background"
+      : contextMeta.context === "background";
+  }
+  if (isChromePageTarget(target)) {
+    return (
+      selectedRoute !== undefined &&
+      isChromePageTarget(selectedRoute) &&
+      chromePortName.page(selectedRoute) === chromePortName.page(target)
+    );
+  }
   if (contextMeta.context !== "content-script") return false;
 
-  const selectedRoute = selectedRoutes.get(connectionMeta.observed);
   if (selectedRoute) {
-    if (selectedRoute.kind === "background") return false;
+    if (!isChromeContentTarget(selectedRoute)) return false;
     if (selectedRoute.tabId !== target.tabId) {
       return false;
     }
@@ -101,4 +110,23 @@ export function matchesChromeTarget(
       ? connectionMeta.observed.frameId === target.frameId
       : connectionMeta.observed.documentId === target.documentId)
   );
+}
+
+function isChromePageTarget(
+  target: ChromeConnectionTarget,
+): target is ChromePageTarget {
+  return (
+    target.kind !== "background" &&
+    target.kind !== "content-frame" &&
+    target.kind !== "content-document"
+  );
+}
+
+function isChromeContentTarget(
+  target: ChromeConnectionTarget,
+): target is Extract<
+  ChromeConnectionTarget,
+  { kind: "content-frame" | "content-document" }
+> {
+  return target.kind === "content-frame" || target.kind === "content-document";
 }

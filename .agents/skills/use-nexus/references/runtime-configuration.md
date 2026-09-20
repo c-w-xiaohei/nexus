@@ -13,7 +13,7 @@ Prefer adapter helpers for first-party or adapter-provided runtimes.
 ```ts
 usingBackgroundScript();
 usingContentScript();
-usingPopup({ tabId: activeTabId });
+usingPopup();
 usingIframeParent({
   appId: "app",
   frames: [{ frameId: "preview", iframe, origin: "https://child.example" }],
@@ -34,8 +34,34 @@ is no automatic retry or reconnect. Do not infer startup targets from a default
 route or create a dummy service proxy just to connect.
 
 Chrome custom page helpers take `createExtensionPageConfig(meta, options?)` or
-`usingExtensionPage(meta, options?)`. Put `connectTo` in the second argument;
-the first argument is only application-owned identity metadata.
+`usingExtensionPage(meta, options?)`. Put `connectTo` and optional `endpointId` in
+the second argument; the first argument is only application-owned identity
+metadata. Use `chromeTarget.extensionPage({ endpointId })` for those custom pages
+only. Built-in helpers auto-identify their local receiver facts where Chrome
+exposes them: `usingPopup()` resolves its current window, `usingDevToolsPage()`
+reads the inspected tab, `usingOptionsPage()` is the designated profile
+receiver, and `usingOffscreenDocument({ reason })` is the profile singleton.
+`usingSidePanel()` targets the currently running panel for a browser window;
+`chromeTarget.sidePanel({ windowId })` is the caller-side target. Content targets
+are the native exact routes `contentFrame({ tabId, frameId })` and
+`contentDocument({ tabId, documentId })`. Receiver helper identification and
+caller target selection are separate. Targets are routing, ContextMeta is
+identity, and policy remains authorization. The custom endpoint ID is a local
+routing label in the native Port name, not an authentication credential or
+identity.
+
+`connect({ target })` only acquires or dials an existing ready receiver. It does
+not open or create Popup, Options, Side Panel, Offscreen, or DevTools contexts,
+and it does not inject Content Script code. Opening, activation, creation, and
+readiness are separate application or Chrome lifecycle operations.
+
+All Runtime-capable Chrome contexts can dial built-in page targets and custom
+addressed extension pages. Ordinary extension pages can also dial exact content
+frame/document targets using `tabs.connect`; content scripts and offscreen
+documents cannot. Existing connections are bidirectional. Use explicit
+provider-level Relay when an intermediate context is required, not transparent
+target routing. Native Port name filtering belongs to the adapter and does not
+replace Core authorization.
 
 ## Direct Configuration
 

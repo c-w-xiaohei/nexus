@@ -13,6 +13,8 @@ import {
   usingOffscreenDocument,
   usingOptionsPage,
   usingPopup,
+  createSidePanelConfig,
+  usingSidePanel,
 } from "../factory";
 import type {
   ChromeAdapterModel,
@@ -20,6 +22,7 @@ import type {
   ChromeContentScriptMeta,
 } from "./meta";
 import { chromeTarget } from "./meta";
+import { UIClientEndpoint } from "../endpoints/ui-client";
 import {
   Token,
   type AdapterModel,
@@ -53,8 +56,24 @@ const contentConstructor = chromeTarget.contentDocument({
   tabId: 1,
   documentId: "document-1",
 });
+const extensionPageConstructor = chromeTarget.extensionPage({
+  endpointId: "settings",
+});
+const popupConstructor = chromeTarget.popup({ windowId: 1 });
+const optionsConstructor = chromeTarget.optionsPage();
+const devToolsConstructor = chromeTarget.devToolsPage({ inspectedTabId: 1 });
+const offscreenConstructor = chromeTarget.offscreenDocument();
+const sidePanelConstructor = chromeTarget.sidePanel({ windowId: 1 });
+// @ts-expect-error context metadata is not endpoint capability configuration.
+new UIClientEndpoint({ context: "reports" });
 void backgroundConstructor;
 void contentConstructor;
+void extensionPageConstructor;
+void popupConstructor;
+void optionsConstructor;
+void devToolsConstructor;
+void offscreenConstructor;
+void sidePanelConstructor;
 
 const where: ConnectionWhere<ChromeAdapterModel> = (
   _contextMeta,
@@ -69,6 +88,10 @@ void targetAsWhere;
 chromeTarget.contentFrame({ tabId: 1 });
 // @ts-expect-error document targets require a document ID.
 chromeTarget.contentDocument({ tabId: 1 });
+// @ts-expect-error popup targets require a window.
+chromeTarget.popup({});
+// @ts-expect-error side-panel targets require a window.
+chromeTarget.sidePanel({});
 
 const contentMeta: ChromeContentScriptMeta = {
   context: "content-script",
@@ -98,6 +121,8 @@ createBackgroundScriptConfig<AppMeta>({
   app: { feature: "background" },
   connectTo: [contentTarget],
 });
+// @ts-expect-error background cannot dial itself.
+createBackgroundScriptConfig({ connectTo: [backgroundTarget] });
 usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
 const backgroundNexus: NexusInstance<ChromeAdapterModel<AppMeta>> =
   usingBackgroundScript<AppMeta>({ app: { feature: "background" } });
@@ -122,9 +147,11 @@ void backgroundNexus
     return connection.get(otherPingToken);
   });
 createContentScriptConfig<AppMeta>({ app: { feature: "content" } });
+// @ts-expect-error content scripts cannot initiate tabs.connect.
+createContentScriptConfig({ connectTo: [contentTarget] });
 usingContentScript<AppMeta>({ app: { feature: "content" } });
-createPopupConfig<AppMeta>({ app: { feature: "popup" }, tabId: 1 });
-usingPopup<AppMeta>({ app: { feature: "popup" }, windowId: 1 });
+createPopupConfig<AppMeta>({ app: { feature: "popup" } });
+usingPopup<AppMeta>({ app: { feature: "popup" } });
 createOptionsPageConfig<AppMeta>({ app: { feature: "options" } });
 usingOptionsPage<AppMeta>({ app: { feature: "options" } });
 createDevToolsPageConfig<AppMeta>({ app: { feature: "devtools" } });
@@ -132,10 +159,28 @@ usingDevToolsPage<AppMeta>({ app: { feature: "devtools" } });
 createOffscreenDocumentConfig<AppMeta>({
   reason: "audio-processing",
   app: { feature: "offscreen" },
+  connectTo: [backgroundTarget, sidePanelConstructor],
+});
+createOffscreenDocumentConfig({
+  reason: "audio-processing",
+  // @ts-expect-error offscreen documents cannot initiate tabs.connect.
+  connectTo: [contentTarget],
+});
+createOffscreenDocumentConfig({
+  reason: "audio-processing",
+  // @ts-expect-error the singleton offscreen document cannot target itself.
+  connectTo: [offscreenConstructor],
 });
 usingOffscreenDocument<AppMeta>({
   reason: "audio-processing",
   app: { feature: "offscreen" },
+});
+createSidePanelConfig<AppMeta>({
+  app: { feature: "side-panel" },
+  connectTo: [backgroundTarget, contentTarget, extensionPageConstructor],
+});
+usingSidePanel<AppMeta>({
+  app: { feature: "side-panel" },
 });
 
 // @ts-expect-error app is required when TAppMeta is provided.
@@ -170,10 +215,7 @@ createExtensionPageConfig(
   { connectTo: [backgroundTarget] },
 );
 
-createExtensionPageConfig({
-  context: "side-panel",
-  page: "panel.html",
-});
+createSidePanelConfig();
 
 createExtensionPageConfig({
   context: "reports",
@@ -192,16 +234,11 @@ const extensionNexus: NexusInstance<
 });
 void extensionNexus;
 
-createExtensionPageConfig({
-  context: "side-panel",
-  page: "panel.html",
+createSidePanelConfig<AppMeta>({
   app: { feature: "panel" },
 });
 
-usingExtensionPage({
-  context: "side-panel",
-  page: "panel.html",
-});
+usingSidePanel();
 
 // Extension-page app/custom metadata is inference-first. Use `satisfies` at the
 // call site to validate a named app payload shape when needed.

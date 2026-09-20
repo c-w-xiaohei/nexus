@@ -57,6 +57,10 @@ export interface SessionService {
   session(): Promise<string>;
 }
 
+export interface SidePanelService {
+  identity(): Promise<UiReceiverIdentity>;
+}
+
 export interface FixtureAdminService {
   setCallPolicy(denyCalls: boolean): Promise<PolicyState>;
   multicastBoundInvoke(): Promise<MulticastIdentitiesResult | FixtureError>;
@@ -68,6 +72,10 @@ export interface FixtureAdminService {
   identityPinned(): Promise<IdentityResult | FixtureError>;
   createOffscreen(): Promise<OffscreenRequestAcknowledgement>;
   closeOffscreen(): Promise<OffscreenRequestAcknowledgement>;
+  popupTargetCall(): Promise<UiTargetResult | FixtureError>;
+  optionsTargetCall(): Promise<UiTargetResult | FixtureError>;
+  offscreenTargetCall(): Promise<UiTargetResult | FixtureError>;
+  retainedUiCall(): Promise<UiTargetResult | FixtureError>;
 }
 
 export interface RelayAdminService {
@@ -136,6 +144,21 @@ export interface OffscreenRequestAcknowledgement {
   readonly requested: true;
 }
 
+export interface UiTargetResult {
+  readonly connectionId: string;
+  readonly receiver: UiReceiverIdentity;
+}
+
+export interface UiReceiverIdentity {
+  readonly participant: string;
+  readonly sessionId: string;
+}
+
+export interface SidePanelAdminService {
+  sidePanelCall(): Promise<UiTargetResult | FixtureError>;
+  sidePanelRetainedCall(): Promise<UiTargetResult | FixtureError>;
+}
+
 export interface RelayAdminResponse {
   readonly result: RelayAdminResult;
 }
@@ -193,6 +216,9 @@ export const DocumentRouteToken = new Token<DocumentRouteService>(
   "nexus-e2e:document-route",
 );
 export const SessionToken = new Token<SessionService>("nexus-e2e:session");
+export const SidePanelToken = new Token<SidePanelService>(
+  "nexus-e2e:side-panel",
+);
 export const FixtureAdminToken = new Token<FixtureAdminService>(
   "nexus-e2e:fixture-admin",
 );
@@ -201,4 +227,7 @@ export const RelayAdminToken = new Token<RelayAdminService>(
 );
 export const TargetedContentAdminToken = new Token<TargetedContentAdminService>(
   "nexus-e2e:targeted-content-admin",
+);
+export const SidePanelAdminToken = new Token<SidePanelAdminService>(
+  "nexus-e2e:side-panel-admin",
 );

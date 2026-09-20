@@ -1,6 +1,6 @@
 ---
 title: Chrome 扩展
-description: 配置扩展上下文，精确连接后台脚本或指定文档中的内容脚本。
+description: 配置扩展上下文，精确连接后台脚本、内容脚本或应用寻址的扩展页面。
 ---
 
 `@nexus-js/chrome` 用于连接 Chrome 扩展中的各个上下文。使用对应的辅助函数初始化：`usingBackgroundScript()`、`usingContentScript()`、`usingPopup()` 等。
@@ -11,7 +11,7 @@ description: 配置扩展上下文，精确连接后台脚本或指定文档中�
 
 ## 精确连接目标 [#exact-targets]
 
-使用 `chromeTarget` 指定后台脚本、框架或文档的地址：
+使用 `chromeTarget` 指定后台脚本、框架、文档、内置页面或自定义扩展页面：
 
 ```ts
 import { chromeTarget } from "@nexus-js/chrome";
@@ -21,6 +21,12 @@ const exactContent = chromeTarget.contentDocument({
   tabId: 42,
   documentId: "document-1",
 });
+const exactOffscreen = chromeTarget.offscreenDocument();
+const exactPopup = chromeTarget.popup({ windowId: 42 });
+const exactPanel = chromeTarget.sidePanel({ windowId: 42 });
+const exactOptions = chromeTarget.optionsPage();
+const exactDevTools = chromeTarget.devToolsPage({ inspectedTabId: 42 });
+const exactCustomPage = chromeTarget.extensionPage({ endpointId: "settings" });
 ```
 
 例如，应用确定目标文档后，已配置的后台上下文可以连接它并获取服务：
@@ -35,18 +41,110 @@ const documentId = "document-1";
 
 const connection = await backgroundNexus.connect({
   target: chromeTarget.contentDocument({ tabId, documentId }),
-  where: (contextMeta, connectionMeta) =>
-    contextMeta.context === "content-script" &&
-    contextMeta.isVisible === true &&
-    connectionMeta.observed.documentId === documentId,
+  where: (contextMeta) =>
+    contextMeta.context === "content-script" && contextMeta.isVisible === true,
 });
 const capture = connection.get(CaptureToken);
 ```
 
 应用负责选择当前标签页、注入内容脚本，再将得到的地址交给 Nexus。
-`tabId`、`frameId` 和 `documentId` 是平台地址。经过验证的发送方信息通过 `ChromeConnectionMeta` 提供，与对端自行声明的身份分开保存。
+`tabId`、`frameId` 和 `documentId` 是平台地址。经过验证的发送方信息通过 `ChromeConnectionMeta` 提供，与对端自行声明的身份分开保存。Chrome 只在 incoming Port 上提供 `Port.sender`；outgoing 连接选中的目标由 adapter 私下保存，不会伪装成 `where` 可验证的 `observed.documentId`。
 
 内容脚本初始化函数不会自动选择服务所在的连接目标。需要连接后台时，将 `chromeTarget.background()` 传给 `connect`。
+
+## 内置页面与自定义页面 [#built-in-and-custom-pages]
+
+内置页面 receiver helper 会独立识别本地 Chrome 上下文，与 caller 侧 target 选择分开。其他上下文需要主动连接某个实例时，使用对应的精确 target：
+
+| 内置上下文         | Receiver helper                      | Caller target                                                                                            | Caller 侧精确坐标                    |
+| ------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| Background         | `usingBackgroundScript()`            | `chromeTarget.background()`                                                                              | 无                                   |
+| Content Script     | `usingContentScript()`               | `chromeTarget.contentFrame({ tabId, frameId })` 或 `chromeTarget.contentDocument({ tabId, documentId })` | `tabId` 加 `frameId` 或 `documentId` |
+| Popup              | `usingPopup()`                       | `chromeTarget.popup({ windowId })`                                                                       | `windowId`                           |
+| Options Page       | `usingOptionsPage()`                 | `chromeTarget.optionsPage()`                                                                             | 无；profile 指定 receiver            |
+| DevTools Page      | `usingDevToolsPage()`                | `chromeTarget.devToolsPage({ inspectedTabId })`                                                          | `inspectedTabId`                     |
+| Offscreen Document | `usingOffscreenDocument({ reason })` | `chromeTarget.offscreenDocument()`                                                                       | 无；profile 单例                     |
+| Side Panel         | `usingSidePanel()`                   | `chromeTarget.sidePanel({ windowId })`                                                                   | `windowId`                           |
+
+例如，Side Panel 入口不需要自行发明应用路由：
+
+```ts
+const panelNexus = usingSidePanel();
+```
+
+后台、内容脚本或另一个扩展页面使用对应的结构化页面地址连接：
+
+```ts
+const connection = await nexus.connect({
+  target: chromeTarget.sidePanel({ windowId: 42 }),
+});
+```
+
+离屏文档使用单例 target 接收连接：
+
+```ts
+const offscreenNexus = usingOffscreenDocument({
+  reason: "audio-processing",
+});
+
+const connection = await backgroundNexus.connect({
+  target: chromeTarget.offscreenDocument(),
+});
+```
+
+Side Panel helper 会在内部识别当前浏览器窗口中正在运行的 Side Panel。Caller
+侧 target 选择浏览器窗口。Chrome 的 tab-specific/global panel 配置仍属于应用
+UI 配置；Nexus 面向某个窗口中当前运行的 Side Panel receiver，不提供按
+`tabId` 寻址的 Side Panel target。结构化坐标是路由输入，不是身份或授权信息。
+
+其他内置 helper 同样不会要求调用者重复填写 receiver 的路由事实：
+`usingPopup()` 通过 `windows.getCurrent()` 解析当前 `windowId`，
+`usingDevToolsPage()` 读取 `chrome.devtools.inspectedWindow.tabId`，
+`usingContentScript()` 使用 Chrome 提供的 native frame/document 路由。
+`usingOptionsPage()` 表示 profile 指定的 Options receiver，
+`usingOffscreenDocument({ reason })` 表示 profile 单例。helper 的自动识别与
+caller 侧 target 选择是两件独立的事。
+同一时间只有一个 `usingOptionsPage()` receiver 可以持有 profile target；第二个
+Options 页面会明确地在 ready 阶段失败，owner 关闭后 replacement 才能接管。
+
+打开或聚焦 Popup、Options、Side Panel，创建 Offscreen Document，打开 DevTools，
+以及注入 Content Script 都是独立的应用或 Chrome 生命周期操作。
+`connect({ target })` 只获取或拨号到已经创建且 ready 的 receiver，不执行这些操作。
+Popup 每次重新打开都会创建新的 session，旧页面关闭后必须重新连接。
+
+自定义扩展页面没有 adapter 管理的结构化地址。只有 `usingExtensionPage` 或 `createExtensionPageConfig` 使用应用管理的 `endpointId`，并通过 `chromeTarget.extensionPage({ endpointId })` 连接：
+
+```ts
+const settingsNexus = usingExtensionPage(
+  { context: "settings-page" },
+  { endpointId: "settings" },
+);
+
+const settingsConnection = await contentNexus.connect({
+  target: chromeTarget.extensionPage({ endpointId: "settings" }),
+});
+```
+
+连接建立后，页面仍通过 `context: "side-panel"`、`context: "offscreen-document"` 等 ContextMeta 表达远端身份。Target 负责路由，ContextMeta 负责身份，policy 负责授权。
+
+职责边界如下：
+
+- 应用负责选择 caller 侧目标实例：发现精确 target 所需的 `windowId`、`inspectedTabId`、`tabId`、`frameId` 和 `documentId`，只为自定义页面分配 `endpointId`，创建页面并等待页面就绪。Receiver helper 在 Chrome 能提供事实时独立完成本地自动识别。
+- Chrome adapter 负责执行和约束平台路由：将明确的 target 转换为 `runtime.connect()` 或 `tabs.connect()`，并拒绝当前上下文不支持的连接。
+- Nexus Core 负责 native Port 选定后的握手、授权、Connection 生命周期、RPC 和 Relay。
+
+应用必须保证自定义页面的 `endpointId` 唯一。地址只是 native Port name 中的本地路由标签，不是身份或授权凭据。Nexus 不会自动发现或创建缺失的页面。
+
+## 连接能力 [#connection-capabilities]
+
+| 本地上下文                                         | 可以主动连接的目标                                                |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| Background                                         | 精确 Content Frame/Document、内置页面、自定义扩展页面             |
+| ISOLATED Content Script                            | Background、内置页面、自定义扩展页面                              |
+| Popup、Options、Side Panel、DevTools、普通扩展页面 | Background、内置页面、自定义扩展页面、精确 Content Frame/Document |
+| Offscreen Document                                 | Background、内置页面、自定义扩展页面                              |
+
+连接建立后可以双向通信。Content Script 和 Offscreen Document 不能主动调用 `tabs.connect()` 连接 Content Script；需要中间节点时，显式提供 Relay，不会自动进行透明多跳路由。
 
 ## 多个连接 [#multiple-connections]
 
@@ -81,4 +179,8 @@ const outcomes = await Promise.allSettled(
 按框架位置寻址时，使用框架目标；操作必须绑定某一份文档时，使用文档目标。同一流程应保持寻址方式一致：框架目标与文档目标并不等价，交替使用它们访问同一上下文可能建立多个会话。
 页面跳转后，文档目标不会自动指向新文档。
 
-离屏文档也需要显式连接 `chromeTarget.background()`。应用负责调用 `chrome.offscreen.createDocument()` 并确认页面就绪；`usingOffscreenDocument()` 只配置 Nexus，不创建页面。
+离屏文档可以连接 Background 或页面 target。应用负责调用
+`chrome.offscreen.createDocument()` 并确认页面就绪；
+`usingOffscreenDocument({ reason })` 只配置 Nexus，不创建页面。类似地，
+`runtime.openOptionsPage()`、Popup 创建、Side Panel 激活和 DevTools 打开都是独立的
+生命周期操作；target acquisition 不会执行这些操作。

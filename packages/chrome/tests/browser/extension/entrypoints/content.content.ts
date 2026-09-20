@@ -22,6 +22,8 @@ import {
   type WorkspaceCapability,
   type WorkspaceService,
 } from "../shared/contracts";
+import { AddressedAdminToken } from "../shared/addressed-contracts";
+import { AddressedPageToken } from "../shared/addressed-contracts";
 import {
   isPreRouteCommand,
   isScenarioCommand,
@@ -503,7 +505,18 @@ async function runFixtureAdminCommand(
     command !== "identity-pinned" &&
     command !== "offscreen-create" &&
     command !== "offscreen-close" &&
-    command !== "identity-constraint"
+    command !== "ui-popup-target" &&
+    command !== "ui-options-target" &&
+    command !== "ui-offscreen-target" &&
+    command !== "ui-retained-call" &&
+    command !== "identity-constraint" &&
+    command !== "addressed-call-alpha" &&
+    command !== "addressed-call-beta" &&
+    command !== "addressed-call-alpha-twice" &&
+    command !== "addressed-call-absent" &&
+    command !== "addressed-direct-alpha" &&
+    command !== "addressed-retain-alpha" &&
+    command !== "addressed-invoke-retained"
   )
     return false;
   if (command === "identity-constraint") {
@@ -511,6 +524,41 @@ async function runFixtureAdminCommand(
       .connect({ target: chromeTarget.background() })
       .then((connection) => connection.get(TargetedContentAdminToken));
     await reporter.result(JSON.stringify(await admin.identityConstraint()));
+    return true;
+  }
+  if (command === "addressed-direct-alpha") {
+    const connection = await nexus.connect({
+      target: chromeTarget.extensionPage({ endpointId: "alpha" }),
+    });
+    await reporter.result(
+      JSON.stringify(await connection.get(AddressedPageToken).identity()),
+    );
+    return true;
+  }
+  if (
+    command === "addressed-call-alpha" ||
+    command === "addressed-call-beta" ||
+    command === "addressed-call-alpha-twice" ||
+    command === "addressed-call-absent" ||
+    command === "addressed-retain-alpha" ||
+    command === "addressed-invoke-retained"
+  ) {
+    const admin = await nexus
+      .connect({ target: chromeTarget.background() })
+      .then((connection) => connection.get(AddressedAdminToken));
+    const result =
+      command === "addressed-call-alpha"
+        ? await admin.callPage("alpha")
+        : command === "addressed-call-beta"
+          ? await admin.callPage("beta")
+          : command === "addressed-call-alpha-twice"
+            ? await admin.callPageTwice("alpha")
+            : command === "addressed-call-absent"
+              ? await admin.callAbsentPage("alpha")
+              : command === "addressed-retain-alpha"
+                ? await admin.retainPage("alpha")
+                : await admin.invokeRetainedPage();
+    await reporter.result(JSON.stringify(result));
     return true;
   }
   const admin = await nexus
@@ -533,7 +581,15 @@ async function runFixtureAdminCommand(
                   ? await admin.identityPinned()
                   : command === "offscreen-create"
                     ? await admin.createOffscreen()
-                    : await admin.closeOffscreen();
+                    : command === "offscreen-close"
+                      ? await admin.closeOffscreen()
+                      : command === "ui-popup-target"
+                        ? await admin.popupTargetCall()
+                        : command === "ui-options-target"
+                          ? await admin.optionsTargetCall()
+                          : command === "ui-offscreen-target"
+                            ? await admin.offscreenTargetCall()
+                            : await admin.retainedUiCall();
   await reporter.result(JSON.stringify(result));
   return true;
 }

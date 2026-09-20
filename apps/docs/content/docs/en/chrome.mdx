@@ -1,6 +1,6 @@
 ---
 title: Chrome Extension
-description: Configure extension contexts and target background scripts or content documents.
+description: Configure extension contexts and target background scripts, content documents, or addressed extension pages.
 ---
 
 `@nexus-js/chrome` connects Chrome extension contexts. Configure each participating
@@ -12,9 +12,10 @@ context with its helper: `usingBackgroundScript()`, `usingContentScript()`,
 The [getting started guide](/nexus/docs/getting-started/) walks through a shared
 contract, background provider, and content-script caller.
 
-## Exact Targets
+## Exact Targets [#exact-targets]
 
-Use `chromeTarget` to address a background script, frame, or document:
+Use `chromeTarget` to address a background script, frame, document, built-in page,
+or custom extension page:
 
 ```ts
 import { chromeTarget } from "@nexus-js/chrome";
@@ -24,6 +25,12 @@ const exactContent = chromeTarget.contentDocument({
   tabId: 42,
   documentId: "document-1",
 });
+const exactOffscreen = chromeTarget.offscreenDocument();
+const exactPopup = chromeTarget.popup({ windowId: 42 });
+const exactPanel = chromeTarget.sidePanel({ windowId: 42 });
+const exactOptions = chromeTarget.optionsPage();
+const exactDevTools = chromeTarget.devToolsPage({ inspectedTabId: 42 });
+const exactCustomPage = chromeTarget.extensionPage({ endpointId: "settings" });
 ```
 
 For example, after application code identifies the document, a configured
@@ -39,10 +46,8 @@ const documentId = "document-1";
 
 const connection = await backgroundNexus.connect({
   target: chromeTarget.contentDocument({ tabId, documentId }),
-  where: (contextMeta, connectionMeta) =>
-    contextMeta.context === "content-script" &&
-    contextMeta.isVisible === true &&
-    connectionMeta.observed.documentId === documentId,
+  where: (contextMeta) =>
+    contextMeta.context === "content-script" && contextMeta.isVisible === true,
 });
 const capture = connection.get(CaptureToken);
 ```
@@ -50,13 +55,152 @@ const capture = connection.get(CaptureToken);
 The application owns active-tab selection and content-script injection. Pass the
 resulting address to Nexus. `tabId`, `frameId`, and `documentId` are platform
 addresses; verified sender facts are exposed through `ChromeConnectionMeta`,
-separately from peer-declared identity.
+separately from peer-declared identity. Chrome supplies `Port.sender` on incoming
+ports only. An outgoing selected target is private adapter route state, not an
+independent `observed.documentId` for a `where` predicate to verify.
 
 The content-script helper does not choose a service target. Pass
 `chromeTarget.background()` to `connect` when the content script needs the
 background session.
 
-## Multiple Connections
+## Built-In And Custom Pages [#built-in-and-custom-pages]
+
+Built-in receiver helpers identify their local Chrome context independently from
+caller target selection. Use the matching target constructor when another context
+must actively connect to one instance:
+
+| Built-in context   | Receiver helper                      | Caller target                                                                                            | Caller-owned exact coordinate          |
+| ------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Background script  | `usingBackgroundScript()`            | `chromeTarget.background()`                                                                              | None                                   |
+| Content script     | `usingContentScript()`               | `chromeTarget.contentFrame({ tabId, frameId })` or `chromeTarget.contentDocument({ tabId, documentId })` | `tabId` plus `frameId` or `documentId` |
+| Popup              | `usingPopup()`                       | `chromeTarget.popup({ windowId })`                                                                       | `windowId`                             |
+| Options page       | `usingOptionsPage()`                 | `chromeTarget.optionsPage()`                                                                             | None; designated profile receiver      |
+| DevTools page      | `usingDevToolsPage()`                | `chromeTarget.devToolsPage({ inspectedTabId })`                                                          | `inspectedTabId`                       |
+| Offscreen document | `usingOffscreenDocument({ reason })` | `chromeTarget.offscreenDocument()`                                                                       | None; profile singleton                |
+| Side Panel         | `usingSidePanel()`                   | `chromeTarget.sidePanel({ windowId })`                                                                   | `windowId`                             |
+
+For example, a side-panel entrypoint can provide its service without inventing an
+application route:
+
+```ts
+import { usingSidePanel } from "@nexus-js/chrome";
+import { PanelToken } from "./shared-contracts";
+import { panelService } from "./panel-service";
+
+const panelNexus = usingSidePanel();
+panelNexus.provide(PanelToken, panelService);
+```
+
+From a configured content script, background, or another extension page:
+
+```ts
+import { chromeTarget } from "@nexus-js/chrome";
+import { PanelToken } from "./shared-contracts";
+
+const connection = await contentNexus.connect({
+  target: chromeTarget.sidePanel({ windowId: 42 }),
+});
+const panel = connection.get(PanelToken);
+```
+
+Define `PanelToken` once in shared code; the service implementation imports that
+same contract. The helper identifies the currently running Side Panel from its
+browser window internally. The target selects the browser window from the caller
+side. Chrome tab-specific or global panel configuration remains application UI
+configuration; Nexus targets the running Side Panel endpoint for a window and
+does not expose a tab-specific Side Panel target. Structural coordinates are
+routing inputs, not identity or authorization facts.
+
+The other built-in helpers also identify their receiver independently of caller
+target selection: `usingPopup()` resolves its current `windowId` with
+`windows.getCurrent()`, `usingDevToolsPage()` reads
+`chrome.devtools.inspectedWindow.tabId`, and `usingContentScript()` receives its
+native frame/document route from Chrome. `usingOptionsPage()` is the designated
+profile receiver, while `usingOffscreenDocument({ reason })` is the profile
+singleton. These helpers do not ask callers to repeat those facts as route IDs.
+Only one live `usingOptionsPage()` receiver may own the profile target. A second
+Options page fails readiness explicitly; after the owner closes, a replacement
+can acquire the target.
+
+Opening a popup, opening or focusing options, opening or activating Side Panel,
+creating an offscreen document, opening DevTools, and injecting a content script
+are separate application or Chrome lifecycle operations. `connect({ target })`
+only acquires or dials an already-created, ready receiver; it does not perform
+any of those operations. Popup reopenings create new sessions, so callers must
+reconnect after the old popup closes.
+
+Custom extension pages have no adapter-owned structural address. Keep an
+application-owned `endpointId` only for `usingExtensionPage` or
+`createExtensionPageConfig`, and dial those pages with
+`chromeTarget.extensionPage({ endpointId })`:
+
+```ts
+const settingsNexus = usingExtensionPage(
+  { context: "settings-page" },
+  { endpointId: "settings" },
+);
+
+const settingsConnection = await contentNexus.connect({
+  target: chromeTarget.extensionPage({ endpointId: "settings" }),
+});
+```
+
+Keep custom addresses unique among live custom pages. Applications own custom
+address assignment, discovery, page creation, and readiness. A missing page is
+not opened automatically.
+
+The adapter puts the destination in its native Port name and filters incoming
+ports before handing them to Core. Chrome still distributes `runtime.connect()`
+at extension scope; the name is an adapter routing label, not authentication or
+a Chrome-native unicast guarantee. Unrelated and nonmatching ports are ignored.
+
+The routing responsibilities are intentionally split:
+
+- Application code chooses the target instance: it discovers caller-side
+  `windowId`, `inspectedTabId`, `tabId`, `frameId`, and `documentId` values for
+  exact targets, assigns custom `endpointId` values only to custom pages, starts
+  pages, and waits for readiness. The receiver helper separately auto-identifies
+  its local Chrome context where Chrome exposes that fact.
+- The Chrome adapter enforces platform capabilities and translates an explicit
+  target into `runtime.connect()` or `tabs.connect()`.
+- Nexus Core owns the handshake, authorization, connection lifecycle, RPC, and
+  Relay after the native Port is selected.
+
+Context metadata still identifies the peer after the Nexus handshake. Targets are
+routing, ContextMeta is identity, and policy remains authorization. An offscreen
+entrypoint uses the singleton target and does not accept an application route:
+
+```ts
+const offscreenNexus = usingOffscreenDocument({
+  reason: "audio-processing",
+});
+```
+
+The background connects to that singleton document:
+
+```ts
+const audioConnection = await backgroundNexus.connect({
+  target: chromeTarget.offscreenDocument(),
+});
+```
+
+## Connection Capabilities [#connection-capabilities]
+
+| Local context                                                 | Targets it can dial                                                            |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Background                                                    | Exact content frame/document, built-in page, custom extension page             |
+| ISOLATED content script                                       | Background, built-in page, custom extension page                               |
+| Popup, options, side panel, DevTools, ordinary extension page | Background, built-in page, custom extension page, exact content frame/document |
+| Offscreen document                                            | Background, built-in page, custom extension page                               |
+
+Connections are bidirectional once established. Content scripts and offscreen
+documents cannot call `tabs.connect()` to initiate a content connection. Explicitly
+expose a gateway or [Relay provider](/nexus/docs/relay/) in a tab-capable context
+when an intermediate peer is required. Nexus does not add
+transparent multi-hop targets or force ordinary page-to-content calls through
+the background.
+
+## Multiple Connections [#multiple-connections]
 
 Use `connectMulticast` for a snapshot of already available connections, then get
 the service from each member:
@@ -85,7 +229,7 @@ const outcomes = await Promise.allSettled(
 This assumes the shared `CaptureToken` contract declares `capture()`. Use native
 Promise results directly; a separate multicast proxy or report type is unnecessary.
 
-## Session Lifecycle
+## Session Lifecycle [#session-lifecycle]
 
 Navigation or context teardown invalidates the associated proxies and refs.
 Observe the acquired connection and acquire replacements after the new context
@@ -97,6 +241,13 @@ consistently in a workflow: frame and document targets are distinct, and targeti
 the same context through both may produce multiple sessions. A document target
 does not silently switch to the replacement document after navigation.
 
-Offscreen documents also need explicit `chromeTarget.background()` acquisition.
-Application code owns `chrome.offscreen.createDocument()` and its readiness
-handshake; `usingOffscreenDocument()` configures Nexus but does not create the page.
+Offscreen documents can dial background or page targets. Application code owns
+`chrome.offscreen.createDocument()` and its readiness coordination;
+`usingOffscreenDocument({ reason })` configures Nexus but does not create the
+page. Likewise, `runtime.openOptionsPage()`, popup creation, Side Panel
+activation, and DevTools opening are separate lifecycle operations; target
+acquisition never performs them.
+
+The addressed-port protocol requires all participating contexts to use the same
+adapter protocol version. Upgrade peers together; legacy unnamed Nexus ports are
+not accepted by the addressed protocol.

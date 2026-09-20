@@ -24,6 +24,8 @@ import {
   DocumentRouteToken,
   FixtureAdminToken,
   RelayAdminToken,
+  SidePanelAdminToken,
+  SidePanelToken,
   TargetedContentAdminToken,
   type DocumentReference,
   type DocumentToolService,
@@ -31,8 +33,15 @@ import {
   type RelayAdminResponse,
   type FixtureError,
   type IdentityResult,
+  type UiTargetResult,
+  SessionToken,
   WorkspaceToken,
 } from "../shared/contracts";
+import {
+  AddressedAdminToken,
+  AddressedPageToken,
+  type AddressedPageService,
+} from "../shared/addressed-contracts";
 import {
   activeRunKey,
   backgroundIdentity,
@@ -254,6 +263,19 @@ export default defineBackground(() => {
     multicastTargets: undefined as readonly FixtureChromeTarget[] | undefined,
   };
   const contentRegistry = createContentRegistry();
+  let retainedAddressedConnection:
+    | Awaited<ReturnType<typeof nexus.connect>>
+    | undefined;
+  let retainedUiConnection:
+    | Awaited<ReturnType<typeof nexus.connect>>
+    | undefined;
+  let retainedSidePanelConnection:
+    | Awaited<ReturnType<typeof nexus.connect>>
+    | undefined;
+  const uiRegistry = new Map<
+    "popup" | "options" | "workspace",
+    { readonly sessionId: string; readonly windowId?: number }
+  >();
 
   const nexus = usingBackgroundScript<FixtureAppMeta>({
     app: {
@@ -369,6 +391,14 @@ export default defineBackground(() => {
     identityPinned: invokeCapabilityProxy,
     createOffscreen,
     closeOffscreen,
+    popupTargetCall: () => callUiTarget("popup"),
+    optionsTargetCall: () => callUiTarget("options"),
+    offscreenTargetCall: () => callUiTarget("offscreen"),
+    retainedUiCall,
+  });
+  nexus.provide(SidePanelAdminToken, {
+    sidePanelCall,
+    sidePanelRetainedCall,
   });
   nexus.provide(RelayAdminToken, {
     registerCurrentDocument: async () => handleRelayControl("register"),
@@ -380,6 +410,59 @@ export default defineBackground(() => {
     contentHold: holdContent,
     identityConstraint,
   });
+  nexus.provide(AddressedAdminToken, {
+    callPage: async (endpointId) => {
+      const connection = await nexus.connect({
+        target: chromeTarget.extensionPage({ endpointId }),
+      });
+      return {
+        connectionId: connection.id,
+        ...(await connection.get(AddressedPageToken).identity()),
+      };
+    },
+    callPageTwice: async (endpointId) => {
+      const target = chromeTarget.extensionPage({ endpointId });
+      const [first, second] = await Promise.all([
+        nexus.connect({ target }),
+        nexus.connect({ target }),
+      ]);
+      return [
+        {
+          connectionId: first.id,
+          ...(await first.get(AddressedPageToken).identity()),
+        },
+        {
+          connectionId: second.id,
+          ...(await second.get(AddressedPageToken).identity()),
+        },
+      ];
+    },
+    callAbsentPage: async (endpointId) => {
+      const result = await nexus.safeConnect({
+        target: chromeTarget.extensionPage({ endpointId }),
+        timeout: 500,
+      });
+      if (result.isOk()) {
+        return { code: "E_FIXTURE_UNEXPECTED_CONNECTION" };
+      }
+      return { code: fixtureErrorCode(result.error) };
+    },
+    retainPage: async (endpointId) => {
+      retainedAddressedConnection = await nexus.connect({
+        target: chromeTarget.extensionPage({ endpointId }),
+      });
+      return await retainedAddressedConnection
+        .get(AddressedPageToken)
+        .identity();
+    },
+    invokeRetainedPage: async () => {
+      if (!retainedAddressedConnection)
+        throw new Error("addressed page connection was not retained");
+      return await retainedAddressedConnection
+        .get(AddressedPageToken)
+        .identity();
+    },
+  });
 
   void nexus.ready().then(async () => {
     const stored = await chrome.storage.local.get(`${fixturePrefix}setting`);
@@ -389,6 +472,25 @@ export default defineBackground(() => {
     const durableRun = await chrome.storage.local.get(activeRunKey);
     const runId = durableRun[activeRunKey];
     if (isFixtureRunId(runId)) await ensureRun(runId);
+  });
+
+  chrome.sidePanel.onOpened.addListener((info) => {
+    void runState.reporter?.result(
+      JSON.stringify({
+        type: "sidepanel-opened",
+        path: info.path,
+        windowId: info.windowId,
+      }),
+    );
+  });
+  chrome.sidePanel.onClosed.addListener((info) => {
+    void runState.reporter?.result(
+      JSON.stringify({
+        type: "sidepanel-closed",
+        path: info.path,
+        windowId: info.windowId,
+      }),
+    );
   });
 
   chrome.runtime.onMessage.addListener(
@@ -414,6 +516,12 @@ export default defineBackground(() => {
             const sender = normalizedContentSender(_sender);
             if (message.content && sender) {
               registerContent(message.runId, message.content, sender);
+            }
+            if (message.ui) {
+              uiRegistry.set(message.ui.participant, {
+                sessionId: message.ui.sessionId,
+                windowId: message.ui.windowId,
+              });
             }
           })
           .then(() => sendResponse({ ok: true }))
@@ -967,6 +1075,90 @@ export default defineBackground(() => {
     return { requested: true } as const;
   }
 
+  /** Dial a built-in UI receiver from Background with an exact adapter target. */
+  async function callUiTarget(
+    context: "popup" | "options" | "offscreen",
+  ): Promise<UiTargetResult | FixtureError> {
+    const target =
+      context === "popup"
+        ? popupTarget()
+        : context === "options"
+          ? chromeTarget.optionsPage()
+          : chromeTarget.offscreenDocument();
+    if (!target) return { code: "E_TARGET_UNAVAILABLE" };
+    const connected = await nexus.safeConnect({ target, timeout: 1_000 });
+    if (connected.isErr()) return errorResult(connected.error);
+    retainedUiConnection = connected.value;
+    try {
+      const sessionId = await connected.value.get(SessionToken).session();
+      return {
+        connectionId: connected.value.id,
+        receiver: { participant: context, sessionId },
+      };
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+
+  /** Call the previously selected UI connection to prove terminal retention. */
+  async function retainedUiCall(): Promise<UiTargetResult | FixtureError> {
+    if (!retainedUiConnection) return { code: "E_FIXTURE_CONNECTION_ABSENT" };
+    try {
+      const sessionId = await retainedUiConnection.get(SessionToken).session();
+      return {
+        connectionId: retainedUiConnection.id,
+        receiver: { participant: "retained", sessionId },
+      };
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+
+  /** Acquire the real Chrome side panel by its owning browser window. */
+  async function sidePanelCall(): Promise<UiTargetResult | FixtureError> {
+    const popup = uiRegistry.get("popup");
+    if (popup?.windowId === undefined) return { code: "E_TARGET_UNAVAILABLE" };
+    const connected = await nexus.safeConnect({
+      target: chromeTarget.sidePanel({ windowId: popup.windowId }),
+      timeout: 1_000,
+    });
+    if (connected.isErr()) return errorResult(connected.error);
+    retainedSidePanelConnection = connected.value;
+    try {
+      return {
+        connectionId: connected.value.id,
+        receiver: await connected.value.get(SidePanelToken).identity(),
+      };
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+
+  /** Invoke the retained side-panel connection after Chrome closes its page. */
+  async function sidePanelRetainedCall(): Promise<
+    UiTargetResult | FixtureError
+  > {
+    if (!retainedSidePanelConnection)
+      return { code: "E_FIXTURE_CONNECTION_ABSENT" };
+    try {
+      return {
+        connectionId: retainedSidePanelConnection.id,
+        receiver: await retainedSidePanelConnection
+          .get(SidePanelToken)
+          .identity(),
+      };
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+
+  function popupTarget(): FixtureChromeTarget | undefined {
+    const popup = uiRegistry.get("popup");
+    return popup?.windowId === undefined
+      ? undefined
+      : chromeTarget.popup({ windowId: popup.windowId });
+  }
+
   /** Register, refresh, or reconfigure the document relay provider. */
   async function handleRelayControl(
     operation: "register" | "refresh" | "policy",
@@ -1177,8 +1369,9 @@ type ContentFact = ContentIdentity & {
 };
 
 type UiIdentity = {
-  readonly participant: "popup" | "workspace";
+  readonly participant: "popup" | "options" | "workspace";
   readonly sessionId: string;
+  readonly windowId?: number;
 };
 
 type Control =
@@ -1306,9 +1499,16 @@ function isUiIdentity(value: unknown): value is UiIdentity {
   if (!value || typeof value !== "object") return false;
   const ui = value as Record<string, unknown>;
   return (
-    hasExactKeys(ui, ["participant", "sessionId"]) &&
-    (ui.participant === "popup" || ui.participant === "workspace") &&
-    isFixtureSessionId(ui.sessionId)
+    (hasExactKeys(ui, ["participant", "sessionId"]) ||
+      hasExactKeys(ui, ["participant", "sessionId", "windowId"])) &&
+    (ui.participant === "popup" ||
+      ui.participant === "options" ||
+      ui.participant === "workspace") &&
+    isFixtureSessionId(ui.sessionId) &&
+    (ui.windowId === undefined ||
+      (typeof ui.windowId === "number" &&
+        Number.isSafeInteger(ui.windowId) &&
+        ui.windowId >= 0))
   );
 }
 

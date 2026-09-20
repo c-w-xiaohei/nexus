@@ -5,6 +5,7 @@ import {
   DocumentRelayToken,
   DocumentToolToken,
   RelayAdminToken,
+  SidePanelAdminToken,
   SessionToken,
   WorkspaceToken,
   type DocumentRelayService,
@@ -49,11 +50,21 @@ export async function startPage(
       sessionId: identity.sessionId,
     });
   } else {
+    const windowId =
+      capability === "popup" || capability === "options"
+        ? (await chrome.windows.getCurrent()).id
+        : undefined;
     await sendRunInit(
       identity.runId,
       undefined,
-      capability === "popup" || capability === "workspace"
-        ? { participant: capability, sessionId: identity.sessionId }
+      capability === "popup" ||
+        capability === "options" ||
+        capability === "workspace"
+        ? {
+            participant: capability,
+            sessionId: identity.sessionId,
+            ...(windowId === undefined ? {} : { windowId }),
+          }
         : undefined,
     );
   }
@@ -163,6 +174,8 @@ export async function startPage(
 
   const status = document.querySelector("[data-status]");
   if (status) status.textContent = `${participant}:ready:${identity.sessionId}`;
+  const windowId =
+    capability === "popup" ? (await chrome.windows.getCurrent()).id : undefined;
   let nextCommandSequence = 0;
   let commandQueue = Promise.resolve();
   document.addEventListener("click", (event) => {
@@ -177,6 +190,29 @@ export async function startPage(
       }
     }
     const context = { command, sequence: ++nextCommandSequence };
+
+    if (command === "sidepanel-open" && windowId !== undefined) {
+      const commandReporter = reporter.commandReporter((result) => {
+        if (result.kind !== "result" && result.kind !== "error") return;
+        resultOutput.value = JSON.stringify({
+          kind: result.kind,
+          runId: identity.runId,
+          command: context.command,
+          sequence: context.sequence,
+          participant,
+          sessionId: identity.sessionId,
+          value: result.value,
+        });
+        resultOutput.dataset.sequence = String(context.sequence);
+      });
+      // Do not await anything before this call: Chrome requires the user gesture.
+      void chrome.sidePanel
+        .open({ windowId })
+        .then(() => commandReporter.result(JSON.stringify({ windowId })))
+        .catch((error) => commandReporter.error(sanitizeFixtureError(error)));
+      return;
+    }
+
     commandQueue = commandQueue.then(async () => {
       const commandReporter = reporter.commandReporter((event) => {
         if (event.kind !== "result" && event.kind !== "error") return;
@@ -204,6 +240,7 @@ export async function startPage(
         handles,
         capability,
         unsubscribe,
+        windowId,
       );
     });
   });
@@ -228,8 +265,27 @@ async function runPageCommand(
   },
   capability: "popup" | "options" | "workspace" | "offscreen",
   unsubscribe: (() => void) | undefined,
+  windowId: number | undefined,
 ): Promise<void> {
   try {
+    if (command === "sidepanel-close") {
+      if (windowId === undefined)
+        throw new Error("popup window ID unavailable");
+      await chrome.sidePanel.close({ windowId });
+      await reporter.result(JSON.stringify({ windowId }));
+      return;
+    }
+    if (command === "sidepanel-call" || command === "sidepanel-retained-call") {
+      const admin = await nexus
+        .connect({ target: chromeTarget.background() })
+        .then((connection) => connection.get(SidePanelAdminToken));
+      const result =
+        command === "sidepanel-call"
+          ? await admin.sidePanelCall()
+          : await admin.sidePanelRetainedCall();
+      await reporter.result(JSON.stringify(result));
+      return;
+    }
     if (command === "state-ui-action") {
       if (state) {
         const value = await state.actions.increment();

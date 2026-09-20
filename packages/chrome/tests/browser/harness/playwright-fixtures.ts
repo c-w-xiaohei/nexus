@@ -51,7 +51,7 @@ type Fixture = {
     occurrence?: number,
   ) => Promise<void>;
   readonly openExtensionPage: (
-    entrypoint: "popup" | "options" | "workspace",
+    entrypoint: "popup" | "options" | "workspace" | "addressed" | "sidepanel",
     runId: string,
     query?: Readonly<Record<string, string>>,
   ) => Promise<Page>;
@@ -221,7 +221,11 @@ export const test = base.extend<Fixture>({
         `chrome-extension://${launch.extensionId}/${entrypoint}.html?${search}`,
       );
       await expect(page.locator("[data-status]")).toContainText(
-        `${entrypoint}:ready:`,
+        entrypoint === "addressed"
+          ? "addressed:ready:"
+          : entrypoint === "sidepanel"
+            ? "sidepanel:ready:"
+            : `${entrypoint}:ready:`,
       );
       return page;
     }),

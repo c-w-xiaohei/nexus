@@ -4,6 +4,7 @@ import { BackgroundEndpoint } from "./endpoints/background";
 import { ContentScriptEndpoint } from "./endpoints/content-script";
 import type { ChromeAdapterModel } from "./types/meta";
 import { chromeTarget } from "./types/meta";
+import { chromePortName } from "./ports/chrome-port-name";
 
 interface ContentService {
   identity(): string;
@@ -25,6 +26,7 @@ type Listener<T> = (value: T) => void;
 function createLinkedPorts(options: {
   readonly clientSender?: chrome.runtime.MessageSender;
   readonly serverSender?: chrome.runtime.MessageSender;
+  readonly name: string;
 }) {
   let clientMessageListener: Listener<unknown> | undefined;
   let serverMessageListener: Listener<unknown> | undefined;
@@ -40,6 +42,7 @@ function createLinkedPorts(options: {
   };
 
   const client = {
+    name: options.name,
     sender: options.clientSender,
     postMessage: (message: unknown) =>
       setTimeout(() => serverMessageListener?.(message)),
@@ -54,6 +57,7 @@ function createLinkedPorts(options: {
     disconnect,
   } as unknown as chrome.runtime.Port;
   const server = {
+    name: options.name,
     sender: options.serverSender,
     postMessage: (message: unknown) =>
       setTimeout(() => clientMessageListener?.(message)),
@@ -84,6 +88,7 @@ describe("Chrome exact content-script targets", () => {
     contentConnectListener = undefined;
     runtimeConnect = vi.fn(() => {
       const ports = createLinkedPorts({
+        name: chromePortName.background,
         serverSender: {
           tab: { id: 7 } as chrome.tabs.Tab,
           frameId: 2,
@@ -96,6 +101,7 @@ describe("Chrome exact content-script targets", () => {
     });
     tabsConnect = vi.fn((_tabId: number, _info?: chrome.tabs.ConnectInfo) => {
       const ports = createLinkedPorts({
+        name: chromePortName.contentScript,
         // The content-script peer sees the background sender. The caller-side
         // background port cannot authoritatively identify the content document.
         clientSender: { id: "test-extension" },
@@ -112,6 +118,11 @@ describe("Chrome exact content-script targets", () => {
               backgroundConnectListener = listener;
             else contentConnectListener = listener;
           },
+          removeListener: vi.fn(),
+        },
+        onMessage: {
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
         },
         connect: runtimeConnect,
       },
@@ -204,7 +215,10 @@ describe("Chrome exact content-script targets", () => {
       })
       .then((connection) => connection.get(ContentToken));
     await expect(reusedProxy.identity()).resolves.toBe("tab-8-frame-0");
-    expect(tabsConnect).toHaveBeenCalledWith(8, { frameId: 0 });
+    expect(tabsConnect).toHaveBeenCalledWith(8, {
+      frameId: 0,
+      name: chromePortName.contentScript,
+    });
     expect(tabsConnect).toHaveBeenCalledOnce();
     expect(Reflect.ownKeys(policyConnectionMeta!)).toEqual(["observed"]);
   });
@@ -248,7 +262,10 @@ describe("Chrome exact content-script targets", () => {
       .then((connection) => connection.get(ContentToken));
 
     await expect(contentProxy.identity()).resolves.toBe("content");
-    expect(tabsConnect).toHaveBeenCalledWith(7, { frameId: 3 });
+    expect(tabsConnect).toHaveBeenCalledWith(7, {
+      frameId: 3,
+      name: chromePortName.contentScript,
+    });
   });
 
   it("preserves synchronous document capability failures through public acquisition", async () => {
@@ -278,6 +295,7 @@ describe("Chrome exact content-script targets", () => {
   it("classifies an asynchronous Port disconnect as a handshake failure", async () => {
     tabsConnect = vi.fn((_tabId: number, _info?: chrome.tabs.ConnectInfo) => {
       const ports = createLinkedPorts({
+        name: chromePortName.contentScript,
         clientSender: { id: "test-extension" },
       });
       setTimeout(ports.disconnect);
@@ -352,6 +370,7 @@ describe("Chrome exact content-script targets", () => {
     await expect(freshProxy.identity()).resolves.toBe("content");
     expect(tabsConnect).toHaveBeenCalledWith(7, {
       documentId: "doc-7",
+      name: chromePortName.contentScript,
     });
   });
 });

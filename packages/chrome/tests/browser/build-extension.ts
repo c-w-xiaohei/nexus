@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 
 const fixtureRoot = fileURLToPath(new URL("./extension", import.meta.url));
 export const outputDirectory = join(fixtureRoot, ".output", "chrome-mv3");
-const requiredPermissions = ["storage", "webNavigation", "offscreen", "tabs"];
+const requiredPermissions = [
+  "storage",
+  "webNavigation",
+  "offscreen",
+  "tabs",
+  "sidePanel",
+];
 const requiredHosts = ["http://127.0.0.1:4173/*", "http://127.0.0.1:4174/*"];
 
 export interface BuildValidation {
@@ -27,6 +33,11 @@ export function validateExtensionBuild(
   const popup = asString(action.default_popup, "action.default_popup");
   const options = asRecord(manifest.options_ui, "options_ui");
   const optionsPage = asString(options.page, "options_ui.page");
+  const sidePanel = asRecord(manifest.side_panel, "side_panel");
+  const sidePanelPage = asString(
+    sidePanel.default_path,
+    "side_panel.default_path",
+  );
   const content = asArray(manifest.content_scripts, "content_scripts");
   assert(content.length === 1, "expected one content script declaration");
   const script = asRecord(content[0], "content_scripts[0]");
@@ -41,13 +52,19 @@ export function validateExtensionBuild(
   assertEqual(manifest.permissions, requiredPermissions, "permissions");
   assertEqual(manifest.host_permissions, requiredHosts, "host_permissions");
 
-  for (const file of [worker, popup, optionsPage, ...contentFiles]) {
+  for (const file of [
+    worker,
+    popup,
+    optionsPage,
+    sidePanelPage,
+    ...contentFiles,
+  ]) {
     assert(
       files[file] !== undefined,
       `manifest references missing file: ${file}`,
     );
   }
-  for (const asset of ["workspace.html", "offscreen.html"]) {
+  for (const asset of ["workspace.html", "offscreen.html", "addressed.html"]) {
     assert(files[asset] !== undefined, `missing required asset: ${asset}`);
   }
   for (const [path, source] of Object.entries(files)) {
@@ -86,7 +103,9 @@ function hasPrivateImport(source: string): boolean {
 }
 
 function hasBareImport(source: string): boolean {
-  return /(?:from\s*["']|import\s*["'])(?![./])[^"]+["']/.test(source);
+  return /\bimport\s+(?:[^"'()]+\s+from\s+)?["'](?![./])[^"']+["']/.test(
+    source,
+  );
 }
 
 function isUnsafeOutputPath(path: string): boolean {

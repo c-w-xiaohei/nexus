@@ -8,7 +8,9 @@ import type {
   ChromeConnectionTarget,
   ChromeConnectionMeta,
 } from "../types/meta.js";
-import { ChromePort } from "../ports/chrome-port.js";
+import { ChromePort, connectRuntimePort } from "../ports/chrome-port.js";
+import { chromePortName } from "../ports/chrome-port-name.js";
+import { listenForChromePort } from "../ports/chrome-port-listener.js";
 import {
   createChromeConnectionMeta,
   matchesChromeTarget,
@@ -19,7 +21,7 @@ import {
  * Primarily connects to background script
  */
 export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
-  private connectHandler?: (port: IPort, meta: ChromeConnectionMeta) => void;
+  private stopListening?: () => void;
 
   capabilities = {
     supportsTransferables: false,
@@ -31,15 +33,24 @@ export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
     connectionMeta: ChromeConnectionMeta,
   ): boolean {
     return (
-      target.kind === "background" &&
+      target.kind !== "content-frame" &&
+      target.kind !== "content-document" &&
       matchesChromeTarget(target, contextMeta, connectionMeta)
     );
   }
 
   listen(onConnect: (port: IPort, meta: ChromeConnectionMeta) => void): void {
+    if (this.stopListening) return;
     try {
-      this.connectHandler = onConnect;
-      chrome.runtime.onConnect.addListener(this.handleConnect);
+      const listener = listenForChromePort(
+        chromePortName.contentScript,
+        (port) =>
+          onConnect(
+            new ChromePort(port),
+            createChromeConnectionMeta(port.sender),
+          ),
+      );
+      this.stopListening = listener.stop;
     } catch (error) {
       throw new NexusEndpointListenError(
         `Failed to start listening for connections: ${error instanceof Error ? error.message : String(error)}`,
@@ -52,13 +63,13 @@ export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
     target: ChromeConnectionTarget,
   ): Promise<{ port: IPort; connectionMeta: ChromeConnectionMeta }> {
     try {
-      // Content script typically connects to background
-      if (target.kind === "background") {
-        const port = chrome.runtime.connect();
+      if (
+        target.kind !== "content-frame" &&
+        target.kind !== "content-document"
+      ) {
+        const port = connectRuntimePort(target);
         const chromePort = new ChromePort(port);
-        const connectionMeta = createChromeConnectionMeta(port.sender, {
-          kind: "background",
-        });
+        const connectionMeta = createChromeConnectionMeta(port.sender, target);
         return { port: chromePort, connectionMeta };
       }
 
@@ -77,12 +88,8 @@ export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
     }
   }
 
-  private handleConnect = (port: chrome.runtime.Port) => {
-    if (!this.connectHandler) return;
-
-    const chromePort = new ChromePort(port);
-    const connectionMeta = createChromeConnectionMeta(port.sender);
-
-    this.connectHandler(chromePort, connectionMeta);
-  };
+  close(): void {
+    this.stopListening?.();
+    this.stopListening = undefined;
+  }
 }

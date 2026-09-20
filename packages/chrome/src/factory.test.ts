@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBackgroundScriptConfig,
   createContentScriptConfig,
   createPopupConfig,
+  createOptionsPageConfig,
   createExtensionPageConfig,
   usingBackgroundScript,
   usingContentScript,
@@ -10,9 +11,12 @@ import {
   usingExtensionPage,
   usingOptionsPage,
   usingOffscreenDocument,
+  createSidePanelConfig,
+  usingSidePanel,
 } from "./factory";
 import { nexus } from "@nexus-js/core";
 import type { ChromeContextMeta } from "./types/meta";
+import { chromePortName } from "./ports/chrome-port-name";
 
 const contextlessCustomMeta: ChromeContextMeta<
   never,
@@ -41,6 +45,7 @@ const mockChrome = {
     getManifest: vi.fn(() => ({ version: "1.0.0" })),
     onConnect: {
       addListener: vi.fn(),
+      removeListener: vi.fn(),
     },
     connect: vi.fn(() => ({ ...mockPort, sender: undefined })),
   },
@@ -50,6 +55,7 @@ const mockChrome = {
   },
   windows: {
     WINDOW_ID_CURRENT: 1,
+    getCurrent: vi.fn(async () => ({ id: 456 })),
   },
   devtools: {
     inspectedWindow: {
@@ -57,6 +63,95 @@ const mockChrome = {
     },
   },
 };
+
+type TestLock = { readonly name: string };
+type LockCallback = (lock: TestLock | null) => Promise<unknown> | unknown;
+type PendingLockRequest = {
+  name: string;
+  callback: LockCallback;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  settled: boolean;
+  rejection?: unknown;
+};
+
+function createLockManagerFake() {
+  const heldNames = new Set<string>();
+  const pending: PendingLockRequest[] = [];
+  const active = new Set<Promise<void>>();
+  let deferred = false;
+
+  const settle = async (request: PendingLockRequest): Promise<void> => {
+    if (request.settled) return;
+    request.settled = true;
+    if (request.rejection !== undefined) {
+      request.reject(request.rejection);
+      return;
+    }
+
+    const lock = heldNames.has(request.name) ? null : { name: request.name };
+    if (lock) heldNames.add(request.name);
+    try {
+      request.resolve(await request.callback(lock));
+    } catch (error) {
+      request.reject(error);
+    } finally {
+      if (lock) heldNames.delete(request.name);
+    }
+  };
+
+  const start = (request: PendingLockRequest) => {
+    const task = settle(request);
+    active.add(task);
+    void task.finally(() => active.delete(task));
+  };
+
+  const request = vi.fn(
+    (
+      name: string,
+      _options: { ifAvailable?: boolean },
+      callback: LockCallback,
+    ) => {
+      const promise = new Promise<unknown>((resolve, reject) => {
+        const pendingRequest: PendingLockRequest = {
+          name,
+          callback,
+          resolve,
+          reject,
+          settled: false,
+        };
+        pending.push(pendingRequest);
+        if (!deferred) queueMicrotask(() => start(pendingRequest));
+      });
+      promise.catch(() => undefined);
+      return promise;
+    },
+  );
+
+  return {
+    request,
+    deferRequests: () => {
+      deferred = true;
+    },
+    resolveNext: async () => {
+      const next = pending.find((candidate) => !candidate.settled);
+      if (!next) throw new Error("No pending Web Lock request.");
+      start(next);
+      await Promise.all(active);
+    },
+    rejectNext: async (error: unknown) => {
+      const next = pending.find((candidate) => !candidate.settled);
+      if (!next) throw new Error("No pending Web Lock request.");
+      next.rejection = error;
+      start(next);
+      await Promise.all(active);
+    },
+    waitForIdle: async () => {
+      while (active.size > 0) await Promise.all([...active]);
+    },
+    isHeld: (name: string) => heldNames.has(name),
+  };
+}
 
 // @ts-ignore
 global.chrome = mockChrome;
@@ -81,8 +176,21 @@ Object.defineProperty(global, "document", {
 });
 
 describe("Chrome Factory Functions", () => {
+  const optionsLockName = "nexus.chrome/1/options-page";
+  const listeningEndpoints: Array<{ close(): void }> = [];
+  let locks: ReturnType<typeof createLockManagerFake>;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    locks = createLockManagerFake();
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { locks },
+    });
+  });
+
+  afterEach(() => {
+    for (const endpoint of listeningEndpoints.splice(0)) endpoint.close();
   });
 
   describe("createBackgroundScriptConfig", () => {
@@ -153,8 +261,8 @@ describe("Chrome Factory Functions", () => {
   });
 
   describe("usingPopup", () => {
-    it("is sync and does not query the active tab", () => {
-      const popup = usingPopup({ tabId: 123, windowId: 456 });
+    it("is sync and resolves its route during readiness", () => {
+      const popup = usingPopup();
 
       expect(popup).toBeDefined();
       expect(popup).not.toBeInstanceOf(Promise);
@@ -165,19 +273,52 @@ describe("Chrome Factory Functions", () => {
   describe("createPopupConfig", () => {
     it("keeps startup configuration separate from metadata and the default target", () => {
       const config = createPopupConfig({
-        tabId: 123,
-        windowId: 456,
         connectTo: [],
       });
 
       expect(config.endpoint?.connectTo).toEqual([]);
       expect(config.endpoint?.meta).toEqual({
         context: "popup",
-        tabId: 123,
-        windowId: 456,
       });
       expect(mockChrome.tabs.query).not.toHaveBeenCalled();
     });
+
+    it("derives the receiver route from the popup's current window", async () => {
+      const endpoint = createPopupConfig().endpoint!.implementation;
+      const accept = vi.fn();
+
+      await endpoint.listen?.(accept);
+
+      expect(mockChrome.windows.getCurrent).toHaveBeenCalledOnce();
+      expect(mockChrome.runtime.onConnect.addListener).toHaveBeenCalledOnce();
+
+      const [nativeListener] =
+        mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+      nativeListener({
+        ...mockPort,
+        name: chromePortName.page({ kind: "popup", windowId: 456 }),
+        sender: undefined,
+      });
+
+      expect(accept).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      [undefined, "missing"],
+      [-1, "negative"],
+    ])(
+      "rejects a %s current popup window ID",
+      async (id: number | undefined, _label: string) => {
+        mockChrome.windows.getCurrent.mockResolvedValueOnce({
+          id,
+        } as unknown as { id: number });
+        const endpoint = createPopupConfig().endpoint!.implementation;
+
+        await expect(endpoint.listen?.(vi.fn())).rejects.toThrow(
+          "Chrome did not expose a concrete current window ID.",
+        );
+      },
+    );
   });
 
   describe("createExtensionPageConfig", () => {
@@ -207,6 +348,169 @@ describe("Chrome Factory Functions", () => {
       );
     });
   });
+
+  it("does not use the current-window sentinel as a concrete route", () => {
+    const config = createOptionsPageConfig();
+
+    expect(config.endpoint?.meta).toEqual({
+      context: "options-page",
+    });
+    expect(config.endpoint?.implementation).toBeDefined();
+  });
+
+  describe("Options receiver lock", () => {
+    it("acquires the named Web Lock before becoming ready", async () => {
+      const endpoint = createOptionsPageConfig().endpoint!.implementation;
+      const onConnect = vi.fn();
+      listeningEndpoints.push(endpoint);
+
+      await endpoint.listen?.(onConnect);
+
+      expect(locks.request).toHaveBeenCalledWith(
+        optionsLockName,
+        { ifAvailable: true },
+        expect.any(Function),
+      );
+      expect(locks.isHeld(optionsLockName)).toBe(true);
+
+      const [nativeListener] =
+        mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+      nativeListener({
+        ...mockPort,
+        name: chromePortName.page({ kind: "options-page" }),
+        sender: undefined,
+      });
+
+      expect(onConnect).toHaveBeenCalledOnce();
+    });
+
+    it("rejects a duplicate and does not deliver its Ports to Core", async () => {
+      const owner = createOptionsPageConfig().endpoint!.implementation;
+      const duplicate = createOptionsPageConfig().endpoint!.implementation;
+      const ownerListener = vi.fn();
+      const duplicateListener = vi.fn();
+      listeningEndpoints.push(owner, duplicate);
+
+      await owner.listen?.(ownerListener);
+      const duplicateListening = duplicate.listen?.(duplicateListener);
+      const [duplicateNativeListener] =
+        mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+      duplicateNativeListener({
+        ...mockPort,
+        name: chromePortName.page({ kind: "options-page" }),
+        sender: undefined,
+      });
+
+      await expect(duplicateListening).rejects.toThrow(
+        `Chrome receiver '${optionsLockName}' is already active.`,
+      );
+      expect(duplicateListener).not.toHaveBeenCalled();
+      expect(mockChrome.runtime.onConnect.removeListener).toHaveBeenCalledWith(
+        duplicateNativeListener,
+      );
+    });
+
+    it("releases ownership on close so a replacement can acquire it", async () => {
+      const owner = createOptionsPageConfig().endpoint!.implementation;
+      const replacement = createOptionsPageConfig().endpoint!.implementation;
+      listeningEndpoints.push(owner, replacement);
+
+      await owner.listen?.(vi.fn());
+      expect(locks.isHeld(optionsLockName)).toBe(true);
+
+      owner.close();
+      await locks.waitForIdle();
+      expect(locks.isHeld(optionsLockName)).toBe(false);
+
+      await replacement.listen?.(vi.fn());
+
+      expect(locks.isHeld(optionsLockName)).toBe(true);
+    });
+
+    it("does not leak a pending lock or buffered Port when closed", async () => {
+      locks.deferRequests();
+      const endpoint = createOptionsPageConfig().endpoint!.implementation;
+      const onConnect = vi.fn();
+      listeningEndpoints.push(endpoint);
+      const listening = endpoint.listen?.(onConnect);
+      const [nativeListener] =
+        mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+
+      nativeListener({
+        ...mockPort,
+        name: chromePortName.page({ kind: "options-page" }),
+        sender: undefined,
+      });
+      endpoint.close();
+      await locks.resolveNext();
+      await listening;
+
+      expect(locks.isHeld(optionsLockName)).toBe(false);
+      expect(onConnect).not.toHaveBeenCalled();
+    });
+
+    it("rejects listen and removes the native listener when lock request rejects", async () => {
+      const error = new Error("Web Locks unavailable.");
+      const endpoint = createOptionsPageConfig().endpoint!.implementation;
+      listeningEndpoints.push(endpoint);
+      const listening = endpoint.listen?.(vi.fn());
+      const [nativeListener] =
+        mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+
+      await locks.rejectNext(error);
+      await expect(listening).rejects.toBe(error);
+
+      expect(mockChrome.runtime.onConnect.removeListener).toHaveBeenCalledWith(
+        nativeListener,
+      );
+    });
+  });
+
+  it("creates a side panel without receiver route configuration", () => {
+    const config = createSidePanelConfig();
+
+    expect(config.endpoint?.meta).toEqual({
+      context: "side-panel",
+    });
+    expect(usingSidePanel()).toBeDefined();
+  });
+
+  it("derives the Side Panel receiver route from its current window", async () => {
+    mockChrome.windows.getCurrent.mockResolvedValueOnce({ id: 456 });
+    const endpoint = createSidePanelConfig().endpoint!.implementation;
+    const accept = vi.fn();
+
+    await endpoint.listen?.(accept);
+
+    expect(mockChrome.windows.getCurrent).toHaveBeenCalledOnce();
+
+    const [nativeListener] =
+      mockChrome.runtime.onConnect.addListener.mock.calls.at(-1)!;
+    nativeListener({
+      ...mockPort,
+      name: chromePortName.page({ kind: "side-panel", windowId: 456 }),
+      sender: undefined,
+    });
+
+    expect(accept).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [undefined, "missing"],
+    [-1, "negative"],
+  ])(
+    "rejects a %s current side panel window ID",
+    async (id: number | undefined, _label: string) => {
+      mockChrome.windows.getCurrent.mockResolvedValueOnce({
+        id,
+      } as unknown as { id: number });
+      const endpoint = createSidePanelConfig().endpoint!.implementation;
+
+      await expect(endpoint.listen?.(vi.fn())).rejects.toThrow(
+        "Chrome did not expose a concrete current window ID.",
+      );
+    },
+  );
 
   describe("usingExtensionPage", () => {
     it("configures custom extension page config", () => {

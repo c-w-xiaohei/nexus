@@ -9,6 +9,7 @@ describe("validateExtensionBuild", () => {
         background: { service_worker: "background.js" },
         action: { default_popup: "popup.html" },
         options_ui: { page: "options.html" },
+        side_panel: { default_path: "sidepanel.html" },
         content_scripts: [
           {
             js: ["content.js"],
@@ -18,7 +19,13 @@ describe("validateExtensionBuild", () => {
             world: "ISOLATED",
           },
         ],
-        permissions: ["storage", "webNavigation", "offscreen", "tabs"],
+        permissions: [
+          "storage",
+          "webNavigation",
+          "offscreen",
+          "tabs",
+          "sidePanel",
+        ],
         host_permissions: [
           "http://127.0.0.1:4173/*",
           "http://127.0.0.1:4174/*",
@@ -29,9 +36,12 @@ describe("validateExtensionBuild", () => {
       "popup.js": "export {}",
       "options.html": '<script src="options.js"></script>',
       "options.js": "export {}",
+      "sidepanel.html": '<script src="sidepanel.js"></script>',
+      "sidepanel.js": "export {}",
       "content.js": "const fixture = true;",
       "workspace.html": '<script src="chunks/workspace.js"></script>',
       "offscreen.html": '<script src="chunks/offscreen.js"></script>',
+      "addressed.html": '<script src="chunks/addressed.js"></script>',
     };
 
     expect(validateExtensionBuild(output).manifest).toMatchObject({
@@ -46,6 +56,7 @@ describe("validateExtensionBuild", () => {
         background: { service_worker: "background.js" },
         action: { default_popup: "popup.html" },
         options_ui: { page: "options.html" },
+        side_panel: { default_path: "sidepanel.html" },
         content_scripts: [
           {
             js: ["content.js"],
@@ -55,7 +66,13 @@ describe("validateExtensionBuild", () => {
             world: "ISOLATED",
           },
         ],
-        permissions: ["storage", "webNavigation", "offscreen", "tabs"],
+        permissions: [
+          "storage",
+          "webNavigation",
+          "offscreen",
+          "tabs",
+          "sidePanel",
+        ],
         host_permissions: [
           "http://127.0.0.1:4173/*",
           "http://127.0.0.1:4174/*",
@@ -64,9 +81,11 @@ describe("validateExtensionBuild", () => {
       "background.js": "import '@nexus-js/core'",
       "popup.html": "",
       "options.html": "",
+      "sidepanel.html": "",
       "content.js": "const fixture = true;",
       "workspace.html": "",
       "offscreen.html": "",
+      "addressed.html": "",
     };
 
     expect(() => validateExtensionBuild(output)).toThrow(

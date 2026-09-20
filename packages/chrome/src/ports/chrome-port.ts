@@ -1,4 +1,50 @@
-import type { IPort } from "@nexus-js/core";
+import { NexusEndpointCapabilityError, type IPort } from "@nexus-js/core";
+import type {
+  ChromeBackgroundTarget,
+  ChromeContentDocumentTarget,
+  ChromeContentFrameTarget,
+  ChromePageTarget,
+} from "../types/meta.js";
+import { chromePortName } from "./chrome-port-name.js";
+
+export function connectRuntimePort(
+  target: ChromeBackgroundTarget | ChromePageTarget,
+): chrome.runtime.Port {
+  return chrome.runtime.connect({
+    name:
+      target.kind === "background"
+        ? chromePortName.background
+        : chromePortName.page(target),
+  });
+}
+
+export function connectContentPort(
+  target: ChromeContentFrameTarget | ChromeContentDocumentTarget,
+): chrome.runtime.Port {
+  const connectInfo: chrome.tabs.ConnectInfo = {
+    name: chromePortName.contentScript,
+    ...(target.kind === "content-frame"
+      ? { frameId: target.frameId }
+      : { documentId: target.documentId }),
+  };
+
+  try {
+    return chrome.tabs.connect(target.tabId, connectInfo);
+  } catch (error) {
+    if (
+      target.kind === "content-document" &&
+      /(?:unexpected (?:property|key).*documentId|documentId.*(?:not supported|unsupported|unexpected))/i.test(
+        error instanceof Error ? error.message : String(error),
+      )
+    ) {
+      throw new NexusEndpointCapabilityError(
+        "Chrome tabs.connect() does not support documentId targeting in this runtime.",
+        { target, originalError: error },
+      );
+    }
+    throw error;
+  }
+}
 
 /**
  * Wraps chrome.runtime.Port to implement Nexus IPort interface
