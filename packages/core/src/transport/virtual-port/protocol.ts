@@ -13,6 +13,7 @@ import {
   string,
   unknown,
   variant,
+  type InferOutput,
 } from "valibot";
 import { VirtualPortProtocolError } from "./errors.js";
 
@@ -76,10 +77,8 @@ export namespace VirtualPortProtocol {
     PongMessageSchema,
   ]);
 
-  export type Message = NonNullable<(typeof MessageSchema)["~types"]>["output"];
-  export type DataMessage = NonNullable<
-    (typeof DataMessageSchema)["~types"]
-  >["output"];
+  export type Message = InferOutput<typeof MessageSchema>;
+  export type DataMessage = InferOutput<typeof DataMessageSchema>;
 
   export const safeClassify = (
     message: unknown,

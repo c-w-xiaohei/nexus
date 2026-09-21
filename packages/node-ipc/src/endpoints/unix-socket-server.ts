@@ -4,7 +4,7 @@ import path from "node:path";
 import type { IEndpoint, IPort } from "@nexus-js/core";
 import { Result } from "better-result";
 import { safeParse } from "valibot";
-import { AuthAckSchema, AuthRequestSchema } from "../auth-protocol.js";
+import { AuthRequestSchema, type AuthAck } from "../auth-protocol.js";
 import { NodeIpcError } from "../errors.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import { NodeIpcAddress, type NodeIpcSocketAddress } from "../types/address.js";
@@ -139,14 +139,8 @@ export class UnixSocketServerEndpoint implements IEndpoint<NodeIpcAdapterModel> 
 
     try {
       await readAuthRequest(socket, this.authToken, this.options);
-      const ack = safeParse(AuthAckSchema, { type: "nexus-ipc-auth-ok" });
-      if (!ack.success) {
-        throw new NodeIpcError(
-          "Could not create auth response",
-          "E_IPC_PROTOCOL_ERROR",
-        );
-      }
-      socket.write(JSON.stringify(ack.output) + "\n");
+      const ack: AuthAck = { type: "nexus-ipc-auth-ok" };
+      socket.write(JSON.stringify(ack) + "\n");
       onConnect(
         new UnixSocketPort(socket),
         this.createConnectionMeta(true, "shared-secret"),

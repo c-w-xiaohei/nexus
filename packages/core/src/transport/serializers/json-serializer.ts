@@ -26,9 +26,9 @@ export namespace JsonSerializer {
     if (!parsed.success) {
       if (
         message.type === Message.NexusMessageType.BATCH &&
-        Array.isArray((message as Partial<Message.BatchMessage>).calls)
+        Array.isArray(message.calls)
       ) {
-        const invalidCall = (message as Message.BatchMessage).calls.find(
+        const invalidCall = message.calls.find(
           (call) => !call || typeof call !== "object",
         );
         if (invalidCall !== undefined) {
@@ -62,11 +62,11 @@ export namespace JsonSerializer {
     }
 
     if (message.type === Message.NexusMessageType.BATCH) {
-      const batchMessage = message as Message.BatchMessage;
-      const packedCalls = batchMessage.calls.map((call) =>
-        packMessageWithoutValidation(call),
-      );
-      return ok([batchMessage.type, batchMessage.id, packedCalls]);
+      return ok([
+        message.type,
+        message.id,
+        message.calls.map(packMessageWithoutValidation),
+      ]);
     }
 
     return ok(packMessageWithoutValidation(message));
@@ -94,25 +94,7 @@ export namespace JsonSerializer {
   const packetArrayToMessage = (
     packet: any[],
   ): Result<Message.NexusMessage, NexusProtocolError> => {
-    try {
-      return packetArrayToMessageUnchecked(packet);
-    } catch (error) {
-      return err(
-        createThrownProtocolError(
-          "Failed to validate Nexus-JSON packet",
-          error,
-          {
-            packet,
-          },
-        ),
-      );
-    }
-  };
-
-  const packetArrayToMessageUnchecked = (
-    packet: any[],
-  ): Result<Message.NexusMessage, NexusProtocolError> => {
-    if (!Array.isArray(packet) || packet.length === 0) {
+    if (packet.length === 0) {
       return err(
         new NexusProtocolError("Invalid Nexus-JSON packet: empty array", {
           packet,
@@ -150,9 +132,7 @@ export namespace JsonSerializer {
         );
       }
 
-      const calls: Array<
-        Message.GetMessage | Message.SetMessage | Message.ApplyMessage
-      > = [];
+      const calls: Record<string, unknown>[] = [];
       for (const packedCall of packedCalls) {
         if (!Array.isArray(packedCall)) {
           return err(
@@ -175,12 +155,7 @@ export namespace JsonSerializer {
             ),
           );
         }
-        calls.push(
-          packetToLogicalMessage(packedCall, nestedType) as
-            | Message.GetMessage
-            | Message.SetMessage
-            | Message.ApplyMessage,
-        );
+        calls.push(packetToLogicalMessage(packedCall, nestedType));
       }
       const batch = { type, id, calls };
       const parsed = safeParse(Message.BatchMessageSchema, batch);
@@ -192,7 +167,8 @@ export namespace JsonSerializer {
           }),
         );
       }
-      return ok(batch);
+      // Keep the reconstructed values, including opaque payloads and error extras.
+      return ok(batch as Message.BatchMessage);
     }
 
     const logicalMessage = packetToLogicalMessage(packet, messageType);
@@ -214,34 +190,22 @@ export namespace JsonSerializer {
     packet: any[],
     messageType: Message.NexusMessageType,
   ): Record<string, unknown> => {
-    const structure = MESSAGE_PACKET_STRUCTURE[
-      messageType
-    ] as readonly string[];
-    if (!structure) {
-      throw new NexusProtocolError(
-        `Unknown message type for deserialization: ${messageType}`,
-        { messageType, packet },
-      );
-    }
-
+    const structure = MESSAGE_PACKET_STRUCTURE[messageType];
     const normalizedPacket = normalizeLegacyInvocationPacket(
       messageType,
       packet,
     );
     const logicalMessage: Record<string, unknown> = {};
     structure.forEach((key, index) => {
+      const value = normalizedPacket[index];
       if (
-        index < normalizedPacket.length &&
-        !(
-          key === "invocationServiceName" &&
-          normalizedPacket[index] === LEGACY_INVOCATION_SERVICE_NAME
-        )
-      ) {
-        const value = normalizedPacket[index];
-        if (value !== null || !isNullablePaddingKey(key)) {
-          logicalMessage[key] = value;
-        }
-      }
+        index >= normalizedPacket.length ||
+        (key === "invocationServiceName" &&
+          value === LEGACY_INVOCATION_SERVICE_NAME) ||
+        (value === null && isNullablePaddingKey(key))
+      )
+        return;
+      logicalMessage[key] = value;
     });
 
     return logicalMessage;
@@ -354,9 +318,13 @@ export namespace JsonSerializer {
       return packetArrayToMessage(packetArray);
     } catch (error) {
       return err(
-        createThrownProtocolError("Failed to deserialize JSON packet", error, {
-          packet,
-        }),
+        createThrownProtocolError(
+          "Failed to validate Nexus-JSON packet",
+          error,
+          {
+            packet: packetArray,
+          },
+        ),
       );
     }
   };

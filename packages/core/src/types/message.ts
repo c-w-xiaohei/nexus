@@ -95,41 +95,29 @@ const CapabilitiesSchema: v.GenericSchema<readonly string[]> = v.pipe(
   v.array(v.string()),
   v.readonly(),
 );
-const MessageTypeSchema = v.enum(NexusMessageType);
-const ChunkDataSchema = v.union([v.string(), v.instance(ArrayBuffer)]);
-const MessageBaseSchema = {
-  type: v.number(),
-  id: v.nullable(MessageIdSchema),
-};
-
-/**
- * The base interface for all Nexus messages, containing the type and a
- * potentially nullable message ID.
- */
 // =============================================================================
 // Layer 3: RPC & Service Proxy Messages
 // =============================================================================
 
-/** A request to get a property from a remote resource. */
-export const GetMessageSchema = v.object({
-  ...MessageBaseSchema,
-  type: v.literal(NexusMessageType.GET),
+const InvocationEntries = {
   id: MessageIdSchema,
   resourceId: v.nullable(v.string()),
   path: PathSchema,
   invocationServiceName: v.optional(v.string()),
+};
+
+/** A request to get a property from a remote resource. */
+export const GetMessageSchema = v.object({
+  type: v.literal(NexusMessageType.GET),
+  ...InvocationEntries,
 });
 
 export type GetMessage = v.InferOutput<typeof GetMessageSchema>;
 
 /** A request to set a property on a remote resource. */
 export const SetMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.SET),
-  id: MessageIdSchema,
-  resourceId: v.nullable(v.string()),
-  path: PathSchema,
-  invocationServiceName: v.optional(v.string()),
+  ...InvocationEntries,
   value: AnyValueSchema,
 });
 
@@ -137,12 +125,8 @@ export type SetMessage = v.InferOutput<typeof SetMessageSchema>;
 
 /** A request to apply (call) a remote function or method. */
 export const ApplyMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.APPLY),
-  id: MessageIdSchema,
-  resourceId: v.nullable(v.string()),
-  path: PathSchema,
-  invocationServiceName: v.optional(v.string()),
+  ...InvocationEntries,
   args: v.array(AnyValueSchema),
 });
 
@@ -150,7 +134,6 @@ export type ApplyMessage = v.InferOutput<typeof ApplyMessageSchema>;
 
 /** A notification to release a remote resource, freeing memory. No response is expected. */
 export const ReleaseMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.RELEASE),
   id: v.null_(),
   resourceId: v.string(),
@@ -160,7 +143,6 @@ export type ReleaseMessage = v.InferOutput<typeof ReleaseMessageSchema>;
 
 /** A batch of RPC requests to be executed together for performance. */
 export const BatchMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.BATCH),
   id: MessageIdSchema,
   calls: v.array(
@@ -172,7 +154,6 @@ export type BatchMessage = v.InferOutput<typeof BatchMessageSchema>;
 
 /** A successful response to a request. */
 export const ResMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.RES),
   id: MessageIdSchema,
   result: AnyValueSchema,
@@ -182,7 +163,6 @@ export type ResMessage = v.InferOutput<typeof ResMessageSchema>;
 
 /** An error response to a request. */
 export const ErrMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.ERR),
   id: MessageIdSchema,
   error: SerializedErrorSchema,
@@ -192,7 +172,6 @@ export type ErrMessage = v.InferOutput<typeof ErrMessageSchema>;
 
 /** A batch of responses, corresponding to a BATCH request. */
 export const BatchResMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.BATCH_RES),
   id: MessageIdSchema,
   results: v.array(
@@ -211,7 +190,6 @@ export type BatchResMessage = v.InferOutput<typeof BatchResMessageSchema>;
 
 /** A request to initiate a connection handshake and exchange metadata. */
 export const HandshakeReqMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.HANDSHAKE_REQ),
   id: MessageIdSchema,
   metadata: AnyValueSchema,
@@ -230,7 +208,6 @@ export type HandshakeReqMessage = v.InferOutput<
 
 /** An acknowledgment to a handshake, confirming the connection. */
 export const HandshakeAckMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.HANDSHAKE_ACK),
   id: MessageIdSchema,
   metadata: AnyValueSchema,
@@ -244,7 +221,6 @@ export type HandshakeAckMessage = v.InferOutput<
 
 /** A final confirmation that both sides accepted the handshake. */
 export const HandshakeReadyMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.HANDSHAKE_READY),
   id: MessageIdSchema,
   capabilities: v.optional(CapabilitiesSchema),
@@ -257,7 +233,6 @@ export type HandshakeReadyMessage = v.InferOutput<
 
 /** A rejection of a handshake request due to policy or error. */
 export const HandshakeRejectMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.HANDSHAKE_REJECT),
   id: MessageIdSchema,
   error: SerializedErrorSchema,
@@ -269,7 +244,6 @@ export type HandshakeRejectMessage = v.InferOutput<
 
 /** A notification that an endpoint's metadata has been updated. */
 export const IdentityUpdateMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.IDENTITY_UPDATE),
   id: v.null_(),
   updates: AnyValueSchema,
@@ -281,7 +255,6 @@ export type IdentityUpdateMessage = v.InferOutput<
 
 /** Announces a newly available service on an already negotiated session. */
 export const ProviderAvailableMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.PROVIDER_AVAILABLE),
   id: v.null_(),
   providers: CapabilitiesSchema,
@@ -300,23 +273,21 @@ export type ProviderAvailableMessage = v.InferOutput<
  * This is handled transparently by Layer 1.
  */
 export const ChunkStartMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.CHUNK_START),
   id: MessageIdSchema,
   totalChunks: v.pipe(v.number(), v.finite()),
   originalMessageId: v.nullable(MessageIdSchema),
-  originalMessageType: MessageTypeSchema,
+  originalMessageType: v.enum(NexusMessageType),
 });
 
 export type ChunkStartMessage = v.InferOutput<typeof ChunkStartMessageSchema>;
 
 /** A message containing a single chunk of data for a large message. */
 export const ChunkDataMessageSchema = v.object({
-  ...MessageBaseSchema,
   type: v.literal(NexusMessageType.CHUNK_DATA),
   id: MessageIdSchema,
   chunkIndex: v.pipe(v.number(), v.finite()),
-  chunkData: ChunkDataSchema,
+  chunkData: v.union([v.string(), v.instance(ArrayBuffer)]),
 });
 
 export type ChunkDataMessage = v.InferOutput<typeof ChunkDataMessageSchema>;
@@ -348,17 +319,6 @@ export type NotificationMessage =
   | IdentityUpdateMessage
   | ProviderAvailableMessage;
 
-/**
- * A comprehensive union type representing any possible message that can be
- * processed by the Nexus core.
- */
-export type NexusMessage =
-  | RequestMessage
-  | ResponseMessage
-  | NotificationMessage
-  | ChunkStartMessage
-  | ChunkDataMessage;
-
 /** The single runtime contract for all sixteen framework message variants. */
 export const NexusMessageSchema = v.variant("type", [
   GetMessageSchema,
@@ -378,6 +338,8 @@ export const NexusMessageSchema = v.variant("type", [
   ChunkStartMessageSchema,
   ChunkDataMessageSchema,
 ]);
+
+export type NexusMessage = v.InferOutput<typeof NexusMessageSchema>;
 
 // =============================================================================
 // Type-level Validation for Protocol-Serializer Consistency

@@ -3,7 +3,7 @@ import { Result } from "better-result";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { NexusStoreProtocolError } from "./errors";
-import type { RemoteActions, StoreValidationSchema } from "./contract";
+import type { RemoteActions } from "./contract";
 
 const snapshotEntries = {
   storeInstanceId: v.string(),
@@ -68,7 +68,7 @@ export type SyncEnvelope<S = unknown, Store extends object = object> =
 
 /** Parses framework-owned values and preserves Valibot's parsed output. */
 export const safeParsePayload = <T>(
-  schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>,
+  schema: v.GenericSchema<unknown, T>,
   value: unknown,
   message: string,
 ): Result<T, NexusStoreProtocolError> =>
@@ -76,6 +76,8 @@ export const safeParsePayload = <T>(
     try: () => {
       const parsed = v.safeParse(schema, value);
       if (!parsed.success) throw new TypeError("Schema validation failed.");
+      // Box outputs so Result.try does not treat a Promise-valued payload as
+      // asynchronous parsing.
       return { data: parsed.output };
     },
     catch: (cause) => new NexusStoreProtocolError(message, { cause }),
@@ -113,7 +115,7 @@ export const safeValidateValue = <Output>(
 /** Validate object-shaped state without replacing the received wire value. */
 export const safeValidateState = <TState extends object>(
   state: unknown,
-  schema: StoreValidationSchema<TState> | undefined,
+  schema: StandardSchemaV1<unknown, TState> | undefined,
   message: string,
 ): Result<TState, NexusStoreProtocolError> => {
   if (typeof state !== "object" || state === null)

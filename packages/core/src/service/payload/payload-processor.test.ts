@@ -391,10 +391,15 @@ describe("PayloadProcessor", () => {
       expect(bigintResult).toBe(originalBigInt);
     });
 
-    it("rejects Map entries that do not contain a key and value", () => {
+    it.each([
+      { entry: [] },
+      { entry: ["key"] },
+      { entry: ["key", 1, "extra"] },
+      { entry: { key: 1 } },
+    ])("rejects Map entries without exactly two slots: $entry", ({ entry }) => {
       const malformedMap = Placeholder.encode(
         PlaceholderType.MAP,
-        JSON.stringify([["key"]]),
+        JSON.stringify([entry]),
       );
 
       expect(

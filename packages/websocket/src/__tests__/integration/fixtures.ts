@@ -130,6 +130,7 @@ export async function createRawWebSocketHost(
         ),
         new Promise<void>((resolve, reject) => {
           if (!server.listening) return resolve();
+          server.closeAllConnections();
           server.close((error) => (error ? reject(error) : resolve()));
         }),
       ]);

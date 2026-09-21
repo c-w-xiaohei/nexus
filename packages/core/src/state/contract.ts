@@ -15,9 +15,6 @@ export type StoreData<Store extends object> = {
   [K in keyof Store as Store[K] extends ActionFunction ? never : K]: Store[K];
 };
 
-/** Standard Schema output compatibility; runtime input is always unknown. */
-export type StoreValidationSchema<T> = StandardSchemaV1<unknown, T>;
-
 export type RemoteActions<Store extends object> = {
   [K in StoreActionKeys<Store>]: Store[K] extends ActionFunction
     ? (...args: Parameters<Store[K]>) => Promise<Awaited<ReturnType<Store[K]>>>
@@ -25,10 +22,11 @@ export type RemoteActions<Store extends object> = {
 };
 
 export type StoreValidationSchemas<Store extends object> = {
-  state?: StoreValidationSchema<StoreData<Store>>;
+  /** Output compatibility only; runtime input is always unknown. */
+  state?: StandardSchemaV1<unknown, StoreData<Store>>;
   actionResults?: {
     [K in StoreActionKeys<Store>]?: Store[K] extends ActionFunction
-      ? StoreValidationSchema<Awaited<ReturnType<Store[K]>>>
+      ? StandardSchemaV1<unknown, Awaited<ReturnType<Store[K]>>>
       : never;
   };
 };

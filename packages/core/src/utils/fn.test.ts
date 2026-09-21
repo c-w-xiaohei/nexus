@@ -43,6 +43,37 @@ describe("fn", () => {
     expect(run({ ok: true })).toBe(expected);
   });
 
+  it("maps tuple transforms once and preserves callback Results and force behavior", async () => {
+    let transforms = 0;
+    const schema = pipe(
+      string(),
+      transform((value) => {
+        transforms++;
+        return Number(value);
+      }),
+    );
+    const expected = Result.err("business failure");
+    const received: unknown[] = [];
+    const run = fn(args([["value", schema]] as const), async (value) => {
+      received.push(value);
+      return expected;
+    });
+
+    expect(await run("4")).toBe(expected);
+    expect(transforms).toBe(1);
+    expect(received).toEqual([4]);
+    expect(await run.force("raw")).toBe(expected);
+    expect(transforms).toBe(1);
+    expect(received).toEqual([4, "raw"]);
+    expect(safeParse(run.schema, { value: "5" }).output).toEqual({ value: 5 });
+
+    const cause = new Error("tuple handler failure");
+    const fail = fn(args([["value", number()]] as const), () => {
+      throw cause;
+    });
+    expect(() => fail(1)).toThrow(cause);
+  });
+
   it("returns schema issues without retaining a Valibot-specific error object", () => {
     const run = fn(object({ value: string() }), (input) => input.value);
     const result = run({ value: 1 });

@@ -4,7 +4,7 @@ import {
   object,
   safeParse,
   type BaseIssue,
-  type BaseSchema,
+  type GenericSchema,
   type InferInput,
   type InferOutput,
 } from "valibot";
@@ -49,7 +49,7 @@ export type Fn<C extends (...args: any[]) => any> = C & {
   /** Skip validation and execute the original function directly */
   force: (...args: any[]) => any;
   /** The Valibot schema used by this function */
-  schema: BaseSchema<unknown, unknown, BaseIssue<unknown>>;
+  schema: GenericSchema;
 };
 
 /**
@@ -81,34 +81,53 @@ const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
  * - If a Promise, await and wrap
  * - Otherwise wrap as ok(value)
  */
-const wrapResult = <R>(value: R) => {
+const wrapResult = (value: unknown) => {
   if (isPromiseLike(value)) {
     return Promise.resolve(value).then((resolved) =>
       isResult(resolved) ? resolved : ok(resolved),
-    ) as any;
+    );
   }
 
-  return isResult(value) ? (value as any) : ok(value);
+  return isResult(value) ? value : ok(value);
 };
 
 // Tuple schema types
-type TupleSchema = readonly (readonly [
-  string,
-  BaseSchema<unknown, unknown, BaseIssue<unknown>>,
-])[];
+type TupleSchema = readonly (readonly [string, GenericSchema])[];
 type TupleInputArgs<T extends TupleSchema> = {
-  [K in keyof T]: T[K] extends readonly [string, infer S]
-    ? S extends BaseSchema<unknown, unknown, BaseIssue<unknown>>
-      ? InferInput<S>
-      : never
-    : never;
+  [K in keyof T]: InferInput<T[K][1]>;
 };
 type TupleOutputArgs<T extends TupleSchema> = {
-  [K in keyof T]: T[K] extends readonly [string, infer S]
-    ? S extends BaseSchema<unknown, unknown, BaseIssue<unknown>>
-      ? InferOutput<S>
-      : never
-    : never;
+  [K in keyof T]: InferOutput<T[K][1]>;
+};
+
+// Keep handler execution outside this boundary: only validation failures become
+// SchemaValidationError, including getters and custom transforms that throw.
+const validateInput = <T extends GenericSchema>(
+  schema: T,
+  input: unknown,
+): Result<InferOutput<T>, SchemaValidationError> => {
+  let parsed;
+  try {
+    parsed = safeParse(schema, input);
+  } catch (cause) {
+    return err(
+      new SchemaValidationError(
+        "Schema validation failed",
+        "VALIDATION_FAILED",
+        [],
+        cause,
+      ),
+    );
+  }
+  return parsed.success
+    ? ok(parsed.output)
+    : err(
+        new SchemaValidationError(
+          "Schema validation failed",
+          "VALIDATION_FAILED",
+          parsed.issues,
+        ),
+      );
 };
 
 /**
@@ -174,46 +193,20 @@ export function fn<
   ) => FnResult<ReturnType<C>>
 >;
 export function fn<
-  T extends BaseSchema<unknown, unknown, BaseIssue<unknown>>,
+  T extends GenericSchema,
   C extends (input: InferOutput<T>) => any,
 >(schema: T, cb: C): Fn<(input: InferInput<T>) => FnResult<ReturnType<C>>>;
 export function fn(
-  schema: BaseSchema<unknown, unknown, BaseIssue<unknown>> | TupleSchema,
+  schema: GenericSchema | TupleSchema,
   cb: (...args: any[]) => any,
 ): any {
   // Handle a Valibot schema (single parameter).
   if (!Array.isArray(schema)) {
-    const singleSchema = schema as BaseSchema<
-      unknown,
-      unknown,
-      BaseIssue<unknown>
-    >;
+    const singleSchema = schema as GenericSchema;
     const result = ((input: unknown) => {
-      let parsed;
-      try {
-        parsed = safeParse(singleSchema, input);
-      } catch (cause) {
-        return err(
-          new SchemaValidationError(
-            "Schema validation failed",
-            "VALIDATION_FAILED",
-            [],
-            cause,
-          ),
-        ) as any;
-      }
-      if (!parsed.success) {
-        return err(
-          new SchemaValidationError(
-            "Schema validation failed",
-            "VALIDATION_FAILED",
-            parsed.issues,
-          ),
-        ) as any;
-      }
-
-      const value = cb(parsed.output);
-      return wrapResult(value);
+      const parsed = validateInput(singleSchema, input);
+      if (parsed.isErr()) return parsed;
+      return wrapResult(cb(parsed.value));
     }) as Fn<(input: unknown) => unknown>;
 
     result.force = (input: unknown) => cb(input);
@@ -223,49 +216,17 @@ export function fn(
   }
 
   // Handle TupleSchema (array of [key, schema] pairs)
-  if (Array.isArray(schema)) {
-    const keys = schema.map(([key]) => key);
-    const objectSchema = object(Object.fromEntries(schema));
+  const keys = schema.map(([key]) => key);
+  const objectSchema = object(Object.fromEntries(schema));
+  const invoke = fn(objectSchema, (input) =>
+    cb(...keys.map((key) => input[key])),
+  );
 
-    const result = ((...args: unknown[]) => {
-      const rawInput = Object.fromEntries(
-        keys.map((key, index) => [key, args[index]]),
-      );
-      let parsed;
-      try {
-        parsed = safeParse(objectSchema, rawInput);
-      } catch (cause) {
-        return err(
-          new SchemaValidationError(
-            "Schema validation failed",
-            "VALIDATION_FAILED",
-            [],
-            cause,
-          ),
-        ) as any;
-      }
-      if (!parsed.success) {
-        return err(
-          new SchemaValidationError(
-            "Schema validation failed",
-            "VALIDATION_FAILED",
-            parsed.issues,
-          ),
-        ) as any;
-      }
+  const result = (...args: unknown[]) =>
+    invoke(Object.fromEntries(keys.map((key, index) => [key, args[index]])));
 
-      const value = cb(
-        ...(keys.map((key) => (parsed.output as any)[key]) as unknown[]),
-      );
-      return wrapResult(value);
-    }) as unknown as Fn<(...args: unknown[]) => unknown>;
+  result.force = (...args: unknown[]) => cb(...args);
+  result.schema = objectSchema;
 
-    result.force = (...args: unknown[]) => cb(...(args as unknown[]));
-    result.schema = objectSchema;
-
-    return result;
-  }
-
-  // This should never happen if TypeScript types are correct
-  throw new Error("Invalid schema type");
+  return result;
 }
