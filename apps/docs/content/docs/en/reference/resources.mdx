@@ -15,7 +15,8 @@ type RemoteValue<T, M extends AdapterModel> = PromiseLike<T> & {
   readonly connection: Connection<M>;
   catch<TResult = never>(
     onRejected?:
-      ((reason: NexusCallError) => TResult | PromiseLike<TResult>) | null,
+      | ((reason: NexusCallError) => TResult | PromiseLike<TResult>)
+      | null,
   ): Promise<T | TResult>;
   finally(onFinally?: (() => void) | null): Promise<T>;
 };

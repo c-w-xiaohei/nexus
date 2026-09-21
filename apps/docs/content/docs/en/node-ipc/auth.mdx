@@ -25,6 +25,11 @@ Success response:
 
 The implementation treats the auth exchange as newline-delimited JSON and buffers split socket chunks until a newline arrives.
 
+The adapter validates the request and response shapes before continuing. The
+request requires the exact type and version shown above and a string token;
+additional fields are tolerated. A well-formed request with the wrong token is
+an authentication failure, rather than a protocol-format error.
+
 ## Configure Tokens
 
 Daemon:

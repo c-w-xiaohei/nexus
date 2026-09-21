@@ -5,8 +5,8 @@ description: Migrate service acquisition and targeting to the connection-resourc
 
 Core 2.0 alpha makes connections explicit. The old service-acquisition APIs are
 removed rather than retained as compatibility aliases. This page describes the
-unreleased alpha migration contract; it does not claim that a published package
-already has this version.
+migration from Core 1.2 to the current alpha line. Check the release notes for
+the exact alpha version you install; new changes may appear here before release.
 
 Removed entries are `create`, `safeCreate`, `select`, `safeSelect`,
 `createMulticast`, `safeCreateMulticast`, `selectMulticast`, and
@@ -27,6 +27,22 @@ Ordinary proxy lifecycle APIs are removed too: `Nexus.getProxyStatus`,
 returned by `connect` and observe it with `onDisconnected` or
 `subscribeIdentity`. `useStoreStatus` remains the React lifecycle observer for
 Nexus State handles.
+
+## State Validation
+
+State `validation.state` and `validation.actionResults` now accept synchronous
+Standard Schema validators. Existing Zod 4 validators remain supported; Valibot
+and Zod Mini validators use the same entry point. Nexus no longer requires Zod
+as a production dependency, so applications using Zod should declare their own
+dependency.
+
+Validation preserves the original snapshot and action result. Do not depend on
+schema defaults, coercions, or transforms to normalize shared values. Async
+validators are not supported. See [State validation schemas](/nexus/docs/state/core-api/#validation-schemas).
+
+Internal protocol validation now uses Valibot and rejects malformed message
+fields before dispatch. Existing valid wire formats and legacy invocation packet
+layouts remain supported.
 
 ## Replace Service Acquisition
 

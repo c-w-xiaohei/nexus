@@ -59,6 +59,25 @@ StoreToken 携带：
 使用 TokenSpace 的 `space.storeToken<Store>(name, options?)` 或 `space.safeStoreToken<Store>(...)` 继承命名空间 ID。
 本地存储可以包含额外的私有字段；运行时实际共享的数据和动作仍由 `snapshot` 与 `expose` 决定。
 
+### 校验 Schema [#validation-schemas]
+
+状态和动作结果验证器接受同步的 [Standard Schema](https://standardschema.dev/) 实现，包括 Valibot、Zod 和 Zod Mini。Nexus 内部协议使用 Valibot，应用可以继续使用自己的验证库。
+
+```ts
+import * as v from "valibot";
+
+const validatedCounterStore = createStoreToken<CounterStore>("app:counter", {
+  validation: {
+    state: v.object({ count: v.number() }),
+    actionResults: { increment: v.number() },
+  },
+});
+```
+
+验证器应检查实际快照或动作结果的结构。Nexus 保留原始值：默认值和转换后的输出不会写入镜像，也不会替代动作结果。强制转换或 transform 的输出类型不能证明原始值具有该类型。
+
+验证必须同步返回。异步验证器会得到 `E_STORE_PROTOCOL`，不会延迟发布；验证器抛出的错误也会转换为 State 协议错误。
+
 ## `createNexusStore()` [#createnexusstore]
 
 `createNexusStore()` 创建权威宿主存储，返回 Nexus 服务提供者、原始 Zustand 存储，以及绑定的生命周期方法。

@@ -13,6 +13,15 @@ Use this reference as a compact style guide, not as a substitute for the full do
 
 Keep adapter docs focused on adapter-specific setup. Do not redefine the full service contract pattern unless the topic is shared contracts.
 
+## State Validation
+
+State token `validation.state` and `validation.actionResults` accept synchronous
+Standard Schema validators, including Valibot, Zod 4, and Zod Mini. Validate the
+actual wire shape: Nexus keeps the original state/action result and discards
+transformed/defaulted outputs. Async validators produce `E_STORE_PROTOCOL`.
+Applications must declare their chosen validator dependency; Core's internal
+Valibot implementation does not require applications to use Valibot.
+
 ## Architecture And Boundaries
 
 Nexus itself is about connection semantics between runtime contexts that already exist. It does not launch browser contexts, inject content scripts, create iframes, spawn workers, or start daemon processes for the application. The host platform, framework, application, or adapter-specific environment owns context startup.

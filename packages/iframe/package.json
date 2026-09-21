@@ -42,7 +42,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@nexus-js/core": "workspace:*"
+    "@nexus-js/core": "workspace:*",
+    "valibot": "1.5.0"
   },
   "devDependencies": {
     "@playwright/test": "1.57.0",

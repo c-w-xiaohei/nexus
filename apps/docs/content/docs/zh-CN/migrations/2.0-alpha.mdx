@@ -4,7 +4,7 @@ description: 将服务获取和 target 迁移到 connection-resource API。
 ---
 
 Core 2.0 alpha 使连接变得显式。旧服务获取 API 被移除，不保留兼容 alias。
-本页描述尚未发布的 alpha 迁移契约，不表示已有发布的 package 已经有该版本。
+本页描述从 Core 1.2 到当前 alpha 发布线的迁移。请同时查看所安装 alpha 版本的发布说明；新增变更可能先于发包出现在本页。
 
 移除的 entry 是 `create`、`safeCreate`、`select`、`safeSelect`、`createMulticast`、`safeCreateMulticast`、`selectMulticast` 和 `safeSelectMulticast`。
 
@@ -17,6 +17,14 @@ Mock call record 保留其 object shape，不再有独立的 `MockNexus*Call` ex
 普通 proxy lifecycle API 也被移除：`Nexus.getProxyStatus`、`Nexus.subscribeProxyStatus`、`Nexus.inspectProxy`、`ProxyStatus`、`ProxyDebugSnapshot` 以及 React 的 `useProxyStatus`。
 保留 `connect` 返回的 `Connection`，用 `onDisconnected` 或 `subscribeIdentity` 观察它。
 `useStoreStatus` 仍是 Nexus State handle 的 React lifecycle observer。
+
+## State 校验 [#state-validation]
+
+State 的 `validation.state` 和 `validation.actionResults` 现在接受同步的 Standard Schema 验证器。现有 Zod 4 验证器仍受支持，Valibot 和 Zod Mini 使用同一入口。Nexus 不再将 Zod 作为生产依赖，使用 Zod 的应用应自行声明依赖。
+
+校验保留原始快照和动作结果，不要依赖 schema 的默认值、强制转换或 transform 来规范化共享数据。不支持异步验证器。参阅 [State 校验 Schema](/nexus/docs/state/core-api/#validation-schemas)。
+
+内部协议校验改用 Valibot，在分发前拒绝格式错误的消息字段。已有合法 wire 格式及旧 invocation packet 布局保持兼容。
 
 ## 替换服务获取 [#replace-service-acquisition]
 

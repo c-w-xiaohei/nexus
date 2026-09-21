@@ -61,6 +61,33 @@ Use `space.storeToken<Store>(name, options?)` or `space.safeStoreToken<Store>(..
 with TokenSpace to inherit namespaced IDs. A local store may contain additional
 private fields; `snapshot` and `expose` still define the runtime sharing boundary.
 
+### Validation schemas
+
+State and action-result validators accept synchronous
+[Standard Schema](https://standardschema.dev/) implementations, including
+Valibot, Zod, and Zod Mini. Nexus uses Valibot for its own protocol schemas;
+applications can keep their preferred validator.
+
+```ts
+import * as v from "valibot";
+
+const validatedCounterStore = createStoreToken<CounterStore>("app:counter", {
+  validation: {
+    state: v.object({ count: v.number() }),
+    actionResults: { increment: v.number() },
+  },
+});
+```
+
+Validators must check the actual snapshot or action-result shape. Nexus preserves
+the original value: defaults and transformed outputs are not installed in a
+mirror or returned instead of an action result. A coercing or transforming
+validator's output type does not establish the original value's type.
+
+Validation must return synchronously. Asynchronous validators are rejected with
+`E_STORE_PROTOCOL`; they do not delay publication. Thrown validation errors are
+also converted to State protocol errors.
+
 ## `createNexusStore()`
 
 `createNexusStore()` creates one authoritative store host and returns the Nexus provider, the original Zustand store, and binding lifecycle methods.

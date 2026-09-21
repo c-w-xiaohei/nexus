@@ -42,7 +42,8 @@
   },
   "dependencies": {
     "@nexus-js/core": "workspace:*",
-    "better-result": "3.0.1"
+    "better-result": "3.0.1",
+    "valibot": "1.5.0"
   },
   "devDependencies": {
     "@types/node": "24.10.2",
