@@ -41,6 +41,7 @@
     "dev": "node ../../scripts/watch-package.mjs",
     "test": "pnpm build && vitest run src/__tests__",
     "test:browser": "pnpm --filter @nexus-js/core build && pnpm build && playwright test",
+    "test:bun": "pnpm --filter @nexus-js/core build && pnpm build && bun test ./tests/runtime/ws-compat.test.mjs",
     "lint": "oxlint .",
     "typecheck": "tsc --noEmit"
   },

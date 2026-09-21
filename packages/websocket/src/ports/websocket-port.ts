@@ -99,7 +99,7 @@ export class WebSocketPort implements IPort {
   private readonly receive = ({ data }: { data: unknown }): void => {
     if (this.closed) return;
     if (
-      !(data instanceof ArrayBuffer) ||
+      (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) ||
       data.byteLength > this.options.maxPayloadBytes
     ) {
       return this.close();
@@ -110,7 +110,14 @@ export class WebSocketPort implements IPort {
         this.earlyBytes + data.byteLength > this.options.maxEarlyBytes)
     )
       return this.close();
-    this.earlyPackets.push(data);
+    // Some ws-compatible runtimes (Bun) deliver views despite binaryType.
+    // Copy only the frame's range, not the surrounding pooled backing buffer.
+    const packet =
+      data instanceof ArrayBuffer
+        ? data
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice()
+            .buffer;
+    this.earlyPackets.push(packet);
     this.earlyBytes += data.byteLength;
     this.drain();
   };
