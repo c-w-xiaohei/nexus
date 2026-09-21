@@ -23,7 +23,10 @@ async function createSocket() {
   return socket;
 }
 
-function deliver(socket: WebSocket, data: string | ArrayBuffer) {
+function deliver(
+  socket: WebSocket,
+  data: string | ArrayBuffer | ArrayBufferView,
+) {
   socket.emit("message", data, typeof data !== "string");
 }
 
@@ -35,6 +38,43 @@ const limits = {
 };
 
 describe("WebSocket Port adoption lifecycle", () => {
+  it("normalizes binary views using their exact byte offset and length", async () => {
+    const socket = await createSocket();
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    // A large backing buffer must neither leak surrounding bytes nor exceed the
+    // payload budget when the actual frame is a small view into it.
+    const backing = new Uint8Array(64);
+    backing.set([11, 22, 33], 19);
+    const received: unknown[] = [];
+    port.onMessage((packet) => received.push(packet));
+    deliver(socket, backing.subarray(19, 22));
+    deliver(socket, new DataView(backing.buffer, 20, 2));
+    expect(received).toHaveLength(2);
+    for (const packet of received) expect(packet).toBeInstanceOf(ArrayBuffer);
+    expect(
+      received.map((packet) => [...new Uint8Array(packet as ArrayBuffer)]),
+    ).toEqual([
+      [11, 22, 33],
+      [22, 33],
+    ]);
+    backing.fill(0);
+    expect([...new Uint8Array(received[0] as ArrayBuffer)]).toEqual([
+      11, 22, 33,
+    ]);
+    port.close();
+  });
+
+  it("rejects an oversized binary view before delivering any packet", async () => {
+    const socket = await createSocket();
+    const terminal = vi.fn();
+    const port = new WebSocketPort(socket, limits, terminal);
+    const handler = vi.fn();
+    port.onMessage(handler);
+    deliver(socket, new Uint8Array(limits.maxPayloadBytes + 1));
+    expect(handler).not.toHaveBeenCalled();
+    expect(terminal).toHaveBeenCalledOnce();
+  });
+
   it("finishes the current handler before delivering reentrant live input", async () => {
     const socket = await createSocket();
     const port = new WebSocketPort(socket, limits, vi.fn());
