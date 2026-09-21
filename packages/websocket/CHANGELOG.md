@@ -1,5 +1,13 @@
 # @nexus-js/websocket
 
+## 0.1.0-alpha.1
+
+### Patch Changes
+
+- e7557b4: Accept binary ArrayBuffer views from WebSocket implementations such as Bun's ws
+  compatibility layer. Preserve the frame's exact byte range and apply payload and
+  queue limits before copying it into a Core packet.
+
 ## 0.1.0-alpha.0
 
 ### Minor Changes
