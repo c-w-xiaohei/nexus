@@ -76,6 +76,8 @@ const validatedCounterStore = createStoreToken<CounterStore>("app:counter", {
 
 验证器应检查实际快照或动作结果的结构。Nexus 保留原始值：默认值和转换后的输出不会写入镜像，也不会替代动作结果。强制转换或 transform 的输出类型不能证明原始值具有该类型。
 
+TypeScript 契约约束验证器的输出类型，不静态检查输入类型兼容性；支持输入类型为 unknown 的验证器。
+
 验证必须同步返回。异步验证器会得到 `E_STORE_PROTOCOL`，不会延迟发布；验证器抛出的错误也会转换为 State 协议错误。
 
 ## `createNexusStore()` [#createnexusstore]

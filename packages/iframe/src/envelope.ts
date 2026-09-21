@@ -1,10 +1,14 @@
-export type MessageEnvelope = {
-  __nexusIframe: true;
-  appId: string;
-  channel: string;
-  nonce?: string;
-  payload: unknown;
-};
+import * as v from "valibot";
+
+export const MessageEnvelopeSchema = v.looseObject({
+  __nexusIframe: v.literal(true),
+  appId: v.string(),
+  channel: v.string(),
+  nonce: v.optional(v.string()),
+  payload: v.unknown(),
+});
+
+export type MessageEnvelope = v.InferOutput<typeof MessageEnvelopeSchema>;
 
 export function createEnvelope(
   appId: string,
@@ -22,13 +26,10 @@ export function createEnvelope(
 }
 
 export function readEnvelope(value: unknown): MessageEnvelope | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Partial<MessageEnvelope>;
-  if (
-    record.__nexusIframe !== true ||
-    typeof record.appId !== "string" ||
-    typeof record.channel !== "string"
-  )
+  try {
+    const result = v.safeParse(MessageEnvelopeSchema, value);
+    return result.success ? result.output : undefined;
+  } catch {
     return undefined;
-  return record as MessageEnvelope;
+  }
 }

@@ -188,15 +188,15 @@ export const buildSerializerBenchmarkMessages =
         },
       },
       {
-        // Current serializers are JSON-based, so this measures today's behavior
-        // for a binary-bearing Nexus message rather than binary preservation.
-        name: "CHUNK_DATA ArrayBuffer payload",
+        // All benchmark codecs run every shared case. Use the wire-safe string
+        // form here; JSON/BinarySerializer intentionally reject ArrayBuffer
+        // chunk data rather than benchmark a lossy `{}` representation.
+        name: "CHUNK_DATA string payload",
         message: {
           type: NexusMessageType.CHUNK_DATA,
-          id: "chunk-binary-1",
+          id: "chunk-string-1",
           chunkIndex: 0,
-          chunkData: Uint8Array.from({ length: 256 }, (_, index) => index % 256)
-            .buffer,
+          chunkData: "chunk-data",
         },
       },
     ];

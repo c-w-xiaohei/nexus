@@ -1,7 +1,8 @@
 import { Nexus } from "@/index";
 import type { ConnectOptions } from "@/api/types/config";
 import { expectTypeOf } from "vitest";
-import { z } from "zod";
+import * as v from "valibot";
+import type { StoreValidationSchemas } from "./contract";
 import type { StateCreator } from "zustand/vanilla";
 import {
   connectNexusStore,
@@ -36,15 +37,11 @@ type ChromeModel = {
 const token = createStoreToken<CounterStore, ChromeModel>(
   "state:chrome-counter",
   {
-    validation: { state: z.object({ count: z.number() }) },
+    validation: { state: v.object({ count: v.number() }) },
   },
 );
 expectTypeOf(token.validation).toEqualTypeOf<
-  | {
-      state?: z.ZodType<{ count: number }>;
-      actionResults?: { increment?: z.ZodType<number> };
-    }
-  | undefined
+  StoreValidationSchemas<CounterStore> | undefined
 >();
 expectTypeOf<StoreData<CounterStore>>().toEqualTypeOf<{ count: number }>();
 expectTypeOf<RemoteActions<CounterStore>>().toEqualTypeOf<{
@@ -82,14 +79,31 @@ const portableRemote = connectNexusStore(chromeNexus, portableToken);
 expectTypeOf(portableRemote).toEqualTypeOf<
   Promise<RemoteStore<CounterStore>>
 >();
+
+const unknownInputValidation = v.pipe(
+  v.unknown(),
+  v.transform(() => ({ count: 0 })),
+);
+createStoreToken<CounterStore>("state:unknown-input", {
+  validation: { state: unknownInputValidation },
+});
+
+const outputConstrainedValidation = v.pipe(
+  v.number(),
+  v.transform((value) => value + 1),
+);
+createStoreToken<CounterStore>("state:output-constrained", {
+  validation: { actionResults: { increment: outputConstrainedValidation } },
+});
+
 if (false) {
   createStoreToken<CounterStore>("state:invalid-validation", {
     validation: {
       // @ts-expect-error State validation accepts only data fields, not methods.
-      state: z.object({ count: z.string() }),
+      state: v.object({ count: v.string() }),
       actionResults: {
         // @ts-expect-error Action validation derives the method return type.
-        increment: z.string(),
+        increment: v.string(),
       },
     },
   });

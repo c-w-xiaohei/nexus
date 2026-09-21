@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
+import { number, object } from "valibot";
 import { TokenSpace } from "./token-space";
 
 type Model = {
@@ -19,7 +19,7 @@ describe("TokenSpace", () => {
   });
 
   it("creates validated State tokens without selecting a connection", () => {
-    const validation = { state: z.object({ count: z.number() }) };
+    const validation = { state: object({ count: number() }) };
     const token = new TokenSpace<Model>({ name: "app" })
       .space("state")
       .storeToken<{ count: number }>("counter", { validation });

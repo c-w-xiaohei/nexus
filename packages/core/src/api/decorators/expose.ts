@@ -3,7 +3,7 @@ import type { AuthorizationPolicy } from "../types/config";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { args, fn } from "@/utils/fn";
-import { z } from "zod";
+import { custom, instance, object, optional } from "valibot";
 import type { DefaultAdapterModel } from "@/types/adapter-model";
 
 /**
@@ -42,23 +42,23 @@ export type NexusClassDecorator<T extends object = object> = (
   context: ClassDecoratorContext,
 ) => void;
 
-const ExposeOptionsSchema = z
-  .object({
-    policy: z
-      .custom<AuthorizationPolicy<DefaultAdapterModel>>(
+const ExposeOptionsSchema = optional(
+  object({
+    policy: optional(
+      custom<AuthorizationPolicy<DefaultAdapterModel>>(
         (value) => typeof value === "object" && value !== null,
-      )
-      .optional(),
-    factory: z
-      .custom<ExposeOptions["factory"]>((value) => typeof value === "function")
-      .optional(),
-  })
-  .optional();
+      ),
+    ),
+    factory: optional(
+      custom<ExposeOptions["factory"]>((value) => typeof value === "function"),
+    ),
+  }),
+);
 
 /** Validate decorator arguments before recording a deferred class registration. */
 const validateExposeInput = fn(
   args([
-    ["token", z.instanceof(Token)],
+    ["token", instance(Token)],
     ["options", ExposeOptionsSchema],
   ] as const),
   (token, options) => ({ token, options }),

@@ -24,24 +24,21 @@ describe("serializer benchmark scaffold", () => {
       "BATCH 100",
       "HANDSHAKE_REQ",
       "HANDSHAKE_ACK",
-      "CHUNK_DATA ArrayBuffer payload",
+      "CHUNK_DATA string payload",
     ]);
   });
 
-  it("uses a real binary-bearing message for binary payload coverage", () => {
-    const binaryCase = buildSerializerBenchmarkMessages().find(
-      (testCase) => testCase.name === "CHUNK_DATA ArrayBuffer payload",
+  it("uses a wire-safe string chunk for shared codec coverage", () => {
+    const chunkCase = buildSerializerBenchmarkMessages().find(
+      (testCase) => testCase.name === "CHUNK_DATA string payload",
     );
 
-    expect(binaryCase?.message).toMatchObject({
+    expect(chunkCase?.message).toMatchObject({
       type: NexusMessageType.CHUNK_DATA,
-      id: "chunk-binary-1",
+      id: "chunk-string-1",
       chunkIndex: 0,
+      chunkData: "chunk-data",
     });
-    expect(
-      binaryCase?.message.type === NexusMessageType.CHUNK_DATA &&
-        binaryCase.message.chunkData,
-    ).toBeInstanceOf(ArrayBuffer);
   });
 
   it("throws a useful benchmark error when a serializer fails", () => {

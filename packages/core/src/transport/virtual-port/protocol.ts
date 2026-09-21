@@ -1,54 +1,72 @@
 import { Result } from "better-result";
 const { err, ok } = Result;
-import { z } from "zod";
+import {
+  integer,
+  literal,
+  minLength,
+  minValue,
+  number,
+  optional,
+  pipe,
+  safeParse,
+  strictObject,
+  string,
+  unknown,
+  variant,
+} from "valibot";
 import { VirtualPortProtocolError } from "./errors.js";
 
 export namespace VirtualPortProtocol {
   export const MARKER = "__nexusVirtualPort";
   export const VERSION = 1;
 
-  const BaseMessageSchema = z
-    .object({
-      [MARKER]: z.literal(true),
-      version: z.literal(VERSION),
-      channelId: z.string().min(1),
-      from: z.string().min(1),
-      nonce: z.string().min(1),
-    })
-    .strict();
+  const BaseMessageEntries = {
+    [MARKER]: literal(true),
+    version: literal(VERSION),
+    channelId: pipe(string(), minLength(1)),
+    from: pipe(string(), minLength(1)),
+    nonce: pipe(string(), minLength(1)),
+  };
 
-  export const ConnectMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("connect"),
-  }).strict();
+  export const ConnectMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("connect"),
+  });
 
-  export const AcceptMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("accept"),
-  }).strict();
+  export const AcceptMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("accept"),
+  });
 
-  export const RejectMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("reject"),
-    reason: z.string().optional(),
-  }).strict();
+  export const RejectMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("reject"),
+    reason: optional(string()),
+  });
 
-  export const DataMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("data"),
-    seq: z.number().int().nonnegative(),
-    payload: z.unknown(),
-  }).strict();
+  export const DataMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("data"),
+    seq: pipe(number(), integer(), minValue(0)),
+    payload: unknown(),
+  });
 
-  export const CloseMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("close"),
-  }).strict();
+  export const CloseMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("close"),
+  });
 
-  export const PingMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("ping"),
-  }).strict();
+  export const PingMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("ping"),
+  });
 
-  export const PongMessageSchema = BaseMessageSchema.extend({
-    type: z.literal("pong"),
-  }).strict();
+  export const PongMessageSchema = strictObject({
+    ...BaseMessageEntries,
+    type: literal("pong"),
+  });
 
-  export const MessageSchema = z.discriminatedUnion("type", [
+  export const MessageSchema = variant("type", [
     ConnectMessageSchema,
     AcceptMessageSchema,
     RejectMessageSchema,
@@ -58,22 +76,36 @@ export namespace VirtualPortProtocol {
     PongMessageSchema,
   ]);
 
-  export type Message = z.infer<typeof MessageSchema>;
-  export type DataMessage = z.infer<typeof DataMessageSchema>;
+  export type Message = NonNullable<(typeof MessageSchema)["~types"]>["output"];
+  export type DataMessage = NonNullable<
+    (typeof DataMessageSchema)["~types"]
+  >["output"];
 
   export const safeClassify = (
     message: unknown,
   ): Result<Message, VirtualPortProtocolError> => {
-    const result = MessageSchema.safeParse(message);
+    let result;
+    try {
+      result = safeParse(MessageSchema, message);
+    } catch (cause) {
+      return err(
+        new VirtualPortProtocolError("Invalid virtual port message", {
+          issues: [],
+          cause,
+        }),
+      );
+    }
     if (!result.success) {
       return err(
         new VirtualPortProtocolError("Invalid virtual port message", {
-          issues: result.error.issues,
+          issues: result.issues,
         }),
       );
     }
 
-    return ok(result.data);
+    // Validate the envelope, but return the wire value unchanged so opaque
+    // payloads and their transfer/reference identity are not rewritten.
+    return ok(message as Message);
   };
 
   export const createBase = (input: {

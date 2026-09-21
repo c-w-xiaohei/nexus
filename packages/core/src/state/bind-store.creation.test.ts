@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import * as v from "valibot";
 import type { StateCreator } from "zustand/vanilla";
 import { createL3Endpoints } from "../utils/test-utils";
 import { createNexusStore } from "./bind-store";
@@ -137,7 +137,9 @@ describe("createNexusStore", () => {
 
   it("validates committed state before publishing it", async () => {
     const definition = createStoreToken<State & Actions>("state:validation", {
-      validation: { state: z.object({ count: z.number().max(1) }) },
+      validation: {
+        state: v.object({ count: v.pipe(v.number(), v.maxValue(1)) }),
+      },
     });
     const { store, destroy } = createNexusStore(definition, createCreator(), {
       snapshot: ({ count }) => ({ count }),

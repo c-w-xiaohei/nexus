@@ -1,6 +1,6 @@
 import { Token } from "../api/token";
 import type { AdapterModel } from "../types/adapter-model";
-import type { ZodType } from "zod";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { StoreApi } from "zustand/vanilla";
 import type { SyncEnvelope, TerminalReason } from "./protocol";
 
@@ -15,6 +15,9 @@ export type StoreData<Store extends object> = {
   [K in keyof Store as Store[K] extends ActionFunction ? never : K]: Store[K];
 };
 
+/** Standard Schema output compatibility; runtime input is always unknown. */
+export type StoreValidationSchema<T> = StandardSchemaV1<unknown, T>;
+
 export type RemoteActions<Store extends object> = {
   [K in StoreActionKeys<Store>]: Store[K] extends ActionFunction
     ? (...args: Parameters<Store[K]>) => Promise<Awaited<ReturnType<Store[K]>>>
@@ -22,10 +25,10 @@ export type RemoteActions<Store extends object> = {
 };
 
 export type StoreValidationSchemas<Store extends object> = {
-  state?: ZodType<StoreData<Store>>;
+  state?: StoreValidationSchema<StoreData<Store>>;
   actionResults?: {
     [K in StoreActionKeys<Store>]?: Store[K] extends ActionFunction
-      ? ZodType<Awaited<ReturnType<Store[K]>>>
+      ? StoreValidationSchema<Awaited<ReturnType<Store[K]>>>
       : never;
   };
 };
@@ -64,9 +67,7 @@ export const createStoreToken = <
   M extends AdapterModel | never = never,
 >(
   id: string,
-  options?: {
-    validation?: StoreValidationSchemas<Store>;
-  },
+  options?: { validation?: StoreValidationSchemas<Store> },
 ): StoreToken<Store, M> => new StoreToken(id, options);
 
 export type RemoteStoreStatus =

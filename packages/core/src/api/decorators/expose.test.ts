@@ -70,6 +70,28 @@ describe("@Expose", () => {
     );
   });
 
+  it("preserves omitted and explicitly undefined optional option keys", () => {
+    const token = new Token<object>("option-shape-service");
+    const register = vi.fn();
+    const decorator = createExposeDecorator(register);
+
+    decorator(token, {})(class Omitted {}, {
+      kind: "class",
+    } as ClassDecoratorContext);
+    decorator(token, { policy: undefined })(class Explicit {}, {
+      kind: "class",
+    } as ClassDecoratorContext);
+
+    const omitted = register.mock.calls[0][0].options;
+    const explicit = register.mock.calls[1][0].options;
+    expect(omitted).toEqual({});
+    expect(Object.hasOwn(omitted, "policy")).toBe(false);
+    expect(Object.hasOwn(omitted, "factory")).toBe(false);
+    expect(explicit).toEqual({ policy: undefined });
+    expect(Object.hasOwn(explicit, "policy")).toBe(true);
+    expect(Object.hasOwn(explicit, "factory")).toBe(false);
+  });
+
   it("top-level Expose delegates to the default singleton", () => {
     const token = new Token<object>("singleton-delegated-service");
 

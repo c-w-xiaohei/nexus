@@ -20,12 +20,55 @@ describe("VirtualPortProtocol", () => {
     expect(result.unwrap()).toEqual(message);
   });
 
+  it("preserves opaque payload identity during classification", () => {
+    const payload = new Uint8Array([1, 2, 3]);
+    const result = VirtualPortProtocol.safeClassify({
+      __nexusVirtualPort: true,
+      version: 1,
+      type: "data",
+      channelId: "channel-1",
+      from: "client",
+      nonce: "nonce-1",
+      seq: 0,
+      payload,
+    });
+
+    expect(result.unwrap().payload).toBe(payload);
+  });
+
   it("rejects malformed messages without throwing", () => {
     const result = VirtualPortProtocol.safeClassify({ type: "data" });
 
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error.code).toBe("VIRTUAL_PORT_PROTOCOL_INVALID");
+    }
+  });
+
+  it("contains exceptions from hostile message getters", () => {
+    const cause = new Error("message-getter-boom");
+    const message = {
+      __nexusVirtualPort: true,
+      version: 1,
+      type: "data",
+      channelId: "channel-1",
+      from: "client",
+      nonce: "nonce-1",
+      seq: 1,
+      payload: null,
+    };
+    Object.defineProperty(message, "channelId", {
+      get: () => {
+        throw cause;
+      },
+    });
+
+    const result = VirtualPortProtocol.safeClassify(message);
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("VIRTUAL_PORT_PROTOCOL_INVALID");
+      expect(result.error.context).toEqual({ issues: [], cause });
     }
   });
 

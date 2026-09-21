@@ -7,7 +7,7 @@ import {
 } from "zustand/vanilla";
 import { Result, type InferErr } from "better-result";
 import { withTimeout } from "es-toolkit";
-import { z } from "zod";
+import * as v from "valibot";
 import type { ServiceProvider } from "../api/types/config";
 import type { AdapterModel } from "../types/adapter-model";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
@@ -22,7 +22,11 @@ import {
   NexusStoreDisconnectedError,
   NexusStoreProtocolError,
 } from "./errors";
-import { safeParsePayload, safeValidateState } from "./protocol";
+import {
+  safeParsePayload,
+  safeValidateState,
+  safeValidateValue,
+} from "./protocol";
 import type { SyncEnvelope, TerminalReason } from "./protocol";
 import type {
   NexusStoreServiceContract,
@@ -32,18 +36,24 @@ import type {
   StoreToken,
 } from "./contract";
 
-const PublicationOptionsSchema = z.object({
+const PublicationOptionsSchema = v.object({
   /** Fixed window starting at the first change, not a debounce. Default: 200ms. */
-  publishWindowMs: z.number().min(0).max(2_147_483_647).default(200),
+  publishWindowMs: v.optional(
+    v.pipe(v.number(), v.minValue(0), v.maxValue(2_147_483_647)),
+    200,
+  ),
   /** Maximum unacknowledged deliveries per subscription. Default: 32. */
-  maxPendingSnapshots: z.number().int().positive().default(32),
+  maxPendingSnapshots: v.optional(
+    v.pipe(v.number(), v.integer(), v.minValue(1)),
+    32,
+  ),
 });
 
 export interface BindNexusStoreOptions<
   Store extends object,
   Keys extends readonly StoreActionKeys<Store>[] =
     readonly StoreActionKeys<Store>[],
-> extends z.input<typeof PublicationOptionsSchema> {
+> extends v.InferInput<typeof PublicationOptionsSchema> {
   /** Pure projection of the data this provider may share. */
   snapshot(state: Store): StoreData<Store>;
   /** Only these local action keys become remote capabilities. */
@@ -152,7 +162,7 @@ export function bindNexusStore<
         new NexusStoreProtocolError("State snapshot failed.", { cause }),
     })
       .andThen(({ state }) =>
-        safeValidateState(
+        safeValidateState<StoreData<Store>>(
           state,
           token.validation?.state,
           "Invalid State snapshot.",
@@ -326,9 +336,9 @@ export function bindNexusStore<
     if (execution.isErr()) return execution;
     const schema = token.validation?.actionResults?.[name];
     if (schema) {
-      const validated = safeParsePayload(
-        schema,
+      const validated = safeValidateValue(
         execution.value,
+        schema,
         `Invalid result for ${name}.`,
       );
       if (validated.isErr()) return validated;

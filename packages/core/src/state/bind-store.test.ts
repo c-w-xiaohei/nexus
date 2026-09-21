@@ -7,7 +7,7 @@ import {
   subscribeWithSelector,
 } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
-import { z } from "zod";
+import * as v from "valibot";
 import { createStarNetwork } from "../utils/test-utils";
 import {
   SERVICE_INVOKE_START,
@@ -547,7 +547,9 @@ describe("buffered Zustand binding", () => {
     const binding = bindNexusStore(
       {
         ...definition,
-        validation: { state: z.object({ count: z.number().max(1) }) },
+        validation: {
+          state: v.object({ count: v.pipe(v.number(), v.maxValue(1)) }),
+        },
       },
       store,
       { ...options, maxPendingSnapshots: 1 },
@@ -642,7 +644,9 @@ describe("buffered Zustand binding", () => {
     const binding = bindNexusStore(
       {
         ...definition,
-        validation: { state: z.object({ count: z.number().max(2) }) },
+        validation: {
+          state: v.object({ count: v.pipe(v.number(), v.maxValue(2)) }),
+        },
       },
       store,
       options,
@@ -950,9 +954,10 @@ describe("buffered Zustand binding", () => {
       increment: (by) => by,
     }));
     const validation = {
-      state: z
-        .object({ count: z.number() })
-        .transform(({ count }) => ({ count: count + 1 })),
+      state: v.pipe(
+        v.object({ count: v.number() }),
+        v.transform(({ count }) => ({ count: count + 1 })),
+      ),
     };
     const binding = bindNexusStore(
       { ...definition, validation },

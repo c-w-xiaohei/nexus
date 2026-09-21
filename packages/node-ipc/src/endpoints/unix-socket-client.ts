@@ -1,5 +1,7 @@
 import net from "node:net";
 import type { IEndpoint } from "@nexus-js/core";
+import { safeParse } from "valibot";
+import { AuthAckSchema, type AuthRequest } from "../auth-protocol.js";
 import { NodeIpcError } from "../errors.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import {
@@ -235,11 +237,7 @@ function writeAuthRequest(
         );
         return;
       }
-      if (
-        typeof message !== "object" ||
-        message === null ||
-        (message as { type?: unknown }).type !== "nexus-ipc-auth-ok"
-      ) {
+      if (!safeParse(AuthAckSchema, message).success) {
         finish(
           new NodeIpcError("Malformed auth response", "E_IPC_PROTOCOL_ERROR"),
         );
@@ -262,8 +260,11 @@ function writeAuthRequest(
     socket.on("data", onData);
     socket.once("error", onError);
     socket.once("close", onClose);
-    socket.write(
-      JSON.stringify({ type: "nexus-ipc-auth", version: 1, token }) + "\n",
-    );
+    const request: AuthRequest = {
+      type: "nexus-ipc-auth",
+      version: 1,
+      token,
+    };
+    socket.write(JSON.stringify(request) + "\n");
   });
 }

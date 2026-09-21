@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import * as v from "valibot";
 import { createNexusStore } from "./bind-store";
 import { createStoreToken } from "./contract";
 import { NexusStoreActionError } from "./errors";
@@ -133,7 +133,11 @@ describe("native State provider runtime", () => {
     const { store, destroy } = createNexusStore(
       createStoreToken<CounterState & Pick<CounterActions, "increment">>(
         "state:validate",
-        { validation: { state: z.object({ count: z.number().max(1) }) } },
+        {
+          validation: {
+            state: v.object({ count: v.pipe(v.number(), v.maxValue(1)) }),
+          },
+        },
       ),
       (set, get) => ({
         count: 0,

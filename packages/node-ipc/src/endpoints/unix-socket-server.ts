@@ -3,6 +3,8 @@ import net from "node:net";
 import path from "node:path";
 import type { IEndpoint, IPort } from "@nexus-js/core";
 import { Result } from "better-result";
+import { safeParse } from "valibot";
+import { AuthAckSchema, AuthRequestSchema } from "../auth-protocol.js";
 import { NodeIpcError } from "../errors.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import { NodeIpcAddress, type NodeIpcSocketAddress } from "../types/address.js";
@@ -137,7 +139,14 @@ export class UnixSocketServerEndpoint implements IEndpoint<NodeIpcAdapterModel> 
 
     try {
       await readAuthRequest(socket, this.authToken, this.options);
-      socket.write(JSON.stringify({ type: "nexus-ipc-auth-ok" }) + "\n");
+      const ack = safeParse(AuthAckSchema, { type: "nexus-ipc-auth-ok" });
+      if (!ack.success) {
+        throw new NodeIpcError(
+          "Could not create auth response",
+          "E_IPC_PROTOCOL_ERROR",
+        );
+      }
+      socket.write(JSON.stringify(ack.output) + "\n");
       onConnect(
         new UnixSocketPort(socket),
         this.createConnectionMeta(true, "shared-secret"),
@@ -234,13 +243,14 @@ function readAuthRequest(
         );
         return;
       }
-      if (!isAuthRequest(message)) {
+      const parsed = safeParse(AuthRequestSchema, message);
+      if (!parsed.success) {
         finish(
           new NodeIpcError("Malformed auth request", "E_IPC_PROTOCOL_ERROR"),
         );
         return;
       }
-      if (message.token !== expectedToken) {
+      if (parsed.output.token !== expectedToken) {
         finish(
           new NodeIpcError("IPC authentication failed", "E_IPC_AUTH_FAILED"),
         );
@@ -252,18 +262,6 @@ function readAuthRequest(
     socket.on("data", onData);
     socket.once("error", onError);
   });
-}
-
-function isAuthRequest(
-  value: unknown,
-): value is { type: "nexus-ipc-auth"; version: 1; token: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { type?: unknown }).type === "nexus-ipc-auth" &&
-    (value as { version?: unknown }).version === 1 &&
-    typeof (value as { token?: unknown }).token === "string"
-  );
 }
 
 async function cleanupStaleSocket(socketPath: string): Promise<void> {

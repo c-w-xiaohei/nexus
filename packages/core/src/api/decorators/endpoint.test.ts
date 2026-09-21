@@ -17,18 +17,51 @@ describe("@Endpoint", () => {
 
   it("passes endpoint registration to its callback", () => {
     const register = vi.fn();
+    const meta = { context: "background" };
+    const target = { context: "owner" };
     const decorator = createEndpointDecorator(register);
 
     class EndpointImpl {}
-    decorator({ meta: { context: "background" } })(
+    decorator({ meta, connectTo: [target] })(
       EndpointImpl as never,
       { kind: "class" } as ClassDecoratorContext,
     );
 
     expect(register).toHaveBeenCalledWith({
       targetClass: EndpointImpl,
-      options: { meta: { context: "background" } },
+      options: expect.objectContaining({ meta, connectTo: expect.any(Array) }),
     });
+    const options = register.mock.calls[0][0].options;
+    expect(options.meta).toBe(meta);
+    expect(options.connectTo).not.toBeUndefined();
+    expect(options.connectTo?.[0]).toBe(target);
+    expect(Object.isFrozen(options.connectTo)).toBe(true);
+  });
+
+  it("preserves omitted and explicitly undefined connectTo keys", () => {
+    const register = vi.fn();
+    const decorator = createEndpointDecorator(register);
+
+    class Omitted {}
+    class Explicit {}
+    decorator({ meta: {} })(
+      Omitted as never,
+      {
+        kind: "class",
+      } as ClassDecoratorContext,
+    );
+    decorator({ meta: {}, connectTo: undefined })(
+      Explicit as never,
+      {
+        kind: "class",
+      } as ClassDecoratorContext,
+    );
+
+    const omitted = register.mock.calls[0][0].options;
+    const explicit = register.mock.calls[1][0].options;
+    expect(Object.hasOwn(omitted, "connectTo")).toBe(false);
+    expect(Object.hasOwn(explicit, "connectTo")).toBe(true);
+    expect(explicit.connectTo).toBeUndefined();
   });
 
   it.each([{}, [null]])(

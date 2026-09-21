@@ -8,7 +8,7 @@ import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { fn } from "@/utils/fn";
 import { isPlainTarget } from "../token";
-import { z } from "zod";
+import { custom, optional, strictObject } from "valibot";
 
 /**
  * `@Endpoint` 装饰器的配置选项
@@ -22,18 +22,17 @@ export interface EndpointOptions<M extends AdapterModel> {
   connectTo?: readonly ConnectionTargetOf<M>[];
 }
 
-const EndpointOptionsSchema = z.object({
-  meta: z.custom<object>(
-    (value) => typeof value === "object" && value !== null,
+const EndpointOptionsSchema = strictObject({
+  meta: custom<object>((value) => typeof value === "object" && value !== null),
+  connectTo: optional(
+    custom<readonly object[]>(
+      (value) => Array.isArray(value) && value.every(isPlainTarget),
+    ),
   ),
-  connectTo: z.array(z.custom<object>(isPlainTarget)).readonly().optional(),
 });
 
 /** Validates endpoint registration before its metadata snapshot is captured. */
-const validateEndpointOptions = fn(
-  EndpointOptionsSchema.strict(),
-  (input) => input,
-);
+const validateEndpointOptions = fn(EndpointOptionsSchema, (input) => input);
 
 export type NexusEndpointDecorator<M extends AdapterModel = AdapterModel> = (
   targetClass: new (...args: unknown[]) => IEndpoint<M>,
@@ -70,7 +69,14 @@ export function createEndpointDecorator(
       );
     }
 
-    const registrationOptions = validatedOptions.value as EndpointOptions<M>;
+    const registrationOptions = {
+      ...validatedOptions.value,
+    } as EndpointOptions<M>;
+    if (registrationOptions.connectTo !== undefined) {
+      registrationOptions.connectTo = Object.freeze([
+        ...registrationOptions.connectTo,
+      ]);
+    }
 
     /** Records the class; construction remains owned by the bootstrap snapshot. */
     return function (

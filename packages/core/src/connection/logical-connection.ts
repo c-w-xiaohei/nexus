@@ -559,9 +559,10 @@ export class LogicalConnection<M extends AdapterModel> {
           this.close("protocol");
           return;
         }
-        this.peerIdentity = Object.freeze({ ...identity });
+        const nextIdentity = Object.freeze({ ...identity });
+        this.peerIdentity = nextIdentity;
         this.identityChanel[1]
-          .safeEmit(this.peerIdentity)
+          .safeEmit(nextIdentity)
           .tapError((errors) =>
             this.logger.error("Identity observers failed", errors),
           );

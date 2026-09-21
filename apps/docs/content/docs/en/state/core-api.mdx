@@ -83,6 +83,8 @@ Validators must check the actual snapshot or action-result shape. Nexus preserve
 the original value: defaults and transformed outputs are not installed in a
 mirror or returned instead of an action result. A coercing or transforming
 validator's output type does not establish the original value's type.
+The TypeScript contract constrains the validator's output type; it does not
+statically check input compatibility. Unknown-input validators are supported.
 
 Validation must return synchronously. Asynchronous validators are rejected with
 `E_STORE_PROTOCOL`; they do not delay publication. Thrown validation errors are

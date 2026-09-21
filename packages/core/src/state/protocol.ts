@@ -1,57 +1,60 @@
-import { z } from "zod";
+import * as v from "valibot";
 import { Result } from "better-result";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { NexusStoreProtocolError } from "./errors";
-import type { RemoteActions } from "./contract";
+import type { RemoteActions, StoreValidationSchema } from "./contract";
 
-const snapshot = z.object({
-  storeInstanceId: z.string(),
-  version: z.number().int().nonnegative(),
-  state: z.unknown(),
-});
-const callback = z.custom<(...args: any[]) => Promise<unknown>>(
+const snapshotEntries = {
+  storeInstanceId: v.string(),
+  version: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  state: v.unknown(),
+};
+const callback = v.custom<(...args: any[]) => Promise<unknown>>(
   (value) => typeof value === "function",
 );
 
 // Capabilities travel in init, not subscribe's return value. Late init callbacks can
 // still be rejected and cleaned up after the original acquisition has timed out.
-export const InitEnvelopeSchema = snapshot.extend({
-  type: z.literal("init"),
-  actions: z.record(z.string(), callback),
+export const InitEnvelopeSchema = v.object({
+  ...snapshotEntries,
+  type: v.literal("init"),
+  actions: v.record(v.string(), callback),
   unsubscribe: callback,
 });
-export const SnapshotEnvelopeSchema = snapshot.extend({
-  type: z.literal("snapshot"),
+export const SnapshotEnvelopeSchema = v.object({
+  ...snapshotEntries,
+  type: v.literal("snapshot"),
 });
-export const TerminalEnvelopeSchema = z.object({
-  type: z.literal("terminal"),
-  storeInstanceId: z.string(),
-  lastKnownVersion: z.number().int().nonnegative(),
-  reason: z.enum([
+export const TerminalEnvelopeSchema = v.object({
+  type: v.literal("terminal"),
+  storeInstanceId: v.string(),
+  lastKnownVersion: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  reason: v.picklist([
     "target-replaced",
     "target-changed",
     "provider-shutdown",
     "source-disconnected",
     "authorization-revoked",
   ]),
-  error: z.unknown().optional(),
+  error: v.optional(v.unknown()),
 });
 // Instance + version prevent stale providers and duplicate/out-of-order snapshots
 // from silently overwriting a live mirror. Core handles the RPC, not this ordering.
-export const SyncEnvelopeSchema = z.discriminatedUnion("type", [
+export const SyncEnvelopeSchema = v.variant("type", [
   InitEnvelopeSchema,
   SnapshotEnvelopeSchema,
   TerminalEnvelopeSchema,
 ]);
 
 export type SnapshotEnvelope<S = unknown> = Omit<
-  z.infer<typeof SnapshotEnvelopeSchema>,
+  v.InferOutput<typeof SnapshotEnvelopeSchema>,
   "state"
 > & { state: S };
-export type TerminalEnvelope = z.infer<typeof TerminalEnvelopeSchema>;
+export type TerminalEnvelope = v.InferOutput<typeof TerminalEnvelopeSchema>;
 export type TerminalReason = TerminalEnvelope["reason"];
 export type InitEnvelope<S, Store extends object> = Omit<
-  z.infer<typeof InitEnvelopeSchema>,
+  v.InferOutput<typeof InitEnvelopeSchema>,
   "state" | "actions" | "unsubscribe"
 > & {
   state: S;
@@ -63,21 +66,54 @@ export type SyncEnvelope<S = unknown, Store extends object = object> =
   | SnapshotEnvelope<S>
   | TerminalEnvelope;
 
-/** Preserves schema output and converts validation/getter throws at the boundary. */
+/** Parses framework-owned values and preserves Valibot's parsed output. */
 export const safeParsePayload = <T>(
-  schema: z.ZodType<T>,
+  schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>,
   value: unknown,
   message: string,
 ): Result<T, NexusStoreProtocolError> =>
   Result.try({
-    try: () => ({ data: schema.parse(value) }),
+    try: () => {
+      const parsed = v.safeParse(schema, value);
+      if (!parsed.success) throw new TypeError("Schema validation failed.");
+      return { data: parsed.output };
+    },
     catch: (cause) => new NexusStoreProtocolError(message, { cause }),
   }).map(({ data }) => data);
+
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  (typeof value === "object" && value !== null) || typeof value === "function"
+    ? typeof (value as { then?: unknown }).then === "function"
+    : false;
+
+/**
+ * Runs synchronous Standard Schema validation at the State boundary.
+ * Output compatibility does not prove the raw input type; async results are
+ * rejected at runtime and their promises are consumed.
+ */
+export const safeValidateValue = <Output>(
+  value: unknown,
+  schema: StandardSchemaV1<unknown, Output>,
+  message: string,
+): Result<Output, NexusStoreProtocolError> => {
+  try {
+    const candidate = schema["~standard"].validate(value);
+    if (isPromiseLike(candidate)) {
+      void Promise.resolve(candidate).catch(() => undefined);
+      throw new TypeError("Asynchronous State validation is not supported.");
+    }
+    const result = candidate as StandardSchemaV1.Result<Output>;
+    if (result.issues) throw new TypeError("State validation failed.");
+    return Result.ok(result.value);
+  } catch (cause) {
+    return Result.err(new NexusStoreProtocolError(message, { cause }));
+  }
+};
 
 /** Validate object-shaped state without replacing the received wire value. */
 export const safeValidateState = <TState extends object>(
   state: unknown,
-  schema: z.ZodType<TState> | undefined,
+  schema: StoreValidationSchema<TState> | undefined,
   message: string,
 ): Result<TState, NexusStoreProtocolError> => {
   if (typeof state !== "object" || state === null)
@@ -89,7 +125,7 @@ export const safeValidateState = <TState extends object>(
   // A shared validator is not a normalization pipeline: every replica installs
   // the same wire state, even if the schema contains a transform or defaults.
   if (schema)
-    return safeParsePayload(schema, state, message).map(() => state as TState);
+    return safeValidateValue(state, schema, message).map(() => state as TState);
   return Result.ok(state as TState);
 };
 

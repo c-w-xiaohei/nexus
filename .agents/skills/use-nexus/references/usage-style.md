@@ -19,6 +19,8 @@ State token `validation.state` and `validation.actionResults` accept synchronous
 Standard Schema validators, including Valibot, Zod 4, and Zod Mini. Validate the
 actual wire shape: Nexus keeps the original state/action result and discards
 transformed/defaulted outputs. Async validators produce `E_STORE_PROTOCOL`.
+Types constrain schema outputs, not input compatibility; unknown-input schemas
+are supported, but their outputs do not establish the raw value's type.
 Applications must declare their chosen validator dependency; Core's internal
 Valibot implementation does not require applications to use Valibot.
 

@@ -1,3 +1,5 @@
+import * as v from "valibot";
+
 /**
  * If you update message types or structures here, you MUST also update the protocol serializers in @/transport/serializers/protocol.
  */
@@ -5,20 +7,28 @@
 /**
  * The unique identifier for a request that expects a response.
  */
-export type MessageId = string | number;
+export const MessageIdSchema = v.union([
+  v.string(),
+  v.pipe(v.number(), v.finite()),
+]);
+
+export type MessageId = v.InferOutput<typeof MessageIdSchema>;
 
 /**
  * Represents a standard format for serialized errors that can be safely
  * transmitted across contexts.
  */
-export interface SerializedError {
+const ErrorPathPartSchema = v.union([
+  v.string(),
+  v.pipe(v.number(), v.finite()),
+]);
+
+export type SerializedError = {
   name: string;
   code: string;
   message: string;
-  /** Present only for errors produced by a Nexus framework boundary. */
   origin?: "framework";
   cause?: SerializedError;
-  /** Allowlisted diagnostics only; arbitrary application context never crosses the wire. */
   context?: {
     originalError?: SerializedError;
     connectionId?: string;
@@ -28,7 +38,29 @@ export interface SerializedError {
     path?: (string | number)[];
   };
   stack?: string;
-}
+};
+
+const SerializedErrorContextSchema = v.object({
+  originalError: v.optional(v.lazy(() => SerializedErrorSchema)),
+  connectionId: v.optional(v.string()),
+  sourceConnectionId: v.optional(v.string()),
+  resourceId: v.optional(v.nullable(v.string())),
+  serviceName: v.optional(v.string()),
+  path: v.optional(v.array(ErrorPathPartSchema)),
+});
+
+/** Runtime validation for the framework-owned, allowlisted error envelope. */
+export const SerializedErrorSchema: v.GenericSchema<SerializedError> = v.object(
+  {
+    name: v.string(),
+    code: v.string(),
+    message: v.string(),
+    origin: v.optional(v.literal("framework")),
+    cause: v.optional(v.lazy(() => SerializedErrorSchema)),
+    context: v.optional(SerializedErrorContextSchema),
+    stack: v.optional(v.string()),
+  },
+);
 
 /**
  * An enumeration of all possible message types within the Nexus framework.
@@ -57,138 +89,207 @@ export enum NexusMessageType {
   CHUNK_DATA = 17,
 }
 
+const AnyValueSchema: v.GenericSchema<any> = v.any();
+const PathSchema = v.array(ErrorPathPartSchema);
+const CapabilitiesSchema: v.GenericSchema<readonly string[]> = v.pipe(
+  v.array(v.string()),
+  v.readonly(),
+);
+const MessageTypeSchema = v.enum(NexusMessageType);
+const ChunkDataSchema = v.union([v.string(), v.instance(ArrayBuffer)]);
+const MessageBaseSchema = {
+  type: v.number(),
+  id: v.nullable(MessageIdSchema),
+};
+
 /**
  * The base interface for all Nexus messages, containing the type and a
  * potentially nullable message ID.
  */
-interface NexusMessageBase {
-  type: NexusMessageType;
-  id: MessageId | null;
-}
-
 // =============================================================================
 // Layer 3: RPC & Service Proxy Messages
 // =============================================================================
 
 /** A request to get a property from a remote resource. */
-export interface GetMessage extends NexusMessageBase {
-  type: NexusMessageType.GET;
-  id: MessageId;
-  resourceId: string | null;
-  path: (string | number)[];
-  invocationServiceName?: string;
-}
+export const GetMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.GET),
+  id: MessageIdSchema,
+  resourceId: v.nullable(v.string()),
+  path: PathSchema,
+  invocationServiceName: v.optional(v.string()),
+});
+
+export type GetMessage = v.InferOutput<typeof GetMessageSchema>;
 
 /** A request to set a property on a remote resource. */
-export interface SetMessage extends NexusMessageBase {
-  type: NexusMessageType.SET;
-  id: MessageId;
-  resourceId: string | null;
-  path: (string | number)[];
-  invocationServiceName?: string;
-  value: any;
-}
+export const SetMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.SET),
+  id: MessageIdSchema,
+  resourceId: v.nullable(v.string()),
+  path: PathSchema,
+  invocationServiceName: v.optional(v.string()),
+  value: AnyValueSchema,
+});
+
+export type SetMessage = v.InferOutput<typeof SetMessageSchema>;
 
 /** A request to apply (call) a remote function or method. */
-export interface ApplyMessage extends NexusMessageBase {
-  type: NexusMessageType.APPLY;
-  id: MessageId;
-  resourceId: string | null;
-  path: (string | number)[];
-  invocationServiceName?: string;
-  args: any[];
-}
+export const ApplyMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.APPLY),
+  id: MessageIdSchema,
+  resourceId: v.nullable(v.string()),
+  path: PathSchema,
+  invocationServiceName: v.optional(v.string()),
+  args: v.array(AnyValueSchema),
+});
+
+export type ApplyMessage = v.InferOutput<typeof ApplyMessageSchema>;
 
 /** A notification to release a remote resource, freeing memory. No response is expected. */
-export interface ReleaseMessage extends NexusMessageBase {
-  type: NexusMessageType.RELEASE;
-  id: null;
-  resourceId: string;
-}
+export const ReleaseMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.RELEASE),
+  id: v.null_(),
+  resourceId: v.string(),
+});
+
+export type ReleaseMessage = v.InferOutput<typeof ReleaseMessageSchema>;
 
 /** A batch of RPC requests to be executed together for performance. */
-export interface BatchMessage extends NexusMessageBase {
-  type: NexusMessageType.BATCH;
-  id: MessageId;
-  calls: (GetMessage | SetMessage | ApplyMessage)[];
-}
+export const BatchMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.BATCH),
+  id: MessageIdSchema,
+  calls: v.array(
+    v.union([GetMessageSchema, SetMessageSchema, ApplyMessageSchema]),
+  ),
+});
+
+export type BatchMessage = v.InferOutput<typeof BatchMessageSchema>;
 
 /** A successful response to a request. */
-export interface ResMessage extends NexusMessageBase {
-  type: NexusMessageType.RES;
-  id: MessageId;
-  result: any;
-}
+export const ResMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.RES),
+  id: MessageIdSchema,
+  result: AnyValueSchema,
+});
+
+export type ResMessage = v.InferOutput<typeof ResMessageSchema>;
 
 /** An error response to a request. */
-export interface ErrMessage extends NexusMessageBase {
-  type: NexusMessageType.ERR;
-  id: MessageId;
-  error: SerializedError;
-}
+export const ErrMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.ERR),
+  id: MessageIdSchema,
+  error: SerializedErrorSchema,
+});
+
+export type ErrMessage = v.InferOutput<typeof ErrMessageSchema>;
 
 /** A batch of responses, corresponding to a BATCH request. */
-export interface BatchResMessage extends NexusMessageBase {
-  type: NexusMessageType.BATCH_RES;
-  id: MessageId;
-  results: ([0, any] | [1, SerializedError])[]; // [0, result] or [1, error]
-}
+export const BatchResMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.BATCH_RES),
+  id: MessageIdSchema,
+  results: v.array(
+    v.union([
+      v.tuple([v.literal(0), AnyValueSchema]),
+      v.tuple([v.literal(1), SerializedErrorSchema]),
+    ]),
+  ),
+});
+
+export type BatchResMessage = v.InferOutput<typeof BatchResMessageSchema>;
 
 // =============================================================================
 // Layer 2: Connection & Routing Messages
 // =============================================================================
 
 /** A request to initiate a connection handshake and exchange metadata. */
-export interface HandshakeReqMessage extends NexusMessageBase {
-  type: NexusMessageType.HANDSHAKE_REQ;
-  id: MessageId;
-  metadata: any;
+export const HandshakeReqMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.HANDSHAKE_REQ),
+  id: MessageIdSchema,
+  metadata: AnyValueSchema,
   /**
    * Optional metadata assigned by a parent context to a child context
    * during a "christening" handshake. Its presence signals a parent-child
    * connection type.
    */
-  assigns?: any;
-  capabilities?: readonly string[];
-}
+  assigns: v.optional(AnyValueSchema),
+  capabilities: v.optional(CapabilitiesSchema),
+});
+
+export type HandshakeReqMessage = v.InferOutput<
+  typeof HandshakeReqMessageSchema
+>;
 
 /** An acknowledgment to a handshake, confirming the connection. */
-export interface HandshakeAckMessage extends NexusMessageBase {
-  type: NexusMessageType.HANDSHAKE_ACK;
-  id: MessageId;
-  metadata: any;
-  capabilities?: readonly string[];
-  providers?: readonly string[];
-}
+export const HandshakeAckMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.HANDSHAKE_ACK),
+  id: MessageIdSchema,
+  metadata: AnyValueSchema,
+  capabilities: v.optional(CapabilitiesSchema),
+  providers: v.optional(CapabilitiesSchema),
+});
+
+export type HandshakeAckMessage = v.InferOutput<
+  typeof HandshakeAckMessageSchema
+>;
 
 /** A final confirmation that both sides accepted the handshake. */
-export interface HandshakeReadyMessage extends NexusMessageBase {
-  type: NexusMessageType.HANDSHAKE_READY;
-  id: MessageId;
-  capabilities?: readonly string[];
-  providers?: readonly string[];
-}
+export const HandshakeReadyMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.HANDSHAKE_READY),
+  id: MessageIdSchema,
+  capabilities: v.optional(CapabilitiesSchema),
+  providers: v.optional(CapabilitiesSchema),
+});
+
+export type HandshakeReadyMessage = v.InferOutput<
+  typeof HandshakeReadyMessageSchema
+>;
 
 /** A rejection of a handshake request due to policy or error. */
-export interface HandshakeRejectMessage extends NexusMessageBase {
-  type: NexusMessageType.HANDSHAKE_REJECT;
-  id: MessageId;
-  error: SerializedError;
-}
+export const HandshakeRejectMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.HANDSHAKE_REJECT),
+  id: MessageIdSchema,
+  error: SerializedErrorSchema,
+});
+
+export type HandshakeRejectMessage = v.InferOutput<
+  typeof HandshakeRejectMessageSchema
+>;
 
 /** A notification that an endpoint's metadata has been updated. */
-export interface IdentityUpdateMessage extends NexusMessageBase {
-  type: NexusMessageType.IDENTITY_UPDATE;
-  id: null;
-  updates: Partial<any>;
-}
+export const IdentityUpdateMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.IDENTITY_UPDATE),
+  id: v.null_(),
+  updates: AnyValueSchema,
+});
+
+export type IdentityUpdateMessage = v.InferOutput<
+  typeof IdentityUpdateMessageSchema
+>;
 
 /** Announces a newly available service on an already negotiated session. */
-export interface ProviderAvailableMessage extends NexusMessageBase {
-  type: NexusMessageType.PROVIDER_AVAILABLE;
-  id: null;
-  providers: readonly string[];
-}
+export const ProviderAvailableMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.PROVIDER_AVAILABLE),
+  id: v.null_(),
+  providers: CapabilitiesSchema,
+});
+
+export type ProviderAvailableMessage = v.InferOutput<
+  typeof ProviderAvailableMessageSchema
+>;
 
 // =============================================================================
 // Layer 1: Transport & Protocol Messages
@@ -198,24 +299,27 @@ export interface ProviderAvailableMessage extends NexusMessageBase {
  * A control message indicating the start of a multi-chunk message transfer.
  * This is handled transparently by Layer 1.
  */
-export interface ChunkStartMessage extends NexusMessageBase {
-  type: NexusMessageType.CHUNK_START;
-  id: MessageId; // Represents the chunk session ID
-  totalChunks: number;
-  originalMessageId: MessageId | null;
-  originalMessageType: NexusMessageType;
-}
+export const ChunkStartMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.CHUNK_START),
+  id: MessageIdSchema,
+  totalChunks: v.pipe(v.number(), v.finite()),
+  originalMessageId: v.nullable(MessageIdSchema),
+  originalMessageType: MessageTypeSchema,
+});
 
-/**
- * A message containing a single chunk of data for a large message.
- * This is handled transparently by Layer 1.
- */
-export interface ChunkDataMessage extends NexusMessageBase {
-  type: NexusMessageType.CHUNK_DATA;
-  id: MessageId; // Represents the chunk session ID
-  chunkIndex: number;
-  chunkData: string | ArrayBuffer;
-}
+export type ChunkStartMessage = v.InferOutput<typeof ChunkStartMessageSchema>;
+
+/** A message containing a single chunk of data for a large message. */
+export const ChunkDataMessageSchema = v.object({
+  ...MessageBaseSchema,
+  type: v.literal(NexusMessageType.CHUNK_DATA),
+  id: MessageIdSchema,
+  chunkIndex: v.pipe(v.number(), v.finite()),
+  chunkData: ChunkDataSchema,
+});
+
+export type ChunkDataMessage = v.InferOutput<typeof ChunkDataMessageSchema>;
 
 // =============================================================================
 // Union Types for Type Safety
@@ -254,6 +358,26 @@ export type NexusMessage =
   | NotificationMessage
   | ChunkStartMessage
   | ChunkDataMessage;
+
+/** The single runtime contract for all sixteen framework message variants. */
+export const NexusMessageSchema = v.variant("type", [
+  GetMessageSchema,
+  SetMessageSchema,
+  ApplyMessageSchema,
+  ResMessageSchema,
+  ErrMessageSchema,
+  ReleaseMessageSchema,
+  BatchMessageSchema,
+  BatchResMessageSchema,
+  HandshakeReqMessageSchema,
+  HandshakeAckMessageSchema,
+  HandshakeRejectMessageSchema,
+  HandshakeReadyMessageSchema,
+  IdentityUpdateMessageSchema,
+  ProviderAvailableMessageSchema,
+  ChunkStartMessageSchema,
+  ChunkDataMessageSchema,
+]);
 
 // =============================================================================
 // Type-level Validation for Protocol-Serializer Consistency

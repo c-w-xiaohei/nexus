@@ -391,6 +391,41 @@ describe("PayloadProcessor", () => {
       expect(bigintResult).toBe(originalBigInt);
     });
 
+    it("rejects Map entries that do not contain a key and value", () => {
+      const malformedMap = Placeholder.encode(
+        PlaceholderType.MAP,
+        JSON.stringify([["key"]]),
+      );
+
+      expect(
+        payloadProcessor.safeRevive([malformedMap], mockConnectionId),
+      ).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
+    });
+
+    it("rejects Set payloads that are not arrays", () => {
+      const malformedSet = Placeholder.encode(
+        PlaceholderType.SET,
+        JSON.stringify({ value: 1 }),
+      );
+
+      expect(
+        payloadProcessor.safeRevive([malformedSet], mockConnectionId),
+      ).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
+    });
+
+    it("keeps BigInt conversion semantics for accepted BigInt strings", () => {
+      const bigintPlaceholder = Placeholder.encode(
+        PlaceholderType.BIGINT,
+        "0x10",
+      );
+
+      expect(
+        unwrap(
+          payloadProcessor.safeRevive([bigintPlaceholder], mockConnectionId),
+        )[0],
+      ).toBe(16n);
+    });
+
     it("should recursively revive arrays and plain objects", () => {
       const placeholder = Placeholder.encode(
         PlaceholderType.RESOURCE,

@@ -1,6 +1,13 @@
 import { Result } from "better-result";
 const { err, ok } = Result;
-import { z } from "zod";
+import {
+  object,
+  safeParse,
+  type BaseIssue,
+  type BaseSchema,
+  type InferInput,
+  type InferOutput,
+} from "valibot";
 
 /**
  * Schema validation error
@@ -11,10 +18,14 @@ export class SchemaValidationError extends Error {
   constructor(
     message: string,
     readonly code: "VALIDATION_FAILED",
-    readonly zodError: z.ZodError,
+    readonly issues: readonly BaseIssue<unknown>[],
+    cause: unknown = { issues },
   ) {
     super(message);
+    this.cause = cause;
   }
+
+  readonly cause: unknown;
 }
 
 /**
@@ -37,8 +48,8 @@ type FnResult<R> =
 export type Fn<C extends (...args: any[]) => any> = C & {
   /** Skip validation and execute the original function directly */
   force: (...args: any[]) => any;
-  /** The Zod schema used by this function */
-  schema: z.ZodTypeAny;
+  /** The Valibot schema used by this function */
+  schema: BaseSchema<unknown, unknown, BaseIssue<unknown>>;
 };
 
 /**
@@ -81,18 +92,21 @@ const wrapResult = <R>(value: R) => {
 };
 
 // Tuple schema types
-type TupleSchema = readonly (readonly [string, z.ZodTypeAny])[];
+type TupleSchema = readonly (readonly [
+  string,
+  BaseSchema<unknown, unknown, BaseIssue<unknown>>,
+])[];
 type TupleInputArgs<T extends TupleSchema> = {
   [K in keyof T]: T[K] extends readonly [string, infer S]
-    ? S extends z.ZodTypeAny
-      ? z.input<S>
+    ? S extends BaseSchema<unknown, unknown, BaseIssue<unknown>>
+      ? InferInput<S>
       : never
     : never;
 };
 type TupleOutputArgs<T extends TupleSchema> = {
   [K in keyof T]: T[K] extends readonly [string, infer S]
-    ? S extends z.ZodTypeAny
-      ? z.infer<S>
+    ? S extends BaseSchema<unknown, unknown, BaseIssue<unknown>>
+      ? InferOutput<S>
       : never
     : never;
 };
@@ -103,8 +117,8 @@ type TupleOutputArgs<T extends TupleSchema> = {
  *
  * @example
  * const schema = args([
- *   ['name', z.string()],
- *   ['age', z.number()],
+ *   ['name', string()],
+ *   ['age', number()],
  * ] as const)
  *
  * const greet = fn(schema, (name, age) => `Hello ${name}, you are ${age}`)
@@ -116,21 +130,21 @@ export function args<T extends TupleSchema>(schema: T): T {
 /**
  * Create a type-safe function wrapper
  *
- * The fn function accepts a Zod schema and a callback function, returning an enhanced function that:
+ * The fn function accepts a Valibot schema and a callback function, returning an enhanced function that:
  * - Automatically validates input parameters
  * - Wraps return values into Result type
  * - Provides a force method to skip validation
  *
  * Supports two schema forms:
  * 1. TupleSchema (recommended): Use args() to define multi-parameter functions
- * 2. ZodType: Single parameter functions
+ * 2. Valibot schema: Single parameter functions
  *
  * @example
  * // Multi-parameter function (recommended with args)
  * const add = fn(
  *   args([
- *     ['a', z.number()],
- *     ['b', z.number()],
+ *     ['a', number()],
+ *     ['b', number()],
  *   ] as const),
  *   (a, b) => a + b
  * )
@@ -139,7 +153,7 @@ export function args<T extends TupleSchema>(schema: T): T {
  * @example
  * // Single parameter function
  * const validate = fn(
- *   z.object({ name: z.string() }),
+ *   object({ name: string() }),
  *   (input) => input
  * )
  * const result = validate({ name: 'Alice' })
@@ -159,34 +173,51 @@ export function fn<
     ...args: Relabel<Parameters<C>, TupleInputArgs<T>>
   ) => FnResult<ReturnType<C>>
 >;
-export function fn<T extends z.ZodType, C extends (input: z.infer<T>) => any>(
-  schema: T,
-  cb: C,
-): Fn<(input: z.input<T>) => FnResult<ReturnType<C>>>;
+export function fn<
+  T extends BaseSchema<unknown, unknown, BaseIssue<unknown>>,
+  C extends (input: InferOutput<T>) => any,
+>(schema: T, cb: C): Fn<(input: InferInput<T>) => FnResult<ReturnType<C>>>;
 export function fn(
-  schema: z.ZodTypeAny | TupleSchema,
+  schema: BaseSchema<unknown, unknown, BaseIssue<unknown>> | TupleSchema,
   cb: (...args: any[]) => any,
 ): any {
-  // Handle ZodType (single parameter)
-  if (schema instanceof z.ZodType) {
+  // Handle a Valibot schema (single parameter).
+  if (!Array.isArray(schema)) {
+    const singleSchema = schema as BaseSchema<
+      unknown,
+      unknown,
+      BaseIssue<unknown>
+    >;
     const result = ((input: unknown) => {
-      const parsed = schema.safeParse(input);
+      let parsed;
+      try {
+        parsed = safeParse(singleSchema, input);
+      } catch (cause) {
+        return err(
+          new SchemaValidationError(
+            "Schema validation failed",
+            "VALIDATION_FAILED",
+            [],
+            cause,
+          ),
+        ) as any;
+      }
       if (!parsed.success) {
         return err(
           new SchemaValidationError(
             "Schema validation failed",
             "VALIDATION_FAILED",
-            parsed.error,
+            parsed.issues,
           ),
         ) as any;
       }
 
-      const value = cb(parsed.data);
+      const value = cb(parsed.output);
       return wrapResult(value);
     }) as Fn<(input: unknown) => unknown>;
 
     result.force = (input: unknown) => cb(input);
-    result.schema = schema;
+    result.schema = singleSchema;
 
     return result;
   }
@@ -194,25 +225,37 @@ export function fn(
   // Handle TupleSchema (array of [key, schema] pairs)
   if (Array.isArray(schema)) {
     const keys = schema.map(([key]) => key);
-    const objectSchema = z.object(Object.fromEntries(schema));
+    const objectSchema = object(Object.fromEntries(schema));
 
     const result = ((...args: unknown[]) => {
       const rawInput = Object.fromEntries(
         keys.map((key, index) => [key, args[index]]),
       );
-      const parsed = objectSchema.safeParse(rawInput);
+      let parsed;
+      try {
+        parsed = safeParse(objectSchema, rawInput);
+      } catch (cause) {
+        return err(
+          new SchemaValidationError(
+            "Schema validation failed",
+            "VALIDATION_FAILED",
+            [],
+            cause,
+          ),
+        ) as any;
+      }
       if (!parsed.success) {
         return err(
           new SchemaValidationError(
             "Schema validation failed",
             "VALIDATION_FAILED",
-            parsed.error,
+            parsed.issues,
           ),
         ) as any;
       }
 
       const value = cb(
-        ...(keys.map((key) => (parsed.data as any)[key]) as unknown[]),
+        ...(keys.map((key) => (parsed.output as any)[key]) as unknown[]),
       );
       return wrapResult(value);
     }) as unknown as Fn<(...args: unknown[]) => unknown>;

@@ -10,10 +10,11 @@ import {
   PLACEHOLDER_PREFIX,
   PlaceholderType,
   REVIVER_TABLE_CONFIG,
+  validateResourceId,
 } from "./protocol";
 import { Logger } from "@/logger";
 import { Result } from "better-result";
-import { NexusProtocolError, toFrameworkProtocolError } from "@/errors";
+import { toFrameworkProtocolError } from "@/errors";
 
 type RevivalContext = {
   sourceConnectionId: string;
@@ -188,12 +189,8 @@ export class PayloadProcessor {
         );
         return value;
       }
-      if (!placeholder.payload)
-        throw new NexusProtocolError(
-          "Resource placeholder requires a non-empty ID.",
-        );
+      const identity = validateResourceId(placeholder.payload ?? "");
       // One payload can repeat an identity; keep one facade and one rollback entry.
-      const identity = placeholder.payload;
       const previous = context.revived.get(identity);
       if (previous) return previous.proxy;
       const existedBeforeRevive = this.resourceManager.hasRemoteProxy(

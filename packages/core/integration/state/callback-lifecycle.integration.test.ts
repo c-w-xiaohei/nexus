@@ -11,7 +11,7 @@ import {
   SERVICE_ON_DISCONNECT,
   type ServiceInvocationHooks,
 } from "../../src/service/service-invocation-hooks";
-import { z } from "zod";
+import * as v from "valibot";
 import { Result } from "better-result";
 import type {
   NexusStoreServiceContract,
@@ -99,10 +99,11 @@ describe("State callback lifecycle across host and mirror", () => {
         {
           validation: {
             actionResults: {
-              add: z
-                .string()
-                .min(2)
-                .transform((value) => value.toUpperCase()),
+              add: v.pipe(
+                v.string(),
+                v.minLength(2),
+                v.transform((value) => value.toUpperCase()),
+              ),
             },
           },
         },
@@ -189,9 +190,9 @@ describe("State callback lifecycle across host and mirror", () => {
     const { provider, store } = createHost();
     const callback = vi.fn();
     const client = createRemoteStore<Data & Actions>({
-      state: z.object({
-        count: z.number().min(1),
-        nested: z.object({ value: z.number() }),
+      state: v.object({
+        count: v.pipe(v.number(), v.minValue(1)),
+        nested: v.object({ value: v.number() }),
       }),
     });
     await expect(
@@ -454,9 +455,9 @@ describe("State callback lifecycle across host and mirror", () => {
       "state:rich",
       {
         validation: {
-          state: z.object({
-            count: z.number().max(2),
-            map: z.map(z.string(), z.bigint()),
+          state: v.object({
+            count: v.pipe(v.number(), v.maxValue(2)),
+            map: v.map(v.string(), v.bigint()),
           }),
         },
       },

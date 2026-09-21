@@ -2,7 +2,9 @@ import * as Message from "../../types/message.js";
 import type { ISerializer } from "./interface.js";
 import { MESSAGE_PACKET_STRUCTURE } from "./protocol/json-protocol.js";
 import { NexusProtocolError } from "../../errors/transport-errors.js";
+import { toSerializedError } from "../../utils/error.js";
 import { Result } from "better-result";
+import { safeParse } from "valibot";
 const { err, ok } = Result;
 
 export namespace JsonSerializer {
@@ -20,59 +22,120 @@ export namespace JsonSerializer {
       );
     }
 
-    if (message.type === Message.NexusMessageType.BATCH) {
-      const batchMessage = message as Message.BatchMessage;
-      if (!Array.isArray(batchMessage.calls)) {
-        return err(
-          new NexusProtocolError(
-            "Invalid Nexus-JSON batch message: calls must be an array",
-            {
-              messageType: batchMessage.type,
-              message: batchMessage,
-            },
-          ),
+    const parsed = safeParse(Message.NexusMessageSchema, message);
+    if (!parsed.success) {
+      if (
+        message.type === Message.NexusMessageType.BATCH &&
+        Array.isArray((message as Partial<Message.BatchMessage>).calls)
+      ) {
+        const invalidCall = (message as Message.BatchMessage).calls.find(
+          (call) => !call || typeof call !== "object",
         );
-      }
-
-      const packedCalls: any[][] = [];
-      for (const call of batchMessage.calls) {
-        if (!call || typeof call !== "object") {
+        if (invalidCall !== undefined) {
           return err(
             new NexusProtocolError(
               "Invalid Nexus-JSON batch message: call must be an object",
-              { messageType: batchMessage.type, call },
+              { messageType: message.type, call: invalidCall },
             ),
           );
         }
-        const packed = messageToPacketArray(call);
-        if (packed.isErr()) return err(packed.error);
-        packedCalls.push(packed.value);
       }
+      return err(
+        new NexusProtocolError("Invalid Nexus-JSON message shape", {
+          messageType: message.type,
+          message,
+          issues: parsed.issues,
+        }),
+      );
+    }
+
+    if (
+      message.type === Message.NexusMessageType.CHUNK_DATA &&
+      message.chunkData instanceof ArrayBuffer
+    ) {
+      return err(
+        new NexusProtocolError(
+          "ArrayBuffer chunk data is not supported by JSON transport",
+          { messageType: message.type },
+        ),
+      );
+    }
+
+    if (message.type === Message.NexusMessageType.BATCH) {
+      const batchMessage = message as Message.BatchMessage;
+      const packedCalls = batchMessage.calls.map((call) =>
+        packMessageWithoutValidation(call),
+      );
       return ok([batchMessage.type, batchMessage.id, packedCalls]);
     }
 
+    return ok(packMessageWithoutValidation(message));
+  };
+
+  const packMessageWithoutValidation = (
+    message: Message.NexusMessage,
+  ): any[] => {
     const structure = MESSAGE_PACKET_STRUCTURE[message.type];
     if (!structure) {
-      return err(
-        new NexusProtocolError(
-          `Unknown message type for serialization: ${message.type}`,
-          { messageType: message.type, message },
-        ),
+      throw new NexusProtocolError(
+        `Unknown message type for serialization: ${message.type}`,
+        { messageType: message.type, message },
       );
     }
 
     const packet = structure.map((key) => (message as any)[key]);
     if (!("invocationServiceName" in message)) {
-      return ok(toLegacyInvocationPacket(message.type, packet));
+      return toLegacyInvocationPacket(message.type, packet);
     }
 
-    return ok(packet);
+    return packet;
   };
 
   const packetArrayToMessage = (
     packet: any[],
   ): Result<Message.NexusMessage, NexusProtocolError> => {
-    const messageType = packet[0] as Message.NexusMessageType;
+    try {
+      return packetArrayToMessageUnchecked(packet);
+    } catch (error) {
+      return err(
+        createThrownProtocolError(
+          "Failed to validate Nexus-JSON packet",
+          error,
+          {
+            packet,
+          },
+        ),
+      );
+    }
+  };
+
+  const packetArrayToMessageUnchecked = (
+    packet: any[],
+  ): Result<Message.NexusMessage, NexusProtocolError> => {
+    if (!Array.isArray(packet) || packet.length === 0) {
+      return err(
+        new NexusProtocolError("Invalid Nexus-JSON packet: empty array", {
+          packet,
+        }),
+      );
+    }
+
+    const messageType = packet[0];
+
+    if (
+      typeof messageType !== "number" ||
+      !Object.prototype.hasOwnProperty.call(
+        MESSAGE_PACKET_STRUCTURE,
+        messageType,
+      )
+    ) {
+      return err(
+        new NexusProtocolError(
+          `Unknown message type for deserialization: ${String(messageType)}`,
+          { messageType, packet },
+        ),
+      );
+    }
 
     if (messageType === Message.NexusMessageType.BATCH) {
       const [type, id, packedCalls] = packet;
@@ -87,7 +150,9 @@ export namespace JsonSerializer {
         );
       }
 
-      const calls: Message.NexusMessage[] = [];
+      const calls: Array<
+        Message.GetMessage | Message.SetMessage | Message.ApplyMessage
+      > = [];
       for (const packedCall of packedCalls) {
         if (!Array.isArray(packedCall)) {
           return err(
@@ -97,20 +162,65 @@ export namespace JsonSerializer {
             ),
           );
         }
-        const call = packetArrayToMessage(packedCall);
-        if (call.isErr()) return err(call.error);
-        calls.push(call.value);
+        const nestedType = packedCall[0];
+        if (
+          nestedType !== Message.NexusMessageType.GET &&
+          nestedType !== Message.NexusMessageType.SET &&
+          nestedType !== Message.NexusMessageType.APPLY
+        ) {
+          return err(
+            new NexusProtocolError(
+              "Invalid Nexus-JSON batch packet: nested call must be GET, SET, or APPLY",
+              { packet, packedCall },
+            ),
+          );
+        }
+        calls.push(
+          packetToLogicalMessage(packedCall, nestedType) as
+            | Message.GetMessage
+            | Message.SetMessage
+            | Message.ApplyMessage,
+        );
       }
-      return ok({ type, id, calls } as Message.BatchMessage);
+      const batch = { type, id, calls };
+      const parsed = safeParse(Message.BatchMessageSchema, batch);
+      if (!parsed.success) {
+        return err(
+          new NexusProtocolError("Invalid Nexus-JSON batch packet", {
+            packet,
+            issues: parsed.issues,
+          }),
+        );
+      }
+      return ok(batch);
     }
 
-    const structure = MESSAGE_PACKET_STRUCTURE[messageType];
-    if (!structure) {
+    const logicalMessage = packetToLogicalMessage(packet, messageType);
+    const parsed = safeParse(Message.NexusMessageSchema, logicalMessage);
+    if (!parsed.success) {
       return err(
-        new NexusProtocolError(
-          `Unknown message type for deserialization: ${messageType}`,
-          { messageType, packet },
-        ),
+        new NexusProtocolError("Invalid Nexus-JSON packet shape", {
+          messageType,
+          packet,
+          issues: parsed.issues,
+        }),
+      );
+    }
+
+    return ok(logicalMessage as Message.NexusMessage);
+  };
+
+  const packetToLogicalMessage = (
+    packet: any[],
+    messageType: Message.NexusMessageType,
+  ): Record<string, unknown> => {
+    const structure = MESSAGE_PACKET_STRUCTURE[
+      messageType
+    ] as readonly string[];
+    if (!structure) {
+      throw new NexusProtocolError(
+        `Unknown message type for deserialization: ${messageType}`,
+        { messageType, packet },
       );
     }
 
@@ -118,7 +228,7 @@ export namespace JsonSerializer {
       messageType,
       packet,
     );
-    const logicalMessage: any = {};
+    const logicalMessage: Record<string, unknown> = {};
     structure.forEach((key, index) => {
       if (
         index < normalizedPacket.length &&
@@ -127,11 +237,14 @@ export namespace JsonSerializer {
           normalizedPacket[index] === LEGACY_INVOCATION_SERVICE_NAME
         )
       ) {
-        logicalMessage[key] = normalizedPacket[index];
+        const value = normalizedPacket[index];
+        if (value !== null || !isNullablePaddingKey(key)) {
+          logicalMessage[key] = value;
+        }
       }
     });
 
-    return ok(logicalMessage as Message.NexusMessage);
+    return logicalMessage;
   };
 
   const LEGACY_INVOCATION_SERVICE_NAME = Symbol("legacyInvocationServiceName");
@@ -173,21 +286,34 @@ export namespace JsonSerializer {
     return packet;
   };
 
+  const isNullablePaddingKey = (key: string): boolean =>
+    key === "invocationServiceName" ||
+    key === "assigns" ||
+    key === "capabilities" ||
+    key === "providers";
+
   export const safeSerialize = (
     logicalMessage: Message.NexusMessage,
-  ): Result<string, NexusProtocolError> =>
-    messageToPacketArray(logicalMessage).andThen((packetArray) => {
-      try {
-        return ok(JSON.stringify(packetArray));
-      } catch (error) {
-        return err(
-          new NexusProtocolError(
-            `Failed to serialize JSON packet: ${error instanceof Error ? error.message : String(error)}`,
-            { messageType: logicalMessage.type, originalError: error },
-          ),
-        );
-      }
-    });
+  ): Result<string, NexusProtocolError> => {
+    try {
+      return messageToPacketArray(logicalMessage).andThen((packetArray) => {
+        try {
+          return ok(JSON.stringify(packetArray));
+        } catch (error) {
+          return err(
+            new NexusProtocolError(
+              `Failed to serialize JSON packet: ${error instanceof Error ? error.message : String(error)}`,
+              { messageType: logicalMessage.type, originalError: error },
+            ),
+          );
+        }
+      });
+    } catch (error) {
+      return err(
+        createThrownProtocolError("Failed to serialize JSON message", error),
+      );
+    }
+  };
 
   export const safeDeserialize = (
     packet: string | ArrayBuffer,
@@ -224,8 +350,29 @@ export namespace JsonSerializer {
       );
     }
 
-    return packetArrayToMessage(packetArray);
+    try {
+      return packetArrayToMessage(packetArray);
+    } catch (error) {
+      return err(
+        createThrownProtocolError("Failed to deserialize JSON packet", error, {
+          packet,
+        }),
+      );
+    }
   };
+
+  const createThrownProtocolError = (
+    message: string,
+    error: unknown,
+    context: Record<string, unknown> = {},
+  ): NexusProtocolError =>
+    new NexusProtocolError(
+      `${message}: ${error instanceof Error ? error.message : String(error)}`,
+      {
+        cause: toSerializedError(error),
+        context: { ...context, originalError: error },
+      },
+    );
 
   export const serializer: ISerializer = {
     packetType: "string",

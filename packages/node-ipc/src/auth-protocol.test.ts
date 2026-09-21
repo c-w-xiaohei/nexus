@@ -1,5 +1,12 @@
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { safeParse } from "valibot";
+import {
+  AuthAckSchema,
+  AuthRequestSchema,
+  type AuthAck,
+  type AuthRequest,
+} from "./auth-protocol";
 import { UnixSocketClientEndpoint } from "./endpoints/unix-socket-client";
 import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server";
 import { createHarness, type TestHarness } from "./integration-test-utils";
@@ -21,6 +28,57 @@ afterEach(async () => {
 });
 
 describe("node-ipc auth protocol", () => {
+  it("validates auth wire shapes while preserving unknown fields", () => {
+    const request: AuthRequest = {
+      type: "nexus-ipc-auth",
+      version: 1,
+      token: "secret",
+      requestId: "request-1",
+    };
+    const ack: AuthAck = {
+      type: "nexus-ipc-auth-ok",
+      requestId: "request-1",
+    };
+
+    expect(safeParse(AuthRequestSchema, request)).toEqual({
+      success: true,
+      output: request,
+      issues: undefined,
+      typed: true,
+    });
+    expect(safeParse(AuthAckSchema, ack)).toEqual({
+      success: true,
+      output: ack,
+      issues: undefined,
+      typed: true,
+    });
+  });
+
+  it.each([
+    { type: "wrong", version: 1, token: "secret" },
+    { type: "nexus-ipc-auth", version: 2, token: "secret" },
+    { type: "nexus-ipc-auth", version: 1, token: 123 },
+  ])("rejects malformed auth request shapes: %j", (request) => {
+    expect(safeParse(AuthRequestSchema, request).success).toBe(false);
+  });
+
+  it.each([{ type: "wrong" }, {}])(
+    "rejects malformed auth ack shapes: %j",
+    (ack) => {
+      expect(safeParse(AuthAckSchema, ack).success).toBe(false);
+    },
+  );
+
+  it("accepts arbitrary ack extension fields", () => {
+    expect(
+      safeParse(AuthAckSchema, {
+        type: "nexus-ipc-auth-ok",
+        version: "future",
+        requestId: 123,
+      }).success,
+    ).toBe(true);
+  });
+
   it("maps malformed server auth responses to a stable protocol error", async () => {
     harness = await createHarness();
     server = net.createServer((socket) => {
@@ -50,7 +108,10 @@ describe("node-ipc auth protocol", () => {
     server = net.createServer((socket) => {
       serverSocket = socket;
       socket.write('{"type":"nexus');
-      setTimeout(() => socket.write('-ipc-auth-ok"}\n'), 0);
+      setTimeout(
+        () => socket.write('-ipc-auth-ok","requestId":"response-1"}\n'),
+        0,
+      );
     });
     if (harness.address.kind !== "path")
       throw new Error("expected path socket");
@@ -94,7 +155,7 @@ describe("node-ipc auth protocol", () => {
     await new Promise<void>((resolve) => socket.once("connect", resolve));
 
     socket.write('{"type":"nexus-ipc-auth","version":1,');
-    setTimeout(() => socket.write('"token":"secret"}\n'), 0);
+    setTimeout(() => socket.write('"token":"secret","extension":false}\n'), 0);
 
     await vi.waitFor(() => expect(onConnect).toHaveBeenCalledOnce());
     expect(onConnect.mock.calls[0][1]).toMatchObject({
