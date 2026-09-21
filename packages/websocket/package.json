@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/websocket",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "description": "WebSocket adapter for Nexus framework",
   "private": false,
   "license": "MIT",
@@ -41,6 +41,7 @@
     "dev": "node ../../scripts/watch-package.mjs",
     "test": "pnpm build && vitest run src/__tests__",
     "test:browser": "pnpm --filter @nexus-js/core build && pnpm build && playwright test",
+    "test:bun": "pnpm --filter @nexus-js/core build && pnpm build && bun test ./tests/runtime/ws-compat.test.mjs",
     "lint": "oxlint .",
     "typecheck": "tsc --noEmit"
   },

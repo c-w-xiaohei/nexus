@@ -8,7 +8,14 @@
     "@nexus-js/iframe": "0.5.0",
     "@nexus-js/node-ipc": "0.6.0",
     "@nexus-js/react": "0.8.0",
-    "@nexus-js/testing": "0.6.0"
+    "@nexus-js/testing": "0.6.0",
+    "@nexus-js/websocket": "0.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "chrome-addressed-extension-pages",
+    "connection-resource-api",
+    "testing-connection-resource-api",
+    "websocket-adapter",
+    "websocket-binary-views"
+  ]
 }
