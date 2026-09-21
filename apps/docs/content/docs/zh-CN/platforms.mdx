@@ -5,11 +5,12 @@ description: 为 Chrome 扩展、iframe 或本地 Node 进程选择适配器。
 
 在各个上下文中安装 `@nexus-js/core`，并根据通信方式选择适配器。上下文的启动和连接目标的发现由应用负责。
 
-| 通信场景                                         | 包                   | 指南                               |
-| ------------------------------------------------ | -------------------- | ---------------------------------- |
-| Chrome 扩展上下文                                | `@nexus-js/chrome`   | [Chrome 扩展](/nexus/docs/chrome/) |
-| 父页面和浏览器 iframe                            | `@nexus-js/iframe`   | [Iframe](/nexus/docs/iframe/)      |
-| 通过 Unix 套接字通信的本地守护进程和 Node 客户端 | `@nexus-js/node-ipc` | [Node IPC](/nexus/docs/node-ipc/)  |
+| 通信场景                                         | 包                    | 指南                                |
+| ------------------------------------------------ | --------------------- | ----------------------------------- |
+| Chrome 扩展上下文                                | `@nexus-js/chrome`    | [Chrome 扩展](/nexus/docs/chrome/)  |
+| 父页面和浏览器 iframe                            | `@nexus-js/iframe`    | [Iframe](/nexus/docs/iframe/)       |
+| 通过 Unix 套接字通信的本地守护进程和 Node 客户端 | `@nexus-js/node-ipc`  | [Node IPC](/nexus/docs/node-ipc/)   |
+| 受控的浏览器、WebView 和 Node 客户端             | `@nexus-js/websocket` | [WebSocket](/nexus/docs/websocket/) |
 
 适配器提供初始化辅助函数、精确目标类型、平台通信通道和连接元数据。
 连接目标与服务提供者的通用行为见[核心概念](/nexus/docs/concepts/)。

@@ -1,0 +1,199 @@
+---
+title: WebSocket
+description: 通过 WebSocket 将受控的浏览器、WebView 和 Node 客户端连接到 Nexus 服务端。
+---
+
+`@nexus-js/websocket` 通过 WebSocket 传输 Nexus 二进制数据包，适用于连接到应用自有
+Node 宿主的受控浏览器、WebView 和 Node 客户端。
+
+<InstallCommand packages="@nexus-js/core @nexus-js/websocket" />
+
+浏览器安全的客户端 API 从 `@nexus-js/websocket` 导入；仅 Node 服务端 Endpoint 从
+`@nexus-js/websocket/server` 导入。
+
+## 适用范围 [#use-it-for]
+
+- 本机 Node 服务及其浏览器、WebView 或 Node 客户端
+- 开发服务器调试面板和多窗口工具 UI
+- 测试控制器与受控测试运行时
+- 由应用自行治理的受控远程工作区或隧道
+
+适配器不提供公网或多租户治理，也不负责发现对端、启动 HTTP 或 WebSocket 服务、登录
+或配对、自动重连、调用重放、持久化消息、恢复旧代理或 Ref，或提供大文件和持续流式传输。
+
+## 连接客户端 [#connect-a-client]
+
+在共享代码中定义不绑定 target 的服务契约和 Token。先配置运行时，再使用精确的
+WebSocket target 建立连接，并从返回的连接获取服务。
+
+```ts
+// shared/contracts.ts
+import { Token } from "@nexus-js/core";
+import type { WorkspaceService } from "./workspace-service.js";
+
+export const WorkspaceToken = new Token<WorkspaceService>("app:workspace");
+```
+
+```ts
+// browser/bootstrap.ts，或 Node 22+ 客户端
+import { usingWebSocketClient } from "@nexus-js/websocket";
+import { WorkspaceToken } from "../shared/contracts.js";
+
+const target = {
+  context: "websocket-server" as const,
+  url: "ws://127.0.0.1:43120/nexus",
+};
+
+const clientNexus = usingWebSocketClient({
+  protocols: ["my-app"],
+  connectTimeoutMs: 5_000,
+  connectTo: [target],
+  callTimeout: 10_000,
+  providers: [],
+  policy: {
+    canConnect: ({ connection }) => connection.role === "client",
+  },
+});
+
+const connection = await clientNexus.connect({ target });
+const workspace = connection.get(WorkspaceToken);
+await workspace.open("one");
+```
+
+客户端使用浏览器原生 `WebSocket` 或 Node 22+ 原生 WebSocket，不使用 `ws` 作为客户端
+实现。`protocols` 是标准 WebSocket 子协议列表，默认省略。`connectTimeoutMs` 独立限制
+原生拨号时间，不替代 Core 的连接获取超时。`connectTo` 是可选的一次性启动目标列表，
+不会添加重试。
+
+`usingWebSocketClient(options?)` 配置默认 Nexus 实例；设置 `configure: false` 时返回
+配置对象，供应用自己的 `Nexus` 设置使用。options 也接受 Nexus 的 `providers`、`policy`
+和 `callTimeout`。适配器没有 ticket、header、credential 或自动重连选项。浏览器客户端
+不能任意添加 HTTP header。应用凭证不要放入 URL、query string 或自动日志。
+
+不带 target 的 `connect` 只等待一个已经存在且匹配的 ready session，不会发现或启动服务端。
+URL 只标识宿主地址，不是身份或授权声明。
+
+## 接入服务端 Socket [#adopt-a-server-socket]
+
+服务端 Endpoint 只接入已经 OPEN 的 Node `ws` socket。它不会创建 HTTP/TLS 服务、执行
+Upgrade、检查 Origin 或路径、认证请求、发送 ping/pong，也不暴露自定义 control API。这些
+职责由宿主负责，宿主决定传给 Nexus 哪些本地事实。
+
+在启用宿主回调前先配置 providers 和 policy，并先 `await nexus.ready()`：这一步会安装
+Endpoint listener 和 providers。随后 Upgrade 回调只同步调用 `safeAttach`；接收 OPEN
+socket 到交给 Nexus 之间不能 `await`。
+
+```ts
+import { createServer } from "node:http";
+import { Nexus } from "@nexus-js/core";
+import { WebSocketServer } from "ws";
+import {
+  WebSocketServerEndpoint,
+  type WebSocketAdapterModel,
+} from "@nexus-js/websocket/server";
+import { WorkspaceToken } from "../shared/contracts.js";
+import { workspaceService } from "./workspace-service.js";
+
+type Facts = {
+  readonly cookie?: string;
+  readonly origin?: string;
+};
+
+const endpoint = new WebSocketServerEndpoint<Facts>({
+  maxConnections: 100,
+  maxPayloadBytes: 1_048_576,
+});
+const nexus = new Nexus<WebSocketAdapterModel<Facts>>();
+nexus.configure({
+  endpoint: {
+    implementation: endpoint,
+    meta: { context: "websocket-server" },
+  },
+  providers: [{ token: WorkspaceToken, service: workspaceService }],
+  policy: {
+    async canConnect({ connection }) {
+      if (connection.role !== "server") return false;
+      return await authenticateCookie(connection.cookie);
+    },
+    async canCall({ connection, serviceName, path }) {
+      return await authorizeCall(connection, serviceName, path);
+    },
+  },
+  callTimeout: 10_000,
+});
+await nexus.ready();
+
+const httpServer = createServer();
+const wsServer = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (request, socket, head) => {
+  const requestUrl = new URL(request.url ?? "/", "http://localhost");
+  if (requestUrl.pathname !== "/nexus") {
+    socket.destroy();
+    return;
+  }
+
+  const origin = request.headers.origin;
+  if (origin !== undefined && origin !== "https://app.example.test") {
+    socket.destroy();
+    return;
+  }
+
+  wsServer.handleUpgrade(request, socket, head, (ws) => {
+    const result = endpoint.safeAttach(ws, {
+      cookie: request.headers.cookie,
+      origin,
+    });
+    if (result.isErr()) ws.close();
+  });
+});
+
+httpServer.listen(43120, "127.0.0.1");
+
+// 应用关闭时，先关闭 Nexus 所有的 socket，再关闭宿主所有的服务。
+process.once("SIGTERM", () => {
+  endpoint.close();
+  wsServer.close();
+  httpServer.close();
+});
+```
+
+`attach(socket, facts)` 是 `safeAttach` 的 throw-style 版本。socket 必须处于 `OPEN`，
+Endpoint 必须已经 listening，且容量未满。成功后所有权转移给 Nexus，`facts` 会以
+`{ ...facts, role: "server" }` 写入 connection metadata；`role` 始终由适配器提供。失败时
+socket 仍归宿主，是否关闭或销毁由宿主决定。attach 成功不等于 Nexus connection 已 ready；
+Core 仍会执行正常握手和授权。
+
+`facts` 是应用定义的浅层快照。当 `canConnect` 需要时，可以包含 cookie 或 session 值等本地
+凭证，也可以包含 Origin 结果或其他事实。适配器不定义 principal 或认证模式，也不会保留
+request 或 socket。这些事实只属于该连接，并在连接生命周期内保留；应用必须负责其敏感性，
+不得记录或传输这些事实。
+
+宿主也可以在 Upgrade 阶段完成认证，再将非敏感的 principal 快照作为 facts 传入。无论采用哪种
+方式，`canConnect` 都仍然是 Nexus 的连接授权边界。
+
+`endpoint.close()` 会关闭 Nexus 所有的 socket，但不会关闭宿主的 HTTP、TLS 或
+`WebSocketServer`；这些服务何时以及如何停止由宿主决定。
+
+## 宿主边界与策略 [#host-boundaries-and-policy]
+
+宿主应负责 TLS、HTTP 路由、路径检查、Origin 检查、Upgrade 认证、协议协商、原生 `ws`
+ping/pong 和宿主资源限制。适配器只传输包含既有 Core 数据包的二进制消息；文本消息是不支持
+的输入，会终止通道。适配器仍会限制收到后的 payload、early packet 和发送积压，但无法提供
+浏览器收到数据之前的分配保证。
+
+Nexus 授权独立于 WebSocket 握手。`canConnect` 接收实际的 `connection` 属性，可以异步
+认证或授权；`canCall` 独立决定每次操作。`where` 只用于连接获取，不是 RPC 授权。如果服务端
+对不可信客户端可达，必须显式定义 policy：省略 Nexus policy 时，默认允许连接和调用。
+
+需要观察应用生命周期时，使用 `nexus.onConnect`、`connection.onDisconnected` 和普通
+identity observer。
+
+## 生命周期与限制 [#lifecycle-and-limits]
+
+一条 socket 对应一个 Nexus session。代理和 Ref 与 session 绑定：断开、重启或 session
+替换后，必须重新连接并获取新句柄。没有自动重连、调用重放或旧引用恢复。已经执行但未响应
+的调用不会在新连接上自动重放。
+
+Upgrade 路径、接入、policy、二进制帧、资源限制和关闭行为应通过真实 WebSocket 集成覆盖验证。
+`createMockNexus()` 只适用于 `NexusInstance` 调用侧的应用测试。

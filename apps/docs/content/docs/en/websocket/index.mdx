@@ -1,0 +1,221 @@
+---
+title: WebSocket
+description: Connect controlled browser, WebView, and Node clients to a Nexus server over WebSocket.
+---
+
+`@nexus-js/websocket` carries Nexus binary packets over a WebSocket. It is for
+controlled browser, WebView, and Node clients that connect to an application-owned
+Node host.
+
+<InstallCommand packages="@nexus-js/core @nexus-js/websocket" />
+
+Import the browser-safe client API from `@nexus-js/websocket`. Import the
+Node-only server endpoint from `@nexus-js/websocket/server`.
+
+## Use It For
+
+- local Node services and their browser, WebView, or Node clients
+- development-server debug panels and multi-window tool UIs
+- test controllers and controlled test runtimes
+- controlled remote workspaces or tunnels with application-owned governance
+
+This adapter does not provide public-internet or multi-tenant governance. It does
+not discover peers, start HTTP or WebSocket servers, implement login or pairing,
+automatically reconnect, replay calls, persist messages, restore old proxies or
+Refs, or provide large-file and sustained-stream transport.
+
+## Connect A Client
+
+Keep service contracts and Tokens target-free in shared code. Configure the
+runtime before demand, then use the exact WebSocket target and get the service
+from the returned connection.
+
+```ts
+// shared/contracts.ts
+import { Token } from "@nexus-js/core";
+import type { WorkspaceService } from "./workspace-service.js";
+
+export const WorkspaceToken = new Token<WorkspaceService>("app:workspace");
+```
+
+```ts
+// browser/bootstrap.ts, or a Node 22+ client
+import { usingWebSocketClient } from "@nexus-js/websocket";
+import { WorkspaceToken } from "../shared/contracts.js";
+
+const target = {
+  context: "websocket-server" as const,
+  url: "ws://127.0.0.1:43120/nexus",
+};
+
+const clientNexus = usingWebSocketClient({
+  protocols: ["my-app"],
+  connectTimeoutMs: 5_000,
+  connectTo: [target],
+  callTimeout: 10_000,
+  providers: [],
+  policy: {
+    canConnect: ({ connection }) => connection.role === "client",
+  },
+});
+
+const connection = await clientNexus.connect({ target });
+const workspace = connection.get(WorkspaceToken);
+await workspace.open("one");
+```
+
+The client uses the native browser `WebSocket` or the native Node 22+ WebSocket;
+it does not use `ws` as a client implementation. `protocols` is the standard
+WebSocket subprotocol list and is omitted by default. `connectTimeoutMs` bounds
+the native dial separately from Core's acquisition timeout. `connectTo` is an
+optional one-shot startup target list; it does not add retries.
+
+`usingWebSocketClient(options?)` configures the default Nexus instance. With
+`configure: false`, it returns a config for an application-owned `Nexus` setup.
+The options also accept Nexus `providers`, `policy`, and `callTimeout`. There is
+no ticket, header, credential, or automatic reconnect option in this adapter.
+Browser clients cannot arbitrarily add HTTP headers. Keep any application
+credentials out of URLs, query strings, and automatic logs.
+
+Targetless `connect` only waits for one existing matching ready session. It does
+not discover or start a server. A URL identifies the host address; it is not an
+identity or authorization assertion.
+
+## Adopt A Server Socket
+
+The server endpoint only adopts an already-open Node `ws` socket. It never creates
+an HTTP/TLS server, performs an Upgrade, checks Origin or path, authenticates a
+request, sends ping/pong, or exposes custom control APIs. The host owns those
+responsibilities and decides which local facts to pass to Nexus.
+
+Configure providers and policy before enabling the host callback. Await
+`nexus.ready()` first: this installs the endpoint listener and providers. The
+Upgrade callback then calls `safeAttach` synchronously; it must not await between
+accepting the open socket and transferring it to Nexus.
+
+```ts
+import { createServer } from "node:http";
+import { Nexus } from "@nexus-js/core";
+import { WebSocketServer } from "ws";
+import {
+  WebSocketServerEndpoint,
+  type WebSocketAdapterModel,
+} from "@nexus-js/websocket/server";
+import { WorkspaceToken } from "../shared/contracts.js";
+import { workspaceService } from "./workspace-service.js";
+
+type Facts = {
+  readonly cookie?: string;
+  readonly origin?: string;
+};
+
+const endpoint = new WebSocketServerEndpoint<Facts>({
+  maxConnections: 100,
+  maxPayloadBytes: 1_048_576,
+});
+const nexus = new Nexus<WebSocketAdapterModel<Facts>>();
+nexus.configure({
+  endpoint: {
+    implementation: endpoint,
+    meta: { context: "websocket-server" },
+  },
+  providers: [{ token: WorkspaceToken, service: workspaceService }],
+  policy: {
+    async canConnect({ connection }) {
+      if (connection.role !== "server") return false;
+      return await authenticateCookie(connection.cookie);
+    },
+    async canCall({ connection, serviceName, path }) {
+      return await authorizeCall(connection, serviceName, path);
+    },
+  },
+  callTimeout: 10_000,
+});
+await nexus.ready();
+
+const httpServer = createServer();
+const wsServer = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (request, socket, head) => {
+  const requestUrl = new URL(request.url ?? "/", "http://localhost");
+  if (requestUrl.pathname !== "/nexus") {
+    socket.destroy();
+    return;
+  }
+
+  const origin = request.headers.origin;
+  if (origin !== undefined && origin !== "https://app.example.test") {
+    socket.destroy();
+    return;
+  }
+
+  wsServer.handleUpgrade(request, socket, head, (ws) => {
+    const result = endpoint.safeAttach(ws, {
+      cookie: request.headers.cookie,
+      origin,
+    });
+    if (result.isErr()) ws.close();
+  });
+});
+
+httpServer.listen(43120, "127.0.0.1");
+
+// During shutdown, close Nexus-owned sockets and then the host-owned servers.
+process.once("SIGTERM", () => {
+  endpoint.close();
+  wsServer.close();
+  httpServer.close();
+});
+```
+
+`attach(socket, facts)` is the throw-style equivalent of `safeAttach`. The socket
+must be `OPEN`, the endpoint must be listening, and its capacity must allow the
+connection. On success ownership transfers to Nexus and `facts` is copied into
+connection metadata as `{ ...facts, role: "server" }`; `role` is always supplied
+by the adapter. On failure the host still owns the socket and decides whether to
+close or destroy it. A successful attach is not a ready Nexus connection: Core
+still performs its normal handshake and authorization.
+
+`facts` is an application-defined shallow snapshot. It may contain local
+credentials such as a cookie or session value when `canConnect` needs them, as
+well as an Origin result or other facts. The adapter does not define a principal
+or authentication mode and does not retain the request or socket. These facts
+remain local to the connection and persist for that connection's lifetime; the
+application must not log or transmit them and must manage their sensitivity.
+
+The host may instead authenticate during Upgrade and pass a non-sensitive
+principal snapshot as facts. Either way, `canConnect` remains the Nexus
+connection authorization boundary.
+
+`endpoint.close()` closes Nexus-owned sockets. It does not close the host's HTTP,
+TLS, or `WebSocketServer`; the host decides when and how those servers stop.
+
+## Host Boundaries And Policy
+
+The host should own TLS, HTTP routing, path checks, Origin checks, Upgrade
+authentication, protocol negotiation, native `ws` ping/pong, and host resource
+limits. The adapter carries only binary messages containing existing Core packets;
+text messages are unsupported input and terminate the channel. It adds received
+payload, early-packet, and send-backlog bounds, but it cannot provide a browser
+pre-receive allocation guarantee.
+
+Nexus authorization remains separate from the WebSocket handshake. `canConnect`
+receives the actual `connection` property and may authenticate or authorize it
+asynchronously. `canCall` is a separate per-operation decision. `where` selects
+connections during acquisition; it is not RPC authorization. If a server is
+reachable by untrusted clients, define an explicit policy: an omitted Nexus
+policy permits connection and call access by default.
+
+Use `nexus.onConnect`, `connection.onDisconnected`, and the normal identity
+observers when application lifecycle observation is needed.
+
+## Lifecycle And Limits
+
+One socket creates one Nexus session. Proxies and Refs are session-bound: after a
+disconnect, restart, or session replacement, connect again and get fresh handles.
+There is no automatic reconnect, call replay, or old-reference recovery. An
+already executed but unanswered call is not replayed on a later connection.
+
+Use real WebSocket integration coverage for the host Upgrade path, adoption,
+policy, binary framing, resource limits, and shutdown. Use `createMockNexus()` only
+for application tests at the `NexusInstance` seam.

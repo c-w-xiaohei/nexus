@@ -56,6 +56,7 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - `references/targeting-and-proxies.md` - `nexus.connect(...)`, connection collections, `where`, proxies, and refs
 - `references/adapter-node-ipc.md` - node-ipc daemon/client setup, `configure: false`, auth gates, and exact connection targets
 - `references/adapter-iframe.md` - iframe parent/child setup, origin checks, nonce usage, heartbeat, reconnect, and session-bound handles
+- WebSocket adapter: client imports use `@nexus-js/websocket`; Node server imports use `@nexus-js/websocket/server`. Use the exact `{ context: "websocket-server", url }` target, configure before demand, and call `connection.get(Token)`. The server endpoint only adopts an already-open `ws` socket via synchronous `attach`/`safeAttach`; the host owns HTTP/TLS, Upgrade, Origin, authentication, and ping/pong. Local connection facts may hold credentials needed by `policy.canConnect`; never log or transmit them, and keep `policy.canConnect`/`policy.canCall` as separate authorization boundaries.
 - `references/policy-and-lifecycle.md` - core policy, authorization style, lifecycle expectations, and documentation style
 - `references/testing.md` - user-level unit testing with `createMockNexus()` and boundaries
 
@@ -69,6 +70,7 @@ Point readers to the published docs when they need more context. Prefer exact li
 - Nexus Relay: https://c-w-xiaohei.github.io/nexus/docs/relay/
 - Authorization and policy: https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/
 - Node IPC adapter: https://c-w-xiaohei.github.io/nexus/docs/node-ipc/
+- WebSocket adapter: https://c-w-xiaohei.github.io/nexus/docs/websocket/
 - Nexus State subsystem: https://c-w-xiaohei.github.io/nexus/docs/state/
 - Testing Nexus applications: https://c-w-xiaohei.github.io/nexus/docs/testing/
 

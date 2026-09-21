@@ -1,5 +1,11 @@
 {
   "title": "适配器",
   "defaultOpen": false,
-  "pages": ["../platforms", "../chrome", "../iframe", "../node-ipc"]
+  "pages": [
+    "../platforms",
+    "../chrome",
+    "../iframe",
+    "../node-ipc",
+    "../websocket"
+  ]
 }

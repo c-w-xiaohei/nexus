@@ -6,11 +6,12 @@ description: Select an adapter for Chrome extensions, iframes, or local Node pro
 Install `@nexus-js/core` in each context, then choose the adapter for the connection
 between them. Your application owns context startup and target discovery.
 
-| Runtime boundary                                | Package              | Guide                                   |
-| ----------------------------------------------- | -------------------- | --------------------------------------- |
-| Chrome extension contexts                       | `@nexus-js/chrome`   | [Chrome extension](/nexus/docs/chrome/) |
-| Parent page and browser iframe                  | `@nexus-js/iframe`   | [Iframe](/nexus/docs/iframe/)           |
-| Local daemon and Node clients over Unix sockets | `@nexus-js/node-ipc` | [Node IPC](/nexus/docs/node-ipc/)       |
+| Runtime boundary                                | Package               | Guide                                   |
+| ----------------------------------------------- | --------------------- | --------------------------------------- |
+| Chrome extension contexts                       | `@nexus-js/chrome`    | [Chrome extension](/nexus/docs/chrome/) |
+| Parent page and browser iframe                  | `@nexus-js/iframe`    | [Iframe](/nexus/docs/iframe/)           |
+| Local daemon and Node clients over Unix sockets | `@nexus-js/node-ipc`  | [Node IPC](/nexus/docs/node-ipc/)       |
+| Controlled browser, WebView, and Node clients   | `@nexus-js/websocket` | [WebSocket](/nexus/docs/websocket/)     |
 
 Adapters provide setup helpers, exact target types, platform channels, and
 connection metadata. Shared targeting and provider behavior is defined in

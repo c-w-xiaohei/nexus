@@ -69,8 +69,8 @@ setup helpers. Which peers can connect directly depends on that platform.
 ### Port: An Established Channel
 
 A **Port** (`IPort`) is the local send/receive handle for one established channel
-to one peer. Each end has its own Port; messages sent through one arrive at the
-other. It may wrap a native `chrome.runtime.Port` or `MessagePort`, or a channel
+to one peer. Each end has its own Port; a Port always sends to the same peer
+channel. It may wrap a native `chrome.runtime.Port` or `MessagePort`, or a channel
 constructed by the adapter.
 
 Its responsibilities are small:
@@ -85,6 +85,16 @@ port.close(); // Close the channel.
 Endpoint supplies the channel; Port carries its messages. Core then adds the
 handshake, identity, and service protocol. An open Port is not yet a ready Nexus
 Connection. Channel reliability does not mean automatic reconnection or RPC retries.
+
+Here, "reliable" means preserving message boundaries and send order in each
+direction, without introducing duplicates or silently skipping messages in the
+middle. A successful send only means local acceptance, not remote receipt or
+execution; when the channel fails, unconfirmed messages may or may not have arrived.
+
+A disconnect notification means this end has observed or declared the channel
+unusable. Detection is adapter-specific, may be delayed, and need not happen at
+both ends simultaneously. A terminated Port never resumes or switches to a new
+channel; reconnecting creates a new Port and requires a new Core handshake.
 
 ### Endpoint: Providing Ports
 

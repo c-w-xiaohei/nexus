@@ -1,0 +1,63 @@
+{
+  "name": "@nexus-js/websocket",
+  "version": "0.0.0",
+  "description": "WebSocket adapter for Nexus framework",
+  "private": false,
+  "license": "MIT",
+  "author": "Carson Yu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c-w-xiaohei/nexus.git",
+    "directory": "packages/websocket"
+  },
+  "keywords": [
+    "nexus",
+    "websocket"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.mjs",
+      "default": "./dist/server.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "dev": "node ../../scripts/watch-package.mjs",
+    "test": "pnpm build && vitest run src/__tests__",
+    "test:browser": "pnpm --filter @nexus-js/core build && pnpm build && playwright test",
+    "lint": "oxlint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nexus-js/core": "workspace:*",
+    "@types/ws": "8.18.1",
+    "better-result": "3.0.1",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.57.0",
+    "@types/node": "24.10.2",
+    "typescript": "7.0.2",
+    "vite": "7.3.1",
+    "vitest": "4.0.18"
+  },
+  "peerDependencies": {
+    "@nexus-js/core": ">=2.0.0-alpha.0 <2.1.0"
+  }
+}

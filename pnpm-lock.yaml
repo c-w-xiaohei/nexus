@@ -288,6 +288,37 @@ importers:
         specifier: 4.0.18
         version: 4.0.18(@types/node@24.10.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.33.0)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/websocket:
+    dependencies:
+      '@nexus-js/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      better-result:
+        specifier: 3.0.1
+        version: 3.0.1
+      ws:
+        specifier: 8.18.3
+        version: 8.18.3
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.57.0
+        version: 1.57.0
+      '@types/node':
+        specifier: 24.10.2
+        version: 24.10.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vite:
+        specifier: 7.3.1
+        version: 7.3.1(@types/node@24.10.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.21.0)(yaml@2.9.0)
+      vitest:
+        specifier: 4.0.18
+        version: 4.0.18(@types/node@24.10.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.33.0)(tsx@4.21.0)(yaml@2.9.0)
+
 packages:
 
   '@1natsu/wait-element@4.2.0':
@@ -2453,6 +2484,9 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -5321,6 +5355,18 @@ packages:
     resolution: {integrity: sha512-42AtmgqjV+X1VpdOfyTGOYRi0/zsoLqtXQckTmqTeybT+BDIbM/Guxo7x3pE2vtpr1ok6xRqM9OpBe+Jyoqyww==}
     engines: {node: '>=18'}
 
+  ws@8.18.3:
+    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   ws@8.20.0:
     resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
     engines: {node: '>=10.0.0'}
@@ -7328,6 +7374,10 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.10.2
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -10592,6 +10642,8 @@ snapshots:
       ansi-styles: 6.2.3
       string-width: 7.2.0
       strip-ansi: 7.2.0
+
+  ws@8.18.3: {}
 
   ws@8.20.0: {}
 

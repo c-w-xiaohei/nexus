@@ -63,7 +63,7 @@ const app = new Nexus<ChromeAdapterModel>();
 ### Port：通道的本端收发接口 [#port-an-established-channel]
 
 <strong>Port</strong>（`IPort`）是已建立的点对点通道在本端的收发句柄。
-每一端都有自己的 Port；从一端发送的消息会抵达另一端。它可以封装原生
+每一端都有自己的 Port；同一 Port 的消息始终发往同一个对端通道。它可以封装原生
 `chrome.runtime.Port` 或 `MessagePort`，也可以封装适配器构造的通道。
 
 它只负责四件事：
@@ -77,6 +77,12 @@ port.close(); // 关闭通道。
 
 Endpoint 提供通道，Port 负责收发消息，Core 在此基础上实现握手、身份交换和服务调用协议。
 Port 已打开，并不意味着 Nexus 连接已就绪。通道可靠也不代表会自动重连或重试 RPC。
+
+这里的“可靠”指通道保留消息边界和各方向的发送顺序，不自行重复或静默跳过中间消息。
+发送返回只表示本地接受发送，不确认对端收到或执行；通道失败时，尚未确认的消息可能已经送达，也可能没有。
+
+断开通知表示本端已观察到或判定通道失效，不保证立即发现，也不保证两端同时发现。
+具体检测方式由适配器决定。Port 终止后不会恢复或切换到新通道；重新连接会创建新的 Port，并由 Core 重新握手。
 
 ### Endpoint：提供 Port [#endpoint-providing-ports]
 
