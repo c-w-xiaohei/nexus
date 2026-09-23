@@ -1,5 +1,14 @@
 # @nexus-js/websocket
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- Updated dependencies [4524114]
+- Updated dependencies [153b466]
+- Updated dependencies [153b466]
+  - @nexus-js/core@2.0.0-alpha.1
+
 ## 0.1.0-alpha.1
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @nexus-js/chrome
 
+## 0.6.0-alpha.1
+
+### Patch Changes
+
+- Updated dependencies [4524114]
+- Updated dependencies [153b466]
+- Updated dependencies [153b466]
+  - @nexus-js/core@2.0.0-alpha.1
+
 ## 0.6.0-alpha.0
 
 ### Minor Changes

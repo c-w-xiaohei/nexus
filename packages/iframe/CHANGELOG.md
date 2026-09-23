@@ -1,5 +1,23 @@
 # @nexus-js/iframe
 
+## 0.6.0-alpha.1
+
+### Patch Changes
+
+- 153b466: Validate Core message and known payload-placeholder structures with Valibot before
+  dispatch or revival. Preserve the existing wire format, legacy invocation
+  packets, opaque payloads, and session-owned resource cleanup. Migrate internal
+  VirtualPort, State, and decorator schemas from Zod to Valibot.
+
+  Validate iframe envelope payload presence and nonce types. Share Node IPC auth
+  request and response schemas while preserving authentication error codes and
+  socket framing.
+
+- Updated dependencies [4524114]
+- Updated dependencies [153b466]
+- Updated dependencies [153b466]
+  - @nexus-js/core@2.0.0-alpha.1
+
 ## 0.6.0-alpha.0
 
 ### Minor Changes

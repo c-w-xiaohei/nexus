@@ -14,7 +14,10 @@
   "changesets": [
     "chrome-addressed-extension-pages",
     "connection-resource-api",
+    "relay-resource-scopes",
+    "standard-schema-state-validation",
     "testing-connection-resource-api",
+    "valibot-protocol-validation",
     "websocket-adapter",
     "websocket-binary-views"
   ]
