@@ -22,9 +22,6 @@ import {
 
 类型和错误也从相同子路径导出。
 
-`relayNexusStore` 从 `@nexus-js/core/relay` 导出，也通过 `@nexus-js/core/state` 重新导出，便于状态相关代码使用。
-只有桥接上下文需要向下游通信网络映射上游权威存储时，才使用它。具体行为见[Relay](/nexus/docs/relay/)。
-
 ## 共享 Store Token [#shared-store-token]
 
 声明一个包含数据和方法的共享存储类型。Token 会推导快照和远程动作类型，调用方无需手动定义底层通信服务。
@@ -162,6 +159,8 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - 根据基线快照初始化本地镜像
 - 握手失败时不返回存储句柄
 
+每个订阅都会自动使用显式 Core 资源域。销毁镜像会关闭该资源域，但不会关闭共享 Connection。Relay 路径也端到端使用同一资源域，无需 `relayNexusStore` helper。
+
 初始化回调提供初始状态、每个动作对应的原始 Core 函数代理，以及幂等的取消订阅方法。
 State 不添加按动作名分发的协议，也不再包装动作代理。因此直接调用动作时，失败会保留 `E_CONN_CLOSED`、`E_CALL_TIMEOUT`、`E_RESOURCE_ACCESS_DENIED` 等 Core 错误码；只有 `safeInvokeStoreAction()` 可能在返回公共 Result 时将错误归一化。
 
@@ -175,6 +174,8 @@ State 不添加按动作名分发的协议，也不再包装动作代理。因�
 - 底层会话被替换后，需要用 `connectNexusStore(...)` 创建新句柄
 - 已进入终态的句柄不会原地恢复
 - 身份更新后不再满足 `where` 时，State 句柄变为 `stale`；普通 Connection 代理则不会持续检查该条件
+
+资源域关闭后，镜像进入终态。路径恢复后请创建新订阅以取得完整基线；State 不会向旧镜像重放 action 或 snapshot acknowledgement。参阅 [Nexus Relay 与资源域](/nexus/docs/relay/)。
 
 ## `safeConnectNexusStore()` [#safeconnectnexusstore]
 

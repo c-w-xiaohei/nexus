@@ -336,6 +336,7 @@ describe("PayloadProcessor", () => {
         "res-456",
         mockConnectionId,
         undefined,
+        undefined,
       );
       expect(result[0]).toBe(mockProxyObject);
     });
@@ -356,7 +357,7 @@ describe("PayloadProcessor", () => {
 
       expect(
         proxyFactory.createRemoteResourceProxy as any,
-      ).toHaveBeenCalledWith("res-456", mockConnectionId, 1_234);
+      ).toHaveBeenCalledWith("res-456", mockConnectionId, 1_234, undefined);
     });
 
     it("should revive MAP/SET/BIGINT placeholders", () => {

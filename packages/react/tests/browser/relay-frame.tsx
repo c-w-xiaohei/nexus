@@ -1,5 +1,4 @@
 import { Nexus } from "@nexus-js/core";
-import { relayNexusStore, relayService } from "@nexus-js/core/relay";
 import {
   usingIframeChild,
   usingIframeParent,
@@ -15,10 +14,7 @@ import {
   relayChildNonce,
   relayFrameNonce,
   relayHostTarget,
-  type CounterActions,
-  type CounterState,
   type RelayChildId,
-  type RelayProfileService,
 } from "./shared";
 
 type RelayChildReadyMessage = {
@@ -27,8 +23,10 @@ type RelayChildReadyMessage = {
 };
 
 const telemetry = {
-  servicePolicyCalls: [] as Array<{ origin: unknown; path: unknown[] }>,
-  dispatchPolicyCalls: [] as Array<{ origin: unknown; action: string }>,
+  servicePolicyCalls: [] as Array<{
+    serviceName: string;
+    path: readonly (string | number)[];
+  }>,
 };
 
 function getChildFrame(childId: string) {
@@ -109,41 +107,21 @@ const iframeParentNexus = new Nexus<IframeAdapterModel>().configure({
       nonce: relayChildNonce(childId),
     })),
   }),
-  providers: [
-    relayService<RelayProfileService, IframeAdapterModel, IframeAdapterModel>(
-      RelayProfileToken,
-      {
-        forwardThrough: chromeNexus,
-        forwardTarget: relayHostTarget,
-        policy: {
-          canCall(context) {
-            telemetry.servicePolicyCalls.push({
-              origin: context.origin,
-              path: [...context.path],
-            });
-            return true;
-          },
-        },
-      },
-    ),
-    relayNexusStore<
-      CounterState & CounterActions,
-      IframeAdapterModel,
-      IframeAdapterModel
-    >(iframeCounterStore, {
-      forwardThrough: chromeNexus,
-      forwardTarget: relayHostTarget,
-      policy: {
-        canDispatch(context) {
-          telemetry.dispatchPolicyCalls.push({
-            origin: context.origin,
-            action: context.action,
-          });
-          return true;
-        },
-      },
-    }),
-  ],
+  policy: {
+    canCall(context) {
+      telemetry.servicePolicyCalls.push({
+        serviceName: context.serviceName,
+        path: [...context.path],
+      });
+      return true;
+    },
+  },
+});
+
+Nexus.relay({
+  from: iframeParentNexus,
+  to: { nexus: chromeNexus, target: relayHostTarget },
+  services: [RelayProfileToken, iframeCounterStore],
 });
 
 window.addEventListener("message", (event) => {
@@ -170,11 +148,8 @@ for (const childId of RELAY_CHILD_IDS) {
 function getRelayFrameTelemetry() {
   return {
     servicePolicyCalls: telemetry.servicePolicyCalls.map((call) => ({
-      ...call,
+      serviceName: call.serviceName,
       path: [...call.path],
-    })),
-    dispatchPolicyCalls: telemetry.dispatchPolicyCalls.map((call) => ({
-      ...call,
     })),
   };
 }

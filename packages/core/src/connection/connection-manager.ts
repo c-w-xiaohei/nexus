@@ -265,6 +265,13 @@ export class ConnectionManager<M extends AdapterModel> {
 
   // ===== Routing And Local Updates =====
 
+  /** Withdraw only explicitly removed entries, preserving unrelated services. */
+  public removeProviders(providers: readonly string[]): void {
+    for (const provider of providers) this.localProviders.delete(provider);
+    for (const connection of this.sessionsMap.values())
+      connection.removeProviders(providers).unwrapOr(undefined);
+  }
+
   /** Sends to one already-published connection; this never discovers or dials. */
   public safeSendMessage(
     message: NexusMessage,

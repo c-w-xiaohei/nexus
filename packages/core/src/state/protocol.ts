@@ -132,7 +132,7 @@ export const safeValidateState = <TState extends object>(
 };
 
 /** Stops a subscription and releases callbacks, including partially valid init events. */
-export function disposeSubscription(input: object): void {
+export function disposeSubscription(input: object): Promise<void> {
   const event = input as { unsubscribe?: () => unknown; actions?: object };
   /** Release a remote capability without allowing one failure to block cleanup. */
   const release = (value: object | undefined) => {
@@ -144,6 +144,7 @@ export function disposeSubscription(input: object): void {
       /* The connection may already have reclaimed this capability. */
     }
   };
+  let completed = Promise.resolve();
   try {
     const stop = event.unsubscribe;
     if (typeof stop === "function") {
@@ -152,8 +153,11 @@ export function disposeSubscription(input: object): void {
       try {
         const result = stop();
         if (result && typeof result === "object" && "then" in result) {
-          void Promise.resolve(result)
-            .catch(() => undefined)
+          completed = Promise.resolve(result)
+            .then(
+              () => undefined,
+              () => undefined,
+            )
             .finally(() => release(stop));
         } else {
           release(stop);
@@ -170,4 +174,5 @@ export function disposeSubscription(input: object): void {
   } catch {
     /* Malformed init may not contain all capabilities. */
   }
+  return completed;
 }

@@ -25,18 +25,16 @@ application seam, not transports or real sessions.
 These entrypoints are included in `@nexus-js/core`; they are not separate packages
 to install.
 
-| Import                                  | Purpose                                                  |
-| --------------------------------------- | -------------------------------------------------------- |
-| `@nexus-js/core/state`                  | [Synchronized state](/nexus/docs/state/)                 |
-| `@nexus-js/core/relay`                  | [Provider forwarding between graphs](/nexus/docs/relay/) |
-| `@nexus-js/core/transport`              | Transport contracts for adapter authors                  |
-| `@nexus-js/core/transport/virtual-port` | Port multiplexing over message buses                     |
+| Import                                  | Purpose                                  |
+| --------------------------------------- | ---------------------------------------- |
+| `@nexus-js/core/state`                  | [Synchronized state](/nexus/docs/state/) |
+| `@nexus-js/core/transport`              | Transport contracts for adapter authors  |
+| `@nexus-js/core/transport/virtual-port` | Port multiplexing over message buses     |
 
 For example:
 
 ```ts
 import { connectNexusStore } from "@nexus-js/core/state";
-import { relayService } from "@nexus-js/core/relay";
 ```
 
 Applications using an existing adapter normally do not need the low-level

@@ -18,6 +18,7 @@ import type { Engine } from "@/service/engine";
 import type { AdapterModel, ContextMetaOf } from "@/types/adapter-model";
 import { REF_WRAPPER_SYMBOL, type RefWrapper } from "@/types/ref-wrapper";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
+import type { RelayRegistration } from "../service/relay-forwarder";
 import { Result } from "better-result";
 import { createEvtChannel } from "@/utils/evt-channel";
 import { toSerializedError } from "@/utils/error";
@@ -53,6 +54,27 @@ type Lifecycle<M extends AdapterModel> =
     }
   | { phase: "failed"; error: Error };
 
+export interface RelayHandle extends Disposable {
+  /** Removes this registration and ends its resource domains, not shared connections. */
+  dispose(): void;
+}
+
+export interface RelayOptions<
+  From extends AdapterModel,
+  To extends AdapterModel,
+> {
+  from: NexusInstance<From>;
+  to: { nexus: NexusInstance<To> } & Pick<
+    ConnectOptions<To>,
+    "target" | "where"
+  >;
+  services: readonly (
+    | Token<object>
+    | Token<object, From>
+    | Token<object, To>
+  )[];
+}
+
 /** Defers bootstrap one turn so synchronous configuration and decorators share one snapshot. */
 const defer = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
@@ -78,6 +100,7 @@ export class Nexus<
   private lifecycle: Lifecycle<M> = { phase: "draft" };
   private initialization: Promise<Result<ConnectionManager<M>, Error>> | null =
     null;
+  private readonly relayDeclarations = new Map<string, RelayRegistration>();
 
   // ===== Handles And Channels =====
   private readonly connections = new WeakMap<
@@ -90,6 +113,8 @@ export class Nexus<
   public readonly Expose = createExposeDecorator((registration) => {
     this.assertDeclarationWindow();
     const id = registration.token.id;
+    if (this.relayDeclarations.has(id))
+      throw new NexusUsageError("A relay already owns this Token.");
     if (this.serviceDeclarations.has(id))
       throw new NexusConfigurationError(
         `Nexus: Provider for token ID "${id}" has already been registered on this Nexus instance.`,
@@ -109,6 +134,118 @@ export class Nexus<
   }) as NexusInstance<M>["Endpoint"];
 
   // ===== Static API =====
+  /** Registers cross-instance service forwarding without dialing or creating business proxies. */
+  public static relay<F extends AdapterModel, T extends AdapterModel>(
+    options: RelayOptions<F, T>,
+  ): RelayHandle {
+    return unwrapResultOrThrow(Nexus.safeRelay(options));
+  }
+
+  public static safeRelay<F extends AdapterModel, T extends AdapterModel>(
+    options: RelayOptions<F, T>,
+  ): Result<RelayHandle, Error> {
+    return Result.try({
+      try: () => Nexus.installRelay(options),
+      catch: () => new NexusUsageError("Invalid relay configuration."),
+    }).andThen((result) => result);
+  }
+
+  private static installRelay<F extends AdapterModel, T extends AdapterModel>(
+    options: RelayOptions<F, T>,
+  ): Result<RelayHandle, Error> {
+    if (
+      !options ||
+      !(options.from instanceof Nexus) ||
+      !(options.to?.nexus instanceof Nexus) ||
+      !Array.isArray(options.services) ||
+      !options.services.length ||
+      !Array.from(options.services).every((token) => token instanceof Token)
+    )
+      return err(
+        new NexusUsageError(
+          "relay requires Nexus instances and a nonempty Token list.",
+        ),
+      );
+    const from: Nexus<F> = options.from;
+    const to: Nexus<T> = options.to.nexus;
+    if (
+      from.lifecycle.phase === "starting" ||
+      from.lifecycle.phase === "listening"
+    )
+      return err(
+        new NexusConfigurationError(
+          "Relay registration is locked during bootstrap.",
+          "E_NEXUS_BOOTSTRAPPING_LOCKED",
+        ),
+      );
+    if (from.lifecycle.phase === "failed") return err(from.lifecycle.error);
+    const services = options.services.map((token) => token.id);
+    if (
+      new Set(services).size !== services.length ||
+      services.some(
+        (id) =>
+          from.relayDeclarations.has(id) ||
+          from.serviceDeclarations.has(id) ||
+          from.config.providers?.some(({ token }) => token.id === id),
+      )
+    )
+      return err(
+        new NexusUsageError("Relay service conflicts with an existing entry."),
+      );
+    if (
+      (options.to.target !== undefined && !isPlainTarget(options.to.target)) ||
+      (options.to.where !== undefined && typeof options.to.where !== "function")
+    )
+      return err(new NexusUsageError("Invalid relay connection selection."));
+    const selected = Result.try({
+      try: () => ({
+        target:
+          options.to.target === undefined
+            ? undefined
+            : structuredClone(options.to.target),
+        where: options.to.where,
+      }),
+      catch: () => new NexusUsageError("Relay target cannot be captured."),
+    });
+    if (selected.isErr()) return selected;
+    const controller = new AbortController();
+    const registration: RelayRegistration = {
+      services,
+      signal: controller.signal,
+      async acquire(timeout, signal) {
+        const connected = await to.safeConnect({
+          ...selected.value,
+          timeout,
+          signal,
+        });
+        if (connected.isErr()) return connected;
+        if (
+          to.lifecycle.phase !== "ready" &&
+          to.lifecycle.phase !== "listening"
+        )
+          return err(new NexusUsageError("Upstream runtime is unavailable."));
+        return ok(to.lifecycle.engine.relayPeer(connected.value.id));
+      },
+    };
+    if (from.lifecycle.phase === "ready") {
+      const installed = from.lifecycle.engine.installRelay(registration);
+      if (installed.isErr()) return installed;
+    }
+    for (const id of services) from.relayDeclarations.set(id, registration);
+    const dispose = () => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      for (const id of services)
+        if (from.relayDeclarations.get(id) === registration)
+          from.relayDeclarations.delete(id);
+      if (
+        from.lifecycle.phase === "ready" ||
+        from.lifecycle.phase === "listening"
+      )
+        from.lifecycle.engine.removeRelay(registration);
+    };
+    return ok({ dispose, [Symbol.dispose]: dispose });
+  }
   /** Consumes one genuine lazy operation, sharing execution with await and returning its RPC Result. */
   public static safeCall<T, M extends AdapterModel>(
     value: RemoteValue<T, M>,
@@ -203,6 +340,12 @@ export class Nexus<
           config.providers === undefined ? [] : config.providers,
         );
         if (providersValid.isErr()) return providersValid;
+        if (
+          config.providers?.some(({ token }) =>
+            this.relayDeclarations.has(token.id),
+          )
+        )
+          return err(new NexusUsageError("A relay already owns this Token."));
         this.config = composeNexusConfig([this.config, config]);
         void this.safeReadyManager();
         return ok(this);
@@ -251,6 +394,8 @@ export class Nexus<
           ];
         const valid = validateProviderBatch(providers);
         if (valid.isErr()) return valid;
+        if (providers.some(({ token }) => this.relayDeclarations.has(token.id)))
+          return err(new NexusUsageError("A relay already owns this Token."));
         if (this.lifecycle.phase === "ready") {
           this.lifecycle.engine.provideServices(providers);
           return ok(this);
@@ -477,6 +622,10 @@ export class Nexus<
         );
         if (built.isErr()) return err(built.error);
         const { engine, connectionManager: manager } = built.value;
+        for (const registration of new Set(this.relayDeclarations.values())) {
+          const installed = engine.installRelay(registration);
+          if (installed.isErr()) return installed;
+        }
         // Native listening may reenter RPC before startup completes.
         this.lifecycle = { phase: "listening", engine, manager };
         const initialized = await manager.safeInitialize();

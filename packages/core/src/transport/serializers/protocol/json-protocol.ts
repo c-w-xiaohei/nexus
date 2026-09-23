@@ -37,6 +37,9 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
     "resourceId",
     "path",
     "invocationServiceName",
+    "scopeId",
+    "timeoutMs",
+    "hops",
   ],
   [Message.NexusMessageType.SET]: [
     "type",
@@ -45,6 +48,9 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
     "path",
     "invocationServiceName",
     "value",
+    "scopeId",
+    "timeoutMs",
+    "hops",
   ],
   [Message.NexusMessageType.APPLY]: [
     "type",
@@ -53,12 +59,21 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
     "path",
     "invocationServiceName",
     "args",
+    "scopeId",
+    "timeoutMs",
+    "hops",
   ],
-  [Message.NexusMessageType.RES]: ["type", "id", "result"],
-  [Message.NexusMessageType.ERR]: ["type", "id", "error"],
-  [Message.NexusMessageType.RELEASE]: ["type", "id", "resourceId"],
-  [Message.NexusMessageType.BATCH]: ["type", "id", "calls"],
-  [Message.NexusMessageType.BATCH_RES]: ["type", "id", "results"],
+  [Message.NexusMessageType.RES]: ["type", "id", "result", "scopeId"],
+  [Message.NexusMessageType.ERR]: ["type", "id", "error", "scopeId"],
+  [Message.NexusMessageType.RELEASE]: [
+    "type",
+    "id",
+    "resourceId",
+    "scopeId",
+    "target",
+  ],
+  [Message.NexusMessageType.BATCH]: ["type", "id", "calls", "scopeId"],
+  [Message.NexusMessageType.BATCH_RES]: ["type", "id", "results", "scopeId"],
   // Layer 2
   [Message.NexusMessageType.HANDSHAKE_REQ]: [
     "type",
@@ -82,7 +97,12 @@ export const MESSAGE_PACKET_STRUCTURE = definePacketStructure({
   ],
   [Message.NexusMessageType.HANDSHAKE_REJECT]: ["type", "id", "error"],
   [Message.NexusMessageType.IDENTITY_UPDATE]: ["type", "id", "updates"],
-  [Message.NexusMessageType.PROVIDER_AVAILABLE]: ["type", "id", "providers"],
+  [Message.NexusMessageType.PROVIDER_AVAILABLE]: [
+    "type",
+    "id",
+    "providers",
+    "removed",
+  ],
   // Layer 1
   [Message.NexusMessageType.CHUNK_START]: [
     "type",

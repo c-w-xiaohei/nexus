@@ -195,7 +195,7 @@ const audioConnection = await backgroundNexus.connect({
 
 Connections are bidirectional once established. Content scripts and offscreen
 documents cannot call `tabs.connect()` to initiate a content connection. Explicitly
-expose a gateway or [Relay provider](/nexus/docs/relay/) in a tab-capable context
+expose a gateway in a tab-capable context
 when an intermediate peer is required. Nexus does not add
 transparent multi-hop targets or force ordinary page-to-content calls through
 the background.

@@ -2,10 +2,9 @@ import { Result } from "better-result";
 import { get, set } from "es-toolkit/compat";
 import {
   NexusMessageType,
-  type GetMessage,
-  type SetMessage,
   type ApplyMessage,
   type NexusMessage,
+  type RpcRequest,
 } from "@/types/message";
 import type { AdapterModel } from "@/types/adapter-model";
 import type {
@@ -22,6 +21,7 @@ import {
 import type { PayloadProcessor } from "../payload/payload-processor";
 import type { PendingCallManager } from "../pending-call-manager";
 import type { ResourceManager } from "../resource-manager";
+import { scopeClosedError, type ResourceScope } from "../resource-scope";
 import {
   getServiceInvocationHook,
   isServiceWithHooks,
@@ -29,8 +29,7 @@ import {
   SERVICE_INVOKE_END,
 } from "../service-invocation-hooks";
 
-type Request = GetMessage | SetMessage | ApplyMessage;
-type AuthorizedCall<M extends AdapterModel> = {
+export type AuthorizedCall<M extends AdapterModel> = {
   serviceName: string;
   servicePolicy: NexusAuthorizationPolicy<M> | undefined;
 };
@@ -59,7 +58,11 @@ export class MessageHandler<M extends AdapterModel> {
         message: NexusMessage,
         connectionId: string,
       ): Result<void, Error>;
-      dispatchRelease(resourceId: string, connectionId: string): void;
+      dispatchRelease(
+        resourceId: string,
+        connectionId: string,
+        scope?: ResourceScope,
+      ): void;
       pendingCalls: Pick<
         PendingCallManager,
         "handleResponse" | "canHandleResponse" | "getCallTimeout"
@@ -91,6 +94,8 @@ export class MessageHandler<M extends AdapterModel> {
   public async safeHandleMessage(
     message: NexusMessage,
     source: string,
+    scope?: ResourceScope,
+    authorization?: AuthorizedCall<M>,
   ): Promise<Result<void, Error>> {
     // This is the unexpected-exception boundary for incoming messages, not a reply retry.
     try {
@@ -103,21 +108,23 @@ export class MessageHandler<M extends AdapterModel> {
         case NexusMessageType.GET:
         case NexusMessageType.SET:
         case NexusMessageType.APPLY:
-          return await this.safeReply(message, source);
+          return await this.safeReply(message, source, scope, authorization);
         case NexusMessageType.RES: {
           // Reject before revival so duplicate/late responses cannot allocate orphan facades.
-          if (!pending.canHandleResponse(message.id, source)) {
+          if (!pending.canHandleResponse(message.id, source, scope)) {
             payload.releaseOrphanedResponseResources(
               message.result,
               source,
-              this.context.dispatchRelease,
+              (id, source) => this.context.dispatchRelease(id, source, scope),
+              scope,
             );
             break;
           }
           const revived = payload.safeRevive(
             [message.result],
             source,
-            pending.getCallTimeout(message.id, source),
+            pending.getCallTimeout(message.id, source, scope),
+            scope,
           );
           pending.handleResponse(
             message.id,
@@ -126,20 +133,33 @@ export class MessageHandler<M extends AdapterModel> {
               ? serializeFrameworkError(toFrameworkProtocolError(revived.error))
               : null,
             source,
+            scope,
           );
           break;
         }
         case NexusMessageType.ERR:
-          pending.handleResponse(message.id, null, message.error, source);
+          pending.handleResponse(
+            message.id,
+            null,
+            message.error,
+            source,
+            scope,
+          );
           break;
-        case NexusMessageType.RELEASE:
+        case NexusMessageType.RELEASE: {
+          if (message.target === "scope") {
+            scope?.close();
+            break;
+          }
+          const resource = resources.getLocalResource(message.resourceId);
           if (
-            resources.getLocalResource(message.resourceId)
-              ?.ownerConnectionId === source
+            resource?.ownerConnectionId === source &&
+            resource.scope === scope
           ) {
             resources.releaseLocalResource(message.resourceId);
           }
           break;
+        }
         default:
           return Result.err(
             Object.assign(
@@ -160,13 +180,15 @@ export class MessageHandler<M extends AdapterModel> {
 
   /** Keeps execution errors inside the reply boundary, but never replies again after a send failure. */
   private async safeReply(
-    message: Request,
+    message: RpcRequest,
     source: string,
+    scope?: ResourceScope,
+    authorization?: AuthorizedCall<M>,
   ): Promise<Result<void, Error>> {
     let encoded: Result<any[], Error>;
     let frameworkFailure = false;
     try {
-      encoded = await this.prepareReply(message, source);
+      encoded = await this.prepareReply(message, source, scope, authorization);
       frameworkFailure = encoded.isErr() && encoded.error instanceof NexusError;
     } catch (error) {
       encoded = Result.err(toError(error));
@@ -175,6 +197,7 @@ export class MessageHandler<M extends AdapterModel> {
       ? {
           type: NexusMessageType.ERR,
           id: message.id,
+          ...(scope ? { scopeId: scope.id } : {}),
           error: frameworkFailure
             ? serializeFrameworkError(encoded.error as NexusError)
             : toSerializedError(encoded.error),
@@ -183,11 +206,14 @@ export class MessageHandler<M extends AdapterModel> {
           type: NexusMessageType.RES,
           id: message.id,
           result: encoded.value[0],
+          ...(scope ? { scopeId: scope.id } : {}),
         };
-    const sent = Result.try({
-      try: () => this.context.safeSendMessage(reply, source),
-      catch: toError,
-    }).andThen((result) => result);
+    const sent = scope?.closed
+      ? Result.err(scopeClosedError(scope))
+      : Result.try({
+          try: () => this.context.safeSendMessage(reply, source),
+          catch: toError,
+        }).andThen((result) => result);
     if (sent.isErr() && encoded.isOk())
       this.context.payloadProcessor.releaseSanitizedResources(encoded.value);
     return sent;
@@ -198,10 +224,14 @@ export class MessageHandler<M extends AdapterModel> {
    * Property/hook/application exceptions are caught by safeReply, not by Result callbacks.
    */
   private async prepareReply(
-    message: Request,
+    message: RpcRequest,
     source: string,
+    scope?: ResourceScope,
+    admitted?: AuthorizedCall<M>,
   ): Promise<Result<any[], Error>> {
-    const authorization = this.authorize(message, source);
+    const authorization = admitted
+      ? Result.ok(admitted)
+      : this.authorize(message, source, scope);
     // No-policy APPLY must enter State/Relay's scope without yielding a microtask.
     const authorized =
       message.type === NexusMessageType.APPLY &&
@@ -211,7 +241,8 @@ export class MessageHandler<M extends AdapterModel> {
     if (authorized.isErr()) return authorized;
 
     // Authorization may await application code. Recheck before any getter or proxy trap.
-    const resolved = this.resolvePath(message, source);
+    if (scope?.closed) return Result.err(scopeClosedError(scope));
+    const resolved = this.resolvePath(message, source, scope);
     if (resolved.isErr()) return resolved;
     const { root, propertyPath, target } = resolved.value;
     const payload = this.context.payloadProcessor;
@@ -221,7 +252,12 @@ export class MessageHandler<M extends AdapterModel> {
         result = target; // GET transports Promise-valued properties without awaiting them.
         break;
       case NexusMessageType.SET: {
-        const revived = payload.safeRevive([message.value], source);
+        const revived = payload.safeRevive(
+          [message.value],
+          source,
+          undefined,
+          scope,
+        );
         if (revived.isErr()) return revived.mapError(toFrameworkProtocolError);
         if (!propertyPath.length)
           return Result.err(
@@ -241,6 +277,7 @@ export class MessageHandler<M extends AdapterModel> {
           source,
           authorized.value.serviceName,
           resolved.value,
+          scope,
         );
         if (invoked.isErr()) return invoked;
         result = await invoked.value;
@@ -248,12 +285,14 @@ export class MessageHandler<M extends AdapterModel> {
       }
     }
     // The registration may have changed while we awaited; never reload the authorized policy.
+    if (scope?.closed) return Result.err(scopeClosedError(scope));
     return payload
       .safeSanitizeFromService(
         [result],
         source,
         authorized.value.serviceName,
         authorized.value.servicePolicy,
+        scope,
       )
       .mapError(toFrameworkProtocolError);
   }
@@ -268,6 +307,7 @@ export class MessageHandler<M extends AdapterModel> {
     source: string,
     serviceName: string,
     { root, target, parent }: InvocationTarget,
+    scope?: ResourceScope,
   ): Result<any, Error> {
     if (typeof target !== "function")
       return Result.err(
@@ -288,6 +328,7 @@ export class MessageHandler<M extends AdapterModel> {
       ? this.context.getConnectionAuthContext?.(source)
       : undefined;
     const invocation = start?.({
+      ...(scope ? { scope } : {}),
       sourceConnectionId: source,
       sourceIdentity: auth?.remoteIdentity,
       localIdentity: auth?.localIdentity,
@@ -297,6 +338,8 @@ export class MessageHandler<M extends AdapterModel> {
       const args = this.context.payloadProcessor.safeRevive(
         message.args,
         source,
+        undefined,
+        scope,
       );
       if (args.isErr()) return args.mapError(toFrameworkProtocolError);
       return Result.ok(
@@ -307,16 +350,17 @@ export class MessageHandler<M extends AdapterModel> {
         ),
       );
     } finally {
-      end?.(invocation);
+      end?.(invocation || undefined);
     }
   }
 
   // ===== Authorization: registry metadata first, application properties afterwards =====
 
   /** Captures the effective host policy without evaluating the requested property path. */
-  private authorize(
-    message: Request,
+  public authorize(
+    message: RpcRequest,
     source: string,
+    scope?: ResourceScope,
   ):
     | Result<AuthorizedCall<M>, Error>
     | Promise<Result<AuthorizedCall<M>, Error>> {
@@ -325,7 +369,7 @@ export class MessageHandler<M extends AdapterModel> {
     let serviceName: string;
     let servicePolicy: NexusAuthorizationPolicy<M> | undefined;
     if (message.resourceId !== null) {
-      const resource = this.ownedResource(message.resourceId, source);
+      const resource = this.ownedResource(message.resourceId, source, scope);
       if (resource.isErr()) return resource;
       serviceName =
         resource.value.serviceName ?? `resource:${message.resourceId}`;
@@ -397,14 +441,18 @@ export class MessageHandler<M extends AdapterModel> {
   }
 
   /** Resolves properties only after authorization, with a fresh resource ownership check. */
-  private resolvePath(message: Request, source: string) {
+  private resolvePath(
+    message: RpcRequest,
+    source: string,
+    scope?: ResourceScope,
+  ) {
     const { resourceId, path } = message;
     const checked = validatePath(path);
     if (checked.isErr()) return checked;
     let root: any;
     const propertyPath = resourceId === null ? path.slice(1) : path;
     if (resourceId !== null) {
-      const resource = this.ownedResource(resourceId, source);
+      const resource = this.ownedResource(resourceId, source, scope);
       if (resource.isErr()) return resource;
       root = resource.value.target;
     } else {
@@ -438,7 +486,11 @@ export class MessageHandler<M extends AdapterModel> {
   }
 
   /** Checks registry ownership without evaluating any property on the target. */
-  private ownedResource(resourceId: string, source: string) {
+  private ownedResource(
+    resourceId: string,
+    source: string,
+    scope?: ResourceScope,
+  ) {
     const resource = this.context.resourceManager.getLocalResource(resourceId);
     if (!resource)
       return Result.err(
@@ -448,7 +500,7 @@ export class MessageHandler<M extends AdapterModel> {
           { resourceId },
         ),
       );
-    if (resource.ownerConnectionId !== source)
+    if (resource.ownerConnectionId !== source || resource.scope !== scope)
       return Result.err(
         new NexusResourceError(
           `Connection "${source}" is not authorized to access resource "${resourceId}".`,

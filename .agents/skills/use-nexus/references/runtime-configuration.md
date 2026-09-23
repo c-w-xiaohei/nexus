@@ -59,9 +59,9 @@ All Runtime-capable Chrome contexts can dial built-in page targets and custom
 addressed extension pages. Ordinary extension pages can also dial exact content
 frame/document targets using `tabs.connect`; content scripts and offscreen
 documents cannot. Existing connections are bidirectional. Use explicit
-provider-level Relay when an intermediate context is required, not transparent
-target routing. Native Port name filtering belongs to the adapter and does not
-replace Core authorization.
+application-owned gateway services when an intermediate context is required,
+not transparent target routing. Native Port name filtering belongs to the
+adapter and does not replace Core authorization.
 
 ## Direct Configuration
 
@@ -108,11 +108,7 @@ brokerNexus.provide(BrokerGatewayToken, gatewayService);
 
 Bridge instances with gateway services. For example, expose a broker-facing service on `brokerNexus` and implement it by creating content-script proxies through `extensionNexus`.
 
-Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when the gateway should forward an existing service contract or Nexus State store into another adjacent graph. Configure the relay provider on the downstream-facing instance and pass the upstream-facing instance as `forwardThrough` with an explicit `forwardTarget`.
-
 For a local Nexus State provider, create a StoreToken first, then create the authoritative store with `createNexusStore(token, creator, { snapshot, expose, publishWindowMs?, maxPendingSnapshots? })`, or bind an existing native Zustand store with `bindNexusStore(token, existingStore, options)`. Register the provider with `nexus.provide(provider)`; use the returned original `store` only in that same hosting context for local reads, subscriptions, and synchronous actions. The defaults are a fixed 200ms publication window and 32 pending snapshots.
-
-Do not model Relay as `target.via`, raw message forwarding, or automatic graph merging. The bridge runtime still owns both configured `Nexus` instances and decides exactly which providers are forwarded.
 
 ## Configuration Composition
 

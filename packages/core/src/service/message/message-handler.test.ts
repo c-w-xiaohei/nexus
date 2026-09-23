@@ -1163,7 +1163,12 @@ describe("MessageHandler", () => {
 
       await messageHandler.safeHandleMessage(message, sourceConnectionId);
 
-      expect(reviveSpy).toHaveBeenCalledWith([1, 2], sourceConnectionId);
+      expect(reviveSpy).toHaveBeenCalledWith(
+        [1, 2],
+        sourceConnectionId,
+        undefined,
+        undefined,
+      );
       expect(sanitizeSpy).toHaveBeenCalledWith([3], sourceConnectionId);
       expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
         {
@@ -1376,6 +1381,8 @@ describe("MessageHandler", () => {
       expect(reviveSpy).toHaveBeenCalledWith(
         [{ name: "John" }],
         sourceConnectionId,
+        undefined,
+        undefined,
       );
       expect(mockStore.user?.name).toBe("John");
       expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
@@ -1430,12 +1437,14 @@ describe("MessageHandler", () => {
         ["original_result"],
         sourceConnectionId,
         5_000,
+        undefined,
       );
       expect(mockEngine.handleResponse).toHaveBeenCalledWith(
         30,
         "revived_result",
         null,
         sourceConnectionId,
+        undefined,
       );
     });
 
@@ -1451,11 +1460,13 @@ describe("MessageHandler", () => {
       expect(mockEngine.getCallTimeout).toHaveBeenCalledWith(
         30,
         sourceConnectionId,
+        undefined,
       );
       expect(reviveSpy).toHaveBeenCalledWith(
         ["original_result"],
         sourceConnectionId,
         5_000,
+        undefined,
       );
     });
 
@@ -1501,6 +1512,7 @@ describe("MessageHandler", () => {
         null,
         error,
         sourceConnectionId,
+        undefined,
       );
     });
   });
@@ -1521,6 +1533,7 @@ describe("MessageHandler", () => {
       expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
         "res-orphan",
         sourceConnectionId,
+        undefined,
       );
       expect(mockEngine.handleResponse).not.toHaveBeenCalled();
     });
@@ -1544,6 +1557,7 @@ describe("MessageHandler", () => {
       expect(mockEngine.dispatchRelease).toHaveBeenCalledWith(
         "res-2",
         sourceConnectionId,
+        undefined,
       );
     });
   });

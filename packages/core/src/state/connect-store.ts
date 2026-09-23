@@ -63,16 +63,37 @@ export const safeConnectNexusStore = async <
   // Core owns ConnectOptions validation; the same accepted budget separately
   // bounds State initialization after connection acquisition succeeds.
   const { timeout } = options;
-  const created = connection.safeGet(token).mapError(createError);
-  if (created.isErr()) return created;
+  const scoped = Result.try({
+    try: () => connection.createScope(token),
+    catch: createError,
+  });
+  if (scoped.isErr()) return scoped;
+  const scope = scoped.value;
+  const created = Result.try({
+    try: () => connection.safeGet(token, { scope }),
+    catch: createError,
+  }).andThen((result) => result.mapError(createError));
+  if (created.isErr()) {
+    scope.close();
+    return created;
+  }
   const service = created.value;
 
   const remoteResult = Result.try({
     try: () => createRemoteStore<Store>(token.validation),
     catch: normalizeConnectHandshakeError,
   });
-  if (remoteResult.isErr()) return remoteResult;
+  if (remoteResult.isErr()) {
+    scope.close();
+    return remoteResult;
+  }
   const remote = remoteResult.value;
+  remote.addSubscriptionCleanup(() => {
+    void remote
+      .subscriptionDisposed()
+      .catch(() => undefined)
+      .finally(() => scope.close());
+  });
 
   // Observe the session before subscribe can deliver init or any update.
   const handshake = await Result.tryPromise({
@@ -80,6 +101,11 @@ export const safeConnectNexusStore = async <
       remote.addCleanup(
         connection.onDisconnected(() =>
           remote.disconnect("Remote store connection disconnected."),
+        ),
+      );
+      remote.addCleanup(
+        scope.onClosed(() =>
+          remote.disconnect("Remote store subscription scope closed."),
         ),
       );
       // State owns selection staleness; a shared Connection does not retain the
@@ -97,8 +123,8 @@ export const safeConnectNexusStore = async <
       // Do not start remote business work after its local owner became terminal.
       if (remote.store.getStatus().type !== "initializing") return;
 
-      // Init arrives through the callback, not the response. A successful response
-      // is only useful when init completed and the session is still usable.
+      // A successful response is only useful when init completed and the
+      // session is still usable.
       const subscribed = Promise.resolve(service.subscribe(remote.onSync));
       return timeout !== undefined
         ? withTimeout(() => subscribed, timeout)

@@ -3,6 +3,7 @@ export const SERVICE_INVOKE_END = Symbol.for("nexus.service.invoke.end");
 export const SERVICE_ON_DISCONNECT = Symbol.for("nexus.service.on.disconnect");
 
 export interface ServiceInvocationContext {
+  readonly scope?: ResourceScope;
   readonly sourceConnectionId: string;
   readonly sourceIdentity: unknown;
   readonly localIdentity: unknown;
@@ -12,7 +13,7 @@ export interface ServiceInvocationContext {
 export interface ServiceInvocationHooks {
   [SERVICE_INVOKE_START]?(
     invocationContext: ServiceInvocationContext,
-  ): ServiceInvocationContext;
+  ): ServiceInvocationContext | void;
   [SERVICE_INVOKE_END]?(invocationContext?: ServiceInvocationContext): void;
   [SERVICE_ON_DISCONNECT]?(connectionId: string): void;
 }
@@ -55,3 +56,4 @@ export const isServiceWithHooks = (
   getServiceInvocationHook(value, SERVICE_INVOKE_START) !== undefined ||
   getServiceInvocationHook(value, SERVICE_INVOKE_END) !== undefined ||
   getServiceInvocationHook(value, SERVICE_ON_DISCONNECT) !== undefined;
+import type { ResourceScope } from "./resource-scope";

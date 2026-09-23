@@ -1,5 +1,5 @@
 import type { AdapterModel } from "@/types/adapter-model";
-import type { ProxyFactory } from "../proxy-factory";
+import { remoteBinding, type ProxyFactory } from "../proxy-factory";
 import type { ResourceManager } from "../resource-manager";
 import type { NexusAuthorizationPolicy } from "@/api/types/config";
 import { isRefWrapper } from "@/types/ref-wrapper";
@@ -15,13 +15,16 @@ import {
 import { Logger } from "@/logger";
 import { Result } from "better-result";
 import { toFrameworkProtocolError } from "@/errors";
+import { scopeClosedError, type ResourceScope } from "../resource-scope";
 
 type RevivalContext = {
+  scope?: ResourceScope;
   sourceConnectionId: string;
   callTimeout?: number;
   revived: Map<string, { proxy: object; existedBeforeRevive: boolean }>;
 };
 type SanitizeContext = {
+  scope?: ResourceScope;
   targetConnectionId: string;
   createdResourceIds: string[];
   serviceName?: string;
@@ -41,8 +44,9 @@ export class PayloadProcessor {
   public safeSanitize(
     args: any[],
     targetConnectionId: string,
+    scope?: ResourceScope,
   ): Result<any[], Error> {
-    return this.safeSanitizeWithContext(args, { targetConnectionId });
+    return this.safeSanitizeWithContext(args, { targetConnectionId, scope });
   }
 
   /** Encodes results with the exact authorized policy, including an explicit undefined snapshot. */
@@ -51,11 +55,13 @@ export class PayloadProcessor {
     targetConnectionId: string,
     serviceName: string,
     servicePolicy: NexusAuthorizationPolicy<AdapterModel> | undefined,
+    scope?: ResourceScope,
   ): Result<any[], Error> {
     return this.safeSanitizeWithContext(args, {
       targetConnectionId,
       serviceName,
       servicePolicy,
+      scope,
     });
   }
 
@@ -64,10 +70,12 @@ export class PayloadProcessor {
     args: any[],
     sourceConnectionId: string,
     callTimeout?: number,
+    scope?: ResourceScope,
   ): Result<any[], Error> {
     const context: RevivalContext = {
       sourceConnectionId,
       callTimeout,
+      scope,
       revived: new Map(),
     };
     const result = Result.try({
@@ -103,9 +111,10 @@ export class PayloadProcessor {
     value: unknown,
     source: string,
     dispatchRelease: (id: string, source: string) => void,
+    scope?: ResourceScope,
   ): void {
     for (const id of collectResourceIds(value)) {
-      if (!this.resourceManager.hasRemoteProxy(id, source))
+      if (!this.resourceManager.hasRemoteProxy(id, source, scope))
         dispatchRelease(id, source);
     }
   }
@@ -117,6 +126,8 @@ export class PayloadProcessor {
     args: any[],
     context: Omit<SanitizeContext, "createdResourceIds">,
   ): Result<any[], Error> {
+    if (context.scope?.closed)
+      return Result.err(scopeClosedError(context.scope));
     const createdResourceIds: string[] = [];
     const result = Result.try({
       try: () => {
@@ -124,7 +135,11 @@ export class PayloadProcessor {
         return Array.isArray(encoded) ? encoded : [encoded];
       },
       catch: toFrameworkProtocolError,
-    });
+    }).andThen((encoded) =>
+      context.scope?.closed
+        ? Result.err(scopeClosedError(context.scope))
+        : Result.ok(encoded),
+    );
     // Encoding is transactional until a message is accepted by the connection.
     if (result.isErr())
       for (const id of createdResourceIds)
@@ -135,11 +150,22 @@ export class PayloadProcessor {
   /** Recursively encode values and allocate session-owned capability IDs. */
   private sanitize(value: any, context: SanitizeContext): any {
     if (typeof value === "function" || isRefWrapper(value)) {
+      const target = typeof value === "function" ? value : value.target;
+      const binding = remoteBinding(target);
+      if (
+        binding &&
+        (binding.scope !== context.scope ||
+          binding.connectionId !== context.targetConnectionId)
+      )
+        throw new Error(
+          "Remote capabilities cannot be implicitly exported into another resource scope.",
+        );
       const id = this.resourceManager.registerLocalResource(
-        typeof value === "function" ? value : value.target,
+        target,
         context.targetConnectionId,
         context.serviceName || undefined,
         context.serviceName ? context.servicePolicy : undefined,
+        ...(context.scope ? [context.scope] : []),
       );
       context.createdResourceIds.push(id);
       return Placeholder.encode(PlaceholderType.RESOURCE, id);
@@ -196,11 +222,13 @@ export class PayloadProcessor {
       const existedBeforeRevive = this.resourceManager.hasRemoteProxy(
         identity,
         context.sourceConnectionId,
+        context.scope,
       );
       const proxy = this.proxyFactory.createRemoteResourceProxy(
         identity,
         context.sourceConnectionId,
         context.callTimeout,
+        context.scope,
       );
       context.revived.set(identity, { proxy, existedBeforeRevive });
       return proxy;

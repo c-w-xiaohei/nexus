@@ -101,6 +101,7 @@ function createFrameworkError(error: SerializedError): NexusCallError {
     case "E_PROTOCOL_ERROR":
       return new NexusProtocolError(error.message, options);
     case "E_RESOURCE_NOT_FOUND":
+    case "E_RESOURCE_SCOPE_CLOSED":
     case "E_RESOURCE_ACCESS_DENIED":
     case "E_INVALID_SERVICE_PATH":
     case "E_TARGET_NOT_CALLABLE":

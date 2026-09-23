@@ -16,6 +16,7 @@ import {
   SERVICE_ON_DISCONNECT,
   type ServiceInvocationContext,
 } from "@/service/service-invocation-hooks";
+import type { ResourceScope } from "@/service/resource-scope";
 import { Logger } from "@/logger";
 import {
   NexusStoreActionError,
@@ -97,6 +98,8 @@ export function bindNexusStore<
   type Subscription = {
     callback: Parameters<NexusStoreServiceContract<Store>["subscribe"]>[0];
     owner?: string;
+    scope?: ResourceScope;
+    stopScope?: () => void;
     delivery: ReturnType<typeof createDelivery>;
     inFlight: Set<ReturnType<typeof createDelivery>>;
   };
@@ -221,6 +224,7 @@ export function bindNexusStore<
     reason?: TerminalReason,
   ) => {
     if (!subscriptions.delete(subscription)) return;
+    subscription.stopScope?.();
     const result = Result.err(error);
     subscription.delivery.complete(result);
     for (const delivery of subscription.inFlight) delivery.complete(result);
@@ -357,6 +361,7 @@ export function bindNexusStore<
     const connection = contexts.get(context);
     if (
       destroyed ||
+      context?.scope?.closed ||
       (connection && connections.get(context.sourceConnectionId) !== connection)
     ) {
       releaseCallback(callback);
@@ -369,10 +374,14 @@ export function bindNexusStore<
     const subscription: Subscription = {
       callback,
       owner: connection ? context.sourceConnectionId : undefined,
+      scope: context?.scope,
       delivery: initialized,
       inFlight: new Set(),
     };
     subscriptions.add(subscription);
+    subscription.stopScope = context?.scope?.onClosed(() =>
+      closeSubscription(subscription),
+    );
     const actions: Record<string, (...args: unknown[]) => Promise<unknown>> =
       Object.fromEntries(
         names.map((name) => [

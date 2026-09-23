@@ -56,6 +56,8 @@ This creates the runtime. Configure its endpoint before connecting;
 A context can host separate instances for extension and iframe communication.
 Each owns its configuration, providers, and sessions, without automatic routing
 between instances. A domain here is a communication graph, not a DNS name.
+Use [Nexus Relay and resource scopes](/nexus/docs/relay/) when the application
+must explicitly bridge selected services between adjacent graphs.
 
 ## Endpoints And Adapters
 
@@ -326,6 +328,9 @@ A root service proxy is a lightweight access handle and needs no release.
 Received object and callback refs have reference lifetimes and can be released.
 See [Callbacks](/nexus/docs/callbacks/) and
 [Remote resources](/nexus/docs/remote-resources/) for complete examples.
+For independent cleanup of a related group of calls, refs, and callbacks, use an
+explicit `connection.createScope(Token)` as described in
+[Nexus Relay and resource scopes](/nexus/docs/relay/).
 
 ## Remote Operations
 

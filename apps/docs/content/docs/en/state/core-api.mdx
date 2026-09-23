@@ -22,8 +22,6 @@ import {
 
 Types and errors are also exported from the same subpath.
 
-`relayNexusStore` is available from `@nexus-js/core/relay` and re-exported from `@nexus-js/core/state` for store-focused code. Use it only when a bridge context needs to project an upstream authoritative store into a downstream Nexus graph. See [Relay](/nexus/docs/relay/) for relay semantics.
-
 ## Shared Store Token
 
 Declare one shared store type containing data and methods. The token derives
@@ -180,6 +178,10 @@ const remote = await connectNexusStore(nexus, counterStore, {
 - initializes the local mirror from the baseline
 - returns no Store handle when the handshake fails
 
+Each subscription uses an explicit Core resource scope automatically. Destroying
+the mirror closes that scope without closing the shared Connection. A Relay path
+uses the same scope end to end; no `relayNexusStore` helper is needed.
+
 The init callback supplies the initial state, the raw Core function proxies for each
 action, and an idempotent unsubscribe capability. State does not add an action-name
 dispatch protocol or wrap those action proxies. Consequently, direct action failures
@@ -200,6 +202,11 @@ Lifecycle boundary:
 - if the underlying session is replaced, create a new handle with `connectNexusStore(...)`
 - terminal handles are not revived in place
 - if the supplied `where` stops matching on an identity update, the State handle becomes `stale`; ordinary Connection proxies do not retain that predicate
+
+If its resource scope closes, the mirror is terminal. Create a new subscription
+for a recovered route and fresh baseline; State does not replay actions or
+snapshot acknowledgements into an old mirror. See
+[Nexus Relay and resource scopes](/nexus/docs/relay/).
 
 ## `safeConnectNexusStore()`
 

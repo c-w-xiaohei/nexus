@@ -11,11 +11,17 @@ import {
 import type { AdapterModel } from "@/types/adapter-model";
 import type { RemoteValue } from "@/api/types";
 import { Result } from "better-result";
+import type { ResourceScope } from "./resource-scope";
 
 const consumers = new WeakMap<
   object,
   () => Promise<Result<any, NexusCallError>>
 >();
+const proxyBindings = new WeakMap<object, CallBinding>();
+
+/** Internal identity inspection without invoking a user-controlled proxy getter. */
+export const remoteBinding = (value: object): CallBinding | undefined =>
+  proxyBindings.get(value);
 
 /** Consumes only a proxy-created operation, sharing its cached execution with await. */
 export function safeCall<T, M extends AdapterModel>(
@@ -63,6 +69,7 @@ export class ProxyFactory {
   private readonly releaseRegistry: FinalizationRegistry<{
     resourceId: string;
     connectionId: string;
+    scope?: ResourceScope;
   }>;
 
   /** Own dispatch, resource bookkeeping, connection lookup, and finalization policy. */
@@ -71,16 +78,24 @@ export class ProxyFactory {
       safeDispatchCall(
         options: DispatchCallOptions,
       ): Promise<Result<any, NexusCallError>>;
-      dispatchRelease(resourceId: string, connectionId: string): void;
+      dispatchRelease(
+        resourceId: string,
+        connectionId: string,
+        scope?: ResourceScope,
+      ): void;
     },
     private readonly resourceManager: ResourceManager,
     private readonly getConnection: (id: string) => Connection<any>,
     private readonly callTimeout = 5_000,
   ) {
     this.releaseRegistry = new FinalizationRegistry(
-      ({ resourceId, connectionId }) => {
-        this.resourceManager.releaseRemoteProxy(resourceId, connectionId);
-        this.engine.dispatchRelease(resourceId, connectionId);
+      ({ resourceId, connectionId, scope }) => {
+        this.resourceManager.releaseRemoteProxy(
+          resourceId,
+          connectionId,
+          scope,
+        );
+        this.engine.dispatchRelease(resourceId, connectionId, scope);
       },
     );
   }
@@ -93,6 +108,7 @@ export class ProxyFactory {
     const binding: CallBinding = {
       connectionId: options.connectionId,
       timeout: options.timeout,
+      ...(options.scope ? { scope: options.scope } : {}),
     };
     return this.createProxy(
       {
@@ -112,6 +128,7 @@ export class ProxyFactory {
     resourceId: string,
     connectionId: string,
     timeout = this.callTimeout,
+    scope?: ResourceScope,
   ): object {
     const connection = this.getConnection(connectionId);
     const resource: RemoteResource = {
@@ -121,20 +138,24 @@ export class ProxyFactory {
         if (resource.released) return;
         resource.released = true;
         this.releaseRegistry.unregister(resource);
-        this.resourceManager.releaseRemoteProxy(resourceId, connectionId);
-        this.engine.dispatchRelease(resourceId, connectionId);
+        this.resourceManager.releaseRemoteProxy(
+          resourceId,
+          connectionId,
+          scope,
+        );
+        this.engine.dispatchRelease(resourceId, connectionId, scope);
       },
     };
     // Held values contain only IDs, never the resource state or a facade.
     this.releaseRegistry.register(
       resource,
-      { resourceId, connectionId },
+      { resourceId, connectionId, scope },
       resource,
     );
-    this.resourceManager.registerRemoteProxy(resourceId, connectionId);
+    this.resourceManager.registerRemoteProxy(resourceId, connectionId, scope);
     const proxy = this.createProxy(
       {
-        binding: { connectionId, timeout },
+        binding: { connectionId, timeout, scope },
         path: [],
         resource,
         connection,
@@ -175,6 +196,7 @@ export class ProxyFactory {
       set: () => false,
     });
     const read = root ? undefined : this.createCall(state, undefined, proxy);
+    proxyBindings.set(proxy, state.binding);
     return proxy;
   }
 
@@ -194,7 +216,9 @@ export class ProxyFactory {
       }
       result = Promise.resolve()
         .then(() => {
-          if (state.resource?.released) {
+          // A terminal scope is diagnosed by dispatch, which also preserves
+          // physical disconnect precedence over domain closure.
+          if (state.resource?.released && !state.binding.scope?.closed) {
             return Result.err(
               new NexusResourceError(
                 `Remote resource "${state.resource.resourceId}" has been released.`,

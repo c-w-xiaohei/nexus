@@ -113,6 +113,7 @@ describe("Engine", () => {
         type: NexusMessageType.RELEASE,
         id: null,
         resourceId: expect.any(String),
+        scopeId: expect.any(String),
       },
       clientConnectionId,
     );
@@ -173,7 +174,12 @@ describe("Engine", () => {
     // Simulate L2 passing a message to L3
     await hostEngine.onMessage(message, hostConnectionId);
 
-    expect(handleMessageSpy).toHaveBeenCalledWith(message, hostConnectionId);
+    expect(handleMessageSpy).toHaveBeenCalledWith(
+      message,
+      hostConnectionId,
+      undefined,
+      undefined,
+    );
   });
 
   it.each([false, true])(

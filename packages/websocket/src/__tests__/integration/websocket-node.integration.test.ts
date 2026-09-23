@@ -448,7 +448,7 @@ describe("WebSocket adapter real Node integration", () => {
     await disconnected;
     // Once the connection has notified subscribers, State releases its action resource.
     await expect(remote.actions.increment(1)).rejects.toMatchObject({
-      code: "E_RESOURCE_ACCESS_DENIED",
+      code: "E_CONN_CLOSED",
     });
     expect(state.store.getState().count).toBe(2);
   });

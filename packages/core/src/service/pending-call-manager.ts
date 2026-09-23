@@ -1,4 +1,5 @@
 import type { MessageId, SerializedError } from "@/types/message";
+import { scopeClosedError, type ResourceScope } from "./resource-scope";
 import { Result } from "better-result";
 import {
   NexusDisconnectedError,
@@ -18,6 +19,7 @@ import {
 
 type PendingCall = {
   connectionId: string;
+  scope?: ResourceScope;
   timeout: number;
   timer: ReturnType<typeof setTimeout>;
   resolve(result: Result<any, NexusCallError>): void;
@@ -30,7 +32,7 @@ export class PendingCallManager {
   /** Reserve a response slot and start the deadline that owns its failure. */
   register(
     id: MessageId,
-    options: { connectionId: string; timeout: number },
+    options: { connectionId: string; timeout: number; scope?: ResourceScope },
   ): Promise<Result<any, NexusCallError>> {
     return new Promise((resolve) => {
       const timer = setTimeout(
@@ -50,14 +52,25 @@ export class PendingCallManager {
   }
 
   /** Accept a response only from the session that created the request. */
-  canHandleResponse(id: MessageId, source: string): boolean {
-    return this.calls.get(id)?.connectionId === source;
+  canHandleResponse(
+    id: MessageId,
+    source: string,
+    scope?: ResourceScope,
+  ): boolean {
+    const pending = this.calls.get(id);
+    return pending?.connectionId === source && pending.scope === scope;
   }
 
   /** Return a caller's timeout only while its response slot remains owned. */
-  getCallTimeout(id: MessageId, source: string): number | undefined {
+  getCallTimeout(
+    id: MessageId,
+    source: string,
+    scope?: ResourceScope,
+  ): number | undefined {
     const pending = this.calls.get(id);
-    return pending?.connectionId === source ? pending.timeout : undefined;
+    return pending?.connectionId === source && pending.scope === scope
+      ? pending.timeout
+      : undefined;
   }
 
   /** Complete a matching request, reviving framework errors when possible. */
@@ -66,8 +79,9 @@ export class PendingCallManager {
     value: any,
     error: SerializedError | null,
     source: string,
+    scope?: ResourceScope,
   ): void {
-    if (!this.canHandleResponse(id, source)) return;
+    if (!this.canHandleResponse(id, source, scope)) return;
     this.finish(
       id,
       error
@@ -96,6 +110,11 @@ export class PendingCallManager {
           ),
         );
     }
+  }
+
+  onScopeClosed(scope: ResourceScope): void {
+    for (const [id, pending] of this.calls)
+      if (pending.scope === scope) this.fail(id, scopeClosedError(scope));
   }
 
   /** Normalize a local failure and settle the request if it is still pending. */

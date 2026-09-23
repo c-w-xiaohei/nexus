@@ -1,4 +1,14 @@
 export { Nexus, nexus } from "./api/nexus";
+export type { ResourceScope } from "./service/resource-scope";
+export {
+  SERVICE_INVOKE_START,
+  SERVICE_INVOKE_END,
+} from "./service/service-invocation-hooks";
+export type {
+  ServiceInvocationContext,
+  ServiceInvocationHooks,
+} from "./service/service-invocation-hooks";
+export type { RelayOptions, RelayHandle } from "./api/nexus";
 export type {
   NexusCallError,
   ResourceAcquireError,

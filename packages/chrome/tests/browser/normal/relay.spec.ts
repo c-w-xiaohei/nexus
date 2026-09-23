@@ -108,21 +108,15 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       nonce: afterAllowed.nonce,
     });
     expect(afterAllowed.invocationCount).toBe(mainBefore.invocationCount + 1);
-    const backgroundSessionId = requiredString(
-      allowedObservation.relaySessionId,
-      "allow policy observation relaySessionId",
-    );
     expect(allowedObservation).toEqual({
       type: "relay-policy-observation",
       decision: "allow",
-      originContext: "popup",
-      originSessionId: popupSessionId,
-      relayContext: "background",
-      relaySessionId: backgroundSessionId,
-      connectionTabId: expect.any(Number),
-      connectionFrameId: 0,
-      connectionDocumentId: expect.stringMatching(/.+/),
-      tokenId: "nexus-e2e:document-relay",
+      peerContext: "popup",
+      peerSessionId: popupSessionId,
+      connectionTabId: null,
+      connectionFrameId: null,
+      connectionDocumentId: null,
+      serviceName: "nexus-e2e:document-relay",
       operation: "APPLY",
       path: ["identity"],
     });
@@ -153,25 +147,22 @@ test("RL-CT-03 records Relay identity and preserves policy denial side effects",
       dispatchHostCommand,
     );
     expect(deniedCall.kind).toBe("error");
-    expect(deniedCall.error?.code).toBe("E_REMOTE_EXCEPTION");
+    expect(deniedCall.error?.code).toBe("E_AUTH_CALL_DENIED");
     expect(deniedCall.error?.message).toEqual(expect.any(String));
     expect(deniedObservation).toEqual({
       type: "relay-policy-observation",
       decision: "deny",
-      originContext: "workspace",
-      originSessionId: workspaceSessionId,
-      relayContext: "background",
-      relaySessionId: backgroundSessionId,
-      connectionTabId: expect.any(Number),
-      connectionFrameId: 0,
-      connectionDocumentId: expect.stringMatching(/.+/),
-      tokenId: "nexus-e2e:document-relay",
+      peerContext: "workspace",
+      peerSessionId: workspaceSessionId,
+      connectionTabId: null,
+      connectionFrameId: null,
+      connectionDocumentId: null,
+      serviceName: "nexus-e2e:document-relay",
       operation: "APPLY",
       path: ["identity"],
-      code: "E_RELAY_POLICY_DENIED",
+      code: "E_AUTH_CALL_DENIED",
     });
     expect(deniedAfter.invocationCount).toBe(deniedBefore.invocationCount);
-    expect(deniedCall.error?.code).not.toBe("E_AUTH_CALL_DENIED");
 
     await clickUiCommand(workspace, runId, "relay-policy-mode", "workspace", {
       mode: "allow",
@@ -276,7 +267,7 @@ test("RL-CT-04 registers the exact main document and does not retarget its retai
     );
     expect(oldCall.kind).toBe("error");
     expect(afterOldCall.invocationCount).toBe(freshFacts.invocationCount);
-    expect(oldCall.error?.code).toBe("E_REMOTE_EXCEPTION");
+    expect(oldCall.error?.code).toBe("E_PROTOCOL_ERROR");
     expect(oldCall.error?.message).toEqual(expect.any(String));
     expect(oldCall.identity).toBeNull();
 
@@ -642,12 +633,6 @@ function parseFacts(value: string): DocumentFacts {
   )
     throw new Error(`Invalid document facts: ${value}`);
   return facts as unknown as DocumentFacts;
-}
-
-function requiredString(value: unknown, description: string): string {
-  if (typeof value !== "string" || value.length === 0)
-    throw new Error(`Invalid ${description}`);
-  return value;
 }
 
 function parsed(value: string): Record<string, any> | undefined {

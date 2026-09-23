@@ -174,7 +174,7 @@ describe("LogicalConnection", () => {
                 : NexusMessageType.HANDSHAKE_ACK,
             id: 1,
             metadata: hostMeta,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           }),
         ).toEqual(Result.ok(undefined));
       }
@@ -242,12 +242,12 @@ describe("LogicalConnection", () => {
             type: NexusMessageType.HANDSHAKE_REQ,
             id: 7,
             metadata: hostMeta,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
           receive({
             type: NexusMessageType.HANDSHAKE_READY,
             id: 7,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
           return Result.ok({
             portProcessor: {
@@ -378,7 +378,7 @@ describe("LogicalConnection", () => {
           type: NexusMessageType.HANDSHAKE_ACK,
           id: 1,
           metadata: hostMeta,
-          capabilities: ["provider-catalog-v1"],
+          capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         expect(connection.isReady()).toBe(true);
         connection.sendMessage({
@@ -517,12 +517,12 @@ describe("LogicalConnection", () => {
                   type: NexusMessageType.HANDSHAKE_REQ,
                   id: 1,
                   metadata: hostMeta,
-                  capabilities: ["provider-catalog-v1"],
+                  capabilities: ["provider-catalog-v1", "resource-scope-v1"],
                 });
                 handlers.onLogicalMessage({
                   type: NexusMessageType.HANDSHAKE_READY,
                   id: 1,
-                  capabilities: ["provider-catalog-v1"],
+                  capabilities: ["provider-catalog-v1", "resource-scope-v1"],
                 });
               }
               return Result.ok({
@@ -535,7 +535,10 @@ describe("LogicalConnection", () => {
                         type: NexusMessageType.HANDSHAKE_ACK,
                         id: message.id,
                         metadata: hostMeta,
-                        capabilities: ["provider-catalog-v1"],
+                        capabilities: [
+                          "provider-catalog-v1",
+                          "resource-scope-v1",
+                        ],
                       });
                     if (message.type === NexusMessageType.RES) {
                       sent.push(Number(message.id));
@@ -669,7 +672,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
         metadata: hostMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
       for (const id of [10, 11])
         connection.sendMessage({
@@ -818,13 +821,13 @@ describe("LogicalConnection", () => {
             type: NexusMessageType.HANDSHAKE_REQ,
             id: 1,
             metadata: hostMeta,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
           connection.publishProviders(["service"]);
           await connection.safeHandleMessage({
             type: NexusMessageType.HANDSHAKE_READY,
             id: 1,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
         } else {
           connection.initiateHandshake();
@@ -833,7 +836,7 @@ describe("LogicalConnection", () => {
             type: NexusMessageType.HANDSHAKE_ACK,
             id: 1,
             metadata: hostMeta,
-            capabilities: ["provider-catalog-v1"],
+            capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
         }
         if (phase === "publishing") receive();
@@ -884,13 +887,13 @@ describe("LogicalConnection", () => {
       type: NexusMessageType.HANDSHAKE_REQ,
       id: 1,
       metadata: hostMeta,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
     });
     connection.publishProviders(["first"]);
     await connection.safeHandleMessage({
       type: NexusMessageType.HANDSHAKE_READY,
       id: 1,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
     });
     expect(sent).toEqual([["first"], ["second"]]);
     expect(connection.isReady()).toBe(true);
@@ -949,7 +952,7 @@ describe("LogicalConnection", () => {
       type: NexusMessageType.HANDSHAKE_REQ,
       id: 31,
       metadata: clientMeta,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
     } as const;
     await hostConnection.safeHandleMessage(request);
     await hostConnection.safeHandleMessage(request);
@@ -981,7 +984,7 @@ describe("LogicalConnection", () => {
       type: NexusMessageType.HANDSHAKE_ACK,
       id: 1,
       metadata: hostMeta,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       providers: [],
     });
     expect(mockClientHandlers.onMessage).not.toHaveBeenCalled();
@@ -1014,7 +1017,7 @@ describe("LogicalConnection", () => {
       type: NexusMessageType.HANDSHAKE_ACK,
       id: 1,
       metadata: hostMeta,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       providers: [],
     });
     expect(connection.isReady()).toBe(false);
@@ -1035,7 +1038,7 @@ describe("LogicalConnection", () => {
       type: NexusMessageType.HANDSHAKE_ACK,
       id: 1,
       metadata: hostMeta,
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       providers: ["service.late"],
     });
     await vi.waitFor(() =>
@@ -1080,7 +1083,7 @@ describe("LogicalConnection", () => {
       id: 19,
       metadata: clientMeta,
       assigns: { context: "assigned", id: 9 },
-      capabilities: ["provider-catalog-v1"],
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
     });
     await vi.waitFor(() =>
       expect(mockHostHandlers.authorize).toHaveBeenCalledOnce(),
@@ -1208,7 +1211,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
         metadata: hostMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(sent).toContainEqual(
@@ -1289,7 +1292,7 @@ describe("LogicalConnection", () => {
           type: NexusMessageType.HANDSHAKE_ACK,
           id: 1,
           metadata: hostMeta,
-          capabilities: ["provider-catalog-v1"],
+          capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         await vi.advanceTimersByTimeAsync(0);
         expect(sent).toContainEqual(
@@ -1321,13 +1324,13 @@ describe("LogicalConnection", () => {
           type: NexusMessageType.HANDSHAKE_REQ,
           id: 1,
           metadata: clientMeta,
-          capabilities: ["provider-catalog-v1"],
+          capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         ackBeforeReady.publishProviders(["ack.provider"]);
         await ackBeforeReady.safeHandleMessage({
           type: NexusMessageType.HANDSHAKE_READY,
           id: 1,
-          capabilities: ["provider-catalog-v1"],
+          capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         expect(sent).toContainEqual(
           expect.objectContaining({
@@ -1381,14 +1384,14 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 1,
         metadata: hostMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
       expect(connection.publishProviders(["service.queued"]).isOk()).toBe(true);
 
       await connection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_READY,
         id: 1,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(connection.isReady()).toBe(false);
@@ -1429,7 +1432,7 @@ describe("LogicalConnection", () => {
           type: NexusMessageType.HANDSHAKE_ACK,
           id: 1,
           metadata: hostMeta,
-          capabilities: ["provider-catalog-v1"],
+          capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         expect(handled.isOk()).toBe(true);
         expect(connection.remoteIdentity).toBeUndefined();
@@ -1471,6 +1474,25 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
         metadata: hostMeta,
+      });
+
+      expect(clientConnection.handshakeRejectionError).toMatchObject({
+        code: "E_PROTOCOL_INCOMPATIBLE",
+      });
+      expect(clientConnection.isReady()).toBe(false);
+      expect(mockClientHandlers.authorize).not.toHaveBeenCalled();
+      expect(mockClientHandlers.onReady).not.toHaveBeenCalled();
+    });
+
+    it("rejects an ACK from a peer without resource-scope-v1", async () => {
+      (mockClientHandlers.authorize as Mock).mockResolvedValue(false);
+
+      expect(clientConnection.initiateHandshake().isOk()).toBe(true);
+      await clientConnection.safeHandleMessage({
+        type: NexusMessageType.HANDSHAKE_ACK,
+        id: 1,
+        metadata: hostMeta,
+        capabilities: ["provider-catalog-v1"],
       });
 
       expect(clientConnection.handshakeRejectionError).toMatchObject({
@@ -1605,7 +1627,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 77,
         metadata: clientMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       await vi.waitFor(() => {
@@ -1615,7 +1637,7 @@ describe("LogicalConnection", () => {
       const readyBeforeVerify = hostConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_READY,
         id: 77,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(hostConnection.isReady()).toBe(false);
@@ -1637,7 +1659,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_REQ,
         id: 88,
         metadata: clientMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       await vi.waitFor(() => {
@@ -1647,7 +1669,7 @@ describe("LogicalConnection", () => {
       const wrongReady = await hostConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_READY,
         id: 89,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(wrongReady.isOk()).toBe(true);
@@ -1691,7 +1713,7 @@ describe("LogicalConnection", () => {
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 999,
         metadata: hostMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(wrongAck.isOk()).toBe(true);
@@ -1822,7 +1844,7 @@ describe("LogicalConnection", () => {
         id: 444,
         metadata: clientMeta,
         assigns: assignmentMeta,
-        capabilities: ["provider-catalog-v1"],
+        capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
 
       expect(hostConnection.localIdentity).toEqual(hostMeta);

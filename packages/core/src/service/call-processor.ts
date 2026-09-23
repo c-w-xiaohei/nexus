@@ -12,10 +12,12 @@ import {
 import { toFrameworkProtocolError } from "@/errors/serialized-error";
 import type { PayloadProcessor } from "./payload/payload-processor";
 import type { PendingCallManager } from "./pending-call-manager";
+import { scopeClosedError, type ResourceScope } from "./resource-scope";
 
 export type CallBinding = {
   timeout: number;
   connectionId: string;
+  scope?: ResourceScope;
 };
 export type DispatchCallOptions = CallBinding & {
   path: (string | number)[];
@@ -55,19 +57,33 @@ export class CallProcessor {
           { connectionId, path: options.path },
         ),
       );
+    if (options.scope?.closed)
+      return Result.err(scopeClosedError(options.scope));
     const id = this.messageIdSeq++;
     const pending = this.deps.pendingCallManager.register(id, {
       connectionId,
       timeout: options.timeout,
+      ...(options.scope ? { scope: options.scope } : {}),
     });
     const sent = Result.try({
       try: () => {
-        const base = { id, resourceId: options.resourceId, path: options.path };
+        const base = {
+          id,
+          resourceId: options.resourceId,
+          path: options.path,
+          ...(options.scope
+            ? {
+                scopeId: options.scope.id,
+                timeoutMs: options.timeout,
+                hops: 16,
+              }
+            : {}),
+        };
         const encoded: Result<GetMessage | ApplyMessage, Error> =
           options.type === "GET"
             ? Result.ok({ ...base, type: NexusMessageType.GET })
             : this.deps.payloadProcessor
-                .safeSanitize(options.args, connectionId)
+                .safeSanitize(options.args, connectionId, options.scope)
                 .map((args) => ({
                   ...base,
                   type: NexusMessageType.APPLY,

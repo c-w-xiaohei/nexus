@@ -24,14 +24,12 @@ State 沿用 Core 的 `ConnectOptions`：精确目标 `target`、筛选条件 `w
 - 生命周期和错误行为：[生命周期和错误](/nexus/docs/state/lifecycle-and-errors/)
 - 测试指南：[测试](/nexus/docs/state/testing/)
 - 常见问题：[FAQ](/nexus/docs/state/faq/)
-- 跨相邻 Nexus 通信网络转发状态：[Relay](/nexus/docs/relay/)
 
 ## 导入入口 [#package-routing]
 
 - 无 UI 依赖的运行时：`@nexus-js/core/state`（属于 `@nexus-js/core`）
 - React 集成：`@nexus-js/react`
 - 核心框架：`@nexus-js/core`
-- 桥接上下文中的转发入口：`@nexus-js/core/relay`
 - 应用单元测试工具：`@nexus-js/testing`
 
 如果要查找产品级 Nexus 文档，请前往[Nexus 文档](/nexus/docs/)。

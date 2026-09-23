@@ -10,12 +10,11 @@ import type {
   ConnectionResource,
   ConnectionAuthContext,
   ConnectionWhere,
+  RelayHandle,
+  ServiceCallAuthContext,
 } from "@nexus-js/core";
+import { Nexus } from "@nexus-js/core";
 import { createNexusStore } from "@nexus-js/core/state";
-import {
-  relayService,
-  type RelayServiceCallContext,
-} from "@nexus-js/core/relay";
 import { eventKey, type BridgeEvent } from "../../protocol";
 import { defineBackground } from "wxt/utils/define-background";
 import {
@@ -247,6 +246,7 @@ export default defineBackground(() => {
   const relayState = {
     policyMode: "allow" as "allow" | "deny",
     target: undefined as ContentFact | undefined,
+    registration: undefined as RelayHandle | undefined,
     retiredBetaSessionId: undefined as string | undefined,
     resolveBetaReplacement: undefined as (() => void) | undefined,
     betaReplacement: undefined as Promise<void> | undefined,
@@ -294,6 +294,10 @@ export default defineBackground(() => {
           declared === undefined || declared === connection.observed.frameId
         );
       },
+      canCall: (context) =>
+        context.serviceName === DocumentRelayToken.id
+          ? evaluateRelayCall(context)
+          : true,
     },
   });
   const workspaceState = createNexusStore(
@@ -1188,18 +1192,19 @@ export default defineBackground(() => {
     ) {
       return { result: errorResultCode("E_TARGET_UNCHANGED") };
     }
+    relayState.registration?.dispose();
     relayState.target = current;
-    nexus.provide(
-      relayService(DocumentRelayToken, {
-        forwardThrough: nexus,
-        forwardTarget: chromeTarget.contentDocument({
+    relayState.registration = Nexus.relay({
+      from: nexus,
+      to: {
+        nexus,
+        target: chromeTarget.contentDocument({
           tabId: current.tabId,
           documentId: current.documentId,
         }),
-        payload: { mode: "serializable" },
-        policy: { canCall: evaluateRelayCall },
-      }),
-    );
+      },
+      services: [DocumentRelayToken],
+    });
     return {
       result: {
         ok: true,
@@ -1213,37 +1218,32 @@ export default defineBackground(() => {
     };
   }
 
-  /** Apply fixture relay policy and record the observed authorization context. */
+  /** Apply the entry-instance policy to the direct downstream peer. */
   async function evaluateRelayCall(
-    context: RelayServiceCallContext<FixtureChromeModel>,
+    context: ServiceCallAuthContext<FixtureChromeModel>,
   ): Promise<boolean> {
-    const originContext = context.origin?.context;
-    const originSessionId = context.origin?.app?.sessionId ?? null;
-    const allowedOrigin =
-      originContext === "popup" ||
-      originContext === "workspace" ||
-      originContext === "fixture-workspace";
+    const peerContext = context.remoteIdentity.context;
+    const peerSessionId = context.remoteIdentity.app.sessionId;
+    const allowedPeer =
+      peerContext === "popup" ||
+      peerContext === "workspace" ||
+      peerContext === "fixture-workspace";
     const decision =
-      relayState.policyMode === "allow" && allowedOrigin ? "allow" : "deny";
-    const connection = context.connection?.observed ?? context.connection;
+      relayState.policyMode === "allow" && allowedPeer ? "allow" : "deny";
     await runState.reporter?.result(
       JSON.stringify({
         type: "relay-policy-observation",
         decision,
-        originContext:
-          originContext === "fixture-workspace"
-            ? "workspace"
-            : (originContext ?? null),
-        originSessionId,
-        relayContext: normalizeString(context.relay?.context),
-        relaySessionId: normalizeString(context.relay?.app?.sessionId),
-        connectionTabId: normalizeNumber(connection?.tabId),
-        connectionFrameId: normalizeNumber(connection?.frameId),
-        connectionDocumentId: normalizeString(connection?.documentId),
-        tokenId: context.tokenId,
+        peerContext:
+          peerContext === "fixture-workspace" ? "workspace" : peerContext,
+        peerSessionId,
+        connectionTabId: normalizeNumber(context.connection.tabId),
+        connectionFrameId: normalizeNumber(context.connection.frameId),
+        connectionDocumentId: normalizeString(context.connection.documentId),
+        serviceName: context.serviceName,
         operation: context.operation,
         path: context.path,
-        ...(decision === "deny" ? { code: "E_RELAY_POLICY_DENIED" } : {}),
+        ...(decision === "deny" ? { code: "E_AUTH_CALL_DENIED" } : {}),
       }),
     );
     return decision === "allow";

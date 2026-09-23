@@ -34,10 +34,13 @@ export function createRemoteStore<Store extends object>(
   }>(() => ({ state: null, status: { type: "initializing" } }));
   const buffered: SyncEnvelope<StoreData<Store>, Store>[] = [];
   const cleanup = new Set<() => void>();
+  const subscriptionCleanup = new Set<() => void>();
   const localUnsubscribers = new Set<() => void>();
   let initialState: StoreData<Store> | null = null;
   let actions = {} as RemoteActions<Store>;
   let failure: Failure | null = null;
+  let subscriptionKnown = false;
+  let subscriptionDisposed = Promise.resolve();
   /** Identify terminal mirrors so late callbacks can be reclaimed immediately. */
   const isTerminal = () => {
     const { type } = mirror.getState().status;
@@ -55,6 +58,12 @@ export function createRemoteStore<Store extends object>(
         /* best effort */
       }
     } else cleanup.add(stop);
+  };
+  /** Runs after a subscription's unsubscribe has been started, or at terminal init failure. */
+  const addSubscriptionCleanup = (stop: () => void) => {
+    if (subscriptionKnown) return addCleanup(stop);
+    if (isTerminal()) return stop();
+    subscriptionCleanup.add(stop);
   };
   /** Commit a terminal status, clear pending events, and release upstream ownership. */
   const finish = (
@@ -80,6 +89,14 @@ export function createRemoteStore<Store extends object>(
     mirror.setState({ status: nextStatus });
     for (const stop of cleanup) {
       cleanup.delete(stop);
+      try {
+        stop();
+      } catch {
+        /* Continue independent cleanup. */
+      }
+    }
+    for (const stop of subscriptionCleanup) {
+      subscriptionCleanup.delete(stop);
       try {
         stop();
       } catch {
@@ -160,7 +177,16 @@ export function createRemoteStore<Store extends object>(
             typeof input === "object" &&
             (input as { type?: unknown }).type === "init"
           );
-          if (isInit) addCleanup(() => disposeSubscription(input as object));
+          if (isInit) {
+            addCleanup(() => {
+              subscriptionDisposed = disposeSubscription(input as object);
+            });
+            subscriptionKnown = true;
+            for (const stop of subscriptionCleanup) {
+              subscriptionCleanup.delete(stop);
+              addCleanup(stop);
+            }
+          }
         },
         catch: eventError,
       });
@@ -303,6 +329,9 @@ export function createRemoteStore<Store extends object>(
     onSync,
     safeReady,
     addCleanup,
+    /** Adds cleanup after the remote unsubscribe phase without exposing it publicly. */
+    addSubscriptionCleanup,
+    subscriptionDisposed: () => subscriptionDisposed,
     /** Mark the mirror disconnected with an upstream-provided diagnostic message. */
     disconnect: (message: string) =>
       finish(new NexusStoreDisconnectedError(message)),

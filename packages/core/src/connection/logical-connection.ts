@@ -24,6 +24,7 @@ import { delay } from "es-toolkit/promise";
 
 const { ok, err } = Result;
 const PROVIDER_CATALOG_CAPABILITY = "provider-catalog-v1";
+const RESOURCE_SCOPE_CAPABILITY = "resource-scope-v1";
 
 /** Construction inputs for an attached, not-yet-handshaken session. */
 export interface ConnectionConfig<M extends AdapterModel> {
@@ -144,6 +145,7 @@ export class LogicalConnection<M extends AdapterModel> {
   private rejection?: Error;
   private readonly providers = new Set<string>();
   private readonly pendingProviders = new Set<string>();
+  private readonly pendingRemovedProviders = new Set<string>();
 
   // ===== Notification Capabilities =====
 
@@ -445,7 +447,7 @@ export class LogicalConnection<M extends AdapterModel> {
       type: NexusMessageType.HANDSHAKE_REQ,
       id,
       metadata: this.localEndpointMeta,
-      capabilities: [PROVIDER_CATALOG_CAPABILITY],
+      capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
       ...(assignmentMetadata && { assigns: assignmentMetadata }),
     });
   }
@@ -460,11 +462,23 @@ export class LogicalConnection<M extends AdapterModel> {
   /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
   public publishProviders(providers: readonly string[]): Result<void, Error> {
     if (this.state.phase === "closed") return ok(undefined);
-    for (const provider of providers) this.pendingProviders.add(provider);
+    for (const provider of providers) {
+      this.pendingRemovedProviders.delete(provider);
+      this.pendingProviders.add(provider);
+    }
     return this.isReady() ? this.flushProviders() : ok(undefined);
   }
 
   // ===== Private Lifetime =====
+
+  public removeProviders(providers: readonly string[]): Result<void, Error> {
+    if (this.state.phase === "closed") return ok(undefined);
+    for (const provider of providers) {
+      this.pendingProviders.delete(provider);
+      this.pendingRemovedProviders.add(provider);
+    }
+    return this.isReady() ? this.flushProviders() : ok(undefined);
+  }
 
   /** Transition once to closed, cancel work, release queues, and notify the owner. */
   private stop(
@@ -478,6 +492,7 @@ export class LogicalConnection<M extends AdapterModel> {
     this.lifetime.abort();
     if ("messages" in state) state.messages.length = 0;
     this.pendingProviders.clear();
+    this.pendingRemovedProviders.clear();
     if (closePort) {
       const closed = this.port.close();
       if (closed.isErr())
@@ -545,6 +560,8 @@ export class LogicalConnection<M extends AdapterModel> {
       case NexusMessageType.PROVIDER_AVAILABLE:
         // Deltas may arrive before READY; readiness only controls notification.
         this.addProviders(message.providers);
+        for (const provider of message.removed ?? [])
+          this.providers.delete(provider);
         return;
       case NexusMessageType.IDENTITY_UPDATE: {
         if (!this.isReady() || !this.peerIdentity) return;
@@ -592,11 +609,14 @@ export class LogicalConnection<M extends AdapterModel> {
       (state.id !== null && state.id !== message.id)
     )
       return;
-    if (!message.capabilities?.includes(PROVIDER_CATALOG_CAPABILITY)) {
+    if (
+      !message.capabilities?.includes(PROVIDER_CATALOG_CAPABILITY) ||
+      !message.capabilities.includes(RESOURCE_SCOPE_CAPABILITY)
+    ) {
       this.reject(
         message.id,
         new NexusProtocolIncompatibleError(
-          `Peer does not support required capability ${PROVIDER_CATALOG_CAPABILITY}.`,
+          `Peer must support ${PROVIDER_CATALOG_CAPABILITY} and ${RESOURCE_SCOPE_CAPABILITY}.`,
         ),
         message.type === NexusMessageType.HANDSHAKE_REQ,
       );
@@ -641,7 +661,7 @@ export class LogicalConnection<M extends AdapterModel> {
         type: NexusMessageType.HANDSHAKE_ACK,
         id: message.id,
         metadata: this.localEndpointMeta,
-        capabilities: [PROVIDER_CATALOG_CAPABILITY],
+        capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
         providers,
       }).unwrapOr(undefined);
     } else {
@@ -649,7 +669,7 @@ export class LogicalConnection<M extends AdapterModel> {
       this.write({
         type: NexusMessageType.HANDSHAKE_READY,
         id: message.id,
-        capabilities: [PROVIDER_CATALOG_CAPABILITY],
+        capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
         providers: this.localProviders(),
       }).unwrapOr(undefined);
       this.publish(true);
@@ -770,13 +790,19 @@ export class LogicalConnection<M extends AdapterModel> {
   private flushProviders(): Result<void, Error> {
     // Reentrant registration during activation queues another delta. Drain it
     // before publishing instead of stranding it until an unrelated registration.
-    while (this.pendingProviders.size > 0) {
+    while (
+      this.pendingProviders.size > 0 ||
+      this.pendingRemovedProviders.size > 0
+    ) {
       const providers = Array.from(this.pendingProviders);
+      const removed = Array.from(this.pendingRemovedProviders);
       this.pendingProviders.clear();
+      this.pendingRemovedProviders.clear();
       const sent = this.write({
         type: NexusMessageType.PROVIDER_AVAILABLE,
         id: null,
         providers,
+        ...(removed.length ? { removed } : {}),
       });
       if (sent.isErr()) return sent;
     }

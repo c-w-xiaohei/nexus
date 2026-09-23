@@ -13,6 +13,7 @@ import {
   SERVICE_INVOKE_START,
   SERVICE_ON_DISCONNECT,
 } from "../service/service-invocation-hooks";
+import type { ResourceScope } from "../service/resource-scope";
 import { RELEASE_PROXY_SYMBOL } from "../types/symbols";
 import { bindNexusStore, createNexusStore } from "./bind-store";
 import { createRemoteStore } from "./remote-store";
@@ -36,6 +37,34 @@ function deferred<T = void>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+function scope(id: string, serviceId: string): ResourceScope {
+  let closed = false;
+  const listeners = new Set<() => void>();
+  return {
+    id,
+    serviceId,
+    get closed() {
+      return closed;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      for (const listener of [...listeners]) listener();
+      listeners.clear();
+    },
+    onClosed(listener) {
+      if (closed) {
+        listener();
+        return () => undefined;
+      }
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    [Symbol.dispose]() {
+      this.close();
+    },
+  };
 }
 function setup() {
   const store = createStore<Data & Actions>()((set, get) => ({
@@ -68,6 +97,40 @@ afterEach(() => {
 });
 
 describe("buffered Zustand binding", () => {
+  it("closes only the subscription that owns a closed resource scope", async () => {
+    const { provider } = setup();
+    const first = scope("first", definition.id);
+    const second = scope("second", definition.id);
+    const firstContext = provider.service[SERVICE_INVOKE_START]!({
+      sourceConnectionId: "shared",
+      sourceIdentity: {},
+      localIdentity: {},
+      platform: {},
+      scope: first,
+    });
+    const secondContext = provider.service[SERVICE_INVOKE_START]!({
+      sourceConnectionId: "shared",
+      sourceIdentity: {},
+      localIdentity: {},
+      platform: {},
+      scope: second,
+    });
+    let firstInit!: InitEnvelope<Data, Data & Actions>;
+    let secondInit!: InitEnvelope<Data, Data & Actions>;
+    await provider.service.subscribe((event) => {
+      if (event.type === "init") firstInit = event;
+    }, firstContext);
+    await provider.service.subscribe((event) => {
+      if (event.type === "init") secondInit = event;
+    }, secondContext);
+
+    first.close();
+    await expect(firstInit.actions.increment(1)).rejects.toMatchObject({
+      code: "E_STORE_DISCONNECTED",
+    });
+    await expect(secondInit.actions.increment(1)).resolves.toBe(1);
+  });
+
   it.each([{ publishWindowMs: -1 }, { maxPendingSnapshots: 0 }])(
     "rejects invalid publication settings before observing the source: %j",
     (limits) => {
@@ -382,6 +445,7 @@ describe("buffered Zustand binding", () => {
           {
             safeConnect: async () =>
               Result.ok({
+                createScope: () => scope("late", definition.id),
                 safeGet: () => Result.ok(service),
                 onDisconnected: () => () => undefined,
                 subscribeIdentity: () => () => undefined,

@@ -51,6 +51,7 @@ const app = new Nexus<ChromeAdapterModel>();
 
 同一个上下文可以分别创建实例，用于扩展通信和 iframe 通信。每个实例拥有自己的配置、服务提供者和会话，实例之间不会自动转发消息。
 这里的“通信域”指一组相互通信的节点，不是 DNS 域名。
+需要由应用在相邻通信图之间桥接指定服务时，参阅 [Nexus Relay 与资源域](/nexus/docs/relay/)。
 
 ## Endpoint 和适配器 [#endpoints-and-adapters]
 
@@ -289,6 +290,7 @@ await observation.stop(); // 在远程观察对象上执行。
 
 根服务代理是轻量访问句柄，不需要释放。收到的对象引用和回调引用则有各自的引用生命周期，可以显式释放。
 完整示例见[回调](/nexus/docs/callbacks/)和[远程资源](/nexus/docs/remote-resources/)。
+若要独立清理一组相关调用、ref 和回调，请使用 `connection.createScope(Token)` 创建显式资源域，详见 [Nexus Relay 与资源域](/nexus/docs/relay/)。
 
 ## 远程操作 [#remote-operations]
 

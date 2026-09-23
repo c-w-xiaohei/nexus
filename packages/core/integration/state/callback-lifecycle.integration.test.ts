@@ -322,29 +322,42 @@ describe("State callback lifecycle across host and mirror", () => {
     const { provider, store } = createHost();
     const subscribed = deferred();
     const reply = deferred();
-    const stopped = deferred();
     const callback = vi.fn();
     const wrapped = {
       ...provider.service,
       async subscribe(
         listener: Parameters<typeof provider.service.subscribe>[0],
+        ...args: unknown[]
       ) {
         subscribed.resolve();
         await reply.promise;
-        await provider.service.subscribe((event) => {
-          if (event.type === "init")
-            return listener({
-              ...event,
-              unsubscribe: () => {
-                event.unsubscribe();
-                stopped.resolve();
-              },
-            });
-          callback(event);
-          return listener(event);
-        });
+        await Reflect.apply(provider.service.subscribe, provider.service, [
+          (event: SyncEnvelope<Data, Data & Actions>) => {
+            if (event.type === "init")
+              return listener({
+                ...event,
+                unsubscribe: event.unsubscribe,
+              });
+            callback(event);
+            return listener(event);
+          },
+          ...args,
+        ]);
       },
     };
+    const hooks = provider.service as typeof provider.service &
+      ServiceInvocationHooks;
+    Object.defineProperties(wrapped, {
+      [SERVICE_INVOKE_START]: {
+        value: hooks[SERVICE_INVOKE_START],
+      },
+      [SERVICE_INVOKE_END]: {
+        value: hooks[SERVICE_INVOKE_END],
+      },
+      [SERVICE_ON_DISCONNECT]: {
+        value: hooks[SERVICE_ON_DISCONNECT],
+      },
+    });
     const network = await createStarNetwork<
       { context: string },
       { from: string }
@@ -364,7 +377,8 @@ describe("State callback lifecycle across host and mirror", () => {
     await subscribed.promise;
     expect(await failed).toMatchObject({ code: "E_STORE_CONNECT" });
     reply.resolve();
-    await stopped.promise;
+    await Promise.resolve();
+    await Promise.resolve();
     expect(store.getState().add(1)).toBe(1);
     expect(callback).not.toHaveBeenCalled();
   });
@@ -612,6 +626,14 @@ describe("State callback lifecycle across host and mirror", () => {
       {
         safeConnect: async () =>
           Result.ok({
+            createScope: () => ({
+              id: "test:destroy",
+              serviceId: token.id,
+              closed: false,
+              close() {},
+              onClosed: () => () => undefined,
+              [Symbol.dispose]() {},
+            }),
             safeGet: () => Result.ok(service),
             onDisconnected: () => () => undefined,
             subscribeIdentity: () => () => undefined,
@@ -660,6 +682,14 @@ describe("State callback lifecycle across host and mirror", () => {
         {
           safeConnect: async () =>
             Result.ok({
+              createScope: () => ({
+                id: "test:timeout",
+                serviceId: token.id,
+                closed: false,
+                close() {},
+                onClosed: () => () => undefined,
+                [Symbol.dispose]() {},
+              }),
               safeGet: () => Result.ok(service),
               onDisconnected: () => () => undefined,
               subscribeIdentity: () => () => undefined,

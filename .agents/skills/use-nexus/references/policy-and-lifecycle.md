@@ -42,8 +42,6 @@ Raw core handles are lifecycle-scoped.
 - `Nexus.release` and `nexus.release` are resource-only operations. Service proxies are not releasable, and `safeRelease` is the Result-returning form for expected release failures.
 - Local same-copy closure can use `instanceof NexusDisconnectedError`; cross-context or duplicate-copy code must check `error.code === "E_CONN_CLOSED"`.
 
-Relay-backed services and stores keep this lifecycle model explicit. Relay policy receives direct downstream caller identity from invocation context, and relay-backed store handles become terminal when the upstream source is disconnected, stale, or replaced. Create fresh downstream handles for fresh sessions.
-
 ## Documentation Style
 
 For adapter docs:

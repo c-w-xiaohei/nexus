@@ -16,17 +16,22 @@ import { Token } from "./token";
 import type { Remote } from "./types";
 import { hasOnlyOptionKeys, isValidTimeout } from "./types/config";
 import { Logger } from "@/logger";
+import type { ResourceScope } from "../service/resource-scope";
 
 const logger = new Logger("L4 --- Connection");
 
 export type DisconnectReason = "local" | "remote" | "protocol";
 export interface ResourceOptions {
+  /** Explicit region; must belong to this connection and the requested Token. */
+  scope?: ResourceScope;
   /** Positive finite local call budget, inherited by refs returned from this handle. */
   callTimeout?: number;
 }
 
 /** A shared session handle, not a lease. Dropping it never closes the session. */
 export interface Connection<M extends AdapterModel = AdapterModel> {
+  /** Creates an independent region without sending or allocating remote objects. */
+  createScope<T extends object>(token: Token<T> | Token<T, M>): ResourceScope;
   readonly id: string;
   readonly status: "connected" | "disconnected";
   readonly disconnectReason: DisconnectReason | undefined;
@@ -84,7 +89,10 @@ export class ConnectionHandle<
   /** Binds a public handle to one immutable session identity and runtime call budget. */
   constructor(
     private readonly session: LogicalConnection<M>,
-    private readonly engine: Pick<Engine<M>, "createServiceProxy">,
+    private readonly engine: Pick<
+      Engine<M>,
+      "createServiceProxy" | "safeCreateScope" | "ownsScope"
+    >,
     private readonly callTimeout: number,
   ) {}
 
@@ -120,6 +128,15 @@ export class ConnectionHandle<
   }
 
   /** Validates local options and catalog availability without dialing or waiting. */
+  createScope<T extends object>(token: Token<T> | Token<T, M>): ResourceScope {
+    if (!(token instanceof Token))
+      throw new NexusUsageError("createScope requires a Token.");
+    const result = this.engine.safeCreateScope(this.id, token.id);
+    if (result.isErr()) throw result.error;
+    return result.value;
+  }
+
+  /** Validates local options and catalog availability without dialing or waiting. */
   safeGet<T extends object>(
     token: Token<T> | Token<T, M>,
     options: ResourceOptions = {},
@@ -127,7 +144,7 @@ export class ConnectionHandle<
     const context = { connectionId: this.id };
     if (
       !(token instanceof Token) ||
-      !hasOnlyOptionKeys(options, ["callTimeout"]) ||
+      !hasOnlyOptionKeys(options, ["callTimeout", "scope"]) ||
       !isValidTimeout(options.callTimeout)
     )
       return Result.err(
@@ -135,6 +152,13 @@ export class ConnectionHandle<
           "get requires a Token and a positive finite callTimeout.",
           "E_USAGE_INVALID",
           { context },
+        ),
+      );
+    const scope = (options as ResourceOptions).scope;
+    if (scope && !this.engine.ownsScope(this.id, token.id, scope))
+      return Result.err(
+        new NexusUsageError(
+          "Scope belongs to a different connection or service.",
         ),
       );
     if (this.status === "disconnected")
@@ -157,6 +181,7 @@ export class ConnectionHandle<
       this.engine.createServiceProxy<Remote<T, M>>(token.id, {
         connectionId: this.id,
         timeout: options.callTimeout ?? this.callTimeout,
+        ...(scope ? { scope } : {}),
       }),
     );
   }

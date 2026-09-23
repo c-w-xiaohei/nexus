@@ -9,6 +9,7 @@
     "guides",
     "adapters",
     "integrations",
+    "relay",
     "state",
     "testing",
     "--- Resources ---",

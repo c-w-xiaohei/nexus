@@ -5,7 +5,7 @@ description: This skill should be used when the user asks to write Nexus applica
 
 # Use Nexus
 
-Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, proxy creation, Nexus Relay, and the architectural boundary between Nexus connection semantics and host-context startup.
+Use this skill for external application code that consumes Nexus. Focus on the public programming model: shared contracts, typed Tokens, runtime configuration, service exposure, proxy creation, and the architectural boundary between Nexus connection semantics and host-context startup.
 
 For full project documentation, direct readers to the published docs at https://c-w-xiaohei.github.io/nexus/docs/. Encourage reading the product concepts and platform guides before inventing adapter behavior or lifecycle semantics.
 
@@ -23,8 +23,11 @@ For full project documentation, direct readers to the published docs at https://
 - For class services, import the concrete runtime instance and use `@xxNexus.Expose(Token)` to bind the class to that instance's decorator store.
 - For function/object-style providers, import the concrete runtime instance and use `xxNexus.provide(Token, service, options?)`.
 - Use `new Nexus()` with a named instance such as `backgroundNexus`, `iframeParentNexus`, or `brokerNexus` for multi-instance runtimes; bind decorators and providers to that specific instance.
-- Use `relayService(...)` or `relayNexusStore(...)` from `@nexus-js/core/relay` when a bridge context forwards selected services or stores across adjacent Nexus graphs.
-- Treat Nexus Relay as provider-level forwarding, not transparent multi-hop routing, raw message forwarding, or `target.via`.
+- Use `Nexus.relay({ from, to: { nexus, target?, where? }, services })` from `@nexus-js/core` when a bridge context forwards selected services or StoreTokens across adjacent Nexus graphs. `from` and `to.nexus` may be typed for different adapter models; the synchronous handle's `dispose()` removes only that registration and its resource domains.
+- Treat Nexus Relay as application-owned adjacent-instance forwarding, not provider discovery, transparent global routing, raw message forwarding, or `target.via`. Each context selects the next target or `where` predicate locally; Relay registration never dials.
+- Use `connection.createScope(Token)` and `connection.get(Token, { scope })` for an independently terminable caller region. A scope belongs to that exact Connection and Token; `close()` leaves the shared Connection open, and existing refs/callbacks remain terminal after closure. Ordinary root access uses a default region that a later root call can recreate through a healthy route.
+- Service providers can implement `ServiceInvocationHooks` with `[SERVICE_INVOKE_START](context)`. Return `context` only when a local method intentionally accepts an optional final `ServiceInvocationContext` framework argument. Capture `context.scope` synchronously for async work; there is no async-local "current scope". Use `scope.onClosed(...)` for scope-owned cleanup or `scope.close()` to end that business region.
+- `connectNexusStore()` creates and owns one explicit scope per Store subscription. Include StoreTokens in `Nexus.relay` directly; there is no `relayNexusStore` helper. A terminal mirror is replaced with a new subscription and baseline, never revived or replayed.
 - For React Nexus State subtree sharing, prefer `createRemoteStoreScope(...)` from `@nexus-js/react` so one provider manages a shared `RemoteStore` handle and leaf components consume selectors, actions, status, and errors from that scope.
 - When one React application uses multiple adapter models, create a model-bound context with `createNexusScope<Model>()` and use its provider and hooks so Nexus instances, StoreTokens, and targeting options remain associated at compile time. Keep the default provider and hooks for applications that do not need model-specific context typing.
 - Keep `useRemoteStore(...)` as the lower-level React owner path. Render a child with a concrete handle and use `useStore(remote.store, selector)` from `zustand` there; Nexus does not export `useStore`. Follow Zustand 5 selector stability rules, using `useShallow` for shallow-equal object/array selections when needed.
@@ -58,9 +61,7 @@ When explaining Nexus architecture, use this layer model:
 1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
 2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
 3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
-4. product-facing API layer: `nexus.configure(...)`, `nexus.connect(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
-
-Describe Nexus Relay as a product-facing capability built on ordinary service and Nexus State provider semantics. It relies on connection identity and routing below it, but it is not a transport layer or raw routing layer.
+4. product-facing API layer: `nexus.configure(...)`, `nexus.connect(...)`, `nexus.ref(...)`, adapter helpers
 
 Do not describe Nexus as a process manager, page loader, iframe lifecycle manager, or worker launcher. Describe those as responsibilities of the app, browser, OS, framework, or adapter-specific host environment.
 
@@ -149,7 +150,7 @@ Also point readers to the published docs when they need more context. Prefer exa
 - Core concepts and architecture layers: https://c-w-xiaohei.github.io/nexus/docs/concepts/
 - Platform and adapter strategy: https://c-w-xiaohei.github.io/nexus/docs/platforms/
 - Authorization and policy: https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/
-- Nexus Relay: https://c-w-xiaohei.github.io/nexus/docs/relay/
+- Nexus Relay and resource scopes: https://c-w-xiaohei.github.io/nexus/docs/relay/
 - Node IPC adapter: https://c-w-xiaohei.github.io/nexus/docs/node-ipc/
 - Nexus State subsystem: https://c-w-xiaohei.github.io/nexus/docs/state/
 - Testing Nexus applications: https://c-w-xiaohei.github.io/nexus/docs/testing/

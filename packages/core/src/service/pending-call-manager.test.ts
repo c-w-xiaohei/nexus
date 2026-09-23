@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Result } from "better-result";
 import { PendingCallManager } from "./pending-call-manager";
+import { ResourceScopeHandle } from "./resource-scope";
 
 describe("PendingCallManager", () => {
   afterEach(() => vi.useRealTimers());
@@ -26,6 +27,39 @@ describe("PendingCallManager", () => {
     const result = await pending;
     expect(result.isErr()).toBe(true);
     expect(result.error.code).toBe("E_CALL_TIMEOUT");
+  });
+
+  it("does not settle a scoped request from an unscoped or sibling scope response", async () => {
+    vi.useFakeTimers();
+    const manager = new PendingCallManager();
+    const first = new ResourceScopeHandle(
+      "scope-first",
+      "service",
+      "A",
+      "requester",
+      () => {},
+    );
+    const sibling = new ResourceScopeHandle(
+      "scope-sibling",
+      "service",
+      "A",
+      "requester",
+      () => {},
+    );
+    const pending = manager.register(1, {
+      connectionId: "A",
+      scope: first,
+      timeout: 100,
+    });
+
+    manager.handleResponse(1, "unscoped", null, "A");
+    manager.handleResponse(1, "sibling", null, "A", sibling);
+    expect(manager.canHandleResponse(1, "A", first)).toBe(true);
+    vi.advanceTimersByTime(100);
+
+    await expect(pending).resolves.toMatchObject({
+      error: { code: "E_CALL_TIMEOUT" },
+    });
   });
 
   it("ignores duplicate and orphan responses after the first settlement", async () => {

@@ -1,5 +1,5 @@
 {
   "title": "集成",
   "defaultOpen": false,
-  "pages": ["../react", "../relay"]
+  "pages": ["../react"]
 }

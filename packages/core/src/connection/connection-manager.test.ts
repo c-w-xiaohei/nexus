@@ -202,7 +202,7 @@ describe("ConnectionManager", () => {
               type: NexusMessageType.HANDSHAKE_ACK,
               id: message.value.id,
               metadata: clientMeta,
-              capabilities: ["provider-catalog-v1"],
+              capabilities: ["provider-catalog-v1", "resource-scope-v1"],
               providers: [],
             });
             if (ack.isErr()) throw ack.error;
@@ -353,12 +353,12 @@ describe("ConnectionManager", () => {
               type: NexusMessageType.HANDSHAKE_REQ,
               id: 7,
               metadata: clientMeta,
-              capabilities: ["provider-catalog-v1"],
+              capabilities: ["provider-catalog-v1", "resource-scope-v1"],
             });
             deliver({
               type: NexusMessageType.HANDSHAKE_READY,
               id: 7,
-              capabilities: ["provider-catalog-v1"],
+              capabilities: ["provider-catalog-v1", "resource-scope-v1"],
               providers: [],
             });
             deliver({
@@ -990,7 +990,7 @@ describe("ConnectionManager", () => {
                     type: NexusMessageType.HANDSHAKE_ACK,
                     id: message.id,
                     metadata: target,
-                    capabilities: ["provider-catalog-v1"],
+                    capabilities: ["provider-catalog-v1", "resource-scope-v1"],
                     providers: [],
                   }).unwrap(),
                 ),

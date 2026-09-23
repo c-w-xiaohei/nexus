@@ -63,6 +63,7 @@ describe("PayloadProcessor resource identity", () => {
     expect(engine.dispatchRelease).toHaveBeenCalledWith(
       "res-1",
       sourceConnectionId,
+      undefined,
     );
     expect(resourceManager.countRemoteProxies()).toBe(0);
   });

@@ -227,7 +227,11 @@ describe("ProxyFactory", () => {
     expect(unregister).toHaveBeenCalledExactlyOnceWith(anchor);
     expect(register.mock.calls).toHaveLength(1);
     expect(registrations.has(anchor)).toBe(false);
-    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith(
+      "resource",
+      "A",
+      undefined,
+    );
   });
 
   it("shares release state across child paths and already declared calls", async () => {
@@ -255,7 +259,11 @@ describe("ProxyFactory", () => {
     await expect(proxy.read()).resolves.toBe("value");
     proxy[RELEASE_PROXY_SYMBOL]();
 
-    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith(
+      "resource",
+      "A",
+      undefined,
+    );
   });
 
   it("finalizes an unreleased resource with only its IDs", () => {
@@ -264,6 +272,10 @@ describe("ProxyFactory", () => {
 
     finalizationCallback(registrations.get(anchor));
 
-    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith("resource", "A");
+    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith(
+      "resource",
+      "A",
+      undefined,
+    );
   });
 });

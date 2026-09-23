@@ -122,7 +122,3 @@ each existing and future ready session once. Use
 `connection.subscribeIdentity(listener)` for immediate full peer metadata and
 all subsequent validated updates. Neither listener reconnects or replaces a
 session.
-
-Nexus Relay does not change these service proxy and remote resource rules.
-Downstream callers connect to the adjacent relay provider; the relay provider
-separately uses `forwardThrough` and `forwardTarget` for its upstream call.

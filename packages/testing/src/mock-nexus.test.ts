@@ -83,6 +83,23 @@ describe("createMockNexus", () => {
     ).resolves.toBe("provided:Ada");
   });
 
+  it("creates independent scopes that terminate only their own State-capable proxy", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    mock.service(ExampleToken, service("scoped"));
+    const connection = await mock.nexus.connect();
+    const first = connection.createScope(ExampleToken);
+    const second = connection.createScope(ExampleToken);
+
+    first.close();
+    expect(() => connection.get(ExampleToken, { scope: first })).toThrowError(
+      expect.objectContaining({ code: "E_RESOURCE_SCOPE_CLOSED" }),
+    );
+    expect(second.closed).toBe(false);
+    expect(connection.safeGet(ExampleToken, { scope: second }).isOk()).toBe(
+      true,
+    );
+  });
+
   it("supports safe configure, provide, and ready", async () => {
     const mock = createMockNexus<TestAdapterModel>();
     expect(mock.nexus.safeConfigure({}).isOk()).toBe(true);

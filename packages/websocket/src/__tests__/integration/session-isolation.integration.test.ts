@@ -187,7 +187,7 @@ describe("WebSocket session reliability", () => {
       code: "E_CONN_CLOSED",
     });
     await expect(aStore.actions.increment(1)).rejects.toMatchObject({
-      code: "E_RESOURCE_ACCESS_DENIED",
+      code: "E_CONN_CLOSED",
     });
     expect(host.sockets.size).toBe(1);
     released.resolve();

@@ -140,7 +140,7 @@ retry, replay, or discover a replacement.
 - Typed RPC, callbacks, and disposable remote resources
 - Connection and service authorization
 - React bindings for Nexus instances and synchronized state
-- Explicit provider-level Relay between adjacent Nexus graphs
+- Explicit resource-scoped Relay between adjacent Nexus graphs
 - Custom endpoint implementations through `IEndpoint<AdapterModel>`
 
 Nexus does not start browser contexts, inject content scripts, create iframes, spawn workers, or launch daemon processes. The application, host platform, or adapter-owned setup is responsible for context existence and discovery.
@@ -153,7 +153,7 @@ Nexus does not start browser contexts, inject content scripts, create iframes, s
 - [Platforms and adapters](https://c-w-xiaohei.github.io/nexus/docs/platforms/)
 - [Authorization and policy](https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/)
 - [React integration](https://c-w-xiaohei.github.io/nexus/docs/react/)
-- [Nexus Relay](https://c-w-xiaohei.github.io/nexus/docs/relay/)
+- [Resource-scoped Relay](https://c-w-xiaohei.github.io/nexus/docs/relay/)
 - [Nexus State](https://c-w-xiaohei.github.io/nexus/docs/state/)
 - [Testing](https://c-w-xiaohei.github.io/nexus/docs/testing/)
 - [Documentation home](https://c-w-xiaohei.github.io/nexus/docs/)

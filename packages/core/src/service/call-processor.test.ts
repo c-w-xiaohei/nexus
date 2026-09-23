@@ -97,6 +97,7 @@ describe("CallProcessor", () => {
         expect(register).toHaveBeenCalledWith(message.id, {
           connectionId,
           timeout: 1_000,
+          scope: undefined,
         });
         deps.pendingCallManager.handleResponse(
           message.id!,

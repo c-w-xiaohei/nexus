@@ -62,11 +62,13 @@ export namespace JsonSerializer {
     }
 
     if (message.type === Message.NexusMessageType.BATCH) {
-      return ok([
+      const packet = [
         message.type,
         message.id,
         message.calls.map(packMessageWithoutValidation),
-      ]);
+      ];
+      if (message.scopeId !== undefined) packet.push(message.scopeId);
+      return ok(packet);
     }
 
     return ok(packMessageWithoutValidation(message));
@@ -84,7 +86,20 @@ export namespace JsonSerializer {
     }
 
     const packet = structure.map((key) => (message as any)[key]);
-    if (!("invocationServiceName" in message)) {
+    while (
+      packet.length > 2 &&
+      packet.at(-1) === undefined &&
+      ["scopeId", "timeoutMs", "hops", "target", "removed"].includes(
+        structure[packet.length - 1],
+      )
+    )
+      packet.pop();
+    if (
+      !("invocationServiceName" in message) &&
+      !("scopeId" in message) &&
+      !("timeoutMs" in message) &&
+      !("hops" in message)
+    ) {
       return toLegacyInvocationPacket(message.type, packet);
     }
 
@@ -120,7 +135,7 @@ export namespace JsonSerializer {
     }
 
     if (messageType === Message.NexusMessageType.BATCH) {
-      const [type, id, packedCalls] = packet;
+      const [type, id, packedCalls, scopeId] = packet;
       if (!Array.isArray(packedCalls)) {
         return err(
           new NexusProtocolError(
@@ -157,7 +172,12 @@ export namespace JsonSerializer {
         }
         calls.push(packetToLogicalMessage(packedCall, nestedType));
       }
-      const batch = { type, id, calls };
+      const batch = {
+        type,
+        id,
+        calls,
+        ...(scopeId != null ? { scopeId } : {}),
+      };
       const parsed = safeParse(Message.BatchMessageSchema, batch);
       if (!parsed.success) {
         return err(
@@ -202,6 +222,10 @@ export namespace JsonSerializer {
         index >= normalizedPacket.length ||
         (key === "invocationServiceName" &&
           value === LEGACY_INVOCATION_SERVICE_NAME) ||
+        (messageType === Message.NexusMessageType.RELEASE &&
+          key === "resourceId" &&
+          value === null &&
+          normalizedPacket[4] === "scope") ||
         (value === null && isNullablePaddingKey(key))
       )
         return;
@@ -252,6 +276,11 @@ export namespace JsonSerializer {
 
   const isNullablePaddingKey = (key: string): boolean =>
     key === "invocationServiceName" ||
+    key === "scopeId" ||
+    key === "timeoutMs" ||
+    key === "hops" ||
+    key === "target" ||
+    key === "removed" ||
     key === "assigns" ||
     key === "capabilities" ||
     key === "providers";

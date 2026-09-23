@@ -1,6 +1,7 @@
 import { NexusError } from "./nexus-error.js";
 
 export type NexusResourceErrorCode =
+  | "E_RESOURCE_SCOPE_CLOSED"
   | "E_RESOURCE_NOT_FOUND"
   | "E_RESOURCE_ACCESS_DENIED"
   | "E_INVALID_SERVICE_PATH"

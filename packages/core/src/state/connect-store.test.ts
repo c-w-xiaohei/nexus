@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Result } from "better-result";
 import type { Connection } from "../api/connection";
+import type { ResourceScope } from "../service/resource-scope";
 import { createStarNetwork } from "../utils/test-utils";
 import { createNexusStore } from "./bind-store";
 import { connectNexusStore, safeConnectNexusStore } from "./connect-store";
@@ -98,6 +99,41 @@ describe("State connection acquisition and handshake", () => {
       expect(result.error).toBeInstanceOf(NexusStoreConnectError);
       expect(result.error.cause).toBeInstanceOf(Error);
     }
+  });
+
+  it("closes a newly created scope when service acquisition fails", async () => {
+    const scope = createScope("missing", token.id);
+    const result = await safeConnectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok({
+            ...connectionFor({}),
+            createScope: () => scope,
+            safeGet: () => Result.err(new Error("missing")),
+          }),
+      },
+      token,
+    );
+
+    expect(result.isErr()).toBe(true);
+    expect(scope.closed).toBe(true);
+  });
+
+  it("contains a scope allocation failure at the safe acquisition boundary", async () => {
+    const result = await safeConnectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok({
+            ...connectionFor({}),
+            createScope: () => {
+              throw new Error("scope capacity reached");
+            },
+          }),
+      },
+      token,
+    );
+
+    expect(result).toMatchObject({ error: { code: "E_STORE_CONNECT" } });
   });
 
   it.each(["throw", "reject", "result"] as const)(
@@ -252,6 +288,104 @@ describe("State connection acquisition and handshake", () => {
     expect(result).toMatchObject({ error: { code: "E_STORE_DISCONNECTED" } });
     expect(subscribe).not.toHaveBeenCalled();
   });
+
+  it("terminates only its mirror when its subscription scope closes", async () => {
+    const first = createScope("first", token.id);
+    const second = createScope("second", token.id);
+    const service = {
+      async subscribe(onSync: (event: unknown) => void) {
+        onSync({
+          type: "init",
+          storeInstanceId: "scoped",
+          version: 0,
+          state: { count: 0 },
+          actions: {},
+          unsubscribe: vi.fn(),
+        });
+      },
+    } as NexusStoreServiceContract<State & Actions>;
+    const createSubscriptionScope = vi
+      .fn<Connection["createScope"]>()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const connection = connectionFor(service, {
+      createScope: createSubscriptionScope,
+    });
+
+    const one = await connectNexusStore(
+      { safeConnect: async () => Result.ok(connection) },
+      token,
+    );
+    const two = await connectNexusStore(
+      { safeConnect: async () => Result.ok(connection) },
+      token,
+    );
+
+    first.close();
+    expect(one.getStatus().type).toBe("disconnected");
+    expect(two.getStatus().type).toBe("ready");
+  });
+
+  it("unsubscribes before closing its subscription scope on destroy", async () => {
+    const order: string[] = [];
+    const scope = createScope("destroy", token.id, () => order.push("scope"));
+    const unsubscribe = vi.fn(() => order.push("unsubscribe"));
+    const service = {
+      subscribe(onSync: (event: unknown) => void) {
+        onSync({
+          type: "init",
+          storeInstanceId: "destroy",
+          version: 0,
+          state: { count: 0 },
+          actions: {},
+          unsubscribe,
+        });
+      },
+    } as NexusStoreServiceContract<State & Actions>;
+    const remote = await connectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok(connectionFor(service, { createScope: () => scope })),
+      },
+      token,
+    );
+
+    remote.destroy();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(order).toEqual(["unsubscribe", "scope"]));
+  });
+
+  it("keeps its scope live until an asynchronous unsubscribe settles", async () => {
+    let resolve!: () => void;
+    const stopped = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const scope = createScope("async-destroy", token.id);
+    const service = {
+      subscribe(onSync: (event: unknown) => void) {
+        onSync({
+          type: "init",
+          storeInstanceId: "async-destroy",
+          version: 0,
+          state: { count: 0 },
+          actions: {},
+          unsubscribe: () => stopped,
+        });
+      },
+    } as NexusStoreServiceContract<State & Actions>;
+    const remote = await connectNexusStore(
+      {
+        safeConnect: async () =>
+          Result.ok(connectionFor(service, { createScope: () => scope })),
+      },
+      token,
+    );
+
+    remote.destroy();
+    expect(scope.closed).toBe(false);
+    resolve();
+    await vi.waitFor(() => expect(scope.closed).toBe(true));
+  });
 });
 
 const connectionFor = (
@@ -259,10 +393,47 @@ const connectionFor = (
   options: {
     onDisconnected?: (listener: () => void) => () => void;
     subscribeIdentity?: (listener: (meta: object) => void) => () => void;
+    createScope?: (token: typeof token) => ResourceScope;
   } = {},
 ): Connection =>
   ({
+    createScope:
+      options.createScope ?? (() => createScope("default", token.id)),
     safeGet: () => Result.ok(service),
     onDisconnected: options.onDisconnected ?? (() => () => undefined),
     subscribeIdentity: options.subscribeIdentity ?? (() => () => undefined),
   }) as Connection;
+
+const createScope = (
+  id: string,
+  serviceId: string,
+  onClose?: () => void,
+): ResourceScope => {
+  let closed = false;
+  const listeners = new Set<() => void>();
+  return {
+    id,
+    serviceId,
+    get closed() {
+      return closed;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      onClose?.();
+      for (const listener of [...listeners]) listener();
+      listeners.clear();
+    },
+    onClosed(listener) {
+      if (closed) {
+        listener();
+        return () => undefined;
+      }
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    [Symbol.dispose]() {
+      this.close();
+    },
+  };
+};

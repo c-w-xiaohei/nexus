@@ -67,21 +67,13 @@ test("nested child calls a host service through the relay frame", async ({
     .poll(() =>
       relayFrame(page).evaluate(() => {
         const telemetry = (window as any).getRelayFrameTelemetry();
-        return telemetry.servicePolicyCalls.map(
-          (call: { path: unknown[] }) => call.path,
-        );
+        return telemetry.servicePolicyCalls;
       }),
     )
-    .toContainEqual(["profile", "read"]);
-
-  const servicePolicyPaths = await relayFrame(page).evaluate(() => {
-    const telemetry = (window as any).getRelayFrameTelemetry();
-    return telemetry.servicePolicyCalls.map(
-      (call: { path: unknown[] }) => call.path,
-    );
-  });
-
-  expect(servicePolicyPaths).not.toContainEqual(["profile", "read", "apply"]);
+    .toContainEqual({
+      serviceName: "react.browser.relay.profile",
+      path: ["profile", "read"],
+    });
 });
 
 test("nested children converge on host state through the relay store", async ({

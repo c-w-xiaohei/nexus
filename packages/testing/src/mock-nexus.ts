@@ -1,6 +1,7 @@
 import {
   Nexus,
   NexusDisconnectedError,
+  NexusResourceError,
   NexusServiceError,
   NexusUsageError,
   Token,
@@ -17,6 +18,7 @@ import {
   type Remote,
   type ResourceAcquireError,
   type ResourceOptions,
+  type ResourceScope,
 } from "@nexus-js/core";
 import {
   createInMemoryServiceProxy,
@@ -109,6 +111,8 @@ export function createMockNexus<
       ...registration?.connectionMeta,
     }) as Readonly<ConnectionMetaOf<M>>;
     const disconnected = new Set<(reason: "local") => void>();
+    const scopes = new WeakSet<ResourceScope>();
+    let scopeSequence = 0;
     const connection: Connection<M> = {
       id,
       get status() {
@@ -122,6 +126,47 @@ export function createMockNexus<
       },
       get connectionMeta(): Readonly<ConnectionMetaOf<M>> {
         return connectionMeta;
+      },
+      createScope: <T extends object>(token: Token<T> | Token<T, M>) => {
+        if (!isToken(token)) throw usageError("createScope requires a Token.");
+        let closed = false;
+        const listeners = new Set<() => void>();
+        const scope: ResourceScope = {
+          id: `${id}:scope:${++scopeSequence}`,
+          serviceId: token.id,
+          get closed() {
+            return closed;
+          },
+          close() {
+            if (closed) return;
+            closed = true;
+            for (const listener of [...listeners]) {
+              try {
+                listener();
+              } catch {
+                // Scope observers are independent lifecycle consumers.
+              }
+            }
+            listeners.clear();
+          },
+          onClosed(listener) {
+            if (closed) {
+              try {
+                listener();
+              } catch {
+                // Late observer failures are isolated.
+              }
+              return () => undefined;
+            }
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+          [Symbol.dispose]() {
+            this.close();
+          },
+        };
+        scopes.add(scope);
+        return scope;
       },
       /** Returns a throw-style resource proxy for this session. */
       get: <T extends object>(
@@ -137,10 +182,13 @@ export function createMockNexus<
         token: Token<T> | Token<T, M>,
         options: ResourceOptions = {},
       ): Result<Remote<T, M>, ResourceAcquireError> => {
+        const scope = options.scope as ResourceScope | undefined;
         if (
           !isToken<T>(token) ||
           !isPlainObject(options) ||
-          !Object.keys(options).every((key) => key === "callTimeout") ||
+          !Object.keys(options).every(
+            (key) => key === "callTimeout" || key === "scope",
+          ) ||
           (options.callTimeout !== undefined &&
             !isPositiveFinite(options.callTimeout))
         )
@@ -176,12 +224,25 @@ export function createMockNexus<
             ),
           );
         }
+        if (scope?.closed)
+          return err(
+            new NexusResourceError(
+              "The resource scope is closed.",
+              "E_RESOURCE_SCOPE_CLOSED",
+              { scopeId: scope.id, serviceName: scope.serviceId },
+            ),
+          ) as unknown as Result<Remote<T, M>, ResourceAcquireError>;
+        if (scope && (!scopes.has(scope) || scope.serviceId !== token.id))
+          return err(
+            usageError("Scope belongs to a different connection or service."),
+          );
         return ok(
           createInMemoryServiceProxy(
             provider.service as T,
             connection,
             options.callTimeout ?? callTimeout,
             token.id,
+            scope,
           ),
         );
       },

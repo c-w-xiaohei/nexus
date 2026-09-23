@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { ResourceManager } from "./resource-manager";
+import { ResourceScopeHandle } from "./resource-scope";
 
 describe("ResourceManager", () => {
   let resourceManager: ResourceManager;
@@ -168,6 +169,34 @@ describe("ResourceManager", () => {
 
       expect(resourceManager.countRemoteProxies()).toBe(initialProxyCount + 1);
       expect(resourceManager.hasRemoteProxy("res-1", "conn-B")).toBe(true);
+    });
+
+    it("keeps matching resource IDs from sibling scopes on one connection distinct", () => {
+      const first = new ResourceScopeHandle(
+        "scope-first",
+        "service",
+        "conn-A",
+        "requester",
+        () => {},
+      );
+      const sibling = new ResourceScopeHandle(
+        "scope-sibling",
+        "service",
+        "conn-A",
+        "requester",
+        () => {},
+      );
+
+      resourceManager.registerRemoteProxy("res-1", "conn-A", first);
+      resourceManager.registerRemoteProxy("res-1", "conn-A", sibling);
+      resourceManager.releaseRemoteProxy("res-1", "conn-A", first);
+
+      expect(resourceManager.hasRemoteProxy("res-1", "conn-A", first)).toBe(
+        false,
+      );
+      expect(resourceManager.hasRemoteProxy("res-1", "conn-A", sibling)).toBe(
+        true,
+      );
     });
   });
 });

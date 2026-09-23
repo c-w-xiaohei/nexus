@@ -20,14 +20,12 @@ For general application-level unit tests with an injectable mock `NexusInstance`
 - Lifecycle and error behavior: [Lifecycle and errors](/nexus/docs/state/lifecycle-and-errors/)
 - Testing guidance: [Testing](/nexus/docs/state/testing/)
 - Common questions: [FAQ](/nexus/docs/state/faq/)
-- State relay across adjacent Nexus graphs: [Relay](/nexus/docs/relay/)
 
 ## Package Routing
 
 - Headless runtime entrypoint: `@nexus-js/core/state` (from `@nexus-js/core`)
 - React bindings: `@nexus-js/react`
 - Foundation framework: `@nexus-js/core`
-- Relay entrypoint for bridge contexts: `@nexus-js/core/relay`
 - Application unit testing utilities: `@nexus-js/testing`
 
 If you are looking for product-level Nexus docs, go to [Nexus Documentation](/nexus/docs/).

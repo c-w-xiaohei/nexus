@@ -99,11 +99,20 @@ const CapabilitiesSchema: v.GenericSchema<readonly string[]> = v.pipe(
 // Layer 3: RPC & Service Proxy Messages
 // =============================================================================
 
+const ScopeIdSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
+const ScopeEntries = { scopeId: v.optional(ScopeIdSchema) };
 const InvocationEntries = {
   id: MessageIdSchema,
   resourceId: v.nullable(v.string()),
   path: PathSchema,
   invocationServiceName: v.optional(v.string()),
+  ...ScopeEntries,
+  timeoutMs: v.optional(
+    v.pipe(v.number(), v.finite(), v.minValue(Number.MIN_VALUE)),
+  ),
+  hops: v.optional(
+    v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(64)),
+  ),
 };
 
 /** A request to get a property from a remote resource. */
@@ -132,23 +141,52 @@ export const ApplyMessageSchema = v.object({
 
 export type ApplyMessage = v.InferOutput<typeof ApplyMessageSchema>;
 
+/** A single service or resource operation, excluding transport and batch envelopes. */
+export type RpcRequest = GetMessage | SetMessage | ApplyMessage;
+
+export function isRpcRequest(message: NexusMessage): message is RpcRequest {
+  return (
+    message.type === NexusMessageType.GET ||
+    message.type === NexusMessageType.SET ||
+    message.type === NexusMessageType.APPLY
+  );
+}
+
 /** A notification to release a remote resource, freeing memory. No response is expected. */
-export const ReleaseMessageSchema = v.object({
-  type: v.literal(NexusMessageType.RELEASE),
-  id: v.null_(),
-  resourceId: v.string(),
-});
+export const ReleaseMessageSchema = v.union([
+  v.object({
+    type: v.literal(NexusMessageType.RELEASE),
+    id: v.null_(),
+    target: v.optional(v.literal("resource")),
+    resourceId: v.string(),
+    ...ScopeEntries,
+  }),
+  v.object({
+    type: v.literal(NexusMessageType.RELEASE),
+    id: v.null_(),
+    target: v.literal("scope"),
+    scopeId: ScopeIdSchema,
+    resourceId: v.optional(v.never()),
+  }),
+]);
 
 export type ReleaseMessage = v.InferOutput<typeof ReleaseMessageSchema>;
 
 /** A batch of RPC requests to be executed together for performance. */
-export const BatchMessageSchema = v.object({
-  type: v.literal(NexusMessageType.BATCH),
-  id: MessageIdSchema,
-  calls: v.array(
-    v.union([GetMessageSchema, SetMessageSchema, ApplyMessageSchema]),
+export const BatchMessageSchema = v.pipe(
+  v.object({
+    type: v.literal(NexusMessageType.BATCH),
+    id: MessageIdSchema,
+    ...ScopeEntries,
+    calls: v.array(
+      v.union([GetMessageSchema, SetMessageSchema, ApplyMessageSchema]),
+    ),
+  }),
+  v.check(
+    (batch) => batch.calls.every((call) => call.scopeId === batch.scopeId),
+    "Batch calls must share their envelope scope.",
   ),
-});
+);
 
 export type BatchMessage = v.InferOutput<typeof BatchMessageSchema>;
 
@@ -157,6 +195,7 @@ export const ResMessageSchema = v.object({
   type: v.literal(NexusMessageType.RES),
   id: MessageIdSchema,
   result: AnyValueSchema,
+  ...ScopeEntries,
 });
 
 export type ResMessage = v.InferOutput<typeof ResMessageSchema>;
@@ -166,6 +205,7 @@ export const ErrMessageSchema = v.object({
   type: v.literal(NexusMessageType.ERR),
   id: MessageIdSchema,
   error: SerializedErrorSchema,
+  ...ScopeEntries,
 });
 
 export type ErrMessage = v.InferOutput<typeof ErrMessageSchema>;
@@ -174,6 +214,7 @@ export type ErrMessage = v.InferOutput<typeof ErrMessageSchema>;
 export const BatchResMessageSchema = v.object({
   type: v.literal(NexusMessageType.BATCH_RES),
   id: MessageIdSchema,
+  ...ScopeEntries,
   results: v.array(
     v.union([
       v.tuple([v.literal(0), AnyValueSchema]),
@@ -258,6 +299,7 @@ export const ProviderAvailableMessageSchema = v.object({
   type: v.literal(NexusMessageType.PROVIDER_AVAILABLE),
   id: v.null_(),
   providers: CapabilitiesSchema,
+  removed: v.optional(CapabilitiesSchema),
 });
 
 export type ProviderAvailableMessage = v.InferOutput<
@@ -320,7 +362,7 @@ export type NotificationMessage =
   | ProviderAvailableMessage;
 
 /** The single runtime contract for all sixteen framework message variants. */
-export const NexusMessageSchema = v.variant("type", [
+export const NexusMessageSchema = v.union([
   GetMessageSchema,
   SetMessageSchema,
   ApplyMessageSchema,
@@ -340,6 +382,9 @@ export const NexusMessageSchema = v.variant("type", [
 ]);
 
 export type NexusMessage = v.InferOutput<typeof NexusMessageSchema>;
+
+/** Layer 3 envelopes that can carry a resource scope. */
+export type RpcMessage = Extract<NexusMessage, { scopeId?: string }>;
 
 // =============================================================================
 // Type-level Validation for Protocol-Serializer Consistency

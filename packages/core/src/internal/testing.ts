@@ -10,6 +10,7 @@ import { PendingCallManager } from "../service/pending-call-manager";
 import { Result } from "better-result";
 import { CallProcessor } from "../service/call-processor";
 import { MessageHandler } from "../service/message/message-handler";
+import type { ResourceScope } from "../service/resource-scope";
 
 export {
   safeConnect as safeAcquireConnection,
@@ -27,6 +28,7 @@ export const createInMemoryServiceProxy = <
   connection: Connection<M>,
   callTimeout = 5_000,
   tokenId = "",
+  scope?: ResourceScope,
 ): Remote<T, M> => {
   const resources = new ResourceManager();
   const pending = new PendingCallManager();
@@ -73,7 +75,7 @@ export const createInMemoryServiceProxy = <
         payloads.releaseOrphanedResponseResources(...args),
     },
     safeSendMessage: (message, source) => {
-      void replies.safeHandleMessage(message, source);
+      void replies.safeHandleMessage(message, source, scope);
       return Result.ok(undefined);
     },
     dispatchRelease: (id) => resources.releaseLocalResource(id),
@@ -92,7 +94,7 @@ export const createInMemoryServiceProxy = <
       releaseSanitizedResources: () => {},
     },
     safeSendMessage: (message, source) => {
-      void requests.safeHandleMessage(message, source).then((result) => {
+      void requests.safeHandleMessage(message, source, scope).then((result) => {
         if (result.isErr() && message.id !== null)
           pending.fail(message.id, result.error);
       });
@@ -102,6 +104,7 @@ export const createInMemoryServiceProxy = <
   return proxyFactory.createServiceProxy<Remote<T, M>>(tokenId, {
     connectionId: connection.id,
     timeout: callTimeout,
+    ...(scope ? { scope } : {}),
   });
 };
 

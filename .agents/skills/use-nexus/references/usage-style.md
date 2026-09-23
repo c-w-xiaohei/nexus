@@ -6,8 +6,7 @@ Use this entry point for application code that consumes Nexus from the outside. 
 2. runtime configuration in every context
 3. service exposure in host contexts
 4. proxy creation in consumer contexts
-5. explicit Relay only when a bridge context forwards selected services or stores across adjacent Nexus graphs
-6. user-level unit tests with an injectable mock `NexusInstance`
+5. user-level unit tests with an injectable mock `NexusInstance`
 
 Use this reference as a compact style guide, not as a substitute for the full docs. For deeper architecture, adapter, lifecycle, policy, or state semantics, direct readers to the published documentation at https://c-w-xiaohei.github.io/nexus/docs/.
 
@@ -33,7 +32,7 @@ Use this architecture model when explaining why configuration and adapter bounda
 1. transport / endpoint layer: `IPort`, `IEndpoint`, serializers, port processing
 2. connection and routing layer: logical handshake, identity, policy, targeting, lifecycle
 3. service / proxy / resource layer: exposed services, proxy calls, refs, pending calls
-4. product-facing API layer: `nexus.configure(...)`, `nexus.connect(...)`, `nexus.ref(...)`, adapter helpers, Relay helpers
+4. product-facing API layer: `nexus.configure(...)`, `nexus.connect(...)`, `nexus.ref(...)`, adapter helpers
 
 Adapters provide or compose endpoint wiring for the current context. Core then builds logical connections over the `IPort`-like channels returned by those endpoints. For bus-style transports such as `window.postMessage`, adapt the shared bus into reliable point-to-point `IPort` semantics before handing it to core.
 
@@ -45,14 +44,16 @@ Adapters provide or compose endpoint wiring for the current context. Core then b
 - Configure every runtime context from main/bootstrap/runtime modules before creating proxies or other demand operations. Register static class/providers before the bootstrap snapshot, or use live `provide(...)` after `ready`.
 - Prefer adapter helpers for standard runtimes; use `nexus.configure(...)` for composition, custom endpoints, policy, or bootstrap bulk configuration.
 - For class-style services, import the concrete runtime instance and use `@xxNexus.Expose(Token)`.
-- For function/object-style providers, helper outputs, State, Relay, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
+- For function/object-style providers, helper outputs, State, and already constructed instances, import the concrete runtime instance and use `xxNexus.provide(...)`.
 - For React Nexus State subtree sharing, prefer `createRemoteStoreScope(...)` from `@nexus-js/react`: let the scope provider manage one shared `RemoteStore` handle, and let leaf components consume `useSelector`, `useActions`, `useStatus`, and `useError` from that scope.
 - For React applications that use multiple adapter models, use `createNexusScope<Model>()` so the provider, hooks, StoreTokens, and targeting options share one compile-time model. Keep the default provider and hooks for applications that do not need model-specific context typing.
 - Keep `useRemoteStore(...)` for low-level ownership. A child rendered only after a concrete handle exists may select it with `useStore(remote.store, selector)` imported from `zustand`, not Nexus. Direct and scoped selectors follow Zustand 5 snapshot stability rules.
 - `useRemoteStore` exposes `{ store, pending, error, reconnect }`, not live status. Observe lifecycle with `useStoreStatus(store, selector?)` or `Scope.useStatus(selector?)`, which return `null` without a handle and during SSR. Select `status.type` when versions are irrelevant. React replacement destroys the old handle without retaining a stale session; acquisition errors are not later transport errors.
 - Use `reconnectKey` for an external committed React lifecycle revision and stable `reconnect()` for an interaction, callback, or timer that requests replacement. Both feed the same replacement path with current committed inputs, do not revive session-bound handles or replay actions, and do not guarantee availability or success. Scope providers accept `reconnectKey`; `Scope.useRemoteStore()` consumers share the provider's reconnect command.
 - Name multi-instance `Nexus` variables after the local transport graph or endpoint face they represent, such as `chromeNexus`, `iframeParentNexus`, or `brokerNexus`, not after a one-way remote target like `toBackgroundNexus`.
-- Use `@nexus-js/core/relay` only for explicit provider-level forwarding across adjacent graphs. Do not describe Relay as transparent multi-hop routing, raw message forwarding, or `target.via`.
+- Register adjacent application-owned bridges with `Nexus.relay({ from, to: { nexus, target?, where? }, services })` from `@nexus-js/core`. The two `NexusInstance` values may use different adapter models. Registration captures selection, returns a synchronous disposer, and neither dials nor discovers providers; every bridge node chooses its own next target. Do not use the removed `@nexus-js/core/relay`, `relayService`, or `relayNexusStore` APIs.
+- Create an explicit caller region with `const scope = connection.createScope(Token)` and `connection.get(Token, { scope })` when callbacks, refs, and calls need independent termination. Scope close leaves the shared session open, but its capabilities are terminal. Default root access can create a new region after recovery; old refs cannot recover. `connectNexusStore` manages this scope automatically for each subscription.
+- A provider may implement `ServiceInvocationHooks` with `[SERVICE_INVOKE_START](context)` to observe a call's scope. Returning `context` intentionally appends it as an optional final local method argument; returning `undefined` does not. Capture the scope before `await` rather than keeping mutable per-provider current context. Use `scope.onClosed(...)` for cleanup and `scope.close()` only when the service owns the business-region end.
 - Keep explicit `ConnectionTarget` values in introductory `nexus.connect(...)` examples, then use `conn.get(Token)` or `conn.safeGet(Token)`. Use `connectMulticast` plus `collection.get(Token)` for snapshots. Targetless `connect` passively waits for one existing matching ready connection; it never discovers providers.
 - Use `createMockNexus()` from `@nexus-js/testing` for application unit tests at the `NexusInstance` seam; do not use it to claim adapter, transport, authorization, reload, restart, or real lifecycle coverage.
 - Treat raw proxies and refs as session-bound. Recreate them after disconnect, reload, restart, or session replacement.
@@ -78,8 +79,8 @@ Point readers to the published docs when they need more context. Prefer exact li
 - Getting started: https://c-w-xiaohei.github.io/nexus/docs/getting-started/
 - Core concepts and architecture layers: https://c-w-xiaohei.github.io/nexus/docs/concepts/
 - Platform and adapter strategy: https://c-w-xiaohei.github.io/nexus/docs/platforms/
-- Nexus Relay: https://c-w-xiaohei.github.io/nexus/docs/relay/
 - Authorization and policy: https://c-w-xiaohei.github.io/nexus/docs/auth-and-policy/
+- Nexus Relay and resource scopes: https://c-w-xiaohei.github.io/nexus/docs/relay/
 - Node IPC adapter: https://c-w-xiaohei.github.io/nexus/docs/node-ipc/
 - WebSocket adapter: https://c-w-xiaohei.github.io/nexus/docs/websocket/
 - Nexus State subsystem: https://c-w-xiaohei.github.io/nexus/docs/state/

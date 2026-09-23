@@ -22,18 +22,16 @@ description: 查找可选包和 Core 子路径入口。
 
 这些入口包含在 `@nexus-js/core` 中，无需安装独立的包。
 
-| 导入路径                                | 用途                                     |
-| --------------------------------------- | ---------------------------------------- |
-| `@nexus-js/core/state`                  | [同步状态](/nexus/docs/state/)           |
-| `@nexus-js/core/relay`                  | [跨通信网络转发服务](/nexus/docs/relay/) |
-| `@nexus-js/core/transport`              | 适配器作者使用的传输契约                 |
-| `@nexus-js/core/transport/virtual-port` | 在消息总线上复用端口                     |
+| 导入路径                                | 用途                           |
+| --------------------------------------- | ------------------------------ |
+| `@nexus-js/core/state`                  | [同步状态](/nexus/docs/state/) |
+| `@nexus-js/core/transport`              | 适配器作者使用的传输契约       |
+| `@nexus-js/core/transport/virtual-port` | 在消息总线上复用端口           |
 
 例如：
 
 ```ts
 import { connectNexusStore } from "@nexus-js/core/state";
-import { relayService } from "@nexus-js/core/relay";
 ```
 
 使用现有适配器的应用通常无需导入底层传输入口。
