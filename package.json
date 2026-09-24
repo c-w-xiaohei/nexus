@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "turbo run build",
-    "benchmark:serializers": "pnpm --filter @nexus-js/core benchmark:serializers",
+    "perf:bench": "pnpm --filter @nexus-js/core build && pnpm --filter @nexus-js/node-ipc perf:bench",
     "dev": "turbo run dev --parallel",
     "test": "turbo run test",
     "lint": "turbo run lint",

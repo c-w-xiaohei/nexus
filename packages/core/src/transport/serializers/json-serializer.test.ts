@@ -10,6 +10,24 @@ import {
 } from "@/errors";
 
 describe("JsonSerializer", () => {
+  it("exposes the same validated packet shape to alternative codecs", () => {
+    const message = {
+      type: NexusMessageType.APPLY as const,
+      id: "codec-1",
+      resourceId: null,
+      path: ["echo"],
+      args: [{ value: 1 }],
+    };
+    const packed = JsonSerializer.safePack(message).unwrap();
+    expect(JSON.stringify(packed)).toBe(
+      JsonSerializer.safeSerialize(message).unwrap(),
+    );
+    expect(JsonSerializer.safeUnpack(packed).unwrap()).toEqual(message);
+    expect(JsonSerializer.safeUnpack([999, "id"])).toMatchObject({
+      error: { code: "E_PROTOCOL_ERROR" },
+    });
+  });
+
   it("preserves framework diagnostics through JSON and binary transports", () => {
     const error = new NexusResourceError("denied", "E_AUTH_CALL_DENIED", {
       resourceId: "resource",

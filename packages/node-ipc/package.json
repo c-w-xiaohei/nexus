@@ -35,6 +35,7 @@
   },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.build.json",
+    "perf:bench": "pnpm build && node ./scripts/benchmark-compare.mjs",
     "dev": "node ../../scripts/watch-package.mjs",
     "test": "pnpm build && vitest run --pool=threads",
     "lint": "oxlint .",

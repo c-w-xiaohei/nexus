@@ -358,6 +358,35 @@ export namespace JsonSerializer {
     }
   };
 
+  /** Internal packet shape shared by codec experiments; not a public wire API. */
+  export const safePack = (
+    message: Message.NexusMessage,
+  ): Result<unknown[], NexusProtocolError> => {
+    try {
+      return messageToPacketArray(message);
+    } catch (error) {
+      return err(
+        createThrownProtocolError("Failed to serialize JSON message", error),
+      );
+    }
+  };
+
+  export const safeUnpack = (
+    packet: unknown,
+  ): Result<Message.NexusMessage, NexusProtocolError> => {
+    if (!Array.isArray(packet))
+      return err(new NexusProtocolError("Invalid Nexus packet: not an array"));
+    try {
+      return packetArrayToMessage(packet);
+    } catch (error) {
+      return err(
+        createThrownProtocolError("Failed to validate Nexus packet", error, {
+          packet,
+        }),
+      );
+    }
+  };
+
   const createThrownProtocolError = (
     message: string,
     error: unknown,
