@@ -12,6 +12,8 @@
     "@nexus-js/websocket": "0.0.0"
   },
   "changesets": [
+    "benchmark-harness",
+    "bounded-binary-rpc",
     "chrome-addressed-extension-pages",
     "connection-resource-api",
     "relay-resource-scopes",
