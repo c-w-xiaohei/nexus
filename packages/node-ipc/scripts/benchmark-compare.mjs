@@ -9,8 +9,8 @@ const results = new Map();
 for (let pair = 0; pair < pairs; pair++) {
   // Reverse the order each pair to reduce effects from CPU temperature and load.
   for (const codec of pair % 2
-    ? ["msgpackr", "json-utf8"]
-    : ["json-utf8", "msgpackr"]) {
+    ? ["msgpackr", "nexus-binary"]
+    : ["nexus-binary", "msgpackr"]) {
     const child = spawnSync(
       process.execPath,
       [fileURLToPath(new URL("./benchmark-rpc.mjs", import.meta.url))],
@@ -34,13 +34,13 @@ for (let pair = 0; pair < pairs; pair++) {
       measurements.some((m) => m.codec !== codec)
     )
       throw new Error(`Incomplete ${codec} run`);
-    if (pair === 0 && codec === "json-utf8") {
+    if (pair === 0 && codec === "nexus-binary") {
       const { codec: _codec, ...machine } = environment;
       console.log(JSON.stringify({ environment: machine, pairs }));
     }
     for (const measurement of measurements) {
       const key = `${measurement.case}/${measurement.concurrency}`;
-      const group = results.get(key) ?? { "json-utf8": [], msgpackr: [] };
+      const group = results.get(key) ?? { "nexus-binary": [], msgpackr: [] };
       group[codec].push(measurement);
       results.set(key, group);
     }
@@ -56,19 +56,20 @@ const median = (values) => {
 };
 console.table(
   [...results].map(([scenario, group]) => {
-    const baseline = median(group["json-utf8"].map((m) => m.rpcPerSec));
+    const baseline = median(group["nexus-binary"].map((m) => m.rpcPerSec));
     const alternative = median(group.msgpackr.map((m) => m.rpcPerSec));
     const pairedChanges = group.msgpackr.map(
       (measurement, index) =>
-        (measurement.rpcPerSec / group["json-utf8"][index].rpcPerSec - 1) * 100,
+        (measurement.rpcPerSec / group["nexus-binary"][index].rpcPerSec - 1) *
+        100,
     );
     return {
       scenario,
-      jsonRpcPerSec: baseline,
+      nexusRpcPerSec: baseline,
       msgpackrRpcPerSec: alternative,
       pairedChangeMedian: `${median(pairedChanges).toFixed(1)}%`,
       pairedChangeRange: `${Math.min(...pairedChanges).toFixed(1)}%..${Math.max(...pairedChanges).toFixed(1)}%`,
-      jsonP99Ms: +median(group["json-utf8"].map((m) => m.p99Ms)).toFixed(3),
+      nexusP99Ms: +median(group["nexus-binary"].map((m) => m.p99Ms)).toFixed(3),
       msgpackrP99Ms: +median(group.msgpackr.map((m) => m.p99Ms)).toFixed(3),
     };
   }),

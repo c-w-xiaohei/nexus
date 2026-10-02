@@ -6,7 +6,7 @@ type DecoderOptions = {
   maxFrameSize?: number;
 };
 
-const DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024;
+export const MAX_FRAME_SIZE = 16 * 1024 * 1024;
 const HEADER_LENGTH = 4;
 
 export namespace BinaryFrame {
@@ -20,7 +20,7 @@ export namespace BinaryFrame {
           "E_IPC_PROTOCOL_ERROR",
         ),
       );
-    if (packet.byteLength > DEFAULT_MAX_FRAME_SIZE)
+    if (packet.byteLength > MAX_FRAME_SIZE)
       return err(
         new NodeIpcError("Frame is too large", "E_IPC_PROTOCOL_ERROR"),
       );
@@ -33,7 +33,7 @@ export namespace BinaryFrame {
   };
 
   export const createDecoder = (options: DecoderOptions = {}) => {
-    const maxFrameSize = options.maxFrameSize ?? DEFAULT_MAX_FRAME_SIZE;
+    const maxFrameSize = options.maxFrameSize ?? MAX_FRAME_SIZE;
     let buffer = new Uint8Array(0);
 
     return {

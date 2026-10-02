@@ -26,6 +26,10 @@ export default defineConfig({
         "internal/testing": path.resolve(__dirname, "src/internal/testing.ts"),
         "state/index": path.resolve(__dirname, "src/state/index.ts"),
         "transport/index": path.resolve(__dirname, "src/transport/index.ts"),
+        "transport/config": path.resolve(
+          __dirname,
+          "src/transport/transport-config.ts",
+        ),
         "transport/virtual-port/index": path.resolve(
           __dirname,
           "src/transport/virtual-port/index.ts",

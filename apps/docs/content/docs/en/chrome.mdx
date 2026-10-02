@@ -251,3 +251,20 @@ acquisition never performs them.
 The addressed-port protocol requires all participating contexts to use the same
 adapter protocol version. Upgrade peers together; legacy unnamed Nexus ports are
 not accepted by the addressed protocol.
+
+## Transport Limits [#transport-limits]
+
+Chrome uses JSON packets with Base64-encoded binary attachments. User binary RPC
+values are supported; `binaryPackets` is not configurable for this adapter.
+Configure the frame, message, and aggregate buffering limits through the helper's
+`transport` option. Defaults are 64 KiB, 16 MiB, and 64 MiB respectively:
+
+```ts
+usingBackgroundScript({
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```

@@ -36,6 +36,11 @@
       "import": "./dist/transport/index.mjs",
       "require": "./dist/transport/index.cjs"
     },
+    "./transport/config": {
+      "types": "./dist/transport/transport-config.d.ts",
+      "import": "./dist/transport/config.mjs",
+      "require": "./dist/transport/config.cjs"
+    },
     "./transport/virtual-port": {
       "types": "./dist/transport/virtual-port/index.d.ts",
       "import": "./dist/transport/virtual-port/index.mjs",

@@ -1,12 +1,13 @@
 import type { NexusConfig } from "@nexus-js/core";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import type { WebSocketAdapterModel, WebSocketTarget } from "./meta.js";
 
 export type WebSocketLimits = {
   readonly maxConnections?: number;
-  readonly maxPayloadBytes?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxEarlyPackets?: number;
   readonly maxEarlyBytes?: number;
+  readonly transport?: TransportLimits;
 };
 
 export type WebSocketClientOptions = WebSocketLimits & {

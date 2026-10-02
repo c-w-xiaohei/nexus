@@ -7,6 +7,7 @@ import {
   NexusHandshakeError,
 } from "../errors/connection-errors";
 import { NexusProtocolError } from "../errors/transport-errors";
+import { isDeterminateTransferError } from "../transport/port-processor";
 import { NexusUsageError } from "../errors/usage-errors";
 import { Transport } from "../transport/transport";
 import type {
@@ -18,6 +19,7 @@ import type {
 } from "../types/adapter-model";
 import { NexusMessageType, type NexusMessage } from "../types/message";
 import { toSerializedError } from "../utils/error";
+import type { ByteReservationLease } from "../service/payload/byte-reservation";
 import {
   LogicalConnection,
   type ConnectionOpenOptions,
@@ -269,14 +271,18 @@ export class ConnectionManager<M extends AdapterModel> {
   public removeProviders(providers: readonly string[]): void {
     for (const provider of providers) this.localProviders.delete(provider);
     for (const connection of this.sessionsMap.values())
-      connection.removeProviders(providers).unwrapOr(undefined);
+      void connection.removeProviders(providers).then((result) => {
+        if (result.isErr())
+          this.logger.warn("Provider withdrawal failed", result.error);
+      });
   }
 
   /** Sends to one already-published connection; this never discovers or dials. */
-  public safeSendMessage(
+  public async safeSendMessage(
     message: NexusMessage,
     connectionId: string,
-  ): Result<void, NexusError> {
+    options?: { lease?: ByteReservationLease; signal?: AbortSignal },
+  ): Promise<Result<void, NexusError>> {
     const initialized = this.ensureInitialized("safeSendMessage");
     if (initialized.isErr()) return initialized;
     try {
@@ -289,13 +295,23 @@ export class ConnectionManager<M extends AdapterModel> {
             { connectionId, messageType: message.type, messageId: message.id },
           ),
         );
-      const sent = connection.sendMessage(message);
+      const sent = await connection.sendMessage(message, options);
+      if (sent.isErr() && isDeterminateTransferError(sent.error))
+        return err(sent.error);
       if (sent.isErr())
         return err(
           new NexusConnectionError(
             `Failed to send message #${message.id ?? "N/A"} to connection ${connectionId}`,
             "E_CONN_CLOSED",
-            { connectionId, messageType: message.type, messageId: message.id },
+            {
+              connectionId,
+              messageType: message.type,
+              messageId: message.id,
+              ...(sent.error instanceof NexusProtocolError &&
+              sent.error.context?.code === "E_TRANSFER_UNCERTAIN"
+                ? { code: "E_TRANSFER_UNCERTAIN" }
+                : {}),
+            },
             toSerializedError(sent.error),
           ),
         );
@@ -315,19 +331,30 @@ export class ConnectionManager<M extends AdapterModel> {
     }
   }
 
+  public reserveBytes(bytes: number): boolean {
+    return this.transport.reserveBytes(bytes);
+  }
+
+  public releaseBytes(bytes: number): void {
+    this.transport.releaseBytes(bytes);
+  }
+
   /** Announce providers to all attached peers, even during handshake; peer failures do not roll back registration. */
   public publishProviders(providers: readonly string[]): void {
     for (const provider of providers) this.localProviders.add(provider);
     for (const connection of this.sessionsMap.values()) {
       // A failed peer closes itself; registration still succeeds for other peers.
-      connection.publishProviders(providers).unwrapOr(undefined);
+      void connection.publishProviders(providers).then((result) => {
+        if (result.isErr())
+          this.logger.warn("Provider publication failed", result.error);
+      });
     }
   }
 
   /** Update every published local identity before broadcasting. Partial sends are not rolled back. */
-  public safeUpdateLocalIdentity(
+  public async safeUpdateLocalIdentity(
     updates: Partial<ContextMetaOf<M>>,
-  ): Result<void, NexusError> {
+  ): Promise<Result<void, NexusError>> {
     const initialized = this.ensureInitialized("safeUpdateLocalIdentity");
     if (initialized.isErr()) return initialized;
     try {
@@ -337,7 +364,7 @@ export class ConnectionManager<M extends AdapterModel> {
       // Separate passes are intentional: transport sends can synchronously reenter policy.
       for (const connection of this.connectionsMap.values()) {
         if (!connection.isReady()) continue;
-        const sent = connection.sendMessage({
+        const sent = await connection.sendMessage({
           type: NexusMessageType.IDENTITY_UPDATE,
           id: null,
           updates,
@@ -390,6 +417,8 @@ export class ConnectionManager<M extends AdapterModel> {
             assignmentMetadata,
             localIdentity: () => this.localEndpointMeta,
             localProviders: () => Array.from(this.localProviders),
+            transportConfig: this.transport.config,
+            bootstrapJson: this.transport.bootstrapJson,
             nextMessageId: () => this.nextMessageOrdinal++,
             timeoutMs: this.config.handshakeTimeoutMs ?? 30_000,
           },

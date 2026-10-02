@@ -11,7 +11,14 @@ const requiredPermissions = [
   "tabs",
   "sidePanel",
 ];
-const requiredHosts = ["http://127.0.0.1:4173/*", "http://127.0.0.1:4174/*"];
+const requiredContentHosts = [
+  "http://127.0.0.1:4173/*",
+  "http://127.0.0.1:4174/*",
+];
+const requiredHostPermissions = [
+  ...requiredContentHosts,
+  "http://127.0.0.1:4176/*",
+];
 
 export interface BuildValidation {
   readonly manifest: Record<string, unknown>;
@@ -42,7 +49,7 @@ export function validateExtensionBuild(
   assert(content.length === 1, "expected one content script declaration");
   const script = asRecord(content[0], "content_scripts[0]");
   const contentFiles = asStringArray(script.js, "content_scripts[0].js");
-  assertEqual(script.matches, requiredHosts, "content script matches");
+  assertEqual(script.matches, requiredContentHosts, "content script matches");
   assert(script.all_frames === true, "content script all_frames must be true");
   assert(
     script.run_at === "document_start",
@@ -50,7 +57,11 @@ export function validateExtensionBuild(
   );
   assert(script.world === "ISOLATED", "content script world must be ISOLATED");
   assertEqual(manifest.permissions, requiredPermissions, "permissions");
-  assertEqual(manifest.host_permissions, requiredHosts, "host_permissions");
+  assertEqual(
+    manifest.host_permissions,
+    requiredHostPermissions,
+    "host_permissions",
+  );
 
   for (const file of [
     worker,

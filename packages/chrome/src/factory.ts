@@ -1,4 +1,5 @@
 import { nexus, type NexusConfig, type NexusInstance } from "@nexus-js/core";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import type {
   ChromeAppMeta,
   ChromeBackgroundMeta,
@@ -30,6 +31,7 @@ type ChromeConfig<
 
 type ChromeConnectionOptions<TTarget extends ChromeConnectionTarget> = {
   connectTo?: readonly TTarget[];
+  transport?: TransportLimits;
 };
 
 type OptionalOptions<TOptions> =
@@ -125,7 +127,7 @@ function isChromeBuiltinContext(
 export function createBackgroundScriptConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateBackgroundScriptConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...optionsMeta } = options ?? {};
+  const { connectTo, transport, ...optionsMeta } = options ?? {};
   const backgroundMeta: ChromeBackgroundMeta<TAppMeta> = {
     context: "background",
     extensionId: chrome.runtime.id,
@@ -136,7 +138,7 @@ export function createBackgroundScriptConfig<TAppMeta = never>(
   return {
     endpoint: {
       meta: backgroundMeta,
-      implementation: new BackgroundEndpoint(),
+      implementation: new BackgroundEndpoint({ transport }),
       ...(connectTo ? { connectTo } : {}),
     },
   };
@@ -159,7 +161,7 @@ export function usingBackgroundScript<TAppMeta = never>(
 export function createContentScriptConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateContentScriptConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...optionsMeta } = options ?? {};
+  const { connectTo, transport, ...optionsMeta } = options ?? {};
   const contentScriptMeta: ChromeContentScriptMeta<TAppMeta> = {
     context: "content-script",
     url: window.location.href,
@@ -171,7 +173,7 @@ export function createContentScriptConfig<TAppMeta = never>(
   return {
     endpoint: {
       meta: contentScriptMeta,
-      implementation: new ContentScriptEndpoint(),
+      implementation: new ContentScriptEndpoint({ transport }),
       ...(connectTo ? { connectTo } : {}),
     },
   };
@@ -202,7 +204,7 @@ export function usingContentScript<TAppMeta = never>(
 export function createPopupConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreatePopupConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...popupOptions } = options ?? {};
+  const { connectTo, transport, ...popupOptions } = options ?? {};
   const popupMeta: ChromePopupMeta<TAppMeta> = {
     context: "popup",
     ...popupOptions,
@@ -210,6 +212,7 @@ export function createPopupConfig<TAppMeta = never>(
 
   return createUiClientConfig<TAppMeta>(popupMeta, {
     connectTo,
+    transport,
     receiver: () => resolveCurrentWindowReceiver(chromeTarget.popup),
   });
 }
@@ -227,7 +230,7 @@ export function usingPopup<TAppMeta = never>(
 export function createOptionsPageConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateOptionsPageConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...optionsPageOptions } = options ?? {};
+  const { connectTo, transport, ...optionsPageOptions } = options ?? {};
   const optionsPageMeta: ChromeOptionsPageMeta<TAppMeta> = {
     context: "options-page",
     ...optionsPageOptions,
@@ -235,6 +238,7 @@ export function createOptionsPageConfig<TAppMeta = never>(
 
   return createUiClientConfig<TAppMeta>(optionsPageMeta, {
     connectTo,
+    transport,
     receiver: chromeTarget.optionsPage(),
     exclusiveReceiver: true,
   });
@@ -251,7 +255,7 @@ export function usingOptionsPage<TAppMeta = never>(
 export function createDevToolsPageConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateDevToolsPageConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...devToolsPageOptions } = options ?? {};
+  const { connectTo, transport, ...devToolsPageOptions } = options ?? {};
   const devToolsPageMeta: ChromeDevToolsPageMeta<TAppMeta> = {
     context: "devtools-page",
     inspectedTabId: chrome.devtools.inspectedWindow.tabId,
@@ -260,6 +264,7 @@ export function createDevToolsPageConfig<TAppMeta = never>(
 
   return createUiClientConfig<TAppMeta>(devToolsPageMeta, {
     connectTo,
+    transport,
     receiver: chromeTarget.devToolsPage({
       inspectedTabId: devToolsPageMeta.inspectedTabId,
     }),
@@ -277,7 +282,7 @@ export function usingDevToolsPage<TAppMeta = never>(
 export function createOffscreenDocumentConfig<TAppMeta = never>(
   options: CreateOffscreenDocumentConfigOptions<TAppMeta>,
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...offscreenDocumentOptions } = options;
+  const { connectTo, transport, ...offscreenDocumentOptions } = options;
   const offscreenDocumentMeta: ChromeOffscreenDocumentMeta<TAppMeta> = {
     context: "offscreen-document",
     ...offscreenDocumentOptions,
@@ -285,6 +290,7 @@ export function createOffscreenDocumentConfig<TAppMeta = never>(
 
   return createUiClientConfig<TAppMeta>(offscreenDocumentMeta, {
     connectTo,
+    transport,
     receiver: chromeTarget.offscreenDocument(),
     canConnectContent: false,
   });
@@ -362,13 +368,14 @@ export function usingExtensionPage(
 export function createSidePanelConfig<TAppMeta = never>(
   ...[options]: OptionalOptions<CreateSidePanelConfigOptions<TAppMeta>>
 ): ChromeConfig<TAppMeta> {
-  const { connectTo, ...meta } = options ?? {};
+  const { connectTo, transport, ...meta } = options ?? {};
   const sidePanelMeta = {
     context: "side-panel",
     ...meta,
   } as ChromeSidePanelMeta<TAppMeta>;
   return createUiClientConfig<TAppMeta>(sidePanelMeta, {
     connectTo,
+    transport,
     receiver: () => resolveCurrentWindowReceiver(chromeTarget.sidePanel),
   });
 }
@@ -390,6 +397,7 @@ function createUiClientConfig<
     receiver?: ChromePageTarget | (() => Promise<ChromePageTarget>);
     exclusiveReceiver?: boolean;
     canConnectContent?: boolean;
+    transport?: TransportLimits;
   } = {},
 ): ChromeConfig<TAppMeta, TCustomMeta> {
   const { connectTo, ...endpointOptions } = options;

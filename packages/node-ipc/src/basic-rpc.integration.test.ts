@@ -74,4 +74,31 @@ describe("node-ipc basic RPC integration", () => {
 
     daemon.close();
   });
+
+  it("roundtrips a 96 KiB Uint8Array through Core over a real Unix socket", async () => {
+    harness = await createHarness();
+    const daemon = await harness.startDaemon();
+    const client = harness.createClient();
+    const service = await client
+      .connect({
+        target: {
+          context: "node-ipc-daemon",
+          appId: "test-daemon",
+          instance: "default",
+        },
+      })
+      .then((connection) => connection.get(EchoToken));
+    const input = Uint8Array.from(
+      { length: 96 * 1024 },
+      (_, index) => (index * 31 + 7) % 256,
+    );
+    const expected = input.slice();
+
+    const result = await service.echo(input);
+
+    expect(result).toBeInstanceOf(Uint8Array);
+    expect(result).toEqual(expected);
+    expect(input).toEqual(expected);
+    daemon.close();
+  });
 });

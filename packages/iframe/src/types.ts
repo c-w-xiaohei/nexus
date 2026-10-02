@@ -5,6 +5,7 @@ import type {
   NexusConfig,
   NexusInstance,
 } from "@nexus-js/core";
+import type { TransportConfig } from "@nexus-js/core/transport/config";
 import type { VirtualPortRouter } from "@nexus-js/core/transport/virtual-port";
 
 export type IframeParentMeta = {
@@ -96,7 +97,7 @@ export type IframeParentEndpointOptions = {
   frames: readonly IframeFrameTarget[];
   channel?: string;
   allowAnyOrigin?: boolean;
-  binaryPackets?: boolean;
+  transport?: TransportConfig;
   /**
    * Overrides the core virtual-port heartbeat used to detect unresponsive
    * iframe links. Defaults to the core heartbeat interval and miss count
@@ -116,7 +117,7 @@ export type IframeChildEndpointOptions = {
   channel?: string;
   nonce?: string;
   allowAnyOrigin?: boolean;
-  binaryPackets?: boolean;
+  transport?: TransportConfig;
   /**
    * Overrides the core virtual-port heartbeat used to detect unresponsive
    * iframe links. Defaults to the core heartbeat interval and miss count

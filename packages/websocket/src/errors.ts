@@ -4,7 +4,12 @@ export type WebSocketErrorCode =
   | "E_WEBSOCKET_ATTACH_REJECTED"
   | "E_WEBSOCKET_CAPACITY"
   | "E_WEBSOCKET_CLIENT_UNAVAILABLE"
-  | "E_WEBSOCKET_CONNECTION_FAILED";
+  | "E_WEBSOCKET_CONNECTION_FAILED"
+  | "E_WEBSOCKET_CONFIG_INVALID"
+  | "E_MESSAGE_TOO_LARGE"
+  | "E_TRANSPORT_CAPACITY"
+  | "E_TRANSFER_CANCELLED"
+  | "E_WEBSOCKET_PORT_CLOSED";
 
 /** Adapter failures omit native errors and request credentials. */
 export class WebSocketAdapterError extends Error {

@@ -1,8 +1,8 @@
 import { benchmarkBinarySerializer } from "@nexus-js/core/internal/serializer-benchmark";
 import { Transport } from "@nexus-js/core/transport";
 
-const codec = process.env.NEXUS_BENCH_CODEC ?? "json-utf8";
-if (codec !== "json-utf8" && codec !== "msgpackr")
+const codec = process.env.NEXUS_BENCH_CODEC ?? "nexus-binary";
+if (codec !== "nexus-binary" && codec !== "msgpackr")
   throw new Error(`Unknown benchmark codec: ${codec}`);
 
 let selected = false;
@@ -12,7 +12,11 @@ if (codec === "msgpackr") {
     if (!endpoint.capabilities?.binaryPackets)
       throw new Error("Benchmark codec requires a binary endpoint");
     selected = true;
-    return { ...create(endpoint), serializer: benchmarkBinarySerializer };
+    return {
+      ...create(endpoint),
+      serializer: benchmarkBinarySerializer,
+      binarySerializer: benchmarkBinarySerializer,
+    };
   };
 }
 

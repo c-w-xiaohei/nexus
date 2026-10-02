@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { Nexus, Token } from "@nexus-js/core";
-import type { IframeAdapterModel, IframeConnectionMeta } from "./types.js";
+import type {
+  IframeAdapterModel,
+  IframeConnectionMeta,
+  IframeParentEndpointOptions,
+} from "./types.js";
 import { createConnectionMeta } from "./connection-meta.js";
 import * as iframePublicApi from "./index.js";
 import {
@@ -11,6 +15,14 @@ import {
   usingIframeParent,
 } from "./index.js";
 import { postMessageFrom } from "./window.js";
+
+const obsoletePacketMode: IframeParentEndpointOptions = {
+  appId: "app",
+  frames: [],
+  // @ts-expect-error Iframe packet mode belongs under transport.
+  binaryPackets: false,
+};
+void obsoletePacketMode;
 
 class FakeWindow {
   readonly listeners = new Map<string, Set<(event: unknown) => void>>();
@@ -136,7 +148,7 @@ describe("iframe adapter factories", () => {
     expect(config.endpoint?.connectTo).toBeUndefined();
   });
 
-  it("builds child config with binary capability override", () => {
+  it("builds child config with binary transport preference", () => {
     const childWindow = new FakeWindow("https://child.test");
     const connectTo = [
       {
@@ -151,7 +163,7 @@ describe("iframe adapter factories", () => {
       frameId: "main",
       parentOrigin: "https://parent.test",
       window: childWindow as unknown as Window,
-      binaryPackets: true,
+      transport: { binaryPackets: true },
       connectTo,
     });
     expect(config.endpoint?.meta).toEqual({
@@ -178,7 +190,7 @@ describe("iframe adapter factories", () => {
       configure: false,
       appId: "app",
       window: parentWindow as unknown as Window,
-      binaryPackets: false,
+      transport: { binaryPackets: false },
       frames: [
         {
           frameId: "main",
@@ -193,17 +205,92 @@ describe("iframe adapter factories", () => {
       frameId: "main",
       parentOrigin: "https://parent.test",
       window: childWindow as unknown as Window,
-      binaryPackets: false,
+      transport: { binaryPackets: false },
     });
 
     expect(parentConfig.endpoint?.implementation?.capabilities).toMatchObject({
-      binaryPackets: false,
+      binaryPackets: true,
       transferables: true,
     });
     expect(childConfig.endpoint?.implementation?.capabilities).toMatchObject({
-      binaryPackets: false,
+      binaryPackets: true,
       transferables: true,
     });
+    expect(
+      (parentConfig.endpoint?.implementation as IframeParentEndpoint).config
+        .binaryPackets,
+    ).toBe(false);
+    expect(
+      (childConfig.endpoint?.implementation as IframeChildEndpoint).config
+        .binaryPackets,
+    ).toBe(false);
+  });
+
+  it("normalizes and freezes endpoint transport configuration", () => {
+    const transport = { maxFrameBytes: 1024 };
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: new FakeWindow("https://parent.test") as unknown as Window,
+      frames: [],
+      transport,
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      localWindow: new FakeWindow("https://child.test") as unknown as Window,
+      parentOrigin: "https://parent.test",
+      transport,
+    });
+
+    expect(parent.config).toEqual({
+      binaryPackets: true,
+      maxFrameBytes: 1024,
+      maxMessageBytes: 16 * 1024 * 1024,
+      maxBufferedBytes: 64 * 1024 * 1024,
+    });
+    expect(Object.isFrozen(parent.config)).toBe(true);
+    expect(child.config).toEqual(parent.config);
+    expect(Object.isFrozen(child.config)).toBe(true);
+    expect(Object.isFrozen(transport)).toBe(false);
+  });
+
+  it("reports shared transport limit failures with an iframe error code", () => {
+    expect(
+      () =>
+        new IframeParentEndpoint({
+          appId: "app",
+          localWindow: new FakeWindow(
+            "https://parent.test",
+          ) as unknown as Window,
+          frames: [],
+          transport: { maxMessageBytes: 2048, maxBufferedBytes: 1024 },
+        }),
+    ).toThrow(expect.objectContaining({ code: "E_IFRAME_CONFIG_INVALID" }));
+  });
+
+  it("rejects the removed top-level packet mode option", () => {
+    const options = {
+      appId: "app",
+      localWindow: new FakeWindow("https://parent.test") as unknown as Window,
+      frames: [],
+      binaryPackets: false,
+    } as const;
+    expect(() => new IframeParentEndpoint(options as never)).toThrow(
+      IframeAdapterError,
+    );
+  });
+
+  it("rejects a non-boolean transport.binaryPackets value", () => {
+    expect(
+      () =>
+        new IframeParentEndpoint({
+          appId: "app",
+          localWindow: new FakeWindow(
+            "https://parent.test",
+          ) as unknown as Window,
+          frames: [],
+          transport: { binaryPackets: "false" },
+        } as never),
+    ).toThrow(IframeAdapterError);
   });
 
   it("derives child config origin from localWindow when window is omitted", () => {
@@ -608,6 +695,70 @@ describe("iframe adapter factories", () => {
 });
 
 describe("iframe adapter message behavior", () => {
+  it("accepts JSON-string virtual-port bootstrap messages on both endpoints", async () => {
+    const parentWindow = new FakeWindow("https://parent.test");
+    const childWindow = new FakeWindow("https://child.test");
+    childWindow.parent = parentWindow;
+    const iframe = new FakeIframe(childWindow, "https://child.test/app");
+    const parent = new IframeParentEndpoint({
+      appId: "app",
+      localWindow: parentWindow as unknown as Window,
+      frames: [
+        {
+          frameId: "main",
+          iframe: iframe as unknown as HTMLIFrameElement,
+          origin: "https://child.test",
+        },
+      ],
+    });
+    const child = new IframeChildEndpoint({
+      appId: "app",
+      frameId: "main",
+      localWindow: childWindow as unknown as Window,
+      parentOrigin: "https://parent.test",
+    });
+    const parentAccepted = vi.fn();
+    const childAccepted = vi.fn();
+    parent.listen(parentAccepted);
+    child.listen(childAccepted);
+    const connect = {
+      __nexusVirtualPort: true,
+      version: 1,
+      type: "connect",
+      channelId: "json-bootstrap",
+      from: "peer",
+      nonce: "nonce",
+    };
+
+    childWindow.deliver(
+      parentWindow,
+      JSON.stringify({
+        __nexusIframe: true,
+        appId: "app",
+        channel: "nexus:iframe",
+        payload: connect,
+      }),
+      "https://parent.test",
+    );
+    parentWindow.deliver(
+      childWindow,
+      JSON.stringify({
+        __nexusIframe: true,
+        appId: "app",
+        channel: "nexus:iframe",
+        payload: { ...connect, channelId: "json-bootstrap-child" },
+      }),
+      "https://child.test",
+    );
+    await flush();
+    await flush();
+
+    expect(parentAccepted).toHaveBeenCalledTimes(1);
+    expect(childAccepted).toHaveBeenCalledTimes(1);
+    parent.close();
+    child.close();
+  });
+
   it("forwards transfer lists to native target postMessage", () => {
     const source = {} as Window;
     const target = {

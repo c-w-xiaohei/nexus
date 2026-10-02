@@ -213,7 +213,7 @@ describe("WebSocket adapter real Node integration", () => {
 
   it("passes binary packets and rejects text, payload overflow, and early FIFO overflow", async () => {
     const endpoint = new WebSocketServerEndpoint({
-      maxPayloadBytes: 4,
+      transport: { maxFrameBytes: 4 },
       maxEarlyPackets: 2,
       maxEarlyBytes: 4,
     });

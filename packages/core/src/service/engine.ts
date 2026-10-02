@@ -45,6 +45,7 @@ import type {
   ServiceProvider,
 } from "@/api/types/config";
 import type { Connection } from "@/api/connection";
+import type { ByteReservationLease } from "./payload/byte-reservation";
 
 export class Engine<M extends AdapterModel> {
   private readonly logger = new Logger("L3 --- Engine");
@@ -59,7 +60,7 @@ export class Engine<M extends AdapterModel> {
   private readonly forwards = new Map<ResourceScopeHandle, RelayForwarder>();
   private readonly routes = new Map<
     ResourceScopeHandle,
-    (message: RpcMessage, receivedAt: number) => Result<void, Error>
+    (message: RpcMessage, receivedAt: number) => Promise<Result<void, Error>>
   >();
 
   // Expose only the factory's creation capability, not the factory itself.
@@ -67,10 +68,11 @@ export class Engine<M extends AdapterModel> {
   private readonly messageHandler: MessageHandler<M>;
 
   /** One L2-to-call error boundary shared by calls, replies and releases. */
-  private readonly safeSendMessage = (
+  private readonly safeSendMessage = async (
     message: NexusMessage,
     connectionId: string,
-  ): Result<void, Error> => {
+    options?: { lease?: ByteReservationLease; signal?: AbortSignal },
+  ): Promise<Result<void, Error>> => {
     if (
       "scopeId" in message &&
       message.scopeId &&
@@ -84,36 +86,44 @@ export class Engine<M extends AdapterModel> {
             : new NexusProtocolError("Unknown outbound resource scope."),
         );
     }
-    return this.connectionManagerState
-      .safeSendMessage(message, connectionId)
-      .mapError((error) =>
-        error.code === "E_CONN_CLOSED" &&
-        !(error instanceof NexusDisconnectedError)
-          ? new NexusDisconnectedError(
-              error.message,
-              "E_CONN_CLOSED",
-              error.context,
-              error.cause,
-            )
-          : error,
-      );
+    return (
+      await (options
+        ? this.connectionManagerState.safeSendMessage(
+            message,
+            connectionId,
+            options,
+          )
+        : this.connectionManagerState.safeSendMessage(message, connectionId))
+    ).mapError((error) =>
+      error.code === "E_CONN_CLOSED" &&
+      !(error instanceof NexusDisconnectedError)
+        ? new NexusDisconnectedError(
+            error.message,
+            "E_CONN_CLOSED",
+            error.context,
+            error.cause,
+          )
+        : error,
+    );
   };
 
   /** Local release is final; remote notification is best effort, without an ACK. */
-  private readonly dispatchRelease = (
+  private readonly dispatchRelease = async (
     resourceId: string,
     connectionId: string,
     scope?: ResourceScope,
-  ): void => {
+  ): Promise<void> => {
     if (scope?.closed) return;
-    this.safeSendMessage(
-      {
-        type: NexusMessageType.RELEASE,
-        id: null,
-        resourceId,
-        ...(scope ? { scopeId: scope.id } : {}),
-      },
-      connectionId,
+    (
+      await this.safeSendMessage(
+        {
+          type: NexusMessageType.RELEASE,
+          id: null,
+          resourceId,
+          ...(scope ? { scopeId: scope.id } : {}),
+        },
+        connectionId,
+      )
     ).tapError((error) =>
       this.logger.warn(
         `Failed to dispatch release for resource #${resourceId} to ${connectionId}.`,
@@ -127,6 +137,8 @@ export class Engine<M extends AdapterModel> {
     private readonly connectionManagerState: Pick<
       ConnectionManager<M>,
       | "safeSendMessage"
+      | "reserveBytes"
+      | "releaseBytes"
       | "isConnectionReady"
       | "getConnectionAuthSnapshot"
       | "publishProviders"
@@ -155,8 +167,15 @@ export class Engine<M extends AdapterModel> {
       this.resourceManager,
       proxyFactory,
     );
+    const payloadReservation = {
+      reserveBytes: (bytes: number) =>
+        this.connectionManagerState.reserveBytes(bytes),
+      releaseBytes: (bytes: number) =>
+        this.connectionManagerState.releaseBytes(bytes),
+    };
     this.messageHandler = new MessageHandler({
       safeSendMessage: this.safeSendMessage,
+      payloadReservation,
       dispatchRelease: this.dispatchRelease,
       pendingCalls: this.pendingCallManager,
       resourceManager: this.resourceManager,
@@ -169,6 +188,7 @@ export class Engine<M extends AdapterModel> {
       isConnectionReady: (id) =>
         this.connectionManagerState.isConnectionReady(id),
       safeSendMessage: this.safeSendMessage,
+      payloadReservation,
       payloadProcessor,
       pendingCallManager: this.pendingCallManager,
     });
@@ -219,7 +239,7 @@ export class Engine<M extends AdapterModel> {
       }
       const route = this.routes.get(scope);
       if (route) {
-        route(message, started).tapError(() => scope.close());
+        (await route(message, started)).tapError(() => scope.close());
         return;
       }
       const registration = this.relays.get(scope.serviceId);
@@ -232,7 +252,7 @@ export class Engine<M extends AdapterModel> {
           forwarder = new RelayForwarder(
             scope,
             registration,
-            (reply) => this.safeSendMessage(reply, sourceConnectionId),
+            async (reply) => this.safeSendMessage(reply, sourceConnectionId),
             () => this.scopes.reserveWaiter(sourceConnectionId),
           );
           this.forwards.set(scope, forwarder);
@@ -408,7 +428,7 @@ export class Engine<M extends AdapterModel> {
       createScope: (serviceId) => this.safeCreateScope(connectionId, serviceId),
       send: (message, scope) =>
         scope.closed
-          ? Result.err(scopeClosedError(scope))
+          ? Promise.resolve(Result.err(scopeClosedError(scope)))
           : this.safeSendMessage(message, connectionId),
       bind: (scope, receive) => this.routes.set(scope, receive),
     };
@@ -469,7 +489,7 @@ export class Engine<M extends AdapterModel> {
       notifyPeer &&
       this.connectionManagerState.isConnectionReady(scope.connectionId)
     )
-      this.safeSendMessage(
+      void this.safeSendMessage(
         {
           type: NexusMessageType.RELEASE,
           id: null,
@@ -477,8 +497,10 @@ export class Engine<M extends AdapterModel> {
           scopeId: scope.id,
         },
         scope.connectionId,
-      ).tapError((error) =>
-        this.logger.debug("Scope closure notification failed", error),
+      ).then((result) =>
+        result.tapError((error) =>
+          this.logger.debug("Scope closure notification failed", error),
+        ),
       );
   }
 
@@ -496,8 +518,10 @@ export class Engine<M extends AdapterModel> {
         },
         source,
       )
-      .tapError((failure) =>
-        this.logger.debug("Relay rejection could not be sent", failure),
+      .then((result) =>
+        result.tapError((failure) =>
+          this.logger.debug("Relay rejection could not be sent", failure),
+        ),
       );
   }
 }

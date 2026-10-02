@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { safeParse } from "valibot";
 import {
+  ChunkAckMessageSchema,
+  ChunkCancelMessageSchema,
+  ChunkDataMessageSchema,
+  ChunkStartMessageSchema,
+  HandshakeAckMessageSchema,
+  HandshakeReadyMessageSchema,
+  HandshakeReqMessageSchema,
   MessageIdSchema,
   NexusMessageSchema,
   NexusMessageType,
@@ -61,6 +68,11 @@ const messages = [
     type: NexusMessageType.HANDSHAKE_REQ,
     id: "handshake-req",
     metadata: { opaque: true },
+    transport: {
+      version: 1,
+      receive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+      packetModes: ["json"],
+    },
   },
   {
     type: NexusMessageType.HANDSHAKE_ACK,
@@ -68,12 +80,22 @@ const messages = [
     metadata: { opaque: true },
     capabilities: ["capability"],
     providers: ["provider"],
+    transport: {
+      version: 1,
+      receive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+      packetModes: ["json"],
+    },
   },
   {
     type: NexusMessageType.HANDSHAKE_READY,
     id: "handshake-ready",
     capabilities: [],
     providers: [],
+    transport: {
+      initiatorReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+      responderReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+      selectedPacketMode: "json",
+    },
   },
   {
     type: NexusMessageType.HANDSHAKE_REJECT,
@@ -92,16 +114,30 @@ const messages = [
   },
   {
     type: NexusMessageType.CHUNK_START,
-    id: "chunk",
-    totalChunks: 2,
-    originalMessageId: "request",
-    originalMessageType: NexusMessageType.APPLY,
+    id: 1,
+    version: 1,
+    packetKind: NexusMessageType.APPLY,
+    totalBytes: 10,
   },
   {
     type: NexusMessageType.CHUNK_DATA,
-    id: "chunk",
-    chunkIndex: 0,
-    chunkData: "chunk-data",
+    id: 1,
+    version: 1,
+    offset: 0,
+    data: new Uint8Array([1, 2]),
+  },
+  {
+    type: NexusMessageType.CHUNK_ACK,
+    id: 1,
+    version: 1,
+    offset: 0,
+    committed: false,
+  },
+  {
+    type: NexusMessageType.CHUNK_CANCEL,
+    id: 1,
+    version: 1,
+    reason: "capacity",
   },
 ] as const;
 
@@ -147,7 +183,14 @@ const wireFixtures = [
   },
   {
     message: messages[8],
-    packet: [10, "handshake-req", { opaque: true }, null, null],
+    packet: [
+      10,
+      "handshake-req",
+      { opaque: true },
+      null,
+      null,
+      messages[8].transport,
+    ],
   },
   {
     message: messages[9],
@@ -157,11 +200,12 @@ const wireFixtures = [
       { opaque: true },
       ["capability"],
       ["provider"],
+      messages[9].transport,
     ],
   },
   {
     message: messages[10],
-    packet: [14, "handshake-ready", [], []],
+    packet: [14, "handshake-ready", [], [], messages[10].transport],
   },
   {
     message: messages[11],
@@ -181,15 +225,89 @@ const wireFixtures = [
   },
   {
     message: messages[14],
-    packet: [16, "chunk", 2, "request", 3],
+    packet: [16, 1, 1, 3, 10],
   },
   {
     message: messages[15],
-    packet: [17, "chunk", 0, "chunk-data"],
+    packet: [
+      17,
+      1,
+      1,
+      0,
+      { "\u0000nexus-binary-v1": "uint8-array", data: "AQI=" },
+    ],
   },
+  { message: messages[16], packet: [18, 1, 1, 0, false] },
+  { message: messages[17], packet: [19, 1, 1, "capacity"] },
 ] as const;
 
 describe("Nexus message schemas", () => {
+  it("rejects unknown chunk fields, versions, offsets and packet kinds", () => {
+    const chunkSchemas = [
+      ChunkStartMessageSchema,
+      ChunkDataMessageSchema,
+      ChunkAckMessageSchema,
+      ChunkCancelMessageSchema,
+    ] as const;
+    for (const [index, schema] of chunkSchemas.entries()) {
+      const message = messages[14 + index];
+      expect(safeParse(schema, { ...message, extra: true }).success).toBe(
+        false,
+      );
+      expect(safeParse(schema, { ...message, version: 2 }).success).toBe(false);
+    }
+    expect(
+      safeParse(ChunkAckMessageSchema, {
+        ...messages[16],
+        offset: -1,
+      }).success,
+    ).toBe(false);
+    for (const packetKind of [
+      NexusMessageType.HANDSHAKE_REQ,
+      NexusMessageType.CHUNK_START,
+      NexusMessageType.CHUNK_DATA,
+      NexusMessageType.CHUNK_ACK,
+      NexusMessageType.CHUNK_CANCEL,
+    ]) {
+      expect(
+        safeParse(ChunkStartMessageSchema, {
+          ...messages[14],
+          packetKind,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("requires transport negotiation on each handshake phase", () => {
+    for (const [index, schema] of [
+      HandshakeReqMessageSchema,
+      HandshakeAckMessageSchema,
+      HandshakeReadyMessageSchema,
+    ].entries()) {
+      const { transport: _transport, ...message } = messages[8 + index];
+      expect(safeParse(schema, message).success).toBe(false);
+    }
+    expect(
+      safeParse(HandshakeReqMessageSchema, {
+        ...messages[8],
+        transport: {
+          version: 1,
+          receive: { maxFrameBytes: 0, maxMessageBytes: 4096 },
+          packetModes: ["json"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      safeParse(HandshakeReadyMessageSchema, {
+        ...messages[10],
+        transport: {
+          ...messages[10].transport,
+          selectedPacketMode: "msgpack",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts every message variant without inspecting application payloads", () => {
     for (const message of messages) {
       expect(safeParse(NexusMessageSchema, message).success).toBe(true);
@@ -205,12 +323,15 @@ describe("Nexus message schemas", () => {
     if (result.success) expect(result.output.result).toBe(payload);
   });
 
-  it("round-trips all sixteen message variants through the existing arrays", () => {
+  it("round-trips all message variants through the existing arrays", () => {
     for (const message of messages) {
       const decoded = JsonSerializer.safeDeserialize(
         JsonSerializer.safeSerialize(message).unwrap(),
       );
-      expect(decoded.isOk()).toBe(true);
+      expect(
+        decoded.isOk(),
+        `message type ${message.type}: ${decoded.isErr() ? decoded.error.message : ""}`,
+      ).toBe(true);
     }
   });
 
@@ -260,6 +381,11 @@ describe("Nexus message schemas", () => {
         "ready",
         null,
         null,
+        {
+          initiatorReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+          responderReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+          selectedPacketMode: "json",
+        },
         "future-field",
       ]),
     );
@@ -267,6 +393,11 @@ describe("Nexus message schemas", () => {
     expect(result.unwrap()).toEqual({
       type: NexusMessageType.HANDSHAKE_READY,
       id: "ready",
+      transport: {
+        initiatorReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+        responderReceive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
+        selectedPacketMode: "json",
+      },
     });
   });
 
@@ -312,31 +443,26 @@ describe("Nexus message schemas", () => {
     ).toMatchObject({ error: message.error });
   });
 
-  it("rejects unsupported ArrayBuffer chunk serialization in JSON and Binary", () => {
+  it("encodes chunk controls in both native serializer modes", () => {
     const message = {
       type: NexusMessageType.CHUNK_DATA,
-      id: "chunk-buffer",
-      chunkIndex: 0,
-      chunkData: new ArrayBuffer(2),
+      id: 1,
+      version: 1,
+      offset: 0,
+      data: new Uint8Array([1, 2]),
     };
 
     for (const result of [
       JsonSerializer.safeSerialize(message),
       BinarySerializer.safeSerialize(message),
     ]) {
-      expect(result.isErr()).toBe(true);
-      if (result.isErr()) {
-        expect(result.error).toBeInstanceOf(NexusProtocolError);
-        expect(result.error.message).toContain(
-          "ArrayBuffer chunk data is not supported",
-        );
-      }
+      expect(result.isOk()).toBe(true);
     }
   });
 
   it("rejects the lossy JSON object representation of an ArrayBuffer chunk", () => {
     const result = JsonSerializer.safeDeserialize(
-      JSON.stringify([NexusMessageType.CHUNK_DATA, "chunk", 0, {}]),
+      JSON.stringify([NexusMessageType.CHUNK_DATA, 1, 1, 0, {}]),
     );
 
     expect(result.isErr()).toBe(true);

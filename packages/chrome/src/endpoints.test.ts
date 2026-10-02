@@ -296,6 +296,25 @@ describe("Chrome endpoint connection metadata", () => {
     }
   });
 
+  it("normalizes transport config on directly constructed endpoints", () => {
+    const transport = { maxFrameBytes: 4096 };
+    const endpoints = [
+      new BackgroundEndpoint({ transport }),
+      new ContentScriptEndpoint({ transport }),
+      new UIClientEndpoint({ transport }),
+    ];
+
+    for (const endpoint of endpoints) {
+      expect(endpoint.config).toEqual({
+        binaryPackets: false,
+        maxFrameBytes: 4096,
+        maxMessageBytes: 16 * 1024 * 1024,
+        maxBufferedBytes: 64 * 1024 * 1024,
+      });
+      expect(Object.isFrozen(endpoint.config)).toBe(true);
+    }
+  });
+
   it("builds frozen, tagged exact targets", () => {
     const background = chromeTarget.background();
     const frame = chromeTarget.contentFrame({ tabId: 7, frameId: 2 });

@@ -75,31 +75,21 @@ describe("LogicalConnection", () => {
     };
 
     // To simulate a real scenario, PortProcessors listen to each other
-    const clientPortProcessor = PortProcessor.create(
-      clientPort,
-      serializer,
-      {
-        onLogicalMessage: (msg: NexusMessage) =>
-          clientConnection.safeHandleMessage(msg).then((result) => {
-            if (result.isErr()) return Promise.reject(result.error);
-          }),
-        onDisconnect: () => clientConnection.handleDisconnect(),
-      },
-      { chunkSize: Infinity },
-    );
+    const clientPortProcessor = PortProcessor.create(clientPort, serializer, {
+      onLogicalMessage: (msg: NexusMessage) =>
+        clientConnection.safeHandleMessage(msg).then((result) => {
+          if (result.isErr()) return Promise.reject(result.error);
+        }),
+      onDisconnect: () => clientConnection.handleDisconnect(),
+    });
 
-    const hostPortProcessor = PortProcessor.create(
-      hostPort,
-      serializer,
-      {
-        onLogicalMessage: (msg: NexusMessage) =>
-          hostConnection.safeHandleMessage(msg).then((result) => {
-            if (result.isErr()) return Promise.reject(result.error);
-          }),
-        onDisconnect: () => hostConnection.handleDisconnect(),
-      },
-      { chunkSize: Infinity },
-    );
+    const hostPortProcessor = PortProcessor.create(hostPort, serializer, {
+      onLogicalMessage: (msg: NexusMessage) =>
+        hostConnection.safeHandleMessage(msg).then((result) => {
+          if (result.isErr()) return Promise.reject(result.error);
+        }),
+      onDisconnect: () => hostConnection.handleDisconnect(),
+    });
 
     // Create the LogicalConnection instances
     clientConnection = new LogicalConnection(
@@ -161,11 +151,11 @@ describe("LogicalConnection", () => {
         },
       );
       if (packet === "REQ") {
-        const started = connection.initiateHandshake();
+        const started = await connection.initiateHandshake();
         expect(started.isErr()).toBe(true);
         if (started.isErr()) expect(started.error).toBe(failure);
       } else {
-        if (packet === "READY") connection.initiateHandshake();
+        if (packet === "READY") await connection.initiateHandshake();
         expect(
           await connection.safeHandleMessage({
             type:
@@ -373,15 +363,17 @@ describe("LogicalConnection", () => {
             nextMessageId: () => 1,
           },
         );
-        connection.initiateHandshake();
-        await connection.safeHandleMessage({
+        await connection.initiateHandshake();
+        const handling = connection.safeHandleMessage({
           type: NexusMessageType.HANDSHAKE_ACK,
           id: 1,
           metadata: hostMeta,
           capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
+        await vi.advanceTimersByTimeAsync(0);
+        await handling;
         expect(connection.isReady()).toBe(true);
-        connection.sendMessage({
+        await connection.sendMessage({
           type: NexusMessageType.RES,
           id: 2,
           result: 1,
@@ -391,13 +383,12 @@ describe("LogicalConnection", () => {
         else connection.close();
         connection.close();
         connection.handleDisconnect();
-        await vi.advanceTimersByTimeAsync(0);
         expect(close).toHaveBeenCalledTimes(mode === "native" ? 0 : 1);
         expect(connection.isReady()).toBe(false);
         expect(mockClientHandlers.onClosed).toHaveBeenCalledExactlyOnceWith(
           connection,
         );
-        expect(mockClientHandlers.onReady).not.toHaveBeenCalled();
+        expect(mockClientHandlers.onReady).toHaveBeenCalledOnce();
         expect(sendMessage).toHaveBeenCalledTimes(sent);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -667,27 +658,280 @@ describe("LogicalConnection", () => {
           nextMessageId: () => 1,
         },
       );
-      connection.initiateHandshake();
-      await connection.safeHandleMessage({
+      await connection.initiateHandshake();
+      const handshake = connection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
         metadata: hostMeta,
         capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
-      for (const id of [10, 11])
+      const queued = [10, 11].map((id) =>
         connection.sendMessage({
           type: NexusMessageType.RES,
           id,
           result: null,
-        });
+        }),
+      );
       expect(sent).toEqual([]);
       await vi.advanceTimersByTimeAsync(0);
+      await handshake;
+      await Promise.all(queued);
       expect(sent).toEqual([10, 11, 12]);
       expect(mockClientHandlers.onReady).toHaveBeenCalledOnce();
       connection.close();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("holds synchronous application ingress reentered during READY submit until activation", async () => {
+    let connection!: LogicalConnection<TestAdapterModel>;
+    let inbound!: Promise<Result<void, Error>>;
+    const onMessage = vi.fn();
+    const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+      onAttached: () => Result.ok(undefined),
+      onReady: () => Result.ok(undefined),
+      onClosed: vi.fn(),
+      onMessage,
+      authorize: vi.fn().mockResolvedValue(true),
+    };
+    connection = new LogicalConnection(
+      {
+        close: () => Result.ok(undefined),
+        sendMessage: (message) => {
+          if (message.type === NexusMessageType.HANDSHAKE_READY) {
+            inbound = connection.safeHandleMessage({
+              type: NexusMessageType.APPLY,
+              id: 99,
+              resourceId: null,
+              path: ["reentrant"],
+              args: [],
+            });
+            expect(onMessage).not.toHaveBeenCalled();
+          }
+          return Result.ok(undefined);
+        },
+      },
+      handlers,
+      {
+        connectionId: "ready-reentrant-ingress",
+        direction: "outgoing",
+        localEndpointMeta: clientMeta,
+        connectionMeta: hostConnectionMeta,
+        nextMessageId: () => 1,
+      },
+    );
+    await connection.initiateHandshake();
+    await connection.safeHandleMessage({
+      type: NexusMessageType.HANDSHAKE_ACK,
+      id: 1,
+      metadata: hostMeta,
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
+    });
+
+    await inbound;
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(
+      connection,
+      expect.objectContaining({ type: NexusMessageType.APPLY, id: 99 }),
+    );
+    connection.close();
+  });
+
+  it("closes when the pre-ready outbound FIFO exceeds its item bound", async () => {
+    const onClosed = vi.fn();
+    const connection = new LogicalConnection<TestAdapterModel>(
+      {
+        close: () => Result.ok(undefined),
+        sendMessage: async () => Result.ok(undefined),
+      },
+      {
+        onAttached: () => Result.ok(undefined),
+        onReady: () => Result.ok(undefined),
+        onClosed,
+        onMessage: vi.fn(),
+      },
+      {
+        connectionId: "outbound-fifo-overflow",
+        direction: "incoming",
+        localEndpointMeta: hostMeta,
+        connectionMeta: clientConnectionMeta,
+        nextMessageId: () => 1,
+      },
+    );
+
+    const queued = Array.from({ length: 1024 }, (_, id) =>
+      connection.sendMessage({
+        type: NexusMessageType.RES,
+        id,
+        result: null,
+      }),
+    );
+    expect(onClosed).not.toHaveBeenCalled();
+    const overflow = connection.sendMessage({
+      type: NexusMessageType.RES,
+      id: 1024,
+      result: null,
+    });
+    const [overflowResult, ...queuedResults] = await Promise.all([
+      overflow,
+      ...queued,
+    ]);
+
+    expect(onClosed).toHaveBeenCalledOnce();
+    expect(queuedResults.every((result) => result.isErr())).toBe(true);
+    expect(overflowResult.isErr()).toBe(true);
+    if (overflowResult.isErr())
+      expect(overflowResult.error.context).toMatchObject({
+        code: "E_TRANSPORT_CAPACITY",
+      });
+  });
+
+  it("rejects staged ingress when native READY submission fails", async () => {
+    let connection!: LogicalConnection<TestAdapterModel>;
+    let inbound!: Promise<Result<void, Error>>;
+    const onMessage = vi.fn();
+    const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+      onAttached: () => Result.ok(undefined),
+      onReady: () => Result.ok(undefined),
+      onClosed: vi.fn(),
+      onMessage,
+      authorize: vi.fn().mockResolvedValue(true),
+    };
+    connection = new LogicalConnection(
+      {
+        close: () => Result.ok(undefined),
+        sendMessage: (message) => {
+          if (message.type === NexusMessageType.HANDSHAKE_READY) {
+            inbound = connection.safeHandleMessage({
+              type: NexusMessageType.APPLY,
+              id: 102,
+              resourceId: null,
+              path: ["reentrant"],
+              args: [],
+            });
+            return Promise.resolve(
+              Result.err(new Error("READY submit failed")),
+            );
+          }
+          return Result.ok(undefined);
+        },
+      },
+      handlers,
+      {
+        connectionId: "ready-reentrant-failure",
+        direction: "outgoing",
+        localEndpointMeta: clientMeta,
+        connectionMeta: hostConnectionMeta,
+        nextMessageId: () => 1,
+      },
+    );
+    await connection.initiateHandshake();
+    await connection.safeHandleMessage({
+      type: NexusMessageType.HANDSHAKE_ACK,
+      id: 1,
+      metadata: hostMeta,
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
+    });
+
+    const result = await inbound;
+    expect(result.isErr()).toBe(true);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(connection.isReady()).toBe(false);
+    expect(handlers.onClosed).toHaveBeenCalledOnce();
+  });
+
+  it("closes when reentrant READY ingress exceeds the fixed item bound", async () => {
+    let connection!: LogicalConnection<TestAdapterModel>;
+    const onMessage = vi.fn();
+    const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+      onAttached: () => Result.ok(undefined),
+      onReady: () => Result.ok(undefined),
+      onClosed: vi.fn(),
+      onMessage,
+      authorize: vi.fn().mockResolvedValue(true),
+    };
+    connection = new LogicalConnection(
+      {
+        close: () => Result.ok(undefined),
+        sendMessage: (message) => {
+          if (message.type === NexusMessageType.HANDSHAKE_READY)
+            for (let id = 0; id < 257; id++)
+              void connection.safeHandleMessage({
+                type: NexusMessageType.APPLY,
+                id,
+                resourceId: null,
+                path: ["reentrant"],
+                args: [],
+              });
+          return Result.ok(undefined);
+        },
+      },
+      handlers,
+      {
+        connectionId: "ready-ingress-overflow",
+        direction: "outgoing",
+        localEndpointMeta: clientMeta,
+        connectionMeta: hostConnectionMeta,
+        nextMessageId: () => 1,
+      },
+    );
+    await connection.initiateHandshake();
+    await connection.safeHandleMessage({
+      type: NexusMessageType.HANDSHAKE_ACK,
+      id: 1,
+      metadata: hostMeta,
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
+    });
+
+    expect(connection.isReady()).toBe(false);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(handlers.onClosed).toHaveBeenCalledOnce();
+  });
+
+  it("closes when reentrant READY ingress exceeds the fixed byte bound", async () => {
+    let connection!: LogicalConnection<TestAdapterModel>;
+    const handlers: LogicalConnectionHandlers<TestAdapterModel> = {
+      onAttached: () => Result.ok(undefined),
+      onReady: () => Result.ok(undefined),
+      onClosed: vi.fn(),
+      onMessage: vi.fn(),
+      authorize: vi.fn().mockResolvedValue(true),
+    };
+    connection = new LogicalConnection(
+      {
+        close: () => Result.ok(undefined),
+        sendMessage: (message) => {
+          if (message.type === NexusMessageType.HANDSHAKE_READY)
+            void connection.safeHandleMessage({
+              type: NexusMessageType.APPLY,
+              id: 5,
+              resourceId: null,
+              path: ["reentrant"],
+              args: ["x".repeat(1024 * 1024 + 1)],
+            });
+          return Result.ok(undefined);
+        },
+      },
+      handlers,
+      {
+        connectionId: "ready-ingress-byte-overflow",
+        direction: "outgoing",
+        localEndpointMeta: clientMeta,
+        connectionMeta: hostConnectionMeta,
+        nextMessageId: () => 1,
+      },
+    );
+    await connection.initiateHandshake();
+    await connection.safeHandleMessage({
+      type: NexusMessageType.HANDSHAKE_ACK,
+      id: 1,
+      metadata: hostMeta,
+      capabilities: ["provider-catalog-v1", "resource-scope-v1"],
+    });
+
+    expect(connection.isReady()).toBe(false);
+    expect(handlers.onMessage).not.toHaveBeenCalled();
+    expect(handlers.onClosed).toHaveBeenCalledOnce();
   });
 
   it("owns timeout and late processor disposal without a manager", async () => {
@@ -773,6 +1017,7 @@ describe("LogicalConnection", () => {
             });
         };
         const calls: Array<Promise<Result<void, Error>>> = [];
+        let pendingHandshake: Promise<Result<void, Error>> | undefined;
         const receive = () => {
           for (const id of [10, 11])
             calls.push(
@@ -823,16 +1068,17 @@ describe("LogicalConnection", () => {
             metadata: hostMeta,
             capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
-          connection.publishProviders(["service"]);
+          await connection.publishProviders(["service"]);
           await connection.safeHandleMessage({
             type: NexusMessageType.HANDSHAKE_READY,
             id: 1,
             capabilities: ["provider-catalog-v1", "resource-scope-v1"],
           });
         } else {
-          connection.initiateHandshake();
-          if (phase === "activating") connection.publishProviders(["service"]);
-          await connection.safeHandleMessage({
+          await connection.initiateHandshake();
+          if (phase === "activating")
+            await connection.publishProviders(["service"]);
+          pendingHandshake = connection.safeHandleMessage({
             type: NexusMessageType.HANDSHAKE_ACK,
             id: 1,
             metadata: hostMeta,
@@ -842,12 +1088,15 @@ describe("LogicalConnection", () => {
         if (phase === "publishing") receive();
         if (phase !== "passive activation") expect(events).toEqual([]);
         await vi.advanceTimersByTimeAsync(0);
+        await pendingHandshake;
         if (outcome === "success") {
+          await vi.waitFor(() => expect(events).toContain("rpc:10"));
+          finishCall();
+          await Promise.all(calls);
           expect(events[0]).toBe("published");
           expect(events.slice(1)).toEqual(
             expect.arrayContaining(["rpc:10", "rpc:11", "rpc:12"]),
           );
-          finishCall();
         } else {
           expect(events).toEqual([]);
           expect(connection.isReady()).toBe(false);
@@ -1062,7 +1311,7 @@ describe("LogicalConnection", () => {
     });
     expect(clientConnection.remoteProviders.size).toBe(0);
     expect(
-      clientConnection.sendMessage({
+      await clientConnection.sendMessage({
         type: NexusMessageType.IDENTITY_UPDATE,
         id: null,
         updates: {},
@@ -1206,7 +1455,7 @@ describe("LogicalConnection", () => {
         },
       );
 
-      expect(connection.initiateHandshake().isOk()).toBe(true);
+      expect((await connection.initiateHandshake()).isOk()).toBe(true);
       await connection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
@@ -1218,21 +1467,19 @@ describe("LogicalConnection", () => {
         expect.objectContaining({ type: NexusMessageType.HANDSHAKE_READY }),
       );
       expect(connection.isReady()).toBe(true);
-      expect(handlers.onReady).not.toHaveBeenCalled();
+      expect(handlers.onReady).toHaveBeenCalledOnce();
       const response = {
         type: NexusMessageType.RES,
         id: 2,
         result: "queued",
       } as const;
-      expect(connection.sendMessage(response).isOk()).toBe(true);
-      expect(sent).not.toContain(response);
-      await vi.waitFor(() => expect(handlers.onReady).toHaveBeenCalledOnce());
+      expect((await connection.sendMessage(response)).isOk()).toBe(true);
       expect(sent.at(-1)).toBe(response);
     });
 
     it("merges authorized handshake catalogs monotonically", async () => {
       (mockHostHandlers.authorize as Mock).mockResolvedValue(true);
-      expect(clientConnection.initiateHandshake().isOk()).toBe(true);
+      expect((await clientConnection.initiateHandshake()).isOk()).toBe(true);
 
       await vi.waitFor(() => {
         expect(clientConnection.isReady()).toBe(true);
@@ -1286,15 +1533,16 @@ describe("LogicalConnection", () => {
 
       try {
         const reqBeforeAck = createConnection();
-        reqBeforeAck.initiateHandshake();
-        reqBeforeAck.publishProviders(["req.provider"]);
-        await reqBeforeAck.safeHandleMessage({
+        await reqBeforeAck.initiateHandshake();
+        await reqBeforeAck.publishProviders(["req.provider"]);
+        const ackHandling = reqBeforeAck.safeHandleMessage({
           type: NexusMessageType.HANDSHAKE_ACK,
           id: 1,
           metadata: hostMeta,
           capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
         await vi.advanceTimersByTimeAsync(0);
+        await ackHandling;
         expect(sent).toContainEqual(
           expect.objectContaining({
             type: NexusMessageType.PROVIDER_AVAILABLE,
@@ -1326,7 +1574,7 @@ describe("LogicalConnection", () => {
           metadata: clientMeta,
           capabilities: ["provider-catalog-v1", "resource-scope-v1"],
         });
-        ackBeforeReady.publishProviders(["ack.provider"]);
+        await ackBeforeReady.publishProviders(["ack.provider"]);
         await ackBeforeReady.safeHandleMessage({
           type: NexusMessageType.HANDSHAKE_READY,
           id: 1,
@@ -1340,9 +1588,9 @@ describe("LogicalConnection", () => {
         );
 
         sent.length = 0;
-        expect(reqBeforeAck.publishProviders(["ready.provider"]).isOk()).toBe(
-          true,
-        );
+        expect(
+          (await reqBeforeAck.publishProviders(["ready.provider"])).isOk(),
+        ).toBe(true);
         expect(sent).toEqual([
           expect.objectContaining({
             type: NexusMessageType.PROVIDER_AVAILABLE,
@@ -1386,7 +1634,9 @@ describe("LogicalConnection", () => {
         metadata: hostMeta,
         capabilities: ["provider-catalog-v1", "resource-scope-v1"],
       });
-      expect(connection.publishProviders(["service.queued"]).isOk()).toBe(true);
+      expect(
+        (await connection.publishProviders(["service.queued"])).isOk(),
+      ).toBe(true);
 
       await connection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_READY,
@@ -1469,7 +1719,7 @@ describe("LogicalConnection", () => {
     it("rejects an ACK from a peer without provider-catalog-v1", async () => {
       (mockClientHandlers.authorize as Mock).mockResolvedValue(false);
 
-      expect(clientConnection.initiateHandshake().isOk()).toBe(true);
+      expect((await clientConnection.initiateHandshake()).isOk()).toBe(true);
       await clientConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
@@ -1487,7 +1737,7 @@ describe("LogicalConnection", () => {
     it("rejects an ACK from a peer without resource-scope-v1", async () => {
       (mockClientHandlers.authorize as Mock).mockResolvedValue(false);
 
-      expect(clientConnection.initiateHandshake().isOk()).toBe(true);
+      expect((await clientConnection.initiateHandshake()).isOk()).toBe(true);
       await clientConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
@@ -1567,7 +1817,7 @@ describe("LogicalConnection", () => {
         sentByClient,
         denyingHandlers(),
       );
-      expect(outgoing.initiateHandshake().isOk()).toBe(true);
+      expect((await outgoing.initiateHandshake()).isOk()).toBe(true);
       await outgoing.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: 1,
@@ -1590,7 +1840,7 @@ describe("LogicalConnection", () => {
     });
 
     it("preserves a remote incompatible rejection's structured cause", async () => {
-      expect(clientConnection.initiateHandshake().isOk()).toBe(true);
+      expect((await clientConnection.initiateHandshake()).isOk()).toBe(true);
       await clientConnection.safeHandleMessage({
         type: NexusMessageType.HANDSHAKE_REJECT,
         id: 1,
@@ -1706,7 +1956,7 @@ describe("LogicalConnection", () => {
     it("should ignore active HANDSHAKE_ACK with the wrong handshake id", async () => {
       (mockClientHandlers.authorize as Mock).mockResolvedValue(true);
 
-      const startResult = clientConnection.initiateHandshake();
+      const startResult = await clientConnection.initiateHandshake();
       expect(startResult.isOk()).toBe(true);
 
       const wrongAck = await clientConnection.safeHandleMessage({
@@ -2037,7 +2287,6 @@ describe("LogicalConnection", () => {
           createMockPortPair()[0],
           JsonSerializer.serializer,
           { onLogicalMessage: vi.fn(), onDisconnect: vi.fn() },
-          { chunkSize: Infinity },
         ),
         mockClientHandlers,
         {

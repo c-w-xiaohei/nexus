@@ -78,6 +78,24 @@ description: 配置本地守护进程与客户端之间的 Nexus 进程间通信
 
 适配器和真实套接字的集成测试指导见[测试](/nexus/docs/node-ipc/testing/)。
 
+## 传输限额 [#transport-limits]
+
+Node IPC 固定使用二进制数据包。守护进程和客户端 helper 接受 `transport` 选项，
+用于设置帧、消息和框架聚合缓冲限额；默认值分别为 64 KiB、16 MiB 和 64 MiB：
+
+```ts
+usingNodeIpcDaemon({
+  appId: "example-app",
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```
+
+配置的帧上限不能超过 IPC 分帧协议的消息上限。
+
 ## 相关页面 [#related-pages]
 
 - 产品文档首页：[Nexus 文档](/nexus/docs/)

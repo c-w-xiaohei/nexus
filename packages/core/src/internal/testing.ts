@@ -53,7 +53,7 @@ export const createInMemoryServiceProxy = <
     resourceManager: resources,
     pendingCalls: pending,
     payloadProcessor: payloads,
-    safeSendMessage: () => Result.ok(undefined),
+    safeSendMessage: async () => Result.ok(undefined),
     dispatchRelease: (id) => resources.releaseLocalResource(id),
   });
   const requests = new MessageHandler({
@@ -74,7 +74,7 @@ export const createInMemoryServiceProxy = <
       releaseOrphanedResponseResources: (...args) =>
         payloads.releaseOrphanedResponseResources(...args),
     },
-    safeSendMessage: (message, source) => {
+    safeSendMessage: async (message, source) => {
       void replies.safeHandleMessage(message, source, scope);
       return Result.ok(undefined);
     },
@@ -89,11 +89,11 @@ export const createInMemoryServiceProxy = <
     isConnectionReady: () => connection.status === "connected",
     pendingCallManager: pending,
     payloadProcessor: {
-      safeSanitize: (args) => Result.ok(args),
+      safeSanitize: async (args) => Result.ok(args),
       // Shared-memory arguments allocate no outgoing capabilities.
       releaseSanitizedResources: () => {},
     },
-    safeSendMessage: (message, source) => {
+    safeSendMessage: async (message, source) => {
       void requests.safeHandleMessage(message, source, scope).then((result) => {
         if (result.isErr() && message.id !== null)
           pending.fail(message.id, result.error);

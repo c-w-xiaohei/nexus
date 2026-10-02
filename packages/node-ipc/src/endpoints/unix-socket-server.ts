@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { IEndpoint, IPort } from "@nexus-js/core";
+import type {
+  ResolvedTransportConfig,
+  TransportLimits,
+} from "@nexus-js/core/transport/config";
 import { Result } from "better-result";
 import { safeParse } from "valibot";
 import { AuthRequestSchema, type AuthAck } from "../auth-protocol.js";
 import { NodeIpcError } from "../errors.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import { NodeIpcAddress, type NodeIpcSocketAddress } from "../types/address.js";
+import { resolveNodeIpcTransport } from "../transport-config.js";
 import type {
   NodeIpcAdapterModel,
   NodeIpcConnectionMeta,
@@ -36,6 +41,7 @@ const createCapabilities = (): EndpointCapabilities => {
 
 export class UnixSocketServerEndpoint implements IEndpoint<NodeIpcAdapterModel> {
   readonly capabilities = createCapabilities();
+  readonly config: Readonly<ResolvedTransportConfig>;
   private server: net.Server | undefined;
   private readonly sockets = new Set<net.Socket>();
 
@@ -45,9 +51,11 @@ export class UnixSocketServerEndpoint implements IEndpoint<NodeIpcAdapterModel> 
     private readonly options: {
       authTimeoutMs?: number;
       maxAuthLineBytes?: number;
+      transport?: TransportLimits;
     } = {},
   ) {
     validateAuthToken(authToken);
+    this.config = resolveNodeIpcTransport(options.transport);
   }
 
   async listen(

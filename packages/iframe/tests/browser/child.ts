@@ -3,6 +3,7 @@ import { usingIframeChild, type IframeAdapterModel } from "@nexus-js/iframe";
 
 interface EchoService {
   echo(value: string): Promise<string>;
+  echoBinary(value: Uint8Array | ArrayBuffer | Blob): Promise<unknown>;
 }
 
 interface ParentEchoService {
@@ -88,6 +89,9 @@ const bootstrapChild = () => {
       parentOrigin: "http://127.0.0.1:3210",
       nonce: `browser-nonce-${frameId}`,
       heartbeat: { intervalMs: 100, maxMisses: 2 },
+      ...(query.get("packetMode") === "json"
+        ? { transport: { binaryPackets: true } }
+        : {}),
       ...(connectToMode
         ? {
             connectTo: [
@@ -106,6 +110,16 @@ const bootstrapChild = () => {
         service: {
           async echo(value: string) {
             return `child:${frameId}:${value}`;
+          },
+          async echoBinary(value: Uint8Array | ArrayBuffer | Blob) {
+            if (value instanceof Blob)
+              return {
+                bytes: Array.from(new Uint8Array(await value.arrayBuffer())),
+                type: value.type,
+              };
+            if (value instanceof ArrayBuffer)
+              return Array.from(new Uint8Array(value));
+            return Array.from(value);
           },
         },
       },

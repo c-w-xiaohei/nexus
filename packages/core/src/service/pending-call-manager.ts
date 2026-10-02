@@ -23,6 +23,7 @@ type PendingCall = {
   timeout: number;
   timer: ReturnType<typeof setTimeout>;
   resolve(result: Result<any, NexusCallError>): void;
+  onSettled?: (result: Result<any, NexusCallError>) => void;
 };
 
 /** Each request belongs to exactly one session. Late replies are handled as orphans. */
@@ -32,7 +33,12 @@ export class PendingCallManager {
   /** Reserve a response slot and start the deadline that owns its failure. */
   register(
     id: MessageId,
-    options: { connectionId: string; timeout: number; scope?: ResourceScope },
+    options: {
+      connectionId: string;
+      timeout: number;
+      scope?: ResourceScope;
+      onSettled?: (result: Result<any, NexusCallError>) => void;
+    },
   ): Promise<Result<any, NexusCallError>> {
     return new Promise((resolve) => {
       const timer = setTimeout(
@@ -157,6 +163,7 @@ export class PendingCallManager {
     if (!pending) return;
     this.calls.delete(id);
     clearTimeout(pending.timer);
+    pending.onSettled?.(result);
     pending.resolve(result);
   }
 }

@@ -94,7 +94,9 @@ describe("VirtualPortRouter", () => {
       { onLogicalMessage: vi.fn(), onDisconnect: clientDisconnect },
     );
 
-    expect(clientProcessor.sendMessage(sampleMessage).isOk()).toBe(true);
+    expect((await clientProcessor.sendMessage(sampleMessage)).isOk()).toBe(
+      true,
+    );
     expect(serverMessages).toHaveBeenCalledWith(sampleMessage);
 
     expect(connectResult.close()).toBeUndefined();
@@ -227,7 +229,7 @@ describe("VirtualPortRouter", () => {
     bus.left.send.mockImplementation(() => {
       throw new Error("data failed");
     });
-    expect(processor.sendMessage(sampleMessage)).toMatchObject({
+    await expect(processor.sendMessage(sampleMessage)).resolves.toMatchObject({
       error: { code: "E_PROTOCOL_ERROR" },
     });
     client.safeClose();

@@ -53,6 +53,22 @@ export interface DocumentReference {
   label(): Promise<string>;
 }
 
+export interface BinaryImageService {
+  getImage(): Promise<{
+    readonly bytes: Uint8Array;
+    readonly mimeType: string;
+  }>;
+  upload(
+    file: Blob,
+    callback: (sha256: string) => Promise<string>,
+  ): Promise<{
+    readonly sha256: string;
+    readonly callbackResult: string;
+    readonly mimeType: string;
+  }>;
+  hold(): Promise<string>;
+}
+
 export interface SessionService {
   session(): Promise<string>;
 }
@@ -208,6 +224,9 @@ export const WorkspaceToken = new Token<WorkspaceService>(
 );
 export const DocumentToolToken = new Token<DocumentToolService>(
   "nexus-e2e:document-tool",
+);
+export const BinaryImageToken = new Token<BinaryImageService>(
+  "nexus-e2e:binary-image",
 );
 export const DocumentRelayToken = new Token<DocumentRelayService>(
   "nexus-e2e:document-relay",

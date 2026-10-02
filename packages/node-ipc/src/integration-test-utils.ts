@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { Nexus, Token } from "@nexus-js/core";
 import type { NexusInstance } from "@nexus-js/core";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory.js";
 import { UnixSocketServerEndpoint } from "./endpoints/unix-socket-server.js";
 import type { NodeIpcSocketAddress } from "./types/address.js";
 import type { NodeIpcAdapterModel } from "./types/meta.js";
 
 export type EchoService = {
-  echo(input: string): string;
+  echo(input: string | Uint8Array): string | Uint8Array;
   fail?(message: string): void;
 };
 
@@ -20,6 +21,7 @@ export type TestHarness = {
   address: NodeIpcSocketAddress;
   startDaemon(options?: {
     authToken?: string;
+    transport?: TransportLimits;
     policy?: Parameters<typeof usingNodeIpcDaemon>[0]["policy"];
     service?: EchoService;
   }): Promise<{
@@ -28,6 +30,7 @@ export type TestHarness = {
   }>;
   createClient(options?: {
     authToken?: string;
+    transport?: TransportLimits;
     policy?: Parameters<typeof usingNodeIpcClient>[0]["policy"];
     resolveAddress?: Parameters<typeof usingNodeIpcClient>[0]["resolveAddress"];
     onEndpointCreated?(endpoint: object): void;
@@ -46,13 +49,20 @@ export async function createHarness(): Promise<TestHarness> {
     root,
     address,
     async startDaemon(options = {}) {
-      const endpoint = new UnixSocketServerEndpoint(address, options.authToken);
+      const endpoint = new UnixSocketServerEndpoint(
+        address,
+        options.authToken,
+        {
+          transport: options.transport,
+        },
+      );
       const daemon = new Nexus<NodeIpcAdapterModel>();
       const config = {
         ...usingNodeIpcDaemon({
           appId: "test-daemon",
           address,
           authToken: options.authToken,
+          transport: options.transport,
           configure: false,
           policy: options.policy,
           providers: [
@@ -61,7 +71,7 @@ export async function createHarness(): Promise<TestHarness> {
               service:
                 options.service ??
                 ({
-                  echo: (input: string) => input,
+                  echo: (input: string | Uint8Array) => input,
                 } satisfies EchoService),
             },
           ],
@@ -92,6 +102,7 @@ export async function createHarness(): Promise<TestHarness> {
       const config = usingNodeIpcClient({
         appId: `test-client-${Math.random().toString(16).slice(2)}`,
         authToken: options.authToken,
+        transport: options.transport,
         configure: false,
         policy: options.policy,
         resolveAddress: options.resolveAddress ?? (() => address),

@@ -201,4 +201,24 @@ gates, heartbeat, reload, and element replacement.
 
 Iframe endpoints advertise binary Nexus transport packets and transferable support by default. This lets core serialize internal transport packets to `ArrayBuffer` and pass that buffer in the browser `postMessage` transfer list when both sides support it.
 
-This only affects Nexus internal transport packets. It does not transfer, move, or detach user RPC payload objects by API contract. Set `binaryPackets: false` on both parent and child endpoint options only when an environment cannot handle binary packet transport.
+This only affects Nexus internal transport packets. User RPC binary values use
+the ordinary value-serialization path and are not transferred, moved, or detached.
+Configure limits under `transport` on either endpoint/helper:
+
+```ts
+usingIframeParent({
+  appId: "iframe-demo",
+  frames: [{ frameId: "preview", iframe, origin: "https://child.example.com" }],
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+    binaryPackets: true,
+  },
+});
+```
+
+These limits default to the values shown. `binaryPackets` is a packet-format
+preference, not a switch for user binary values. The endpoints select binary
+packets only when both support them; if either sets `binaryPackets: false`, the
+connection uses JSON packets. Set this preference only under `transport`.

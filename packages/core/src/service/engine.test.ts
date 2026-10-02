@@ -103,7 +103,7 @@ describe("Engine", () => {
     );
     const send = vi
       .spyOn(clientManager, "safeSendMessage")
-      .mockReturnValue(Result.err(error));
+      .mockResolvedValue(Result.err(error));
     const warn = vi
       .spyOn(Logger.prototype, "warn")
       .mockImplementation(() => {});
@@ -117,12 +117,14 @@ describe("Engine", () => {
       },
       clientConnectionId,
     );
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(`to ${clientConnectionId}.`),
-      expect.objectContaining({
-        code: "E_CONN_CLOSED",
-        message: error.message,
-      }),
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`to ${clientConnectionId}.`),
+        expect.objectContaining({
+          code: "E_CONN_CLOSED",
+          message: error.message,
+        }),
+      ),
     );
     await expect(resource.run()).rejects.toMatchObject({
       code: "E_RESOURCE_ACCESS_DENIED",

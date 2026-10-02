@@ -4,6 +4,10 @@ interface BrowserHarness {
   callConnectToSelectedChild(value: string): Promise<string>;
   callCachedChildEcho(frameId: string, value: string): Promise<string>;
   callChildEcho(frameId: string, value: string): Promise<string>;
+  callChildBinary(
+    frameId: string,
+    value: Uint8Array | ArrayBuffer | Blob,
+  ): Promise<unknown>;
   getTelemetry(): {
     parentCalls: Array<{ frameId: string; value: string }>;
     childCalls: Array<{ frameId: string; value: string }>;
@@ -374,6 +378,50 @@ test("uses binary ArrayBuffer transport packets across cross-origin iframe RPC",
     parentBefore.binaryDataEnvelopes,
   );
 });
+
+for (const mode of ["binary", "json-parent-binary-child"] as const) {
+  test(`preserves user binary values and source buffers across iframe RPC (${mode})`, async ({
+    page,
+  }) => {
+    await page.goto(
+      mode === "binary" ? "/parent.html" : "/parent.html?packetMode=json",
+    );
+    await waitForLoadedFrames(page);
+
+    const result = await page.evaluate(async () => {
+      const backing = new Uint8Array([90, 3, 7, 11, 255, 91]);
+      const source = backing.subarray(1, 5);
+      const sourceBuffer = source.buffer as ArrayBuffer;
+      const echoedView = await (
+        window as unknown as BrowserHarness
+      ).callChildBinary("alpha", source);
+      const echoedArrayBuffer = await (
+        window as unknown as BrowserHarness
+      ).callChildBinary("alpha", sourceBuffer);
+      const blob = new Blob([source], { type: "application/x-iframe-test" });
+      const echoedBlob = await (
+        window as unknown as BrowserHarness
+      ).callChildBinary("alpha", blob);
+
+      return {
+        sourceBufferByteLength: sourceBuffer.byteLength,
+        sourceBytes: Array.from(source),
+        echoedView,
+        echoedArrayBuffer,
+        echoedBlob,
+      };
+    });
+
+    expect(result.sourceBufferByteLength).toBe(6);
+    expect(result.sourceBytes).toEqual([3, 7, 11, 255]);
+    expect(result.echoedView).toEqual([3, 7, 11, 255]);
+    expect(result.echoedArrayBuffer).toEqual([90, 3, 7, 11, 255, 91]);
+    expect(result.echoedBlob).toEqual({
+      bytes: [3, 7, 11, 255],
+      type: "application/x-iframe-test",
+    });
+  });
+}
 
 test("child iframe calls a parent Nexus service with frame routing metadata", async ({
   page,

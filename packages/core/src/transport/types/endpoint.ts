@@ -5,9 +5,13 @@ import type {
   ContextMetaOf,
 } from "@/types/adapter-model";
 import type { IPort } from "./port";
+import type { ResolvedTransportConfig } from "../transport-config";
 
 /** The adapter seam: connect one target and match only ready connections. */
 export interface IEndpoint<M extends AdapterModel> {
+  readonly config?: Readonly<ResolvedTransportConfig>;
+  /** Bootstrap handshakes as JSON before the session selects its packet mode. */
+  readonly bootstrapJson?: boolean;
   listen?(
     accept: (port: IPort, connectionMeta: ConnectionMetaOf<M>) => void,
   ): void | Promise<unknown>;
@@ -23,7 +27,7 @@ export interface IEndpoint<M extends AdapterModel> {
     connectionMeta: ConnectionMetaOf<M>,
   ): boolean;
   close?(): void | Promise<void>;
-  capabilities?: {
+  readonly capabilities?: {
     binaryPackets?: boolean;
     transferables?: boolean;
     supportsTransferables?: boolean;

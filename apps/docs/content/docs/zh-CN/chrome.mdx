@@ -184,3 +184,19 @@ const outcomes = await Promise.allSettled(
 `usingOffscreenDocument({ reason })` 只配置 Nexus，不创建页面。类似地，
 `runtime.openOptionsPage()`、Popup 创建、Side Panel 激活和 DevTools 打开都是独立的
 生命周期操作；target acquisition 不会执行这些操作。
+
+## 传输限额 [#transport-limits]
+
+Chrome 使用 JSON 数据包，并以 Base64 编码二进制附件。适配器支持用户 RPC 二进制值，
+但不开放 `binaryPackets` 配置。可通过 helper 的 `transport` 选项配置帧、消息和聚合缓冲限额；
+默认值分别为 64 KiB、16 MiB 和 64 MiB：
+
+```ts
+usingBackgroundScript({
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```

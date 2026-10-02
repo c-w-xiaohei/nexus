@@ -18,7 +18,9 @@ async function createSocket() {
   const host = await createRawWebSocketHost(() => {});
   cleanup.push(host.close);
   const socket = await openWs(host.url);
-  vi.spyOn(socket, "send").mockImplementation(() => {});
+  vi.spyOn(socket, "send").mockImplementation((_message, callback: unknown) => {
+    if (typeof callback === "function") callback();
+  });
   vi.spyOn(socket, "terminate");
   return socket;
 }
@@ -31,13 +33,181 @@ function deliver(
 }
 
 const limits = {
-  maxPayloadBytes: 16,
+  config: {
+    binaryPackets: true,
+    maxFrameBytes: 16,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
   maxBufferedAmountBytes: 16,
   maxEarlyPackets: 3,
   maxEarlyBytes: 16,
 };
 
 describe("WebSocket Port adoption lifecycle", () => {
+  it("waits for bufferedAmount to fall below the socket high-water mark", async () => {
+    const socket = await createSocket();
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    let bufferedAmount = 16;
+    Object.defineProperty(socket, "bufferedAmount", {
+      configurable: true,
+      get: () => bufferedAmount,
+    });
+    const controller = new globalThis.AbortController();
+    const sent = port.postMessage(
+      new ArrayBuffer(1),
+      undefined,
+      controller.signal,
+    );
+
+    expect(socket.send).not.toHaveBeenCalled();
+    globalThis.setTimeout(() => {
+      bufferedAmount = 0;
+    }, 20);
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+    await expect(sent).resolves.toBeUndefined();
+    expect(socket.terminate).not.toHaveBeenCalled();
+    port.close();
+  });
+
+  it("releases a high-water wait when aborted without closing the socket", async () => {
+    const socket = await createSocket();
+    Object.defineProperty(socket, "bufferedAmount", { value: 16 });
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    const controller = new globalThis.AbortController();
+    const sent = port.postMessage(
+      new ArrayBuffer(1),
+      undefined,
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(sent).rejects.toMatchObject({ code: "E_TRANSFER_CANCELLED" });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
+    port.close();
+  });
+
+  it("rejects a high-water wait when the native socket closes", async () => {
+    const socket = await createSocket();
+    Object.defineProperty(socket, "bufferedAmount", { value: 16 });
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    const sent = port.postMessage(new ArrayBuffer(1));
+    socket.terminate();
+
+    await expect(sent).rejects.toMatchObject({
+      code: "E_WEBSOCKET_PORT_CLOSED",
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it("settles queued aborts immediately and preserves FIFO for remaining sends", async () => {
+    const socket = await createSocket();
+    const callbacks: Array<(error?: Error) => void> = [];
+    vi.mocked(socket.send).mockImplementation((_message, callback: unknown) => {
+      if (typeof callback === "function")
+        callbacks.push(callback as (error?: Error) => void);
+    });
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    const first = port.postMessage(new ArrayBuffer(10));
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+
+    const controller = new globalThis.AbortController();
+    const cancelled = port.postMessage(
+      new ArrayBuffer(6),
+      undefined,
+      controller.signal,
+    );
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({
+      code: "E_TRANSFER_CANCELLED",
+    });
+
+    const third = port.postMessage(new ArrayBuffer(6));
+    expect(socket.send).toHaveBeenCalledOnce();
+    callbacks[0]!();
+    await first;
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledTimes(2));
+    expect(
+      vi
+        .mocked(socket.send)
+        .mock.calls.map(([packet]) =>
+          packet instanceof ArrayBuffer ? packet.byteLength : -1,
+        ),
+    ).toEqual([10, 6]);
+    callbacks[1]!();
+    await third;
+    port.close();
+  });
+
+  it("settles in-flight Node sends on abort and ignores stale callbacks", async () => {
+    const socket = await createSocket();
+    const callbacks: Array<(error?: Error) => void> = [];
+    vi.mocked(socket.send).mockImplementation((_message, callback: unknown) => {
+      if (typeof callback === "function")
+        callbacks.push(callback as (error?: Error) => void);
+    });
+    const terminal = vi.fn();
+    const port = new WebSocketPort(socket, limits, terminal);
+    const controller = new globalThis.AbortController();
+    const sent = port.postMessage(
+      new ArrayBuffer(1),
+      undefined,
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(sent).rejects.toMatchObject({
+      code: "E_TRANSFER_CANCELLED",
+    });
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(socket.listenerCount("error")).toBe(0);
+    expect(terminal).toHaveBeenCalledOnce();
+    callbacks[0]!();
+    expect(terminal).toHaveBeenCalledOnce();
+    port.close();
+  });
+
+  it("settles in-flight Node sends on close and ignores stale callbacks", async () => {
+    const socket = await createSocket();
+    const callbacks: Array<(error?: Error) => void> = [];
+    vi.mocked(socket.send).mockImplementation((_message, callback: unknown) => {
+      if (typeof callback === "function")
+        callbacks.push(callback as (error?: Error) => void);
+    });
+    const port = new WebSocketPort(socket, limits, vi.fn());
+    const sent = port.postMessage(new ArrayBuffer(1));
+    const rejected = sent.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+    const closed = waitForClose(socket);
+    socket.terminate();
+
+    expect(await rejected).toMatchObject({ code: "E_WEBSOCKET_PORT_CLOSED" });
+    await closed;
+    callbacks[0]!();
+    expect(socket.send).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an in-flight Node callback by deadline and removes its listeners", async () => {
+    const socket = await createSocket();
+    vi.mocked(socket.send).mockImplementation(() => {});
+    const options = { ...limits, sendTimeoutMs: 10 };
+    const port = new WebSocketPort(socket, options, vi.fn());
+    const closeListeners = socket.listenerCount("close");
+    const errorListeners = socket.listenerCount("error");
+
+    await expect(port.postMessage(new ArrayBuffer(1))).rejects.toMatchObject({
+      code: "E_TRANSPORT_CAPACITY",
+    });
+    expect(socket.listenerCount("close")).toBe(closeListeners - 1);
+    expect(socket.listenerCount("error")).toBe(errorListeners - 1);
+    port.close();
+  });
+
   it("normalizes binary views using their exact byte offset and length", async () => {
     const socket = await createSocket();
     const port = new WebSocketPort(socket, limits, vi.fn());
@@ -70,7 +240,7 @@ describe("WebSocket Port adoption lifecycle", () => {
     const port = new WebSocketPort(socket, limits, terminal);
     const handler = vi.fn();
     port.onMessage(handler);
-    deliver(socket, new Uint8Array(limits.maxPayloadBytes + 1));
+    deliver(socket, new Uint8Array(limits.config.maxFrameBytes + 1));
     expect(handler).not.toHaveBeenCalled();
     expect(terminal).toHaveBeenCalledOnce();
   });
@@ -160,12 +330,17 @@ describe("WebSocket Port adoption lifecycle", () => {
     const socket = await createSocket();
     const terminal = vi.fn();
     const port = new WebSocketPort(socket, limits, terminal);
-    Object.defineProperty(socket, "bufferedAmount", { value: 15 });
-    port.postMessage(new ArrayBuffer(1));
+    let bufferedAmount = 15;
+    Object.defineProperty(socket, "bufferedAmount", {
+      configurable: true,
+      get: () => bufferedAmount,
+    });
+    await port.postMessage(new ArrayBuffer(1));
     expect(socket.send).toHaveBeenCalledOnce();
-    port.postMessage(new ArrayBuffer(2));
-    expect(socket.send).toHaveBeenCalledOnce();
-    expect(terminal).toHaveBeenCalledOnce();
+    bufferedAmount = 0;
+    await port.postMessage(new ArrayBuffer(2));
+    expect(socket.send).toHaveBeenCalledTimes(2);
+    expect(terminal).not.toHaveBeenCalled();
 
     const failingSocket = await createSocket();
     vi.mocked(failingSocket.send).mockImplementation(
@@ -175,7 +350,11 @@ describe("WebSocket Port adoption lifecycle", () => {
     );
     const failed = vi.fn();
     const failingPort = new WebSocketPort(failingSocket, limits, failed);
-    failingPort.postMessage(new ArrayBuffer(1));
+    await expect(
+      failingPort.postMessage(new ArrayBuffer(1)),
+    ).rejects.toMatchObject({
+      code: "E_WEBSOCKET_PORT_CLOSED",
+    });
     expect(failed).toHaveBeenCalledOnce();
   });
 });

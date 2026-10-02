@@ -111,7 +111,7 @@ type Facts = {
 
 const endpoint = new WebSocketServerEndpoint<Facts>({
   maxConnections: 100,
-  maxPayloadBytes: 1_048_576,
+  transport: { maxFrameBytes: 1_048_576 },
 });
 const nexus = new Nexus<WebSocketAdapterModel<Facts>>();
 nexus.configure({
@@ -219,3 +219,22 @@ already executed but unanswered call is not replayed on a later connection.
 Use real WebSocket integration coverage for the host Upgrade path, adoption,
 policy, binary framing, resource limits, and shutdown. Use `createMockNexus()` only
 for application tests at the `NexusInstance` seam.
+
+### Transport Limits [#transport-limits]
+
+WebSocket always uses binary packets. Configure frame, message, and aggregate
+framework-buffer limits through `transport`; the defaults are 64 KiB, 16 MiB,
+and 64 MiB:
+
+```ts
+const endpoint = new WebSocketServerEndpoint({
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```
+
+`maxBufferedAmountBytes` is a separate native WebSocket send high-water
+threshold, not the framework's aggregate buffer budget.

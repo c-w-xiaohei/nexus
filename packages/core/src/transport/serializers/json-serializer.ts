@@ -5,6 +5,16 @@ import { NexusProtocolError } from "../../errors/transport-errors.js";
 import { toSerializedError } from "../../utils/error.js";
 import { Result } from "better-result";
 import { safeParse } from "valibot";
+import {
+  decodeJsonValues,
+  encodeJsonValues,
+  preflightCodecBytes,
+} from "./binary-values.js";
+import type { ByteReservationLease } from "../../service/payload/byte-reservation.js";
+import {
+  decodeBinaryValue,
+  isBinaryValue,
+} from "../../service/payload/binary-value.js";
 const { err, ok } = Result;
 
 export namespace JsonSerializer {
@@ -51,7 +61,7 @@ export namespace JsonSerializer {
 
     if (
       message.type === Message.NexusMessageType.CHUNK_DATA &&
-      message.chunkData instanceof ArrayBuffer
+      message.data instanceof ArrayBuffer
     ) {
       return err(
         new NexusProtocolError(
@@ -89,9 +99,14 @@ export namespace JsonSerializer {
     while (
       packet.length > 2 &&
       packet.at(-1) === undefined &&
-      ["scopeId", "timeoutMs", "hops", "target", "removed"].includes(
-        structure[packet.length - 1],
-      )
+      [
+        "scopeId",
+        "timeoutMs",
+        "hops",
+        "target",
+        "removed",
+        "detailCode",
+      ].includes(structure[packet.length - 1])
     )
       packet.pop();
     if (
@@ -283,15 +298,20 @@ export namespace JsonSerializer {
     key === "removed" ||
     key === "assigns" ||
     key === "capabilities" ||
-    key === "providers";
+    key === "providers" ||
+    key === "detailCode";
 
   export const safeSerialize = (
     logicalMessage: Message.NexusMessage,
+    options: { readonly lease?: ByteReservationLease } = {},
   ): Result<string, NexusProtocolError> => {
     try {
       return messageToPacketArray(logicalMessage).andThen((packetArray) => {
         try {
-          return ok(JSON.stringify(packetArray));
+          const estimate = preflightCodecBytes(packetArray);
+          if (options.lease && !options.lease.reserve(estimate))
+            throw new TypeError("Shared transport buffer capacity exceeded.");
+          return ok(JSON.stringify(encodeJsonValues(packetArray)));
         } catch (error) {
           return err(
             new NexusProtocolError(
@@ -324,12 +344,18 @@ export namespace JsonSerializer {
 
     let packetArray: any;
     try {
-      packetArray = JSON.parse(packet);
+      packetArray = decodeJsonValues(JSON.parse(packet));
+      if (
+        Array.isArray(packetArray) &&
+        packetArray[0] === Message.NexusMessageType.CHUNK_DATA &&
+        isBinaryValue(packetArray[4])
+      )
+        packetArray[4] = decodeBinaryValue(packetArray[4]);
     } catch (error) {
       return err(
         new NexusProtocolError(
           `Invalid JSON in packet: ${error instanceof Error ? error.message : String(error)}`,
-          { packet, originalError: error },
+          { packet, originalError: error, cause: toSerializedError(error) },
         ),
       );
     }

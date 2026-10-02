@@ -1,4 +1,6 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
+import { resolveTransportConfig } from "@nexus-js/core/transport/config";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import {
   NexusEndpointCapabilityError,
   NexusEndpointConnectError,
@@ -26,11 +28,16 @@ import {
  * Handles connections from content scripts, popups, and other extension contexts
  */
 export class BackgroundEndpoint implements IEndpoint<ChromeAdapterModel> {
+  readonly config;
   private stopListening?: () => void;
 
   capabilities = {
     supportsTransferables: false, // Chrome extension IPC doesn't support transferables
   };
+
+  constructor(options: { transport?: TransportLimits } = {}) {
+    this.config = resolveTransportConfig(options.transport, false);
+  }
 
   matchesTarget(
     target: ChromeConnectionTarget,

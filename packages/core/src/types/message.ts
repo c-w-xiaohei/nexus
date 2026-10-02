@@ -87,6 +87,8 @@ export enum NexusMessageType {
   // === Layer 1: Transport & Protocol ===
   CHUNK_START = 16,
   CHUNK_DATA = 17,
+  CHUNK_ACK = 18,
+  CHUNK_CANCEL = 19,
 }
 
 const AnyValueSchema: v.GenericSchema<any> = v.any();
@@ -94,6 +96,49 @@ const PathSchema = v.array(ErrorPathPartSchema);
 const CapabilitiesSchema: v.GenericSchema<readonly string[]> = v.pipe(
   v.array(v.string()),
   v.readonly(),
+);
+const PositiveSafeIntegerSchema = v.pipe(
+  v.number(),
+  v.integer(),
+  v.minValue(1),
+  v.maxValue(Number.MAX_SAFE_INTEGER),
+);
+const ReceiveLimitsSchema = v.strictObject({
+  maxFrameBytes: PositiveSafeIntegerSchema,
+  maxMessageBytes: PositiveSafeIntegerSchema,
+});
+const PacketModesSchema = v.pipe(
+  v.array(v.picklist(["json", "binary"])),
+  v.minLength(1),
+  v.maxLength(2),
+  v.check((modes) => new Set(modes).size === modes.length),
+);
+const HandshakeTransportSchema = v.strictObject({
+  version: v.literal(1),
+  receive: ReceiveLimitsSchema,
+  packetModes: PacketModesSchema,
+});
+export const CHUNKABLE_PACKET_TYPES = [
+  NexusMessageType.GET,
+  NexusMessageType.SET,
+  NexusMessageType.APPLY,
+  NexusMessageType.RES,
+  NexusMessageType.ERR,
+  NexusMessageType.RELEASE,
+  NexusMessageType.BATCH,
+  NexusMessageType.BATCH_RES,
+  NexusMessageType.IDENTITY_UPDATE,
+  NexusMessageType.PROVIDER_AVAILABLE,
+] as const;
+const ChunkablePacketKindSchema = v.picklist(CHUNKABLE_PACKET_TYPES);
+const HandshakeReadyTransportSchema = v.strictObject({
+  initiatorReceive: ReceiveLimitsSchema,
+  responderReceive: ReceiveLimitsSchema,
+  selectedPacketMode: v.picklist(["json", "binary"]),
+});
+const ChunkBytesSchema = v.pipe(
+  v.union([v.instance(Uint8Array), v.instance(ArrayBuffer)]),
+  v.check((data) => data.byteLength > 0),
 );
 // =============================================================================
 // Layer 3: RPC & Service Proxy Messages
@@ -241,6 +286,7 @@ export const HandshakeReqMessageSchema = v.object({
    */
   assigns: v.optional(AnyValueSchema),
   capabilities: v.optional(CapabilitiesSchema),
+  transport: HandshakeTransportSchema,
 });
 
 export type HandshakeReqMessage = v.InferOutput<
@@ -254,6 +300,7 @@ export const HandshakeAckMessageSchema = v.object({
   metadata: AnyValueSchema,
   capabilities: v.optional(CapabilitiesSchema),
   providers: v.optional(CapabilitiesSchema),
+  transport: HandshakeTransportSchema,
 });
 
 export type HandshakeAckMessage = v.InferOutput<
@@ -266,6 +313,7 @@ export const HandshakeReadyMessageSchema = v.object({
   id: MessageIdSchema,
   capabilities: v.optional(CapabilitiesSchema),
   providers: v.optional(CapabilitiesSchema),
+  transport: HandshakeReadyTransportSchema,
 });
 
 export type HandshakeReadyMessage = v.InferOutput<
@@ -314,25 +362,70 @@ export type ProviderAvailableMessage = v.InferOutput<
  * A control message indicating the start of a multi-chunk message transfer.
  * This is handled transparently by Layer 1.
  */
-export const ChunkStartMessageSchema = v.object({
+export const ChunkStartMessageSchema = v.strictObject({
   type: v.literal(NexusMessageType.CHUNK_START),
-  id: MessageIdSchema,
-  totalChunks: v.pipe(v.number(), v.finite()),
-  originalMessageId: v.nullable(MessageIdSchema),
-  originalMessageType: v.enum(NexusMessageType),
+  id: PositiveSafeIntegerSchema,
+  version: v.literal(1),
+  packetKind: ChunkablePacketKindSchema,
+  totalBytes: PositiveSafeIntegerSchema,
 });
 
 export type ChunkStartMessage = v.InferOutput<typeof ChunkStartMessageSchema>;
 
 /** A message containing a single chunk of data for a large message. */
-export const ChunkDataMessageSchema = v.object({
+export const ChunkDataMessageSchema = v.strictObject({
   type: v.literal(NexusMessageType.CHUNK_DATA),
-  id: MessageIdSchema,
-  chunkIndex: v.pipe(v.number(), v.finite()),
-  chunkData: v.union([v.string(), v.instance(ArrayBuffer)]),
+  id: PositiveSafeIntegerSchema,
+  version: v.literal(1),
+  offset: v.pipe(
+    v.number(),
+    v.integer(),
+    v.minValue(0),
+    v.maxValue(Number.MAX_SAFE_INTEGER),
+  ),
+  data: ChunkBytesSchema,
 });
 
 export type ChunkDataMessage = v.InferOutput<typeof ChunkDataMessageSchema>;
+
+/** Cumulative acknowledgment for a version 1 chunk transfer. */
+export const ChunkAckMessageSchema = v.strictObject({
+  type: v.literal(NexusMessageType.CHUNK_ACK),
+  id: PositiveSafeIntegerSchema,
+  version: v.literal(1),
+  offset: v.pipe(
+    v.number(),
+    v.integer(),
+    v.minValue(0),
+    v.maxValue(Number.MAX_SAFE_INTEGER),
+  ),
+  committed: v.boolean(),
+});
+
+export type ChunkAckMessage = v.InferOutput<typeof ChunkAckMessageSchema>;
+
+/** Cancels a version 1 chunk transfer using a bounded protocol reason. */
+export const ChunkCancelMessageSchema = v.strictObject({
+  type: v.literal(NexusMessageType.CHUNK_CANCEL),
+  id: PositiveSafeIntegerSchema,
+  version: v.literal(1),
+  reason: v.picklist([
+    "rejected",
+    "capacity",
+    "cancelled",
+    "timeout",
+    "decode-error",
+  ]),
+  detailCode: v.optional(v.pipe(v.string(), v.maxLength(64))),
+});
+
+export type ChunkCancelMessage = v.InferOutput<typeof ChunkCancelMessageSchema>;
+
+export type ChunkControlMessage =
+  | ChunkStartMessage
+  | ChunkDataMessage
+  | ChunkAckMessage
+  | ChunkCancelMessage;
 
 // =============================================================================
 // Union Types for Type Safety
@@ -379,6 +472,8 @@ export const NexusMessageSchema = v.union([
   ProviderAvailableMessageSchema,
   ChunkStartMessageSchema,
   ChunkDataMessageSchema,
+  ChunkAckMessageSchema,
+  ChunkCancelMessageSchema,
 ]);
 
 export type NexusMessage = v.InferOutput<typeof NexusMessageSchema>;

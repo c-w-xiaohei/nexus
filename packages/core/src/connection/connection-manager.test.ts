@@ -19,7 +19,10 @@ import {
 import type { AdapterModel } from "@/types/adapter-model";
 import { JsonSerializer } from "@/transport/serializers/json-serializer";
 import { Result } from "better-result";
-import { NexusEndpointConnectError } from "../errors/transport-errors";
+import {
+  NexusEndpointConnectError,
+  NexusProtocolError,
+} from "../errors/transport-errors";
 
 interface TestUserMeta {
   context: string;
@@ -40,6 +43,12 @@ const matchesTarget = (target: TestUserMeta, contextMeta: TestUserMeta) =>
   Object.entries(target).every(
     ([key, value]) => contextMeta[key as keyof TestUserMeta] === value,
   );
+
+const testTransportOffer = {
+  version: 1 as const,
+  receive: { maxFrameBytes: 64 * 1024, maxMessageBytes: 16 * 1024 * 1024 },
+  packetModes: ["json" as const],
+};
 
 const createTestStack = async (
   meta: TestUserMeta,
@@ -81,12 +90,16 @@ const sendFromManager = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
   connectionId: string,
   message: NexusMessage,
-): void => manager.safeSendMessage(message, connectionId).unwrap();
+): Promise<void> =>
+  manager
+    .safeSendMessage(message, connectionId)
+    .then((result) => result.unwrap());
 
 const updateManagerIdentity = <M extends AdapterModel>(
   manager: ConnectionManager<M>,
   updates: Partial<M["contextMeta"]>,
-): void => manager.safeUpdateLocalIdentity(updates).unwrap();
+): Promise<void> =>
+  manager.safeUpdateLocalIdentity(updates).then((result) => result.unwrap());
 
 describe("ConnectionManager", () => {
   // L1 Mocks
@@ -204,6 +217,7 @@ describe("ConnectionManager", () => {
               metadata: clientMeta,
               capabilities: ["provider-catalog-v1", "resource-scope-v1"],
               providers: [],
+              transport: testTransportOffer,
             });
             if (ack.isErr()) throw ack.error;
             receive(ack.value);
@@ -354,12 +368,18 @@ describe("ConnectionManager", () => {
               id: 7,
               metadata: clientMeta,
               capabilities: ["provider-catalog-v1", "resource-scope-v1"],
+              transport: testTransportOffer,
             });
             deliver({
               type: NexusMessageType.HANDSHAKE_READY,
               id: 7,
               capabilities: ["provider-catalog-v1", "resource-scope-v1"],
               providers: [],
+              transport: {
+                initiatorReceive: testTransportOffer.receive,
+                responderReceive: testTransportOffer.receive,
+                selectedPacketMode: "json",
+              },
             });
             deliver({
               type: NexusMessageType.IDENTITY_UPDATE,
@@ -634,19 +654,15 @@ describe("ConnectionManager", () => {
           context: { originalError: listenError },
         },
       });
-      expect(() =>
-        sendFromManager(
-          hostManager,
-          { connectionId: "missing" },
-          {
-            type: NexusMessageType.APPLY,
-            id: 1,
-            resourceId: null,
-            path: [],
-            args: [],
-          },
-        ),
-      ).toThrow(/not initialized/);
+      await expect(
+        sendFromManager(hostManager, "missing", {
+          type: NexusMessageType.APPLY,
+          id: 1,
+          resourceId: null,
+          path: [],
+          args: [],
+        }),
+      ).rejects.toThrow(/not initialized/);
 
       const retried = await hostManager.safeInitialize();
 
@@ -715,7 +731,9 @@ describe("ConnectionManager", () => {
         path: [],
         args: [],
       };
-      expect(hostManager.safeUpdateLocalIdentity({ id: 5 })).toMatchObject({
+      await expect(
+        hostManager.safeUpdateLocalIdentity({ id: 5 }),
+      ).resolves.toMatchObject({
         error: { code: "E_USAGE_INVALID" },
       });
       await initializeManager(hostManager);
@@ -723,18 +741,18 @@ describe("ConnectionManager", () => {
       await resolveManager(client.manager, { target: hostMeta });
       const [connection] = hostManager.connections.values();
       expect(hostManager.findReadyConnections()).toHaveLength(1);
-      expect(
+      await expect(
         hostManager.safeSendMessage(message, connection.connectionId),
-      ).toEqual(Result.ok(undefined));
+      ).resolves.toEqual(Result.ok(undefined));
       await vi.waitFor(() =>
         expect(client.handlers.onMessage).toHaveBeenCalledWith(
           message,
           expect.any(String),
         ),
       );
-      expect(hostManager.safeSendMessage(message, "unknown")).toMatchObject({
-        error: { code: "E_CONN_CLOSED" },
-      });
+      await expect(
+        hostManager.safeSendMessage(message, "unknown"),
+      ).resolves.toMatchObject({ error: { code: "E_CONN_CLOSED" } });
       expect(mockHostEndpoint.connect).not.toHaveBeenCalled();
     });
 
@@ -901,9 +919,9 @@ describe("ConnectionManager", () => {
           closePort();
         });
         connection.close();
-        expect(observed).toEqual([
-          operation === "queries" ? [] : Result.ok(undefined),
-        ]);
+        expect(observed).toHaveLength(1);
+        if (operation === "queries") expect(observed).toEqual([[]]);
+        else await expect(observed[0]).resolves.toEqual(Result.ok(undefined));
         expect(hostManager.connections.size).toBe(0);
       },
     );
@@ -928,7 +946,7 @@ describe("ConnectionManager", () => {
       postA.mockClear();
       postB.mockClear();
 
-      const result = hostManager.safeSendMessage(
+      const result = await hostManager.safeSendMessage(
         {
           type: NexusMessageType.APPLY,
           id: 1,
@@ -958,6 +976,39 @@ describe("ConnectionManager", () => {
         a.connectionId,
       );
       b.close();
+    });
+
+    it("preserves a determinate chunk rejection without classifying the connection closed", async () => {
+      await initializeManager(hostManager);
+      const accept = (port: IPort, meta?: TestConnectionMeta) =>
+        hostL1OnConnect(port, meta);
+      const client = await createTestStack(clientMeta, accept);
+      await resolveManager(client.manager, { target: hostMeta });
+      const connection = [...hostManager.connections.values()][0]!;
+      const refusal = new NexusProtocolError("transfer refused", {
+        transferOutcome: "determinate",
+        reason: "capacity",
+      });
+      vi.spyOn(connection, "sendMessage").mockResolvedValueOnce(
+        Result.err(refusal),
+      );
+
+      const result = await hostManager.safeSendMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 91,
+          resourceId: null,
+          path: ["service", "run"],
+          args: [],
+        },
+        connection.connectionId,
+        { signal: new AbortController().signal },
+      );
+
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) expect(result.error).toBe(refusal);
+      expect(connection.isReady()).toBe(true);
+      connection.close();
     });
 
     it("settles an outgoing queued-publication failure without waiting for the handshake timeout", async () => {
@@ -992,6 +1043,7 @@ describe("ConnectionManager", () => {
                     metadata: target,
                     capabilities: ["provider-catalog-v1", "resource-scope-v1"],
                     providers: [],
+                    transport: testTransportOffer,
                   }).unwrap(),
                 ),
               );
@@ -1256,7 +1308,9 @@ describe("ConnectionManager", () => {
       identityUpdated.mockClear();
       try {
         expect(
-          client.manager.safeUpdateLocalIdentity({ groups: ["new"] }).isOk(),
+          (
+            await client.manager.safeUpdateLocalIdentity({ groups: ["new"] })
+          ).isOk(),
         ).toBe(true);
         await closed;
         expect(identityUpdated).toHaveBeenCalledOnce();
@@ -1294,7 +1348,9 @@ describe("ConnectionManager", () => {
         return Result.err(new Error("broadcast failed"));
       });
       const sendB = vi.spyOn(b, "sendMessage");
-      expect(hostManager.safeUpdateLocalIdentity({ id: 777 })).toMatchObject({
+      await expect(
+        hostManager.safeUpdateLocalIdentity({ id: 777 }),
+      ).resolves.toMatchObject({
         error: { code: "E_PROTOCOL_ERROR" },
       });
       expect(sendA).toHaveBeenCalledOnce();
@@ -1320,7 +1376,7 @@ describe("ConnectionManager", () => {
 
       // Act: Host updates its own identity
       const hostUpdates: Partial<TestUserMeta> = { id: 999 };
-      updateManagerIdentity(hostManager, hostUpdates);
+      await updateManagerIdentity(hostManager, hostUpdates);
 
       // Assert: Passive filtering finds the same connection using the new identity.
       const newHostMeta = { ...hostMeta, ...hostUpdates };
@@ -1340,7 +1396,7 @@ describe("ConnectionManager", () => {
       });
       expect(connection).not.toBeNull();
 
-      updateManagerIdentity(client.manager, { id: 777 });
+      await updateManagerIdentity(client.manager, { id: 777 });
 
       await vi.waitFor(() => {
         const snapshot = client.manager.getConnectionAuthSnapshot(
@@ -1373,7 +1429,7 @@ describe("ConnectionManager", () => {
       const clientUpdates: Partial<TestUserMeta> = {
         groups: ["group-2"],
       };
-      updateManagerIdentity(client.manager, clientUpdates);
+      await updateManagerIdentity(client.manager, clientUpdates);
 
       await vi.waitFor(() => {
         expect(

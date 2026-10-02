@@ -94,6 +94,12 @@ describe("iframe envelope parsing", () => {
     expect(envelope.nonce).toBe("nonce");
   });
 
+  it("reads a JSON-string bootstrap envelope", () => {
+    const envelope = createEnvelope("app", "custom", { bootstrap: true }, "n");
+
+    expect(readEnvelope(JSON.stringify(envelope))).toEqual(envelope);
+  });
+
   it("rejects an envelope whose fields throw when read", () => {
     const envelope = {};
     Object.defineProperty(envelope, "__nexusIframe", {

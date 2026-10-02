@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import WebSocket from "ws";
 import { WebSocketServerEndpoint } from "../../endpoints/websocket-server-endpoint.js";
 import { normalizeTargetUrl } from "../../runtime/validation.js";
+import type { WebSocketLimits } from "../../types/options.js";
 import {
   createWebSocketHost,
   createRawWebSocketHost,
@@ -10,12 +11,53 @@ import {
 } from "../integration/fixtures.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const obsoleteFrameOption: WebSocketLimits = {
+  // @ts-expect-error WebSocket frame size belongs under transport.
+  maxPayloadBytes: 4096,
+};
+void obsoleteFrameOption;
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(cleanup.splice(0).map((close) => close()));
 });
 
 describe("WebSocket runtime boundaries", () => {
+  test("normalizes the frozen binary transport config", () => {
+    const endpoint = new WebSocketServerEndpoint({
+      transport: { maxFrameBytes: 4096 },
+      maxBufferedAmountBytes: 8192,
+    });
+
+    expect(endpoint.config).toEqual({
+      binaryPackets: true,
+      maxFrameBytes: 4096,
+      maxMessageBytes: 16 * 1024 * 1024,
+      maxBufferedBytes: 64 * 1024 * 1024,
+    });
+    expect(Object.isFrozen(endpoint.config)).toBe(true);
+    expect(
+      () => new WebSocketServerEndpoint({ maxPayloadBytes: 4096 } as never),
+    ).toThrow();
+    expect(
+      () =>
+        new WebSocketServerEndpoint({
+          transport: { binaryPackets: false } as never,
+        }),
+    ).toThrow();
+    expect(
+      () =>
+        new WebSocketServerEndpoint({
+          transport: { maxFrameBytes: 1024 * 1024 + 1 },
+        }),
+    ).toThrow();
+    expect(
+      () =>
+        new WebSocketServerEndpoint({
+          transport: { maxMessageBytes: 2048, maxBufferedBytes: 1024 },
+        }),
+    ).toThrow(expect.objectContaining({ code: "E_WEBSOCKET_CONFIG_INVALID" }));
+  });
+
   test("canonicalizes valid targets and excludes URL credentials and fragments", () => {
     expect(normalizeTargetUrl("WS://example.test:80/nexus?x=1")).toBe(
       "ws://example.test/nexus?x=1",

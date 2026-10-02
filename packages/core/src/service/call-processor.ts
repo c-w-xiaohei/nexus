@@ -13,6 +13,10 @@ import { toFrameworkProtocolError } from "@/errors/serialized-error";
 import type { PayloadProcessor } from "./payload/payload-processor";
 import type { PendingCallManager } from "./pending-call-manager";
 import { scopeClosedError, type ResourceScope } from "./resource-scope";
+import type {
+  ByteReservationBudget,
+  ByteReservationLease,
+} from "./payload/byte-reservation";
 
 export type CallBinding = {
   timeout: number;
@@ -35,7 +39,9 @@ export class CallProcessor {
       safeSendMessage(
         message: NexusMessage,
         connectionId: string,
-      ): Result<void, Error>;
+        options?: { lease?: ByteReservationLease; signal?: AbortSignal },
+      ): Promise<Result<void, Error>>;
+      payloadReservation?: ByteReservationBudget;
       payloadProcessor: Pick<
         PayloadProcessor,
         "safeSanitize" | "releaseSanitizedResources"
@@ -60,49 +66,93 @@ export class CallProcessor {
     if (options.scope?.closed)
       return Result.err(scopeClosedError(options.scope));
     const id = this.messageIdSeq++;
+    const abort = new AbortController();
+    let settled = false;
     const pending = this.deps.pendingCallManager.register(id, {
       connectionId,
       timeout: options.timeout,
       ...(options.scope ? { scope: options.scope } : {}),
+      onSettled: (result) => {
+        settled = true;
+        if (
+          options.scope?.closed ||
+          (result.isErr() && result.error.code === "E_CALL_TIMEOUT")
+        )
+          abort.abort();
+      },
     });
-    const sent = Result.try({
-      try: () => {
-        const base = {
-          id,
-          resourceId: options.resourceId,
-          path: options.path,
-          ...(options.scope
-            ? {
-                scopeId: options.scope.id,
-                timeoutMs: options.timeout,
-                hops: 16,
-              }
-            : {}),
-        };
-        const encoded: Result<GetMessage | ApplyMessage, Error> =
-          options.type === "GET"
-            ? Result.ok({ ...base, type: NexusMessageType.GET })
-            : this.deps.payloadProcessor
-                .safeSanitize(options.args, connectionId, options.scope)
-                .map((args) => ({
-                  ...base,
-                  type: NexusMessageType.APPLY,
-                  args,
-                }));
-        if (encoded.isErr()) return encoded;
+    const stopAbort = options.scope?.onClosed(() => abort.abort());
+    let lease: ByteReservationLease | undefined;
+    let sent: Result<void, Error>;
+    try {
+      const base = {
+        id,
+        resourceId: options.resourceId,
+        path: options.path,
+        ...(options.scope
+          ? {
+              scopeId: options.scope.id,
+              timeoutMs: options.timeout,
+              hops: 16,
+            }
+          : {}),
+      };
+      let encoded: Result<GetMessage | ApplyMessage, Error>;
+      if (options.type === "GET") {
+        encoded = Result.ok({ ...base, type: NexusMessageType.GET });
+      } else {
+        const preparing = this.deps.payloadProcessor.safeSanitize(
+          options.args,
+          connectionId,
+          options.scope,
+          {
+            reserveBytes:
+              this.deps.payloadReservation?.reserveBytes ?? (() => true),
+            releaseBytes:
+              this.deps.payloadReservation?.releaseBytes ?? (() => {}),
+            signal: abort.signal,
+            onLease: (value) => {
+              lease = value;
+              if (settled) value.releaseAll();
+            },
+          },
+        );
+        const outcome = await Promise.race([
+          preparing.then((result) => ({ kind: "prepared" as const, result })),
+          pending.then((result) => ({ kind: "settled" as const, result })),
+        ]);
+        if (outcome.kind === "settled") {
+          stopAbort?.();
+          return outcome.result;
+        }
+        encoded = outcome.result.map((args) => ({
+          ...base,
+          type: NexusMessageType.APPLY,
+          args,
+        }));
+      }
+      if (encoded.isErr()) sent = encoded;
+      else {
         let delivered = false;
         try {
-          const result = this.deps.safeSendMessage(encoded.value, connectionId);
-          delivered = result.isOk();
-          return result;
+          sent = await this.deps.safeSendMessage(encoded.value, connectionId, {
+            lease,
+            signal: abort.signal,
+          });
+          delivered = sent.isOk();
         } finally {
-          if (!delivered)
+          if (!delivered) {
             this.deps.payloadProcessor.releaseSanitizedResources(encoded.value);
+            lease?.releaseAll();
+          }
         }
-      },
-      catch: toFrameworkProtocolError,
-    }).andThen((result) => result);
+      }
+    } catch (error) {
+      sent = Result.err(toFrameworkProtocolError(error));
+    }
+    stopAbort?.();
     if (sent.isErr()) this.deps.pendingCallManager.fail(id, sent.error);
+    void pending.finally(() => lease?.releaseAll());
     return pending;
   }
 }

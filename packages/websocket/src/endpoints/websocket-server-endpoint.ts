@@ -17,6 +17,7 @@ export class WebSocketServerEndpoint<
   readonly capabilities = { binaryPackets: true };
   private readonly ports = new Map<WebSocket, WebSocketPort>();
   private readonly limits;
+  readonly config;
   private closed = false;
   private accept?: (
     port: IPort,
@@ -25,6 +26,7 @@ export class WebSocketServerEndpoint<
 
   constructor(options: WebSocketServerOptions = {}) {
     this.limits = normalizeLimits(options);
+    this.config = this.limits.config;
   }
 
   listen(

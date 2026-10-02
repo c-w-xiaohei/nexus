@@ -188,5 +188,22 @@ iframe 重载会替换子窗口和 Nexus 会话。代理与引用绑定到会话
 
 iframe Endpoint 默认声明支持 Nexus 二进制传输包和可转移对象。Core 因而可以将内部传输包序列化为 `ArrayBuffer`，并在双方都支持时将缓冲区放入浏览器 `postMessage` 的转移列表。
 
-这只影响 Nexus 的内部传输包，不会以可转移对象的方式移动或分离用户传入的 RPC 数据对象。
-只有运行环境无法处理二进制传输包时，才在父、子两端的 Endpoint 选项中同时设置 `binaryPackets: false`。
+这只影响 Nexus 的内部传输包。用户 RPC 二进制值通过普通值序列化路径传递，不会被转移、移动或分离。
+可以在任一 Endpoint/helper 的 `transport` 下配置限额：
+
+```ts
+usingIframeParent({
+  appId: "iframe-demo",
+  frames: [{ frameId: "preview", iframe, origin: "https://child.example.com" }],
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+    binaryPackets: true,
+  },
+});
+```
+
+这些限额默认为示例值。`binaryPackets` 是传输包格式偏好，不是用户二进制值的开关；
+只有双方都支持时才使用二进制包，任一端设置为 `false` 时连接会使用 JSON 包。
+仅通过 `transport.binaryPackets` 设置这一偏好。

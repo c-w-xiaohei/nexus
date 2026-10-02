@@ -18,9 +18,14 @@ import type { LogicalConnectionHandlers } from "./types";
 import { Logger } from "@/logger";
 import { createEvtChannel } from "@/utils/evt-channel";
 import { toSerializedError } from "@/utils/error";
-import { NexusProtocolIncompatibleError } from "@/errors";
+import { NexusProtocolError, NexusProtocolIncompatibleError } from "@/errors";
+import { isDeterminateTransferError } from "@/transport/port-processor";
 import { Result } from "better-result";
 import { delay } from "es-toolkit/promise";
+import type { ResolvedTransportConfig } from "../transport/transport-config";
+import { isChunkControl } from "../transport/chunking";
+import { DEFAULT_TRANSPORT_LIMITS } from "../transport/transport-config";
+import type { ByteReservationLease } from "../service/payload/byte-reservation";
 
 const { ok, err } = Result;
 const PROVIDER_CATALOG_CAPABILITY = "provider-catalog-v1";
@@ -34,6 +39,8 @@ export interface ConnectionConfig<M extends AdapterModel> {
   direction: "incoming" | "outgoing";
   nextMessageId: () => number;
   localProviders?: () => readonly string[];
+  transportConfig?: ResolvedTransportConfig;
+  bootstrapJson?: boolean;
 }
 
 type AcquiredPort<M extends AdapterModel> = Result<
@@ -100,8 +107,6 @@ type SessionState =
     }
   | {
       phase: "activating" | "publishing";
-      messages: NexusMessage[];
-      published: Promise<void>;
     }
   | { phase: "ready" }
   | { phase: "closed"; reason: "local" | "remote" | "protocol" };
@@ -125,6 +130,26 @@ export class LogicalConnection<M extends AdapterModel> {
   private readonly logger: Logger;
   private readonly nextMessageId: () => number;
   private readonly localProviders: () => readonly string[];
+  private readonly transportConfig: ResolvedTransportConfig;
+  private readonly bootstrapJson: boolean;
+  private peerTransportOffer?: HandshakeReqMessage["transport"];
+  private readonly allowImplicitLegacyTransport: boolean;
+  private queuedMessages: {
+    message: NexusMessage;
+    resolve: (result: Result<void, Error>) => void;
+    options?: { lease?: ByteReservationLease; signal?: AbortSignal };
+  }[] = [];
+  private drainingQueuedMessages = false;
+  private publicationWaiters = new Set<() => void>();
+  private activationPending = false;
+  private activationIngressBytes = 0;
+  private activationIngress: {
+    message: NexusMessage;
+    resolve: (result: Result<void, Error>) => void;
+  }[] = [];
+  private static readonly MAX_ACTIVATION_INGRESS_ITEMS = 256;
+  private static readonly MAX_ACTIVATION_INGRESS_BYTES = 1024 * 1024;
+  private static readonly MAX_QUEUED_MESSAGES = 1024;
 
   // ===== Session Lifecycle =====
 
@@ -171,6 +196,12 @@ export class LogicalConnection<M extends AdapterModel> {
     this.localEndpointMeta = config.localEndpointMeta;
     this.nextMessageId = config.nextMessageId;
     this.localProviders = config.localProviders ?? (() => []);
+    this.transportConfig = config.transportConfig ?? {
+      binaryPackets: false,
+      ...DEFAULT_TRANSPORT_LIMITS,
+    };
+    this.bootstrapJson = config.bootstrapJson === true;
+    this.allowImplicitLegacyTransport = config.transportConfig === undefined;
     this.context = {
       connectionId: this.connectionId,
       connection: Object.freeze({ ...config.connectionMeta }),
@@ -287,7 +318,7 @@ export class LogicalConnection<M extends AdapterModel> {
       const portHandlers: PortProcessorHandlers = {
         onLogicalMessage: (message) => {
           if (messages) messages.push(message);
-          else connection?.receive(message);
+          else return connection?.receive(message);
         },
         onDisconnect: () => {
           if (messages)
@@ -298,7 +329,10 @@ export class LogicalConnection<M extends AdapterModel> {
             );
           else connection?.handleDisconnect();
         },
-        onProtocolError: fail,
+        onProtocolError: (error) => {
+          if (messages) fail(error);
+          else connection?.close("protocol");
+        },
       };
       const attach = (acquired: AcquiredPort<M>) => {
         if (acquired.isErr()) return fail(acquired.error);
@@ -324,13 +358,15 @@ export class LogicalConnection<M extends AdapterModel> {
           const passive = messages.some(
             (message) => message.type === NexusMessageType.HANDSHAKE_REQ,
           );
-          for (const message of messages) attached.receive(message);
+          for (const message of messages) void attached.receive(message);
           messages = undefined;
           if (config.direction === "outgoing" && !passive) {
             const started = attached.initiateHandshake(
               config.assignmentMetadata,
             );
-            if (started.isErr()) fail(started.error);
+            void started.then((result) => {
+              if (result.isErr()) fail(result.error);
+            });
           }
         } catch (error) {
           // Preserve construction/observer errors before cleanup can emit disconnect.
@@ -375,27 +411,69 @@ export class LogicalConnection<M extends AdapterModel> {
 
   /**
    * Send or queue in FIFO order. Ok means local acceptance, not remote delivery.
-   * Err leaves the session closed; processor failures close it before returning.
+   * Cancellation and determinate transfer rejection leave the ready session
+   * usable; other processor failures close it before returning.
    */
-  public sendMessage(message: NexusMessage): Result<void, Error> {
+  public sendMessage(
+    message: NexusMessage,
+    options?: { lease?: ByteReservationLease; signal?: AbortSignal },
+  ): Promise<Result<void, Error>> {
     if (this.state.phase === "closed")
-      return err(
-        new LogicalConnectionInvalidStateError(
-          "Cannot send on a closed connection.",
-          { connectionId: this.connectionId },
+      return Promise.resolve(
+        err(
+          new LogicalConnectionInvalidStateError(
+            "Cannot send on a closed connection.",
+            { connectionId: this.connectionId },
+          ),
         ),
       );
-    if ("messages" in this.state) {
-      this.state.messages.push(message);
-      return ok(undefined);
+    if (this.queuedMessages.length >= LogicalConnection.MAX_QUEUED_MESSAGES) {
+      const error = new NexusProtocolError(
+        "Connection outbound queue capacity exceeded",
+        { code: "E_TRANSPORT_CAPACITY" },
+      );
+      this.close("protocol");
+      return Promise.resolve(err(error));
     }
-    return this.write(message);
+    const sent = new Promise<Result<void, Error>>((resolve) => {
+      this.queuedMessages.push({ message, resolve, options });
+    });
+    if (this.state.phase === "ready") void this.drainQueuedMessages();
+    return sent;
   }
 
   /** Serialize handshake authorization while allowing independent application work to overlap. */
   public safeHandleMessage(
     message: NexusMessage,
   ): Promise<Result<void, Error>> {
+    if (this.activationPending && !isChunkControl(message)) {
+      let messageBytes: number;
+      try {
+        messageBytes = new TextEncoder().encode(
+          JSON.stringify(message),
+        ).byteLength;
+      } catch (error) {
+        this.close("protocol");
+        return Promise.resolve(err(asError(error)));
+      }
+      this.activationIngressBytes += messageBytes;
+      if (
+        this.activationIngress.length >=
+          LogicalConnection.MAX_ACTIVATION_INGRESS_ITEMS ||
+        this.activationIngressBytes >
+          LogicalConnection.MAX_ACTIVATION_INGRESS_BYTES
+      ) {
+        this.close("protocol");
+        return Promise.resolve(
+          err(
+            new NexusProtocolError("READY activation ingress queue exceeded"),
+          ),
+        );
+      }
+      return new Promise((resolve) => {
+        this.activationIngress.push({ message, resolve });
+      });
+    }
     const handshaking = this.state.phase === "handshaking";
     const response =
       message.type === NexusMessageType.RES ||
@@ -420,21 +498,22 @@ export class LogicalConnection<M extends AdapterModel> {
    * current identity, optionally assigning the passive peer's identity. Manager
    * uses open instead, which also owns acquisition, reception and the deadline.
    */
-  /** Start the active handshake for an attached session and preserve its assignment metadata. */
   public initiateHandshake(
     assignmentMetadata?: ContextMetaOf<M>,
-  ): Result<void, Error> {
+  ): Promise<Result<void, Error>> {
     if (
       this.state.phase !== "handshaking" ||
       this.state.expected !== NexusMessageType.HANDSHAKE_REQ
     )
-      return err(
-        new LogicalConnectionInvalidStateError(
-          "Handshake can only be initiated in INITIALIZING state.",
-          {
-            phase: this.state.phase,
-            connectionId: this.connectionId,
-          },
+      return Promise.resolve(
+        err(
+          new LogicalConnectionInvalidStateError(
+            "Handshake can only be initiated in INITIALIZING state.",
+            {
+              phase: this.state.phase,
+              connectionId: this.connectionId,
+            },
+          ),
         ),
       );
     const id = this.nextMessageId();
@@ -448,6 +527,7 @@ export class LogicalConnection<M extends AdapterModel> {
       id,
       metadata: this.localEndpointMeta,
       capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
+      transport: this.localTransportOffer(),
       ...(assignmentMetadata && { assigns: assignmentMetadata }),
     });
   }
@@ -460,7 +540,9 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 
   /** Queue additions before readiness, otherwise send them. Send failure closes the session. */
-  public publishProviders(providers: readonly string[]): Result<void, Error> {
+  public async publishProviders(
+    providers: readonly string[],
+  ): Promise<Result<void, Error>> {
     if (this.state.phase === "closed") return ok(undefined);
     for (const provider of providers) {
       this.pendingRemovedProviders.delete(provider);
@@ -471,7 +553,9 @@ export class LogicalConnection<M extends AdapterModel> {
 
   // ===== Private Lifetime =====
 
-  public removeProviders(providers: readonly string[]): Result<void, Error> {
+  public async removeProviders(
+    providers: readonly string[],
+  ): Promise<Result<void, Error>> {
     if (this.state.phase === "closed") return ok(undefined);
     for (const provider of providers) {
       this.pendingProviders.delete(provider);
@@ -489,8 +573,29 @@ export class LogicalConnection<M extends AdapterModel> {
     if (state.phase === "closed") return;
     // Reentrant close/disconnect sees the terminal state before any native callback.
     this.state = { phase: "closed", reason };
+    this.activationPending = false;
+    this.activationIngressBytes = 0;
+    for (const pending of this.activationIngress.splice(0))
+      pending.resolve(
+        err(
+          new LogicalConnectionInvalidStateError(
+            "Connection closed before READY activation",
+            { connectionId: this.connectionId },
+          ),
+        ),
+      );
+    for (const resolve of this.publicationWaiters) resolve();
+    this.publicationWaiters.clear();
     this.lifetime.abort();
-    if ("messages" in state) state.messages.length = 0;
+    for (const queued of this.queuedMessages.splice(0))
+      queued.resolve(
+        err(
+          new LogicalConnectionInvalidStateError(
+            "Connection closed before queued send",
+            { connectionId: this.connectionId },
+          ),
+        ),
+      );
     this.pendingProviders.clear();
     this.pendingRemovedProviders.clear();
     if (closePort) {
@@ -531,16 +636,15 @@ export class LogicalConnection<M extends AdapterModel> {
   // ===== Private Transport =====
 
   /** Write one packet and close the session when the processor rejects it. */
-  private write(message: NexusMessage): Result<void, Error> {
-    // Control packets bypass publication buffering, not failure cleanup.
-    const sent = this.port.sendMessage(message);
+  private async write(message: NexusMessage): Promise<Result<void, Error>> {
+    const sent = await Promise.resolve(this.port.sendMessage(message));
     if (sent.isErr()) this.close("protocol");
     return sent;
   }
 
   /** Start managed inbound processing and turn failures into protocol closure. */
-  private receive(message: NexusMessage): void {
-    void this.safeHandleMessage(message).then((result) => {
+  private receive(message: NexusMessage): Promise<void> {
+    return this.safeHandleMessage(message).then((result) => {
       if (result.isErr()) {
         this.logger.error("Failed to process incoming message", result.error);
         this.close("protocol");
@@ -552,6 +656,29 @@ export class LogicalConnection<M extends AdapterModel> {
 
   /** Consume protocol packets or forward published application packets in order. */
   private async dispatch(message: NexusMessage): Promise<void> {
+    if (
+      this.allowImplicitLegacyTransport &&
+      (message.type === NexusMessageType.HANDSHAKE_REQ ||
+        message.type === NexusMessageType.HANDSHAKE_ACK ||
+        message.type === NexusMessageType.HANDSHAKE_READY) &&
+      !message.transport
+    ) {
+      const offer = this.localTransportOffer();
+      message =
+        message.type === NexusMessageType.HANDSHAKE_READY
+          ? {
+              ...message,
+              transport: {
+                initiatorReceive: offer.receive,
+                responderReceive: offer.receive,
+                selectedPacketMode: "json",
+              },
+            }
+          : message.type === NexusMessageType.HANDSHAKE_REQ ||
+              message.type === NexusMessageType.HANDSHAKE_ACK
+            ? { ...message, transport: offer }
+            : message;
+    }
     const state = this.state;
     if (state.phase === "closed") return;
     // Catalogs and identity updates have their own admission rules. Application
@@ -596,7 +723,10 @@ export class LogicalConnection<M extends AdapterModel> {
       case NexusMessageType.HANDSHAKE_READY:
         break;
       default:
-        if ("published" in state) await state.published;
+        if (state.phase === "activating" || state.phase === "publishing")
+          await new Promise<void>((resolve) => {
+            this.publicationWaiters.add(resolve);
+          });
         if (this.state.phase === "ready")
           await this.handlers.onMessage(this, message);
         return;
@@ -609,6 +739,20 @@ export class LogicalConnection<M extends AdapterModel> {
       (state.id !== null && state.id !== message.id)
     )
       return;
+    if (
+      (message.type === NexusMessageType.HANDSHAKE_REQ ||
+        message.type === NexusMessageType.HANDSHAKE_ACK) &&
+      !message.transport
+    ) {
+      this.reject(
+        message.id,
+        new NexusProtocolIncompatibleError(
+          "Peer does not advertise the required transport protocol.",
+        ),
+        message.type === NexusMessageType.HANDSHAKE_REQ,
+      );
+      return;
+    }
     if (
       !message.capabilities?.includes(PROVIDER_CATALOG_CAPABILITY) ||
       !message.capabilities.includes(RESOURCE_SCOPE_CAPABILITY)
@@ -623,8 +767,46 @@ export class LogicalConnection<M extends AdapterModel> {
       return;
     }
     if (message.type === NexusMessageType.HANDSHAKE_READY) {
+      const local = this.localTransportOffer();
+      const peer = this.peerTransportOffer;
+      const expectedMode = this.selectPacketMode(peer?.packetModes ?? ["json"]);
+      if (
+        !peer ||
+        message.transport.initiatorReceive.maxFrameBytes !==
+          peer.receive.maxFrameBytes ||
+        message.transport.initiatorReceive.maxMessageBytes !==
+          peer.receive.maxMessageBytes ||
+        message.transport.responderReceive.maxFrameBytes !==
+          local.receive.maxFrameBytes ||
+        message.transport.responderReceive.maxMessageBytes !==
+          local.receive.maxMessageBytes ||
+        message.transport.selectedPacketMode !== expectedMode
+      ) {
+        this.reject(
+          message.id,
+          new NexusProtocolIncompatibleError(
+            "Peer READY does not match negotiated transport parameters.",
+          ),
+        );
+        return;
+      }
+      const activated = this.port.activateSession?.({
+        maxFrameBytes: Math.min(
+          local.receive.maxFrameBytes,
+          peer!.receive.maxFrameBytes,
+        ),
+        maxMessageBytes: Math.min(
+          local.receive.maxMessageBytes,
+          peer!.receive.maxMessageBytes,
+        ),
+        packetMode: message.transport.selectedPacketMode,
+      });
+      if (activated?.isErr()) {
+        this.reject(message.id, activated.error);
+        return;
+      }
       this.addProviders(message.providers ?? []);
-      this.publish(false);
+      await this.publish(false);
       return;
     }
 
@@ -647,6 +829,26 @@ export class LogicalConnection<M extends AdapterModel> {
       return;
     }
     this.peerIdentity = Object.freeze({ ...identity });
+    this.peerTransportOffer = message.transport;
+    const localOffer = this.localTransportOffer();
+    const peerModes = message.transport.packetModes;
+    const fixedLocalMode =
+      !this.bootstrapJson && localOffer.packetModes.length === 1;
+    if (
+      message.transport.version !== 1 ||
+      !peerModes.length ||
+      (fixedLocalMode &&
+        (peerModes.length !== 1 || peerModes[0] !== localOffer.packetModes[0]))
+    ) {
+      this.reject(
+        message.id,
+        new NexusProtocolIncompatibleError(
+          "Peer transport mode offer is incompatible with this endpoint.",
+        ),
+        message.type === NexusMessageType.HANDSHAKE_REQ,
+      );
+      return;
+    }
     if (message.type === NexusMessageType.HANDSHAKE_REQ) {
       // Policy saw the pre-assignment local identity; ACK reports the final one.
       if (message.assigns)
@@ -657,22 +859,72 @@ export class LogicalConnection<M extends AdapterModel> {
         expected: NexusMessageType.HANDSHAKE_READY,
         id: message.id,
       };
-      this.write({
+      await this.write({
         type: NexusMessageType.HANDSHAKE_ACK,
         id: message.id,
         metadata: this.localEndpointMeta,
         capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
         providers,
-      }).unwrapOr(undefined);
+        transport: this.localTransportOffer(),
+      });
     } else {
       this.addProviders(message.providers ?? []);
-      this.write({
+      this.activationPending = true;
+      this.activationIngressBytes = 0;
+      const selectedMode = this.selectPacketMode(message.transport.packetModes);
+      const activationStarted = this.port.beginActivation?.(selectedMode);
+      if (activationStarted?.isErr()) {
+        this.activationPending = false;
+        this.reject(message.id, activationStarted.error);
+        return;
+      }
+      const readySent = await this.write({
         type: NexusMessageType.HANDSHAKE_READY,
         id: message.id,
         capabilities: [PROVIDER_CATALOG_CAPABILITY, RESOURCE_SCOPE_CAPABILITY],
         providers: this.localProviders(),
-      }).unwrapOr(undefined);
-      this.publish(true);
+        transport: {
+          initiatorReceive: this.localTransportOffer().receive,
+          responderReceive: message.transport.receive,
+          selectedPacketMode: selectedMode,
+        },
+      });
+      if (readySent.isErr()) {
+        this.activationPending = false;
+        for (const pending of this.activationIngress.splice(0))
+          pending.resolve(err(readySent.error));
+        return;
+      }
+      const activated = this.port.activateSession?.({
+        maxFrameBytes: Math.min(
+          this.localTransportOffer().receive.maxFrameBytes,
+          message.transport.receive.maxFrameBytes,
+        ),
+        maxMessageBytes: Math.min(
+          this.localTransportOffer().receive.maxMessageBytes,
+          message.transport.receive.maxMessageBytes,
+        ),
+        packetMode: this.selectPacketMode(message.transport.packetModes),
+      });
+      if (activated?.isErr()) {
+        this.activationPending = false;
+        for (const pending of this.activationIngress.splice(0))
+          pending.resolve(err(activated.error));
+        this.reject(message.id, activated.error);
+        return;
+      }
+      this.activationPending = false;
+      await this.publish(true);
+      this.port.completeActivation?.();
+      for (const pending of this.activationIngress.splice(0)) {
+        const result = await Result.tryPromise({
+          try: () => this.dispatch(pending.message),
+          catch: asError,
+        });
+        pending.resolve(result);
+        if (result.isErr()) this.close("protocol");
+      }
+      this.activationIngressBytes = 0;
     }
   }
 
@@ -697,20 +949,46 @@ export class LogicalConnection<M extends AdapterModel> {
     return allowed.isOk() && allowed.value === true;
   }
 
+  private localTransportOffer(): HandshakeReqMessage["transport"] {
+    return {
+      version: 1,
+      receive: {
+        maxFrameBytes: this.transportConfig.maxFrameBytes,
+        maxMessageBytes: this.transportConfig.maxMessageBytes,
+      },
+      packetModes: this.transportConfig.binaryPackets
+        ? ["json", "binary"]
+        : ["json"],
+    };
+  }
+
+  private selectPacketMode(
+    modes: readonly ("json" | "binary")[],
+  ): "json" | "binary" {
+    return this.transportConfig.binaryPackets && modes.includes("binary")
+      ? "binary"
+      : "json";
+  }
+
   /** Publish a verified peer after control packets and reentrant sends are drained. */
-  private publish(deferred: boolean): void {
+  private async publish(deferred: boolean): Promise<void> {
     if (this.state.phase === "closed" || !this.peerIdentity) return;
-    const drain = () => {
+    const drain = async () => {
       // Keep this FIFO installed while draining: reentrant sends append to its end.
       // Closing clears this same array, stopping traversal even after an Ok send.
-      for (const message of publication.messages) {
-        this.write(message).unwrapOr(undefined);
+      while (this.queuedMessages.length) {
+        const queued = this.queuedMessages.shift()!;
+        const sent = queued.options
+          ? await this.port.sendMessage(queued.message, queued.options)
+          : await this.write(queued.message);
+        if (sent.isErr()) this.close("protocol");
+        queued.resolve(sent);
+        if (sent.isErr()) return false;
       }
-      publication.messages.length = 0;
       return this.state === publication;
     };
-    const finish = () => {
-      if (!drain() || !this.peerIdentity) return;
+    const finish = async () => {
+      if (!(await drain()) || !this.peerIdentity) return;
       const notified = Result.try({
         try: () => this.handlers.onReady(this),
         catch: asError,
@@ -722,37 +1000,72 @@ export class LogicalConnection<M extends AdapterModel> {
       }
       // Owner registration may reenter sends or close. Keep inbound traffic behind
       // publication and drain new sends before completing the transition.
-      if (!drain()) return;
+      if (!(await drain())) return;
       this.state = { phase: "ready" };
+      await this.drainQueuedMessages();
+      if (this.state.phase !== "ready") return;
       this.settleOpening(ok(undefined));
+      for (const resolve of this.publicationWaiters) resolve();
+      this.publicationWaiters.clear();
     };
-    const completeLater = async () => {
-      try {
-        // Install publication and send catalog deltas before scheduling the timer.
-        await Promise.resolve();
-        await delay(0, { signal: this.lifetime.signal });
-        finish();
-      } catch (error) {
-        if (this.lifetime.signal.aborted) return;
-        this.settleOpening(err(asError(error)));
-        this.close("protocol");
-      }
-    };
-    // Install the final Promise before any transport callback can reenter.
-    // Shutdown cancels the delay and releases waiters to recheck the closed state.
-    const publication: Extract<SessionState, { published: Promise<void> }> = {
+    // Install publication state before transport callbacks can reenter.
+    const publication: Extract<
+      SessionState,
+      { phase: "activating" | "publishing" }
+    > = {
       phase: "activating",
-      messages: [],
-      published: deferred ? completeLater() : Promise.resolve(),
     };
     this.state = publication;
     // Flush deltas before readiness. Passive publication finishes in this same
     // stack, before any Promise waiter resumes; the active side waits one turn.
     // Failed writes close the session; finish() and the cancelled delay already
     // guard publication, so there is no separate failure transition here.
-    this.flushProviders().unwrapOr(undefined);
+    const sent = await this.flushProviders();
+    if (sent.isErr()) return;
     publication.phase = "publishing";
-    if (!deferred) finish();
+    if (deferred) {
+      await Promise.resolve();
+      await delay(0, { signal: this.lifetime.signal });
+    }
+    await finish();
+  }
+
+  private async drainQueuedMessages(): Promise<void> {
+    if (this.drainingQueuedMessages) return;
+    this.drainingQueuedMessages = true;
+    try {
+      while (this.queuedMessages.length && this.state.phase === "ready") {
+        const queued = this.queuedMessages.shift()!;
+        if (queued.options?.signal?.aborted) {
+          queued.resolve(
+            err(
+              new LogicalConnectionInvalidStateError(
+                "Queued send was aborted",
+                {
+                  connectionId: this.connectionId,
+                },
+              ),
+            ),
+          );
+          continue;
+        }
+        const result = queued.options
+          ? await this.port.sendMessage(queued.message, queued.options)
+          : await this.write(queued.message);
+        if (
+          result.isErr() &&
+          !queued.options?.signal?.aborted &&
+          !isDeterminateTransferError(result.error)
+        )
+          this.close("protocol");
+        queued.resolve(result);
+        if (result.isErr()) break;
+      }
+    } finally {
+      this.drainingQueuedMessages = false;
+      if (this.queuedMessages.length && this.state.phase === "ready")
+        void this.drainQueuedMessages();
+    }
   }
 
   /** Send best-effort handshake rejection while retaining the original failure. */
@@ -763,13 +1076,17 @@ export class LogicalConnection<M extends AdapterModel> {
   ): void {
     this.rejection = error;
     // Rejection is best effort; send failure must not replace the original reason.
-    const sent = this.port.sendMessage({
-      type: NexusMessageType.HANDSHAKE_REJECT,
-      id,
-      error: toSerializedError(error),
+    const sent = Promise.resolve(
+      this.port.sendMessage({
+        type: NexusMessageType.HANDSHAKE_REJECT,
+        id,
+        error: toSerializedError(error),
+      }),
+    );
+    void sent.then((result) => {
+      if (result.isErr())
+        this.logger.error("Failed to send HANDSHAKE_REJECT", result.error);
     });
-    if (sent.isErr())
-      this.logger.error("Failed to send HANDSHAKE_REJECT", sent.error);
     if (this.state.phase === "closed") return;
     if (deferred)
       void delay(0, { signal: this.lifetime.signal }).then(
@@ -787,7 +1104,7 @@ export class LogicalConnection<M extends AdapterModel> {
   }
 
   /** Drain queued provider announcements, including registrations made reentrantly. */
-  private flushProviders(): Result<void, Error> {
+  private async flushProviders(): Promise<Result<void, Error>> {
     // Reentrant registration during activation queues another delta. Drain it
     // before publishing instead of stranding it until an unrelated registration.
     while (
@@ -798,7 +1115,7 @@ export class LogicalConnection<M extends AdapterModel> {
       const removed = Array.from(this.pendingRemovedProviders);
       this.pendingProviders.clear();
       this.pendingRemovedProviders.clear();
-      const sent = this.write({
+      const sent = await this.write({
         type: NexusMessageType.PROVIDER_AVAILABLE,
         id: null,
         providers,

@@ -11,7 +11,7 @@ import {
   createConnectionMeta,
   isTrustedConnectionMeta,
 } from "./connection-meta.js";
-import { createCapabilities } from "./shared.js";
+import { endpointCapabilities, resolveIframeTransport } from "./shared.js";
 import type {
   EndpointCapabilities,
   IframeChildEndpointOptions,
@@ -33,7 +33,9 @@ import { getWindow, postMessageFrom } from "./window.js";
  * by the configured parent origin, adapter channel, app id, and optional nonce.
  */
 export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
+  readonly bootstrapJson = true;
   readonly capabilities: EndpointCapabilities;
+  readonly config: ReturnType<typeof resolveIframeTransport>;
   private router: VirtualPortRouter | undefined;
   private cleanupLifecycle: (() => void) | undefined;
   private observedOrigin: string | undefined;
@@ -42,7 +44,8 @@ export class IframeChildEndpoint implements IEndpoint<IframeAdapterModel> {
   constructor(private readonly options: IframeChildEndpointOptions) {
     validateAppId(options.appId);
     validateOrigin(options.parentOrigin, options.allowAnyOrigin);
-    this.capabilities = createCapabilities(options.binaryPackets);
+    this.config = resolveIframeTransport(options);
+    this.capabilities = endpointCapabilities;
     this.installLifecycleClose();
   }
 

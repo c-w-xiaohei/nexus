@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { usingNodeIpcClient, usingNodeIpcDaemon } from "./factory";
+import { UnixSocketClientEndpoint } from "./endpoints/unix-socket-client";
 
 describe("Node IPC factories", () => {
   it("creates daemon config with listen endpoint, metadata, and binary capabilities", () => {
@@ -23,6 +24,82 @@ describe("Node IPC factories", () => {
       binaryPackets: true,
       transferables: false,
     });
+    expect(implementation?.config).toEqual({
+      binaryPackets: true,
+      maxFrameBytes: 64 * 1024,
+      maxMessageBytes: 16 * 1024 * 1024,
+      maxBufferedBytes: 64 * 1024 * 1024,
+    });
+    expect(Object.isFrozen(implementation?.config)).toBe(true);
+  });
+
+  it("normalizes transport configuration and snapshots caller input", () => {
+    const transport = {
+      maxFrameBytes: 4096,
+      maxMessageBytes: 8192,
+      maxBufferedBytes: 16_384,
+    };
+    const config = usingNodeIpcClient({
+      appId: "client",
+      transport,
+      configure: false,
+    });
+    const endpoint = config.endpoint?.implementation;
+    transport.maxFrameBytes = 1024;
+
+    expect(endpoint?.config).toEqual({
+      binaryPackets: true,
+      ...transport,
+      maxFrameBytes: 4096,
+    });
+    expect(Object.isFrozen(endpoint?.config)).toBe(true);
+  });
+
+  it("rejects transport settings outside the IPC binary framing contract", () => {
+    expect(() =>
+      usingNodeIpcClient({
+        appId: "client",
+        transport: { maxFrameBytes: 16 * 1024 * 1024 + 1 },
+        configure: false,
+      }),
+    ).toThrow(expect.objectContaining({ code: "E_IPC_CONFIG_INVALID" }));
+    expect(() =>
+      usingNodeIpcClient({
+        appId: "client",
+        transport: { maxMessageBytes: 8192, maxBufferedBytes: 8192 },
+        configure: false,
+      }),
+    ).toThrow(expect.objectContaining({ code: "E_IPC_CONFIG_INVALID" }));
+    expect(() =>
+      usingNodeIpcClient({
+        appId: "client",
+        transport: { maxMessageBytes: 12.5 },
+        configure: false,
+      }),
+    ).toThrow(expect.objectContaining({ code: "E_IPC_CONFIG_INVALID" }));
+    expect(() =>
+      usingNodeIpcDaemon({
+        appId: "daemon",
+        transport: { binaryPackets: false },
+        configure: false,
+      } as never),
+    ).toThrow(expect.objectContaining({ code: "E_IPC_CONFIG_INVALID" }));
+  });
+
+  it("normalizes transport config on directly constructed endpoints", () => {
+    const input = { maxFrameBytes: 2048 };
+    const endpoint = new UnixSocketClientEndpoint(undefined, undefined, {
+      transport: input,
+    });
+    input.maxFrameBytes = 1024;
+
+    expect(endpoint.config).toMatchObject({
+      binaryPackets: true,
+      maxFrameBytes: 2048,
+      maxMessageBytes: 16 * 1024 * 1024,
+      maxBufferedBytes: 64 * 1024 * 1024,
+    });
+    expect(Object.isFrozen(endpoint.config)).toBe(true);
   });
 
   it("creates client config with startup targets without acquisition defaults", () => {

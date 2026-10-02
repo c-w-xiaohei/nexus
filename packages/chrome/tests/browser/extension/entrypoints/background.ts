@@ -14,6 +14,10 @@ import type {
   ServiceCallAuthContext,
 } from "@nexus-js/core";
 import { Nexus } from "@nexus-js/core";
+import {
+  usingWebSocketClient,
+  type WebSocketAdapterModel,
+} from "@nexus-js/websocket";
 import { createNexusStore } from "@nexus-js/core/state";
 import { eventKey, type BridgeEvent } from "../../protocol";
 import { defineBackground } from "wxt/utils/define-background";
@@ -26,6 +30,7 @@ import {
   SidePanelAdminToken,
   SidePanelToken,
   TargetedContentAdminToken,
+  BinaryImageToken,
   type DocumentReference,
   type DocumentToolService,
   type FixtureAppMeta,
@@ -283,6 +288,7 @@ export default defineBackground(() => {
       sessionId: identity.sessionId,
     },
   });
+  let binaryRelayReady: Promise<void> | undefined;
   nexus.configure({
     policy: {
       canConnect: ({
@@ -639,6 +645,8 @@ export default defineBackground(() => {
 
   /** Initialize one browser fixture run and publish its ready barrier. */
   async function activateRun(runId: string): Promise<void> {
+    if (runId.startsWith("binary-relay-"))
+      await (binaryRelayReady ??= initializeBinaryRelay());
     if (runState.activeRunId === runId) return;
     if (!(await initializeBackgroundRun(runId))) return;
     await chrome.storage.session.setAccessLevel({
@@ -659,10 +667,31 @@ export default defineBackground(() => {
   /** Coalesce concurrent run activation requests behind one promise. */
   function ensureRun(runId: string): Promise<void> {
     if (runState.activeRunId === runId) return Promise.resolve();
-    runState.activation ??= activateRun(runId).finally(() => {
-      runState.activation = undefined;
-    });
+    runState.activation ??= Promise.resolve()
+      .then(() => activateRun(runId))
+      .finally(() => {
+        runState.activation = undefined;
+      });
     return runState.activation;
+  }
+
+  async function initializeBinaryRelay(): Promise<void> {
+    await nexus.ready();
+    const response = await fetch("http://127.0.0.1:4176/target");
+    if (!response.ok)
+      throw new Error("Binary WebSocket target discovery failed");
+    const targetInfo = (await response.json()) as { readonly url: string };
+    const wsNexus = new Nexus<WebSocketAdapterModel>().configure(
+      usingWebSocketClient({ configure: false }),
+    );
+    Nexus.relay({
+      from: nexus,
+      to: {
+        nexus: wsNexus,
+        target: { context: "websocket-server", url: targetInfo.url },
+      },
+      services: [BinaryImageToken],
+    });
   }
 
   /** Create or reuse the offscreen document and await its session handshake. */

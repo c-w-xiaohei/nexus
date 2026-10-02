@@ -17,6 +17,18 @@ import {
 import { nexus } from "@nexus-js/core";
 import type { ChromeContextMeta } from "./types/meta";
 import { chromePortName } from "./ports/chrome-port-name";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
+
+const unsupportedChromeTransport: TransportLimits = {
+  // @ts-expect-error Chrome transport exposes no binary packet option.
+  binaryPackets: true,
+};
+void unsupportedChromeTransport;
+const invalidFrameSize: TransportLimits = {
+  // @ts-expect-error Frame size must be numeric.
+  maxFrameBytes: "4096",
+};
+void invalidFrameSize;
 
 const contextlessCustomMeta: ChromeContextMeta<
   never,
@@ -206,6 +218,46 @@ describe("Chrome Factory Functions", () => {
       });
       expect(configureSpy).not.toHaveBeenCalled();
     });
+
+    it("uses the Chrome JSON transport defaults", () => {
+      const config = createBackgroundScriptConfig();
+
+      expect(config.endpoint?.implementation.config).toEqual({
+        binaryPackets: false,
+        maxFrameBytes: 64 * 1024,
+        maxMessageBytes: 16 * 1024 * 1024,
+        maxBufferedBytes: 64 * 1024 * 1024,
+      });
+    });
+
+    it("passes transport limits to a frozen endpoint config", () => {
+      const transport = {
+        maxFrameBytes: 1024,
+        maxMessageBytes: 4096,
+        maxBufferedBytes: 8192,
+      };
+      const config = createBackgroundScriptConfig({ transport });
+      const endpoint = config.endpoint!.implementation;
+
+      expect(endpoint.config).toEqual({
+        binaryPackets: false,
+        maxFrameBytes: 1024,
+        maxMessageBytes: 4096,
+        maxBufferedBytes: 8192,
+      });
+      expect(Object.isFrozen(endpoint.config)).toBe(true);
+      expect(endpoint.config).not.toBe(transport);
+      transport.maxFrameBytes = 2048;
+      expect(endpoint.config?.maxFrameBytes).toBe(1024);
+    });
+
+    it("rejects runtime attempts to enable binary packets", () => {
+      expect(() =>
+        createBackgroundScriptConfig({
+          transport: { binaryPackets: true } as never,
+        }),
+      ).toThrow("transport.binaryPackets is not a transport limit.");
+    });
   });
 
   describe("usingBackgroundScript", () => {
@@ -231,6 +283,20 @@ describe("Chrome Factory Functions", () => {
         isVisible: true,
       });
       expect(global.document.addEventListener).not.toHaveBeenCalled();
+    });
+
+    it("attaches normalized transport limits without mixing them into metadata", () => {
+      const config = createContentScriptConfig({
+        transport: { maxFrameBytes: 8192 },
+      });
+
+      expect(config.endpoint?.meta).not.toHaveProperty("transport");
+      expect(config.endpoint?.implementation.config).toEqual({
+        binaryPackets: false,
+        maxFrameBytes: 8192,
+        maxMessageBytes: 16 * 1024 * 1024,
+        maxBufferedBytes: 64 * 1024 * 1024,
+      });
     });
   });
 
@@ -356,6 +422,20 @@ describe("Chrome Factory Functions", () => {
       context: "options-page",
     });
     expect(config.endpoint?.implementation).toBeDefined();
+  });
+
+  it("propagates transport limits through extension-page helpers", () => {
+    const config = createExtensionPageConfig(
+      { context: "extension-page" },
+      { transport: { maxMessageBytes: 1024 * 1024 } },
+    );
+
+    expect(config.endpoint?.implementation.config).toEqual({
+      binaryPackets: false,
+      maxFrameBytes: 64 * 1024,
+      maxMessageBytes: 1024 * 1024,
+      maxBufferedBytes: 64 * 1024 * 1024,
+    });
   });
 
   describe("Options receiver lock", () => {

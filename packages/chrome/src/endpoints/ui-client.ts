@@ -1,4 +1,6 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
+import { resolveTransportConfig } from "@nexus-js/core/transport/config";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import {
   NexusEndpointCapabilityError,
   NexusEndpointConnectError,
@@ -23,6 +25,7 @@ import {
 
 /** Endpoint for extension pages, including popup, side panel and offscreen pages. */
 export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
+  readonly config;
   capabilities = { supportsTransferables: false };
   private stopListening?: () => void;
   private readonly acceptedPorts = new Set<chrome.runtime.Port>();
@@ -38,6 +41,7 @@ export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
       receiver?: ChromePageTarget | (() => Promise<ChromePageTarget>);
       exclusiveReceiver?: boolean;
       canConnectContent?: boolean;
+      transport?: TransportLimits;
     } = {},
   ) {
     const {
@@ -48,6 +52,7 @@ export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
     this.receiver = receiver;
     this.exclusiveReceiver = exclusiveReceiver;
     this.canConnectContent = canConnectContent;
+    this.config = resolveTransportConfig(options.transport, false);
   }
 
   matchesTarget = (

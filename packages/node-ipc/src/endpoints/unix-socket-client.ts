@@ -1,8 +1,13 @@
 import net from "node:net";
 import type { IEndpoint } from "@nexus-js/core";
+import type {
+  ResolvedTransportConfig,
+  TransportLimits,
+} from "@nexus-js/core/transport/config";
 import { safeParse } from "valibot";
 import { AuthAckSchema, type AuthRequest } from "../auth-protocol.js";
 import { NodeIpcError } from "../errors.js";
+import { resolveNodeIpcTransport } from "../transport-config.js";
 import { UnixSocketPort } from "../ports/unix-socket-port.js";
 import {
   NodeIpcAddress,
@@ -34,6 +39,7 @@ const createCapabilities = (): EndpointCapabilities => {
 
 export class UnixSocketClientEndpoint implements IEndpoint<NodeIpcAdapterModel> {
   readonly capabilities = createCapabilities();
+  readonly config: Readonly<ResolvedTransportConfig>;
 
   targetKey = (target: NodeIpcConnectionTarget): string =>
     JSON.stringify({
@@ -48,9 +54,11 @@ export class UnixSocketClientEndpoint implements IEndpoint<NodeIpcAdapterModel> 
     private readonly options: {
       authTimeoutMs?: number;
       maxAuthLineBytes?: number;
+      transport?: TransportLimits;
     } = {},
   ) {
     validateAuthToken(authToken);
+    this.config = resolveNodeIpcTransport(options.transport);
   }
 
   async connect(

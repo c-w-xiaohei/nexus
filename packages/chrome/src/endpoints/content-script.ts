@@ -1,4 +1,6 @@
 import type { IEndpoint, IPort } from "@nexus-js/core";
+import { resolveTransportConfig } from "@nexus-js/core/transport/config";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import {
   NexusEndpointConnectError,
   NexusEndpointListenError,
@@ -21,11 +23,16 @@ import {
  * Primarily connects to background script
  */
 export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
+  readonly config;
   private stopListening?: () => void;
 
   capabilities = {
     supportsTransferables: false,
   };
+
+  constructor(options: { transport?: TransportLimits } = {}) {
+    this.config = resolveTransportConfig(options.transport, false);
+  }
 
   matchesTarget(
     target: ChromeConnectionTarget,

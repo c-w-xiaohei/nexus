@@ -19,6 +19,10 @@ import {
   toFrameworkProtocolError,
 } from "@/errors";
 import type { PayloadProcessor } from "../payload/payload-processor";
+import type {
+  ByteReservationBudget,
+  ByteReservationLease,
+} from "../payload/byte-reservation";
 import type { PendingCallManager } from "../pending-call-manager";
 import type { ResourceManager } from "../resource-manager";
 import { scopeClosedError, type ResourceScope } from "../resource-scope";
@@ -57,7 +61,9 @@ export class MessageHandler<M extends AdapterModel> {
       safeSendMessage(
         message: NexusMessage,
         connectionId: string,
-      ): Result<void, Error>;
+        options?: { lease?: ByteReservationLease; signal?: AbortSignal },
+      ): Promise<Result<void, Error>>;
+      payloadReservation?: ByteReservationBudget;
       dispatchRelease(
         resourceId: string,
         connectionId: string,
@@ -186,9 +192,21 @@ export class MessageHandler<M extends AdapterModel> {
     authorization?: AuthorizedCall<M>,
   ): Promise<Result<void, Error>> {
     let encoded: Result<any[], Error>;
+    let lease: ByteReservationLease | undefined;
+    const abort = new AbortController();
+    const stopAbort = scope?.onClosed(() => abort.abort());
     let frameworkFailure = false;
     try {
-      encoded = await this.prepareReply(message, source, scope, authorization);
+      encoded = await this.prepareReply(message, source, scope, authorization, {
+        reserveBytes:
+          this.context.payloadReservation?.reserveBytes ?? (() => true),
+        releaseBytes:
+          this.context.payloadReservation?.releaseBytes ?? (() => {}),
+        signal: abort.signal,
+        onLease: (value) => {
+          lease = value;
+        },
+      });
       frameworkFailure = encoded.isErr() && encoded.error instanceof NexusError;
     } catch (error) {
       encoded = Result.err(toError(error));
@@ -210,12 +228,20 @@ export class MessageHandler<M extends AdapterModel> {
         };
     const sent = scope?.closed
       ? Result.err(scopeClosedError(scope))
-      : Result.try({
-          try: () => this.context.safeSendMessage(reply, source),
-          catch: toError,
-        }).andThen((result) => result);
+      : await Promise.resolve()
+          .then(() =>
+            lease
+              ? this.context.safeSendMessage(reply, source, {
+                  lease,
+                  signal: abort.signal,
+                })
+              : this.context.safeSendMessage(reply, source),
+          )
+          .catch((error) => Result.err(toError(error)));
     if (sent.isErr() && encoded.isOk())
       this.context.payloadProcessor.releaseSanitizedResources(encoded.value);
+    lease?.releaseAll();
+    stopAbort?.();
     return sent;
   }
 
@@ -228,6 +254,7 @@ export class MessageHandler<M extends AdapterModel> {
     source: string,
     scope?: ResourceScope,
     admitted?: AuthorizedCall<M>,
+    reservation?: Parameters<PayloadProcessor["safeSanitizeFromService"]>[5],
   ): Promise<Result<any[], Error>> {
     const authorization = admitted
       ? Result.ok(admitted)
@@ -286,15 +313,16 @@ export class MessageHandler<M extends AdapterModel> {
     }
     // The registration may have changed while we awaited; never reload the authorized policy.
     if (scope?.closed) return Result.err(scopeClosedError(scope));
-    return payload
-      .safeSanitizeFromService(
+    return (
+      await payload.safeSanitizeFromService(
         [result],
         source,
         authorized.value.serviceName,
         authorized.value.servicePolicy,
         scope,
+        reservation,
       )
-      .mapError(toFrameworkProtocolError);
+    ).mapError(toFrameworkProtocolError);
   }
 
   /**

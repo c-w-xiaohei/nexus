@@ -27,7 +27,8 @@ export function createEnvelope(
 
 export function readEnvelope(value: unknown): MessageEnvelope | undefined {
   try {
-    const result = v.safeParse(MessageEnvelopeSchema, value);
+    const candidate = typeof value === "string" ? JSON.parse(value) : value;
+    const result = v.safeParse(MessageEnvelopeSchema, candidate);
     return result.success ? result.output : undefined;
   } catch {
     return undefined;

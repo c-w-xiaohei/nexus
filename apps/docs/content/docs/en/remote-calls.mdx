@@ -40,6 +40,32 @@ Use [callbacks](/nexus/docs/callbacks/) for functions and
 in their owning context. Supported by-value data depends on the transport's
 serializer; do not assume arbitrary class instances preserve their behavior.
 
+### Binary values
+
+Ordinary RPC arguments and results can include `ArrayBuffer`, `Uint8Array`,
+Node.js `Buffer`, and `Blob`, including when nested in supported containers.
+`ArrayBuffer` stays an `ArrayBuffer`; `Uint8Array` and Node `Buffer` arrive as a
+`Uint8Array` containing only the view's visible bytes. A `Blob` arrives as a
+`Blob` with its content and MIME type. A `File` is transferred with Blob content
+semantics only; pass its name and other file metadata as separate fields.
+
+Nexus snapshots bytes for transport and does not detach the caller's buffer.
+This does not preserve object identity or shared memory and is not a zero-copy
+or ownership-transfer API. No per-call binary or chunk option is needed.
+
+Large encoded messages are split into bounded frames transparently on each
+connection hop and reassembled before normal RPC handling. Defaults are a 64 KiB
+frame limit, a 16 MiB message limit, and a 64 MiB aggregate framework-buffer
+budget per endpoint runtime. JSON/Base64 encoding can make a message reach its
+limit sooner than binary encoding. The 16 MiB message ceiling is fixed; an
+endpoint can lower that limit but cannot raise it.
+Unsupported values, size limits, exhausted
+capacity, and transfer deadlines reject the normal call with structured errors;
+inspect them through `await` or `Nexus.safeCall(...)`. Delivery can be uncertain
+if the final frame was submitted but its acknowledgment or RPC response was not
+received. Nexus does not retry or replay the call, so do not infer that the
+remote method did not run.
+
 ## Calls Start When Consumed
 
 ```ts

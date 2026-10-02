@@ -12,6 +12,8 @@ import {
   type ReleaseMessage,
 } from "../../types/message";
 import { Result } from "better-result";
+import { createByteReservationLease } from "../payload/byte-reservation";
+import { REF_WRAPPER_SYMBOL } from "@/types/ref-wrapper";
 const { err, ok } = Result;
 import {
   SERVICE_INVOKE_END,
@@ -299,6 +301,59 @@ describe("MessageHandler", () => {
       },
       sourceConnectionId,
     );
+  });
+
+  it("holds a reply lease until native acceptance, independent of a colliding response ID", async () => {
+    let used = 0;
+    let completeSend!: (result: Result<void, Error>) => void;
+    context.payloadReservation = {
+      reserveBytes: (bytes) => {
+        used += bytes;
+        return true;
+      },
+      releaseBytes: (bytes) => {
+        used -= bytes;
+      },
+    };
+    context.safeSendMessage = vi.fn(
+      () =>
+        new Promise<Result<void, Error>>((resolve) => (completeSend = resolve)),
+    );
+    vi.spyOn(
+      payloadProcessor,
+      "safeSanitizeFromService",
+    ).mockImplementationOnce(
+      async (_values, _target, _service, _policy, _scope, reservation) => {
+        const lease = createByteReservationLease(reservation);
+        expect(lease.reserve(32)).toBe(true);
+        reservation?.onLease(lease);
+        return ok(["reply"]);
+      },
+    );
+    resourceManager.registerExposedServices([
+      { name: "lease-reply", service: { run: () => "reply" } },
+    ]);
+
+    const replying = messageHandler.safeHandleMessage(
+      {
+        type: NexusMessageType.APPLY,
+        id: 808,
+        resourceId: null,
+        path: ["lease-reply", "run"],
+        args: [],
+      },
+      sourceConnectionId,
+    );
+    await vi.waitFor(() => expect(used).toBe(32));
+    await messageHandler.safeHandleMessage(
+      { type: NexusMessageType.RES, id: 808, result: "reverse" },
+      sourceConnectionId,
+    );
+    expect(used).toBe(32);
+
+    completeSend(Result.ok(undefined));
+    expect((await replying).isOk()).toBe(true);
+    expect(used).toBe(0);
   });
 
   it("returns unexpected response processing errors without replying", async () => {
@@ -1204,6 +1259,44 @@ describe("MessageHandler", () => {
 
       expect(sendSpy).toHaveBeenCalled();
       expect(result.isErr()).toBe(true);
+    });
+
+    it("rolls back a returned capability when its RES cannot be handed off", async () => {
+      const resultObject = { value: 42 };
+      resourceManager.registerExposedServices([
+        {
+          name: "capability",
+          service: {
+            create: () => ({
+              [REF_WRAPPER_SYMBOL]: true,
+              target: resultObject,
+            }),
+          },
+        },
+      ]);
+      vi.spyOn(mockEngine, "safeSendMessage").mockResolvedValueOnce(
+        err(new Error("native reply submission failed")),
+      );
+
+      const result = await messageHandler.safeHandleMessage(
+        {
+          type: NexusMessageType.APPLY,
+          id: 1001,
+          resourceId: null,
+          path: ["capability", "create"],
+          args: [],
+        },
+        sourceConnectionId,
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(resourceManager.countLocalResources()).toBe(0);
+      expect(mockEngine.safeSendMessage).toHaveBeenCalledOnce();
+      expect(mockEngine.safeSendMessage.mock.calls[0]?.[0]).toMatchObject({
+        type: NexusMessageType.RES,
+        id: 1001,
+        result: expect.stringMatching(/^\u0003R:/),
+      });
     });
 
     it("should call a function from the local resource registry", async () => {

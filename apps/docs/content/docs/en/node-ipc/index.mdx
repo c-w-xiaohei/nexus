@@ -78,6 +78,25 @@ Do not use the mock to validate node-ipc adapter behavior. It does not exercise 
 
 Use [Testing](/nexus/docs/node-ipc/testing/) for adapter and real socket integration testing guidance.
 
+## Transport Limits [#transport-limits]
+
+Node IPC uses binary packets. Daemon and client helpers accept a `transport`
+option for frame, message, and aggregate framework-buffer limits; defaults are
+64 KiB, 16 MiB, and 64 MiB:
+
+```ts
+usingNodeIpcDaemon({
+  appId: "example-app",
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```
+
+The configured frame limit cannot exceed the IPC framing packet limit.
+
 ## Related Pages
 
 - Product docs landing: [Nexus Documentation](/nexus/docs/)

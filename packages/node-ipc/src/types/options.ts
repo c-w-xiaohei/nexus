@@ -1,4 +1,5 @@
 import type { ConnectionTargetOf, NexusConfig } from "@nexus-js/core";
+import type { TransportLimits } from "@nexus-js/core/transport/config";
 import type {
   NodeIpcAddressResolver,
   NodeIpcSocketAddress,
@@ -12,6 +13,7 @@ export type NodeIpcDaemonOptions = {
   authToken?: string;
   authTimeoutMs?: number;
   maxAuthLineBytes?: number;
+  transport?: TransportLimits;
   configure?: true;
 } & Omit<NexusConfig<NodeIpcAdapterModel>, "endpoint">;
 
@@ -27,6 +29,7 @@ export type NodeIpcClientOptions = {
   authToken?: string;
   authTimeoutMs?: number;
   maxAuthLineBytes?: number;
+  transport?: TransportLimits;
   connectTo?: readonly ConnectionTargetOf<NodeIpcAdapterModel>[];
   resolveAddress?: NodeIpcAddressResolver;
   configure?: true;

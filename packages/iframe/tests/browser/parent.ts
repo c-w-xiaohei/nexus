@@ -9,6 +9,7 @@ import {
 
 interface EchoService {
   echo(value: string): Promise<string>;
+  echoBinary(value: Uint8Array | ArrayBuffer | Blob): Promise<unknown>;
 }
 
 interface ParentEchoService {
@@ -19,6 +20,8 @@ const EchoToken = new Token<EchoService>("browser.echo");
 const ParentEchoToken = new Token<ParentEchoService>("browser.parent-echo");
 const connectToMode =
   new URLSearchParams(window.location.search).get("mode") === "connect-to";
+const jsonParentMode =
+  new URLSearchParams(window.location.search).get("packetMode") === "json";
 
 const frameIds = ["alpha", "beta"] as const;
 const telemetry = {
@@ -78,6 +81,7 @@ const parentConfig = usingIframeParent({
     nonce: `browser-nonce-${frameId}`,
   })),
   heartbeat: { intervalMs: 100, maxMisses: 2 },
+  ...(jsonParentMode ? { transport: { binaryPackets: false } } : {}),
 });
 const parentEndpoint = parentConfig.endpoint?.implementation;
 if (!parentEndpoint) throw new Error("Missing iframe parent endpoint");
@@ -116,7 +120,10 @@ window.addEventListener("message", (event) => {
 
 for (const frameId of frameIds) {
   const iframe = getFrame(frameId);
-  if (!connectToMode) iframe.src = iframe.dataset.src ?? "";
+  if (!connectToMode) {
+    const source = iframe.dataset.src ?? "";
+    iframe.src = jsonParentMode ? `${source}&packetMode=json` : source;
+  }
 }
 
 /** Acquires the explicitly addressed child and makes one observable remote call. */
@@ -133,6 +140,22 @@ async function callChildEcho(frameId: string, value: string) {
   const response = await service.echo(value);
   telemetry.childCalls.push({ frameId, value });
   return response;
+}
+
+async function callChildBinary(
+  frameId: string,
+  value: Uint8Array | ArrayBuffer | Blob,
+) {
+  const service = await parent
+    .connect({
+      target: {
+        context: "iframe-child",
+        appId: "browser-app",
+        frameId,
+      },
+    })
+    .then((connection) => connection.get(EchoToken));
+  return service.echoBinary(value);
 }
 
 /** Reuses a session-bound proxy so reload tests can observe stale-session rejection. */
@@ -212,6 +235,7 @@ async function reloadFrame(frameId: string) {
 Object.assign(window, {
   callCachedChildEcho,
   callChildEcho,
+  callChildBinary,
   getTelemetry,
   reloadFrame,
   startConnectToSelection,

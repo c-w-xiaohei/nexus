@@ -11,7 +11,7 @@ import {
   createConnectionMeta,
   isTrustedConnectionMeta,
 } from "./connection-meta.js";
-import { createCapabilities } from "./shared.js";
+import { endpointCapabilities, resolveIframeTransport } from "./shared.js";
 import type {
   EndpointCapabilities,
   IframeAdapterModel,
@@ -34,7 +34,9 @@ type ParentFrameState = IframeFrameTarget & {
  * for each frame: matching origin is not enough when same-origin frames coexist.
  */
 export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
+  readonly bootstrapJson = true;
   readonly capabilities: EndpointCapabilities;
+  readonly config: ReturnType<typeof resolveIframeTransport>;
   private readonly frames: ParentFrameState[] = [];
   private onConnect:
     | ((port: IPort, connectionMeta: IframeConnectionMeta) => void)
@@ -43,7 +45,8 @@ export class IframeParentEndpoint implements IEndpoint<IframeAdapterModel> {
 
   constructor(private readonly options: IframeParentEndpointOptions) {
     validateAppId(options.appId);
-    this.capabilities = createCapabilities(options.binaryPackets);
+    this.config = resolveIframeTransport(options);
+    this.capabilities = endpointCapabilities;
     for (const frame of options.frames)
       this.frames.push(this.createFrameState(frame));
   }

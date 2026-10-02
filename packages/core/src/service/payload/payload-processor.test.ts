@@ -39,11 +39,210 @@ describe("PayloadProcessor", () => {
     payloadProcessor = new PayloadProcessor(resourceManager, proxyFactory);
   });
 
+  it.each(["sanitized", "orphaned"] as const)(
+    "releases %s callbacks nested in Map keys, values, and Sets once",
+    async (cleanup) => {
+      const callback = () => {};
+      const prepared = unwrap(
+        await payloadProcessor.safeSanitize(
+          [new Map([[callback, new Set([callback])]])],
+          mockConnectionId,
+        ),
+      );
+      const release = vi.fn();
+      if (cleanup === "sanitized") {
+        vi.spyOn(resourceManager, "releaseLocalResource").mockImplementation(
+          release,
+        );
+        payloadProcessor.releaseSanitizedResources(prepared);
+        expect(release).toHaveBeenCalledExactlyOnceWith("res-123");
+      } else {
+        payloadProcessor.releaseOrphanedResponseResources(
+          prepared,
+          mockConnectionId,
+          release,
+        );
+        expect(release).toHaveBeenCalledExactlyOnceWith(
+          "res-123",
+          mockConnectionId,
+        );
+      }
+    },
+  );
+
   describe("safeSanitize", () => {
-    it("preserves __proto__ as ordinary data through encode and revive", () => {
+    it("snapshots visible bytes and prepares Blob values asynchronously", async () => {
+      const backing = new Uint8Array([99, 1, 2, 88]);
+      const view = backing.subarray(1, 3);
+      const prepared = await payloadProcessor.safeSanitize(
+        [
+          {
+            view,
+            blob: new Blob([new Uint8Array([3, 4])], { type: "image/test" }),
+          },
+        ],
+        mockConnectionId,
+      );
+      backing[1] = 9;
+      const [revived] = unwrap(
+        payloadProcessor.safeRevive(unwrap(prepared), mockConnectionId),
+      );
+      expect([...revived.view]).toEqual([1, 2]);
+      expect(revived.blob).toBeInstanceOf(Blob);
+      expect(revived.blob.type).toBe("image/test");
+      expect([...new Uint8Array(await revived.blob.arrayBuffer())]).toEqual([
+        3, 4,
+      ]);
+      expect(backing.buffer.byteLength).toBe(4);
+    });
+
+    it("rejects an oversized Blob before reading its bytes", async () => {
+      const oversizedBlob = new Blob([]);
+      Object.defineProperty(oversizedBlob, "size", {
+        value: 16 * 1024 * 1024 + 1,
+      });
+      const arrayBuffer = vi
+        .spyOn(oversizedBlob, "arrayBuffer")
+        .mockResolvedValue(new ArrayBuffer(0));
+
+      const result = await payloadProcessor.safeSanitize(
+        [oversizedBlob],
+        mockConnectionId,
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(arrayBuffer).not.toHaveBeenCalled();
+    });
+
+    it("rejects shared reservation exhaustion before reading Blob bytes", async () => {
+      const blob = new Blob([new Uint8Array([1, 2, 3])]);
+      const arrayBuffer = vi.spyOn(blob, "arrayBuffer");
+      const reserveBytes = vi.fn(() => false);
+      const releaseBytes = vi.fn();
+      const onLease = vi.fn();
+
+      const result = await payloadProcessor.safeSanitize(
+        [blob],
+        mockConnectionId,
+        undefined,
+        { reserveBytes, releaseBytes, onLease },
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(reserveBytes).toHaveBeenCalledWith(blob.size);
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(releaseBytes).not.toHaveBeenCalled();
+      expect(onLease).not.toHaveBeenCalled();
+    });
+
+    it("retains Blob reservations through abort and releases them after read settles", async () => {
+      const blob = new Blob([new Uint8Array([1, 2, 3])]);
+      let finishRead!: (buffer: ArrayBuffer) => void;
+      vi.spyOn(blob, "arrayBuffer").mockReturnValue(
+        new Promise((resolve) => {
+          finishRead = resolve;
+        }),
+      );
+      let reserved = 0;
+      const reservation = {
+        reserveBytes: vi.fn((bytes: number) => {
+          reserved += bytes;
+          return true;
+        }),
+        releaseBytes: vi.fn((bytes: number) => {
+          reserved -= bytes;
+        }),
+      };
+      const controller = new AbortController();
+      const onLease = vi.fn();
+      const preparing = payloadProcessor.safeSanitize(
+        [blob],
+        mockConnectionId,
+        undefined,
+        { ...reservation, signal: controller.signal, onLease },
+      );
+
+      await vi.waitFor(() => expect(reserved).toBe(blob.size));
+      controller.abort();
+      expect(reserved).toBe(blob.size);
+      finishRead(await new Blob([new Uint8Array([1, 2, 3])]).arrayBuffer());
+      const result = await preparing;
+
+      expect(result.isErr()).toBe(true);
+      expect(reserved).toBe(0);
+      expect(reservation.releaseBytes).toHaveBeenCalledWith(blob.size);
+      expect(onLease).not.toHaveBeenCalled();
+    });
+
+    it("hands successful preparation bytes to an idempotent lease", async () => {
+      let reserved = 0;
+      const releaseBytes = vi.fn((bytes: number) => {
+        reserved -= bytes;
+      });
+      let handedOff!: import("./byte-reservation").ByteReservationLease;
+      const bytes = new Uint8Array([10, 11, 12]);
+
+      const result = await payloadProcessor.safeSanitize(
+        [bytes],
+        mockConnectionId,
+        undefined,
+        {
+          reserveBytes: (amount) => {
+            reserved += amount;
+            return true;
+          },
+          releaseBytes,
+          onLease: (lease) => {
+            handedOff = lease;
+          },
+        },
+      );
+
+      expect(result.isOk()).toBe(true);
+      expect(reserved).toBe(bytes.byteLength);
+      handedOff.release(bytes.byteLength);
+      handedOff.releaseAll();
+      expect(reserved).toBe(0);
+      expect(releaseBytes).toHaveBeenCalledOnce();
+    });
+
+    it("rolls back bytes and capabilities together when lease handoff throws", async () => {
+      const releaseResource = vi.spyOn(resourceManager, "releaseLocalResource");
+      const releaseBytes = vi.fn();
+      const result = await payloadProcessor.safeSanitize(
+        [() => {}, new Uint8Array([1, 2, 3])],
+        mockConnectionId,
+        undefined,
+        {
+          reserveBytes: () => true,
+          releaseBytes,
+          onLease: () => {
+            throw new Error("lease handoff failed");
+          },
+        },
+      );
+
+      expect(result.isErr()).toBe(true);
+      expect(releaseResource).toHaveBeenCalledExactlyOnceWith("res-123");
+      expect(releaseBytes).toHaveBeenCalledExactlyOnceWith(3);
+    });
+
+    it("rejects cyclic payloads and preserves rollback of earlier callbacks", async () => {
+      vi.mocked(resourceManager.registerLocalResource).mockRestore();
+      const cycle: Record<string, unknown> = {};
+      cycle.self = cycle;
+      const result = await payloadProcessor.safeSanitize(
+        [() => {}, cycle],
+        mockConnectionId,
+      );
+      expect(result.isErr()).toBe(true);
+      expect(resourceManager.countLocalResources()).toBe(0);
+    });
+
+    it("preserves __proto__ as ordinary data through encode and revive", async () => {
       const input = JSON.parse('{"__proto__":{"inherited":true},"value":1}');
       const encoded = unwrap(
-        payloadProcessor.safeSanitize([input], mockConnectionId),
+        await payloadProcessor.safeSanitize([input], mockConnectionId),
       );
       const [revived] = unwrap(
         payloadProcessor.safeRevive(encoded, mockConnectionId),
@@ -53,14 +252,14 @@ describe("PayloadProcessor", () => {
       expect(revived.inherited).toBeUndefined();
       expect(revived.value).toBe(1);
     });
-    it("rolls back capabilities even when a getter throws an unserializable value", () => {
+    it("rolls back capabilities even when a getter throws an unserializable value", async () => {
       vi.mocked(resourceManager.registerLocalResource).mockRestore();
       const hostile = {
         toString() {
           throw new Error("unreadable");
         },
       };
-      const result = payloadProcessor.safeSanitize(
+      const result = await payloadProcessor.safeSanitize(
         [
           () => {},
           {
@@ -74,7 +273,7 @@ describe("PayloadProcessor", () => {
       expect(result).toMatchObject({ error: { code: "E_PROTOCOL_ERROR" } });
       expect(resourceManager.countLocalResources()).toBe(0);
     });
-    it("rolls back resources registered before a later value fails to sanitize", () => {
+    it("rolls back resources registered before a later value fails to sanitize", async () => {
       vi.mocked(resourceManager.registerLocalResource).mockRestore();
       const existingResourceId = resourceManager.registerLocalResource(
         {},
@@ -86,7 +285,7 @@ describe("PayloadProcessor", () => {
         },
       };
 
-      const result = payloadProcessor.safeSanitize(
+      const result = await payloadProcessor.safeSanitize(
         [() => {}, failingValue],
         mockConnectionId,
       );
@@ -96,9 +295,9 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.hasLocalResource(existingResourceId)).toBe(true);
     });
 
-    it("should keep primitives (string, number, boolean, null) as they are", () => {
+    it("should keep primitives (string, number, boolean, null) as they are", async () => {
       const result = unwrap(
-        payloadProcessor.safeSanitize(
+        await payloadProcessor.safeSanitize(
           ["hello", 123, true, null],
           mockConnectionId,
         ),
@@ -106,19 +305,19 @@ describe("PayloadProcessor", () => {
       expect(result).toEqual(["hello", 123, true, null]);
     });
 
-    it("should convert undefined to an UNDEFINED placeholder", () => {
+    it("should convert undefined to an UNDEFINED placeholder", async () => {
       const expected = Placeholder.encode(PlaceholderType.UNDEFINED);
       const result = unwrap(
-        payloadProcessor.safeSanitize([undefined], mockConnectionId),
+        await payloadProcessor.safeSanitize([undefined], mockConnectionId),
       );
       expect(result).toEqual([expected]);
     });
 
-    it("should escape strings that start with placeholder/escape prefix", () => {
+    it("should escape strings that start with placeholder/escape prefix", async () => {
       const placeholderStr = Placeholder.encode(PlaceholderType.UNDEFINED);
       const escapedStr = `${ESCAPE_CHAR}test`;
       const result = unwrap(
-        payloadProcessor.safeSanitize(
+        await payloadProcessor.safeSanitize(
           [placeholderStr, escapedStr],
           mockConnectionId,
         ),
@@ -129,10 +328,10 @@ describe("PayloadProcessor", () => {
       ]);
     });
 
-    it("should convert a Function to a RESOURCE placeholder", () => {
+    it("should convert a Function to a RESOURCE placeholder", async () => {
       const myFunc = () => {};
       const result = unwrap(
-        payloadProcessor.safeSanitize([myFunc], mockConnectionId),
+        await payloadProcessor.safeSanitize([myFunc], mockConnectionId),
       );
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myFunc,
@@ -145,7 +344,7 @@ describe("PayloadProcessor", () => {
       );
     });
 
-    it("should preserve service policy when sanitizing a Function returned from a service", () => {
+    it("should preserve service policy when sanitizing a Function returned from a service", async () => {
       const myFunc = () => {};
       const servicePolicy = { canCall: vi.fn(() => false) };
       resourceManager.registerExposedServices([
@@ -157,7 +356,7 @@ describe("PayloadProcessor", () => {
       ]);
 
       const result = unwrap(
-        payloadProcessor.safeSanitizeFromService(
+        await payloadProcessor.safeSanitizeFromService(
           [myFunc],
           mockConnectionId,
           "vault",
@@ -176,7 +375,7 @@ describe("PayloadProcessor", () => {
       );
     });
 
-    it("should preserve an explicit undefined service policy snapshot", () => {
+    it("should preserve an explicit undefined service policy snapshot", async () => {
       const myFunc = () => {};
       const laterPolicy = { canCall: vi.fn(() => false) };
       resourceManager.registerExposedServices([
@@ -184,7 +383,7 @@ describe("PayloadProcessor", () => {
       ]);
 
       const result = unwrap(
-        payloadProcessor.safeSanitizeFromService(
+        await payloadProcessor.safeSanitizeFromService(
           [myFunc],
           mockConnectionId,
           "vault",
@@ -210,11 +409,11 @@ describe("PayloadProcessor", () => {
       );
     });
 
-    it("should convert a RefWrapper object to RESOURCE placeholder", () => {
+    it("should convert a RefWrapper object to RESOURCE placeholder", async () => {
       const myObject = { id: 1 };
       const refWrapper = { [REF_WRAPPER_SYMBOL]: true, target: myObject };
       const result = unwrap(
-        payloadProcessor.safeSanitize([refWrapper], mockConnectionId),
+        await payloadProcessor.safeSanitize([refWrapper], mockConnectionId),
       );
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myObject,
@@ -227,45 +426,35 @@ describe("PayloadProcessor", () => {
       );
     });
 
-    it("should convert Map/Set/BigInt placeholders", () => {
+    it("should convert Map/Set/BigInt placeholders", async () => {
       const myMap = new Map([["a", 1]]);
       const mySet = new Set(["a", 1]);
       const myBigInt = BigInt(9007199254740991);
       const mapResult = unwrap(
-        payloadProcessor.safeSanitize([myMap], mockConnectionId),
+        await payloadProcessor.safeSanitize([myMap], mockConnectionId),
       );
       const setResult = unwrap(
-        payloadProcessor.safeSanitize([mySet], mockConnectionId),
+        await payloadProcessor.safeSanitize([mySet], mockConnectionId),
       );
       const bigintResult = unwrap(
-        payloadProcessor.safeSanitize([myBigInt], mockConnectionId),
+        await payloadProcessor.safeSanitize([myBigInt], mockConnectionId),
       );
-      expect(mapResult[0]).toBe(
-        Placeholder.encode(
-          PlaceholderType.MAP,
-          JSON.stringify(Array.from(myMap.entries())),
-        ),
-      );
-      expect(setResult[0]).toBe(
-        Placeholder.encode(
-          PlaceholderType.SET,
-          JSON.stringify(Array.from(mySet.values())),
-        ),
-      );
+      expect(mapResult[0]).toEqual(myMap);
+      expect(setResult[0]).toEqual(mySet);
       expect(bigintResult[0]).toBe(
         Placeholder.encode(PlaceholderType.BIGINT, myBigInt.toString()),
       );
     });
 
-    it("should recursively sanitize arrays and plain objects", () => {
+    it("should recursively sanitize arrays and plain objects", async () => {
       const myFunc = () => {};
       const arr = [1, "test", myFunc];
       const obj = { a: 1, b: "test", c: myFunc };
       const arrResult = unwrap(
-        payloadProcessor.safeSanitize([arr], mockConnectionId),
+        await payloadProcessor.safeSanitize([arr], mockConnectionId),
       )[0];
       const objResult = unwrap(
-        payloadProcessor.safeSanitize([obj], mockConnectionId),
+        await payloadProcessor.safeSanitize([obj], mockConnectionId),
       )[0];
       expect(arrResult).toEqual([
         1,

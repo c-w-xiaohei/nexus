@@ -19,11 +19,13 @@ export class WebSocketClientEndpoint implements IEndpoint<WebSocketAdapterModel>
   private closed = false;
   private readonly ports = new Set<WebSocketPort>();
   private readonly limits;
+  readonly config;
   private readonly connectTimeoutMs;
   private readonly protocols;
 
   constructor(options: WebSocketClientOptions = {}) {
     this.limits = normalizeLimits(options);
+    this.config = this.limits.config;
     this.connectTimeoutMs = normalizeLimit(options.connectTimeoutMs, 5_000);
     this.protocols = options.protocols ? [...options.protocols] : undefined;
   }

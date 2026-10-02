@@ -19,6 +19,7 @@ import {
   type DocumentRouteFacts,
   TargetedContentAdminToken,
   WorkspaceToken,
+  BinaryImageToken,
   type WorkspaceCapability,
   type WorkspaceService,
 } from "../shared/contracts";
@@ -344,6 +345,7 @@ export default defineContentScript({
         )
           return;
         if (await runContentControlCommand(command, nexus, reporter)) return;
+        if (await runBinaryCommand(command, nexus, reporter)) return;
         const result = await runTargetedCommand(
           command,
           identity.runId,
@@ -411,6 +413,80 @@ function createContentRouteProbe(
       await reporter.barrier("pre-ready-armed");
     },
   };
+}
+
+async function runBinaryCommand(
+  command: ScenarioCommand,
+  nexus: FixtureNexus,
+  reporter: ContentCommandReporter,
+): Promise<boolean> {
+  if (
+    command !== "binary-image" &&
+    command !== "binary-upload" &&
+    command !== "binary-hold"
+  )
+    return false;
+  const connection = await nexus.connect({ target: chromeTarget.background() });
+  const image = connection.get(BinaryImageToken, {
+    callTimeout: command === "binary-hold" ? 30_000 : 60_000,
+  });
+  if (command === "binary-image") {
+    const value = await image.getImage();
+    const blob = new Blob([value.bytes.slice().buffer], {
+      type: value.mimeType,
+    });
+    const decoded = await createImageBitmap(blob);
+    try {
+      await reporter.result(
+        JSON.stringify({
+          byteLength: value.bytes.byteLength,
+          mimeType: value.mimeType,
+          sha256: await digest(value.bytes),
+          width: decoded.width,
+          height: decoded.height,
+          decoded: decoded.width === 320 && decoded.height === 180,
+        }),
+      );
+    } finally {
+      decoded.close();
+    }
+    return true;
+  }
+  if (command === "binary-upload") {
+    const bytes = Uint8Array.from(
+      { length: 256 * 1024 },
+      (_, index) => index % 251,
+    );
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const file = new File([bytes], "payload.bin", {
+      type: "application/x-nexus-fixture",
+    });
+    const upload = async (value: Blob, label: string) =>
+      await image.upload(value, async (sha256) => `${label}:${sha256}`);
+    const blobResult = await upload(blob, "callback:blob");
+    const fileResult = await upload(file, "callback:file");
+    await reporter.result(
+      JSON.stringify({
+        blobSha256: blobResult.sha256,
+        fileSha256: fileResult.sha256,
+        blobMimeType: blobResult.mimeType,
+        fileMimeType: fileResult.mimeType,
+        blobCallback: blobResult.callbackResult,
+        fileCallback: fileResult.callbackResult,
+      }),
+    );
+    return true;
+  }
+  await reporter.barrier("binary-hold-started");
+  await image.hold();
+  return true;
+}
+
+async function digest(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", bytes.slice().buffer);
+  return [...new Uint8Array(hash)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /** Handle commands that exercise content-to-background connection behavior. */

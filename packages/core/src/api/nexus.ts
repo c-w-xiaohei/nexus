@@ -534,9 +534,9 @@ export class Nexus<
           "E_USAGE_INVALID",
         ),
       );
-    return (await this.safeReadyManager()).andThen((manager) =>
-      manager.safeUpdateLocalIdentity(updates),
-    );
+    const manager = await this.safeReadyManager();
+    if (manager.isErr()) return manager;
+    return manager.value.safeUpdateLocalIdentity(updates);
   }
   /** Marks an object for reference transfer; no remote resource is allocated until encoding. */
   public ref<T extends object>(target: T): RefWrapper<T> {

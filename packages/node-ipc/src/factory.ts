@@ -39,6 +39,7 @@ export function usingNodeIpcDaemon(
       implementation: new UnixSocketServerEndpoint(address, options.authToken, {
         authTimeoutMs: options.authTimeoutMs,
         maxAuthLineBytes: options.maxAuthLineBytes,
+        transport: options.transport,
       }),
     },
   };
@@ -99,6 +100,7 @@ export function usingNodeIpcClient(
         {
           authTimeoutMs: options.authTimeoutMs,
           maxAuthLineBytes: options.maxAuthLineBytes,
+          transport: options.transport,
         },
       ),
       ...(connectTo ? { connectTo } : {}),

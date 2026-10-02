@@ -66,6 +66,75 @@ describe("CallProcessor", () => {
     expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
   });
 
+  it("returns the RPC timeout while a Blob read stays reserved until it settles", async () => {
+    vi.useFakeTimers();
+    let finishRead!: (buffer: ArrayBuffer) => void;
+    let readStarted!: () => void;
+    const started = new Promise<void>((resolve) => (readStarted = resolve));
+    const blob = new Blob([new Uint8Array(32)]);
+    Object.defineProperty(blob, "arrayBuffer", {
+      value: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          finishRead = resolve;
+          readStarted();
+        }),
+    });
+    let reserved = 0;
+    const payloadProcessor = new PayloadProcessor(resources, {
+      createRemoteResourceProxy: vi.fn(),
+    } as any);
+    const timed = new CallProcessor({
+      ...deps,
+      payloadProcessor,
+      payloadReservation: {
+        reserveBytes: (bytes) => {
+          reserved += bytes;
+          return true;
+        },
+        releaseBytes: (bytes) => (reserved -= bytes),
+      },
+    });
+    try {
+      const callPromise = timed.safeProcess(
+        call({ args: [blob], timeout: 10 }),
+      );
+      await started;
+      expect(reserved).toBeGreaterThanOrEqual(32);
+      await vi.advanceTimersByTimeAsync(11);
+      const result = await callPromise;
+      expect(result.isErr()).toBe(true);
+      expect(result.isErr() && result.error.code).toBe("E_CALL_TIMEOUT");
+      expect(reserved).toBeGreaterThanOrEqual(32);
+      finishRead(new Uint8Array(32).buffer);
+      await vi.waitFor(() => expect(reserved).toBe(0));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the outgoing lease until the pending RPC settles", async () => {
+    let used = 0;
+    const payloadReservation = {
+      reserveBytes: (bytes: number) => {
+        used += bytes;
+        return true;
+      },
+      releaseBytes: (bytes: number) => (used -= bytes),
+    };
+    const safeSendMessage = vi.fn(async () => Result.ok(undefined));
+    const timed = new CallProcessor({
+      ...deps,
+      safeSendMessage,
+      payloadReservation,
+    });
+    const pending = timed.safeProcess(call({ args: [new Uint8Array(32)] }));
+    await vi.waitFor(() => expect(safeSendMessage).toHaveBeenCalledOnce());
+    expect(used).toBeGreaterThanOrEqual(32);
+    deps.pendingCallManager.handleResponse(1, "done", null, "A");
+    await expect(pending).resolves.toEqual(Result.ok("done"));
+    expect(used).toBe(0);
+  });
+
   it("keeps a message sequence per processor", async () => {
     await processor.safeProcess(call());
     await processor.safeProcess(call());
@@ -94,11 +163,10 @@ describe("CallProcessor", () => {
     const register = vi.spyOn(deps.pendingCallManager, "register");
     vi.mocked(deps.safeSendMessage).mockImplementation(
       (message, connectionId) => {
-        expect(register).toHaveBeenCalledWith(message.id, {
-          connectionId,
-          timeout: 1_000,
-          scope: undefined,
-        });
+        expect(register).toHaveBeenCalledWith(
+          message.id,
+          expect.objectContaining({ connectionId, timeout: 1_000 }),
+        );
         deps.pendingCallManager.handleResponse(
           message.id!,
           "reentrant",
@@ -112,6 +180,23 @@ describe("CallProcessor", () => {
     await expect(processor.safeProcess(call())).resolves.toEqual(
       Result.ok("reentrant"),
     );
+  });
+
+  it("keeps a valid response when the send promise rejects afterward", async () => {
+    vi.mocked(deps.safeSendMessage).mockImplementation((message, source) => {
+      deps.pendingCallManager.handleResponse(
+        message.id!,
+        "response won",
+        null,
+        source,
+      );
+      return Promise.reject(new Error("late native rejection"));
+    });
+
+    await expect(processor.safeProcess(call())).resolves.toEqual(
+      Result.ok("response won"),
+    );
+    expect(deps.pendingCallManager.canHandleResponse(1, "A")).toBe(false);
   });
 
   it("removes pending state after a thrown transport handoff", async () => {

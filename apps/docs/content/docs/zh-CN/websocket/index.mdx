@@ -101,7 +101,7 @@ type Facts = {
 
 const endpoint = new WebSocketServerEndpoint<Facts>({
   maxConnections: 100,
-  maxPayloadBytes: 1_048_576,
+  transport: { maxFrameBytes: 1_048_576 },
 });
 const nexus = new Nexus<WebSocketAdapterModel<Facts>>();
 nexus.configure({
@@ -197,3 +197,20 @@ identity observer。
 
 Upgrade 路径、接入、policy、二进制帧、资源限制和关闭行为应通过真实 WebSocket 集成覆盖验证。
 `createMockNexus()` 只适用于 `NexusInstance` 调用侧的应用测试。
+
+### 传输限额 [#transport-limits]
+
+WebSocket 固定使用二进制数据包。可通过 `transport` 配置帧、消息和框架聚合缓冲限额；
+默认值分别为 64 KiB、16 MiB 和 64 MiB：
+
+```ts
+const endpoint = new WebSocketServerEndpoint({
+  transport: {
+    maxFrameBytes: 64 * 1024,
+    maxMessageBytes: 16 * 1024 * 1024,
+    maxBufferedBytes: 64 * 1024 * 1024,
+  },
+});
+```
+
+`maxBufferedAmountBytes` 是 WebSocket 原生发送高水位阈值，与框架聚合缓冲预算不同。

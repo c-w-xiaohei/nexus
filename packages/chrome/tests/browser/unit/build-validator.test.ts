@@ -29,6 +29,7 @@ describe("validateExtensionBuild", () => {
         host_permissions: [
           "http://127.0.0.1:4173/*",
           "http://127.0.0.1:4174/*",
+          "http://127.0.0.1:4176/*",
         ],
       }),
       "background.js": "export {}",
@@ -76,6 +77,7 @@ describe("validateExtensionBuild", () => {
         host_permissions: [
           "http://127.0.0.1:4173/*",
           "http://127.0.0.1:4174/*",
+          "http://127.0.0.1:4176/*",
         ],
       }),
       "background.js": "import '@nexus-js/core'",

@@ -4,12 +4,18 @@
  * wrapping native connection objects (e.g., `chrome.runtime.Port`, `MessagePort`).
  */
 export interface IPort {
+  /** Physical packet payload limit, excluding any adapter-owned envelope. */
+  readonly maxPacketBytes?: number;
   /**
    * Sends a message to the other side of the channel.
    * @param message The message to send.
    * @param transfer An optional array of `Transferable` objects to transfer ownership of.
    */
-  postMessage(message: any, transfer?: Transferable[]): void;
+  postMessage(
+    message: any,
+    transfer?: Transferable[],
+    signal?: AbortSignal,
+  ): void | Promise<void>;
 
   /**
    * Registers a handler to process messages received from the channel.
