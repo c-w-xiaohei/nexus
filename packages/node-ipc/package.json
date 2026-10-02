@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/node-ipc",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "description": "Node IPC adapter for Nexus framework",
   "private": false,
   "license": "MIT",
