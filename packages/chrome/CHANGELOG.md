@@ -1,5 +1,13 @@
 # @nexus-js/chrome
 
+## 0.6.0-alpha.3
+
+### Patch Changes
+
+- 6f6ffe3: Automatically use copied binary packets on Google Chrome 152+ when an MV3 extension enables `message_serialization: "structured_clone"`. Detect the browser through User-Agent Client Hints and retain JSON/Base64 for older versions, other browser brands, missing Client Hints, or extensions without the opt-in. Keep transport limits and the public configuration unchanged; transferables remain unsupported.
+- Updated dependencies [c9e15ca]
+  - @nexus-js/core@2.0.0-alpha.3
+
 ## 0.6.0-alpha.2
 
 ### Minor Changes

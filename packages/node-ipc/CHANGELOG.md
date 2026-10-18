@@ -1,5 +1,12 @@
 # @nexus-js/node-ipc
 
+## 0.7.0-alpha.3
+
+### Patch Changes
+
+- Updated dependencies [c9e15ca]
+  - @nexus-js/core@2.0.0-alpha.3
+
 ## 0.7.0-alpha.2
 
 ### Minor Changes
