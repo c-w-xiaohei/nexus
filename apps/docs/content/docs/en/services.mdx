@@ -36,6 +36,9 @@ app.provide(DocumentToken, documents);
 This is also the registration path for runtime-created dependencies. `provide`
 registers the actual object; `connection.get` does not construct another instance.
 
+For outbound buffer ownership, see the
+[`transfer` option](/nexus/docs/remote-calls/#transfer-buffer-ownership).
+
 ## Register A Class
 
 For class-based services, use the configured owner's instance-bound decorator:

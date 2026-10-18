@@ -42,8 +42,10 @@ app.safeConnectMulticast(options?): Promise<Result<ConnectionCollection<M>, Conn
 | `onDisconnected(listener)`    | 返回取消函数；投递一次终止原因，包括晚注册            |
 | `subscribeIdentity(listener)` | 返回取消函数；连接有效时通知当前身份及后续接受的更新  |
 
-获取选项为 `ResourceOptions = { callTimeout?: number }`。超时覆盖仅作用于返回的句柄，不修改共享 Connection。
+获取选项为 `ResourceOptions = { callTimeout?: number; scope?: ResourceScope; transfer?: boolean }`。
+`transfer` 默认 `false`，控制该句柄的出站 buffer 所有权。选项仅作用于返回的句柄。
 获取时会检查连接是否就绪、选项是否合法和当前服务目录，不会主动连接或等待。
+发送实际 payload 时才检查转移能力，参阅[buffer 所有权](/nexus/docs/remote-calls/#transfer-buffer-ownership)。
 
 身份监听器接收完整快照，不会跳过值相同的更新。对已断开的句柄注册监听，不会重放身份信息。
 监听器的同步异常会被隔离，异步失败则需应用自行处理。

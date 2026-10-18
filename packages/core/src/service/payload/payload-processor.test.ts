@@ -62,6 +62,11 @@ describe("PayloadProcessor", () => {
           mockConnectionId,
           release,
         );
+        payloadProcessor.releaseOrphanedResponseResources(
+          prepared,
+          mockConnectionId,
+          release,
+        );
         expect(release).toHaveBeenCalledExactlyOnceWith(
           "res-123",
           mockConnectionId,
@@ -338,6 +343,8 @@ describe("PayloadProcessor", () => {
         mockConnectionId,
         undefined,
         undefined,
+        undefined,
+        undefined,
       );
       expect(result[0]).toBe(
         Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
@@ -369,6 +376,8 @@ describe("PayloadProcessor", () => {
         mockConnectionId,
         "vault",
         servicePolicy,
+        undefined,
+        undefined,
       );
       expect(result[0]).toBe(
         Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
@@ -403,6 +412,8 @@ describe("PayloadProcessor", () => {
         mockConnectionId,
         "vault",
         undefined,
+        undefined,
+        undefined,
       );
       expect(result[0]).toBe(
         Placeholder.encode(PlaceholderType.RESOURCE, "res-123"),
@@ -418,6 +429,8 @@ describe("PayloadProcessor", () => {
       expect(resourceManager.registerLocalResource).toHaveBeenCalledWith(
         myObject,
         mockConnectionId,
+        undefined,
+        undefined,
         undefined,
         undefined,
       );
@@ -526,6 +539,7 @@ describe("PayloadProcessor", () => {
         mockConnectionId,
         undefined,
         undefined,
+        undefined,
       );
       expect(result[0]).toBe(mockProxyObject);
     });
@@ -546,7 +560,13 @@ describe("PayloadProcessor", () => {
 
       expect(
         proxyFactory.createRemoteResourceProxy as any,
-      ).toHaveBeenCalledWith("res-456", mockConnectionId, 1_234, undefined);
+      ).toHaveBeenCalledWith(
+        "res-456",
+        mockConnectionId,
+        1_234,
+        undefined,
+        undefined,
+      );
     });
 
     it("should revive MAP/SET/BIGINT placeholders", () => {

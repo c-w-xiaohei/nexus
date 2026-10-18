@@ -14,14 +14,19 @@ import type {
 } from "@/types/adapter-model";
 import { Token } from "./token";
 import type { Remote } from "./types";
-import { hasOnlyOptionKeys, isValidTimeout } from "./types/config";
+import {
+  hasOnlyOptionKeys,
+  isValidTimeout,
+  hasValidRpcOptions,
+  type RpcOptions,
+} from "./types/config";
 import { Logger } from "@/logger";
 import type { ResourceScope } from "../service/resource-scope";
 
 const logger = new Logger("L4 --- Connection");
 
 export type DisconnectReason = "local" | "remote" | "protocol";
-export interface ResourceOptions {
+export interface ResourceOptions extends RpcOptions {
   /** Explicit region; must belong to this connection and the requested Token. */
   scope?: ResourceScope;
   /** Positive finite local call budget, inherited by refs returned from this handle. */
@@ -144,7 +149,8 @@ export class ConnectionHandle<
     const context = { connectionId: this.id };
     if (
       !(token instanceof Token) ||
-      !hasOnlyOptionKeys(options, ["callTimeout", "scope"]) ||
+      !hasOnlyOptionKeys(options, ["callTimeout", "scope", "transfer"]) ||
+      !hasValidRpcOptions(options) ||
       !isValidTimeout(options.callTimeout)
     )
       return Result.err(
@@ -181,6 +187,7 @@ export class ConnectionHandle<
       this.engine.createServiceProxy<Remote<T, M>>(token.id, {
         connectionId: this.id,
         timeout: options.callTimeout ?? this.callTimeout,
+        transfer: options.transfer,
         ...(scope ? { scope } : {}),
       }),
     );

@@ -172,6 +172,8 @@ function createPortProcessor<M extends AdapterModel>(
     transferables:
       context.endpoint.capabilities?.transferables ??
       context.endpoint.capabilities?.supportsTransferables === true,
+    arrayBufferTransfer:
+      context.endpoint.capabilities?.arrayBufferTransfer === true,
     reserveBytes: context.reserveBytes,
     releaseBytes: context.releaseBytes,
   });

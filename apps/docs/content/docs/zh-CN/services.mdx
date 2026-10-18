@@ -31,6 +31,8 @@ app.provide(DocumentToken, documents);
 
 运行时创建的依赖也通过这种方式注册。`provide` 注册已有对象；`connection.get` 不会再创建另一个业务实例。
 
+出站 buffer 的所有权配置见 [`transfer` 选项](/nexus/docs/remote-calls/#transfer-buffer-ownership)。
+
 ## 注册类服务 [#register-a-class]
 
 对于用类实现的服务，使用所属 Nexus 实例提供的装饰器：

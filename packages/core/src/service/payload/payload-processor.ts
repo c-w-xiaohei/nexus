@@ -38,6 +38,7 @@ type RevivalContext = {
   scope?: ResourceScope;
   sourceConnectionId: string;
   callTimeout?: number;
+  transfer?: boolean;
   revived: Map<string, { proxy: object; existedBeforeRevive: boolean }>;
 };
 type SanitizeContext = {
@@ -46,6 +47,7 @@ type SanitizeContext = {
   createdResourceIds: string[];
   serviceName?: string;
   servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
+  transfer?: boolean;
 };
 
 type SanitizeBudget = {
@@ -74,10 +76,11 @@ export class PayloadProcessor {
     targetConnectionId: string,
     scope?: ResourceScope,
     reservation?: PayloadReservationOptions,
+    transfer?: boolean,
   ): Promise<Result<any[], Error>> {
     return this.safeSanitizeWithContext(
       args,
-      { targetConnectionId, scope },
+      { targetConnectionId, scope, transfer },
       reservation,
     );
   }
@@ -90,6 +93,7 @@ export class PayloadProcessor {
     servicePolicy: NexusAuthorizationPolicy<AdapterModel> | undefined,
     scope?: ResourceScope,
     reservation?: PayloadReservationOptions,
+    transfer?: boolean,
   ): Promise<Result<any[], Error>> {
     return this.safeSanitizeWithContext(
       args,
@@ -98,6 +102,7 @@ export class PayloadProcessor {
         serviceName,
         servicePolicy,
         scope,
+        transfer,
       },
       reservation,
     );
@@ -109,11 +114,13 @@ export class PayloadProcessor {
     sourceConnectionId: string,
     callTimeout?: number,
     scope?: ResourceScope,
+    transfer?: boolean,
   ): Result<any[], Error> {
     const context: RevivalContext = {
       sourceConnectionId,
       callTimeout,
       scope,
+      transfer,
       revived: new Map(),
     };
     const result = Result.try({
@@ -125,9 +132,7 @@ export class PayloadProcessor {
     });
     if (result.isErr()) {
       for (const { proxy, existedBeforeRevive } of context.revived.values()) {
-        if (existedBeforeRevive)
-          this.proxyFactory.discardRemoteResourceProxy(proxy);
-        else {
+        if (!existedBeforeRevive) {
           const release = (proxy as { [RELEASE_PROXY_SYMBOL]?: unknown })[
             RELEASE_PROXY_SYMBOL
           ];
@@ -152,8 +157,15 @@ export class PayloadProcessor {
     scope?: ResourceScope,
   ): void {
     for (const id of collectResourceIds(value)) {
-      if (!this.resourceManager.hasRemoteProxy(id, source, scope))
-        dispatchRelease(id, source);
+      if (this.resourceManager.hasRemoteProxy(id, source, scope)) continue;
+      const identity = this.resourceManager.registerRemoteProxy(
+        id,
+        source,
+        scope,
+      );
+      if (identity.released) continue;
+      this.resourceManager.releaseRemoteProxy(id, source, scope);
+      dispatchRelease(id, source);
     }
   }
 
@@ -244,7 +256,8 @@ export class PayloadProcessor {
         context.targetConnectionId,
         context.serviceName || undefined,
         context.serviceName ? context.servicePolicy : undefined,
-        ...(context.scope ? [context.scope] : []),
+        context.scope,
+        context.transfer,
       );
       context.createdResourceIds.push(id);
       return Placeholder.encode(PlaceholderType.RESOURCE, id);
@@ -264,7 +277,7 @@ export class PayloadProcessor {
     }
     if (typeof value === "bigint")
       return Placeholder.encode(PlaceholderType.BIGINT, value.toString());
-    const binary = snapshotBinary(value, budget);
+    const binary = snapshotBinary(value, budget, context.transfer);
     if (binary) return binary;
     if (value instanceof Map) {
       if (ancestors.has(value))
@@ -347,6 +360,7 @@ export class PayloadProcessor {
         context.sourceConnectionId,
         context.callTimeout,
         context.scope,
+        context.transfer,
       );
       context.revived.set(identity, { proxy, existedBeforeRevive });
       return proxy;
@@ -395,8 +409,13 @@ function collectResourceIds(
   return ids;
 }
 
-function snapshotBinary(value: unknown, budget: SanitizeBudget) {
-  if (value instanceof ArrayBuffer) return snapshotArrayBuffer(value, budget);
+function snapshotBinary(
+  value: unknown,
+  budget: SanitizeBudget,
+  transfer = false,
+) {
+  if (value instanceof ArrayBuffer)
+    return snapshotArrayBuffer(value, budget, transfer);
   if (ArrayBuffer.isView(value)) {
     const tag = Object.prototype.toString.call(value);
     if (tag !== "[object Uint8Array]")
@@ -405,31 +424,66 @@ function snapshotBinary(value: unknown, budget: SanitizeBudget) {
       );
     const view = value as Uint8Array;
     if (
+      transfer &&
+      (view.byteOffset !== 0 ||
+        view.byteLength !== view.buffer.byteLength ||
+        (
+          globalThis as { Buffer?: { isBuffer(value: unknown): boolean } }
+        ).Buffer?.isBuffer(value))
+    )
+      throw new TypeError(
+        "Transfer requires a full Uint8Array; partial views and Node Buffer are unsupported.",
+      );
+    if (
       Object.prototype.toString.call(view.buffer) ===
       "[object SharedArrayBuffer]"
     )
       throw new TypeError("SharedArrayBuffer values are not supported.");
     reserveRawBytes(view.byteLength, budget);
+    if (transfer) validateTransferBuffer(view.buffer as ArrayBuffer);
     return createBinaryValue(
       "uint8-array",
-      new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice(),
+      transfer
+        ? new Uint8Array(view.buffer)
+        : new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice(),
+      undefined,
+      transfer,
     );
   }
   if (value !== null && typeof value === "object") {
     const tag = Object.prototype.toString.call(value);
     if (tag === "[object ArrayBuffer]")
-      return snapshotArrayBuffer(value as ArrayBuffer, budget);
+      return snapshotArrayBuffer(value as ArrayBuffer, budget, transfer);
+    if (tag === "[object SharedArrayBuffer]")
+      throw new TypeError("SharedArrayBuffer values are not supported.");
   }
   return undefined;
 }
 
-function snapshotArrayBuffer(buffer: ArrayBuffer, budget: SanitizeBudget) {
+function snapshotArrayBuffer(
+  buffer: ArrayBuffer,
+  budget: SanitizeBudget,
+  transfer = false,
+) {
   reserveRawBytes(buffer.byteLength, budget);
+  if (transfer) validateTransferBuffer(buffer);
   try {
-    return createBinaryValue("array-buffer", new Uint8Array(buffer.slice(0)));
+    return createBinaryValue(
+      "array-buffer",
+      new Uint8Array(transfer ? buffer : buffer.slice(0)),
+      undefined,
+      transfer,
+    );
   } catch {
     throw new TypeError("Detached ArrayBuffer values are not supported.");
   }
+}
+
+function validateTransferBuffer(buffer: ArrayBuffer): void {
+  if ((buffer as ArrayBuffer & { resizable?: boolean }).resizable)
+    throw new TypeError("Resizable ArrayBuffer transfer is unsupported.");
+  // Unlike byteLength, construction distinguishes detached and empty buffers.
+  new Uint8Array(buffer);
 }
 
 function reserveRawBytes(byteLength: number, budget: SanitizeBudget): void {

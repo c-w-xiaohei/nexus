@@ -55,6 +55,42 @@ Nexus.safeCall<T, M>(call: RemoteValue<T, M>): Promise<Result<T, NexusCallError>
 
 所有权示例见[远程资源](/nexus/docs/remote-resources/)。
 
+## Buffer 转移 [#buffer-transfer]
+
+`get`、`safeGet`、`provide`、`Expose`、provider 描述对象和 `serviceProvider`
+接受 `transfer?: boolean`，默认 `false`，控制本地绑定的出站 buffer。
+参阅[使用示例](/nexus/docs/remote-calls/#transfer-buffer-ownership)。
+
+| 出站数据                        | 策略来源           |
+| ------------------------------- | ------------------ |
+| 请求参数 / 回调结果             | 客户端绑定         |
+| 响应 / 回调参数                 | 提供方绑定         |
+| 返回 ref 的后续参数             | 获取该 ref 的绑定  |
+| 导出 ref 或 callback 的后续结果 | 导出绑定捕获的策略 |
+
+同一 scope 下各绑定的策略也相互独立。重新注册服务不会修改已有资源绑定。
+`ref()` 停止遍历；后续方法返回裸 buffer 时使用捕获的策略。
+转移资源持有的缓存 buffer 会使缓存分离，需要保留时应返回副本。
+
+### 支持范围与限额 [#supported-values-and-limits]
+
+- 支持固定长度 `ArrayBuffer` 和完整 `Uint8Array` 视图。拒绝已分离或可调整大小的
+  buffer、局部视图、Node `Buffer`、`SharedArrayBuffer` 及其他 transferable。
+  `Blob` 和 `File` 保持内容复制语义。
+- 同一转移列表内的 backing buffer 去重。独立调用和多播接收者需要独立 buffer。
+- 要求协商后的原生附件能力，包含元数据的消息须满足单帧上限（默认 64 KiB），
+  不分块、不回退 copy。没有可转移 buffer 的 payload 仍可使用仅支持复制的连接。
+
+### 失败与恢复 [#failure-and-recovery]
+
+首次触发执行开始准备，原生提交时分离 buffer。超时或取消会阻止尚未提交的本地发送，
+无法撤销远端执行。原生异常可能导致部分 buffer 已分离。交付不确定时关闭所属 scope；
+应重新获取默认句柄或创建新的显式 scope。结果转移可能在业务副作用发生后失败，不自动重试。
+
+Relay 只向相邻运行时转移所有权，中继可以在下一跳复制字节。
+后续跳失败不会恢复原始 buffer，不保证端到端零拷贝。
+应用测试替身接受选项但不模拟分离，所有权应通过真实运行时集成测试验证。
+
 ## 引用释放 [#reference-release]
 
 | 入口                       | 返回值                           |

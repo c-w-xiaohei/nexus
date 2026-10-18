@@ -7,7 +7,7 @@ import {
   NexusHandshakeError,
 } from "../errors/connection-errors";
 import { NexusProtocolError } from "../errors/transport-errors";
-import { isDeterminateTransferError } from "../transport/port-processor";
+import { isRecoverableSendError } from "../transport/port-processor";
 import { NexusUsageError } from "../errors/usage-errors";
 import { Transport } from "../transport/transport";
 import type {
@@ -296,7 +296,7 @@ export class ConnectionManager<M extends AdapterModel> {
           ),
         );
       const sent = await connection.sendMessage(message, options);
-      if (sent.isErr() && isDeterminateTransferError(sent.error))
+      if (sent.isErr() && isRecoverableSendError(sent.error))
         return err(sent.error);
       if (sent.isErr())
         return err(

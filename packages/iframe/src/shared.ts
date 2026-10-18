@@ -29,5 +29,6 @@ export function resolveIframeTransport(
 
 export const endpointCapabilities: EndpointCapabilities = Object.freeze({
   binaryPackets: true,
+  arrayBufferTransfer: true,
   transferables: true,
 });

@@ -7,6 +7,9 @@ A remote resource is an object that stays in its owning context while another
 context calls its methods. Use it for a subscription, document session, cursor,
 or other operation with continuing state.
 
+`ref()` keeps its target local even with `transfer: true`. Subsequent buffer
+results follow the [resource's captured policy](/nexus/docs/reference/resources/#buffer-transfer).
+
 ## Describe The Returned Object
 
 Extend the document contract with an observation that returns a subscription.

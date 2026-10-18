@@ -6,6 +6,9 @@ description: 通过引用访问留在原上下文中的对象，并显式管理�
 远程资源是留在原上下文中的对象，其他上下文通过引用调用它的方法。
 它适合表示订阅、文档会话、游标等需要持续保存状态的资源。
 
+即使开启 `transfer: true`，`ref()` 的目标也留在本地。后续 buffer 结果遵循
+[资源捕获的策略](/nexus/docs/reference/resources/#buffer-transfer)。
+
 ## 描述返回对象 [#describe-the-returned-object]
 
 扩展文档服务契约，让 `watch` 返回一个订阅对象的引用。将这些定义与已有 Token 放在同一个共享模块中：

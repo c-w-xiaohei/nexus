@@ -12,6 +12,12 @@ import {
   type Reassembly,
 } from "./chunking.js";
 import { DEFAULT_TRANSPORT_LIMITS } from "./transport-config.js";
+import {
+  prepareNativePacket,
+  decodeNativePacket,
+  nativePacketSize,
+  type NativeAttachmentPacket,
+} from "./serializers/native-attachments";
 const { err, ok } = Result;
 const MAX_QUEUED_SENDS = 1024;
 type SendOptions = {
@@ -38,8 +44,20 @@ export function isDeterminateTransferError(
   );
 }
 
+/** These send failures are contained to a call or resource scope. */
+export function isRecoverableSendError(
+  error: Error,
+): error is NexusProtocolError {
+  return (
+    isDeterminateTransferError(error) ||
+    (error instanceof NexusProtocolError &&
+      error.context?.nativeAttachments === true)
+  );
+}
+
 export namespace PortProcessor {
   export interface Context {
+    readonly arrayBufferTransfer?: boolean;
     /** Serialize and submit one logical message through the native port. */
     sendMessage(
       message: NexusMessage,
@@ -50,6 +68,7 @@ export namespace PortProcessor {
     /** Buffer decoded ingress during the native READY submission window. */
     beginActivation?(
       packetMode?: "json" | "binary",
+      arrayBufferTransfer?: boolean,
     ): Result<void, NexusProtocolError>;
     /** Release buffered ingress once the connection publishes as ready. */
     completeActivation?(): void;
@@ -58,6 +77,7 @@ export namespace PortProcessor {
       maxFrameBytes: number;
       maxMessageBytes: number;
       packetMode?: "json" | "binary";
+      arrayBufferTransfer?: boolean;
     }): Result<void, NexusProtocolError>;
   }
 
@@ -72,6 +92,7 @@ export namespace PortProcessor {
     jsonSerializer?: ISerializer;
     binarySerializer?: ISerializer;
     transferables?: boolean;
+    arrayBufferTransfer?: boolean;
   }
 
   /**
@@ -102,6 +123,8 @@ export namespace PortProcessor {
     let reassemblyTimer: ReturnType<typeof setTimeout> | undefined;
     let reservedBytes = 0;
     let activationPending = false;
+    let closed = false;
+    let nativeEnabled = false;
     let activationBytes = 0;
     const activationQueue: { rawMessage: unknown; bytes: number }[] = [];
     const activationByteLimit = 1024 * 1024;
@@ -143,10 +166,14 @@ export namespace PortProcessor {
       waiter.resolve(result);
     };
 
-    const rawSize = (packet: string | ArrayBuffer): number =>
+    const rawSize = (
+      packet: string | ArrayBuffer | NativeAttachmentPacket,
+    ): number =>
       typeof packet === "string"
         ? encoder.encode(packet).byteLength
-        : packet.byteLength;
+        : packet instanceof ArrayBuffer
+          ? packet.byteLength
+          : nativePacketSize(packet);
     const jsonSerializer = options.jsonSerializer ?? serializer;
     const binarySerializer = options.binarySerializer ?? serializer;
     let bootstrapPending = options.bootstrapJson === true;
@@ -159,7 +186,15 @@ export namespace PortProcessor {
       message.type === NexusMessageType.HANDSHAKE_REQ ||
       message.type === NexusMessageType.HANDSHAKE_ACK ||
       message.type === NexusMessageType.HANDSHAKE_READY;
-    const decodePacket = (packet: string | ArrayBuffer) => {
+    const decodePacket = (
+      packet: string | ArrayBuffer | NativeAttachmentPacket,
+    ) => {
+      if (typeof packet !== "string" && !(packet instanceof ArrayBuffer))
+        return nativeEnabled
+          ? decodeNativePacket(packet)
+          : err(
+              new NexusProtocolError("Native attachments were not negotiated."),
+            );
       const selected = bootstrapPending
         ? activationPacketMode === "binary" && packet instanceof ArrayBuffer
           ? binarySerializer
@@ -243,6 +278,7 @@ export namespace PortProcessor {
       );
     };
     const cleanup = () => {
+      closed = true;
       for (const id of waiters.keys()) {
         settleTransfer(
           id,
@@ -259,21 +295,38 @@ export namespace PortProcessor {
       reassemblyTimer = undefined;
     };
     const safePostMessage = async (
-      packet: string | ArrayBuffer,
+      packet: string | ArrayBuffer | NativeAttachmentPacket,
       signal?: AbortSignal,
     ): Promise<Result<void, NexusProtocolError>> => {
       try {
+        if (closed || signal?.aborted)
+          return err(
+            new NexusProtocolError("Transport submission cancelled", {
+              transferOutcome: "determinate",
+            }),
+          );
         const transfer =
-          packet instanceof ArrayBuffer && options.transferables !== false
-            ? [packet]
-            : undefined;
+          typeof packet === "object" && !(packet instanceof ArrayBuffer)
+            ? packet.buffers
+            : packet instanceof ArrayBuffer && options.transferables !== false
+              ? [packet]
+              : undefined;
         await port.postMessage(packet, transfer, signal);
         return ok(undefined);
       } catch (error) {
         return err(
           new NexusProtocolError(
             `Failed to post transport packet: ${error instanceof Error ? error.message : String(error)}`,
-            { originalError: error },
+            {
+              originalError: error,
+              ...(typeof packet === "object" && !(packet instanceof ArrayBuffer)
+                ? {
+                    code: "E_TRANSFER_UNCERTAIN",
+                    transferOutcome: "uncertain",
+                    nativeAttachments: true,
+                  }
+                : {}),
+            },
           ),
         );
       }
@@ -283,6 +336,31 @@ export namespace PortProcessor {
       message: NexusMessage,
       options: SendOptions = {},
     ): Promise<Result<void, NexusProtocolError>> => {
+      const native = prepareNativePacket(message);
+      if (native.isErr()) return native;
+      if (native.value) {
+        const packet = native.value;
+        const bytes = rawSize(packet);
+        if (!nativeEnabled || bytes > maxFrameBytes || bytes > maxMessageBytes)
+          return err(
+            new NexusProtocolError(
+              "Native attachment capability or frame limit is unavailable",
+              { transferOutcome: "determinate", bytes, maxFrameBytes },
+            ),
+          );
+        if (!reserveBytes(bytes))
+          return err(
+            new NexusProtocolError("Native attachment capacity exceeded", {
+              transferOutcome: "determinate",
+            }),
+          );
+        try {
+          return await safePostMessage(packet, options.signal);
+        } finally {
+          releaseBytes(bytes);
+          options.lease?.releaseAll();
+        }
+      }
       const selected =
         bootstrapPending && isBootstrapMessage(message)
           ? jsonSerializer
@@ -447,12 +525,8 @@ export namespace PortProcessor {
     };
 
     const handleRawMessage = (rawMessage: any): void => {
-      const frameBytes =
-        typeof rawMessage === "string"
-          ? encoder.encode(rawMessage).byteLength
-          : rawMessage instanceof ArrayBuffer
-            ? rawMessage.byteLength
-            : Number.POSITIVE_INFINITY;
+      if (closed) return;
+      const frameBytes = rawSize(rawMessage);
       if (frameBytes > maxFrameBytes) {
         handlers.onProtocolError?.(
           new NexusProtocolError(
@@ -830,14 +904,17 @@ export namespace PortProcessor {
     }
 
     return {
+      arrayBufferTransfer: options.arrayBufferTransfer === true,
       sendMessage,
-      beginActivation: (packetMode) => {
+      beginActivation: (packetMode, arrayBufferTransfer) => {
         if (activationPending)
           return err(
             new NexusProtocolError("READY activation already pending"),
           );
         activationPending = true;
         activationPacketMode = packetMode;
+        nativeEnabled =
+          options.arrayBufferTransfer === true && arrayBufferTransfer === true;
         if (packetMode) sessionMode = packetMode;
         return ok(undefined);
       },
@@ -854,6 +931,9 @@ export namespace PortProcessor {
         maxFrameBytes = limits.maxFrameBytes;
         maxMessageBytes = limits.maxMessageBytes;
         if (limits.packetMode) sessionMode = limits.packetMode;
+        nativeEnabled =
+          options.arrayBufferTransfer === true &&
+          limits.arrayBufferTransfer === true;
         if (!activationPending) bootstrapPending = false;
         return ok(undefined);
       },

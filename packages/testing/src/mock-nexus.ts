@@ -187,8 +187,11 @@ export function createMockNexus<
           !isToken<T>(token) ||
           !isPlainObject(options) ||
           !Object.keys(options).every(
-            (key) => key === "callTimeout" || key === "scope",
+            (key) =>
+              key === "callTimeout" || key === "scope" || key === "transfer",
           ) ||
+          (options.transfer !== undefined &&
+            typeof options.transfer !== "boolean") ||
           (options.callTimeout !== undefined &&
             !isPositiveFinite(options.callTimeout))
         )

@@ -403,6 +403,7 @@ export class Nexus<
               token: input as Token<T, M>,
               service: service!,
               policy: options?.policy,
+              transfer: options?.transfer,
             },
           ];
         const valid = validateProviderBatch(providers);

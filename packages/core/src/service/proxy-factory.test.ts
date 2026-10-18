@@ -207,13 +207,17 @@ describe("ProxyFactory", () => {
     ]);
   });
 
-  it("registers finalization with an ID-only held value and a non-facade anchor", () => {
+  it("registers finalization without retaining a facade or its anchor", () => {
     const proxy = factory.createRemoteResourceProxy("resource", "A");
     const [anchor, heldValue, token] = register.mock.calls[0];
 
     expect(anchor).toBeTypeOf("object");
     expect(anchor).not.toBe(proxy);
-    expect(heldValue).toEqual({ resourceId: "resource", connectionId: "A" });
+    expect(heldValue).toMatchObject({
+      resourceId: "resource",
+      connectionId: "A",
+    });
+    expect(heldValue.identity.anchor.deref()).toBe(anchor);
     expect(token).toBe(anchor);
   });
 
@@ -250,26 +254,45 @@ describe("ProxyFactory", () => {
     expect(dispatchRelease).toHaveBeenCalledOnce();
   });
 
-  it("discards a revived proxy finalizer without invalidating the resource", async () => {
-    const proxy: any = factory.createRemoteResourceProxy("resource", "A");
-    const anchor = register.mock.calls[0][0];
-
-    factory.discardRemoteResourceProxy(proxy);
-    expect(registrations.has(anchor)).toBe(false);
-    await expect(proxy.read()).resolves.toBe("value");
-    proxy[RELEASE_PROXY_SYMBOL]();
-
-    expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith(
+  it("shares release across repeated revival and never resurrects a released identity", async () => {
+    const first: any = factory.createRemoteResourceProxy(
       "resource",
       "A",
+      100,
       undefined,
+      false,
     );
+    const second: any = factory.createRemoteResourceProxy(
+      "resource",
+      "A",
+      200,
+      undefined,
+      true,
+    );
+    await first.read();
+    await second.read();
+    expect(dispatch.mock.calls.map(([call]) => call.transfer)).toEqual([
+      false,
+      true,
+    ]);
+    expect(register).toHaveBeenCalledOnce();
+    first[Symbol.dispose]();
+    await expect(second.read()).rejects.toMatchObject({
+      code: "E_RESOURCE_ACCESS_DENIED",
+    });
+    const late: any = factory.createRemoteResourceProxy("resource", "A");
+    await expect(late.read()).rejects.toMatchObject({
+      code: "E_RESOURCE_ACCESS_DENIED",
+    });
+    second[Symbol.dispose]();
+    expect(dispatchRelease).toHaveBeenCalledOnce();
   });
 
   it("finalizes an unreleased resource with only its IDs", () => {
     factory.createRemoteResourceProxy("resource", "A");
     const anchor = register.mock.calls[0][0];
 
+    registrations.get(anchor).identity.anchor = { deref: () => undefined };
     finalizationCallback(registrations.get(anchor));
 
     expect(dispatchRelease).toHaveBeenCalledExactlyOnceWith(

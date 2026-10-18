@@ -7,6 +7,7 @@ interface BrowserHarness {
   callChildBinary(
     frameId: string,
     value: Uint8Array | ArrayBuffer | Blob,
+    transfer?: boolean,
   ): Promise<unknown>;
   getTelemetry(): {
     parentCalls: Array<{ frameId: string; value: string }>;
@@ -37,6 +38,34 @@ async function waitForLoadedFrames(page: Page) {
       ),
     )
     .toEqual(["alpha", "beta"]);
+}
+
+for (const query of ["", "?packetMode=json"]) {
+  test(`transfers the original buffer across iframe postMessage ${query}`, async ({
+    page,
+  }) => {
+    await page.goto(`/parent.html${query}`);
+    await waitForLoadedFrames(page);
+    const result = await page.evaluate(async () => {
+      const api = window as unknown as BrowserHarness;
+      const buffer = new Uint8Array([2, 4, 6]).buffer;
+      const copied = new Uint8Array([1, 3, 5]);
+      const response = await api.callChildBinary("alpha", buffer, true);
+      const copyResponse = await api.callChildBinary("alpha", copied);
+      return {
+        response,
+        copyResponse,
+        movedLength: buffer.byteLength,
+        copied: Array.from(copied),
+      };
+    });
+    expect(result).toEqual({
+      response: [2, 4, 6],
+      copyResponse: [1, 3, 5],
+      movedLength: 0,
+      copied: [1, 3, 5],
+    });
+  });
 }
 
 async function callChildEcho(page: Page, frameId: string, value: string) {

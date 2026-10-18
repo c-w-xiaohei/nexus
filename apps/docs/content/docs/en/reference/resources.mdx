@@ -64,6 +64,48 @@ callbacks are automatically reference-transferred.
 
 See [Remote resources](/nexus/docs/remote-resources/) for ownership examples.
 
+## Buffer transfer
+
+`transfer?: boolean` defaults to `false` on `get`, `safeGet`, `provide`,
+`Expose`, provider descriptors, and `serviceProvider`. It controls the local
+binding's outbound buffers. See the [usage example](/nexus/docs/remote-calls/#transfer-buffer-ownership).
+
+| Outbound data                            | Policy source                       |
+| ---------------------------------------- | ----------------------------------- |
+| Request arguments / callback results     | Client binding                      |
+| Response / callback arguments            | Provider binding                    |
+| Arguments to a returned ref              | Binding that acquired the ref       |
+| Results from an exported ref or callback | Exporting binding's captured policy |
+
+Policies are independent per binding, even in one scope. Re-registering a service
+does not change existing resource bindings. `ref()` stops traversal; later methods
+returning bare buffers use the captured policy. Transferring a resource's cached
+buffer detaches that cache; return a copy to retain it.
+
+### Supported values and limits
+
+- Supports fixed-length `ArrayBuffer` and full `Uint8Array` views. Rejects detached
+  or resizable buffers, partial views, Node `Buffer`, `SharedArrayBuffer`, and other
+  transferables. `Blob` and `File` retain content-copy semantics.
+- Deduplicates backing buffers within one transfer list. Independent calls and
+  multicast recipients require independent buffers.
+- Requires negotiated native attachment support and one frame including metadata
+  (default 64 KiB). No chunking or copy fallback. Payloads without transferable
+  buffers can still use copy-only connections.
+
+### Failure and recovery
+
+First consumption starts preparation; native submission detaches buffers. Timeout
+or cancellation stops pending local submission, but cannot undo remote execution.
+Native exceptions can partially detach buffers. Uncertain submission closes the
+affected scope; reacquire a default handle or create a new explicit scope.
+Result transfer can fail after business effects occur. There is no automatic retry.
+
+Relay transfers ownership only to the adjacent runtime, which may copy bytes on
+the next hop. Later-hop failure cannot restore the original buffer; end-to-end
+zero-copy is not guaranteed. Application mocks accept the option without simulating
+detachment; verify ownership with runtime integration tests.
+
 ## Reference Release
 
 | Entry                      | Return                                      |

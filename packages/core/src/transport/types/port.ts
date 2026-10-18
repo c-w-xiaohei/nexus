@@ -10,6 +10,8 @@ export interface IPort {
    * Sends a message to the other side of the channel.
    * @param message The message to send.
    * @param transfer An optional array of `Transferable` objects to transfer ownership of.
+   * Adapters advertising arrayBufferTransfer must honor the list, reject closed
+   * ports, and check signal immediately before any deferred native submission.
    */
   postMessage(
     message: any,

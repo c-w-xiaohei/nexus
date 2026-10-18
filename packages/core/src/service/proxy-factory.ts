@@ -1,5 +1,8 @@
 import type { CallBinding, DispatchCallOptions } from "./call-processor";
-import type { ResourceManager } from "./resource-manager";
+import type {
+  ResourceManager,
+  RemoteResourceIdentity,
+} from "./resource-manager";
 import { RELEASE_PROXY_SYMBOL } from "@/types/symbols";
 import { NexusResourceError } from "@/errors/resource-errors";
 import type { Connection } from "@/api/connection";
@@ -35,7 +38,7 @@ export function safeCall<T, M extends AdapterModel>(
 
 type RemoteResource = {
   resourceId: string;
-  released: boolean;
+  identity: RemoteResourceIdentity;
   /** Releases this shared capability once, including its finalizer registration. */
   release(): void;
 };
@@ -65,11 +68,11 @@ const releaseServiceProxy = () =>
  * release state. Weak metadata never keeps an otherwise unused facade alive.
  */
 export class ProxyFactory {
-  private readonly resourceAnchors = new WeakMap<object, RemoteResource>();
   private readonly releaseRegistry: FinalizationRegistry<{
     resourceId: string;
     connectionId: string;
     scope?: ResourceScope;
+    identity: RemoteResourceIdentity;
   }>;
 
   /** Own dispatch, resource bookkeeping, connection lookup, and finalization policy. */
@@ -89,7 +92,8 @@ export class ProxyFactory {
     private readonly callTimeout = 5_000,
   ) {
     this.releaseRegistry = new FinalizationRegistry(
-      ({ resourceId, connectionId, scope }) => {
+      ({ resourceId, connectionId, scope, identity }) => {
+        if (identity.released || identity.anchor?.deref()) return;
         this.resourceManager.releaseRemoteProxy(
           resourceId,
           connectionId,
@@ -108,6 +112,7 @@ export class ProxyFactory {
     const binding: CallBinding = {
       connectionId: options.connectionId,
       timeout: options.timeout,
+      transfer: options.transfer,
       ...(options.scope ? { scope: options.scope } : {}),
     };
     return this.createProxy(
@@ -129,47 +134,47 @@ export class ProxyFactory {
     connectionId: string,
     timeout = this.callTimeout,
     scope?: ResourceScope,
+    transfer?: boolean,
   ): object {
     const connection = this.getConnection(connectionId);
-    const resource: RemoteResource = {
+    const identity = this.resourceManager.registerRemoteProxy(
       resourceId,
-      released: false,
-      release: () => {
-        if (resource.released) return;
-        resource.released = true;
-        this.releaseRegistry.unregister(resource);
-        this.resourceManager.releaseRemoteProxy(
-          resourceId,
-          connectionId,
-          scope,
-        );
-        this.engine.dispatchRelease(resourceId, connectionId, scope);
-      },
-    };
-    // Held values contain only IDs, never the resource state or a facade.
-    this.releaseRegistry.register(
-      resource,
-      { resourceId, connectionId, scope },
-      resource,
+      connectionId,
+      scope,
     );
-    this.resourceManager.registerRemoteProxy(resourceId, connectionId, scope);
-    const proxy = this.createProxy(
+    let resource = identity.anchor?.deref() as RemoteResource | undefined;
+    if (!resource) {
+      resource = {
+        resourceId,
+        identity,
+        release: () => {
+          if (identity.released) return;
+          this.releaseRegistry.unregister(resource!);
+          this.resourceManager.releaseRemoteProxy(
+            resourceId,
+            connectionId,
+            scope,
+          );
+          this.engine.dispatchRelease(resourceId, connectionId, scope);
+        },
+      };
+      // Held identity metadata refers to its anchor weakly, never to a facade.
+      this.releaseRegistry.register(
+        resource,
+        { resourceId, connectionId, scope, identity },
+        resource,
+      );
+      identity.anchor = new WeakRef(resource);
+    }
+    return this.createProxy(
       {
-        binding: { connectionId, timeout, scope },
+        binding: { connectionId, timeout, scope, transfer },
         path: [],
         resource,
         connection,
       },
       true,
     );
-    this.resourceAnchors.set(proxy, resource);
-    return proxy;
-  }
-
-  /** Drops this facade's finalizer, leaving a pre-existing shared resource identity intact. */
-  public discardRemoteResourceProxy(proxy: object): void {
-    const resource = this.resourceAnchors.get(proxy);
-    if (resource) this.releaseRegistry.unregister(resource);
   }
 
   // ===== Paths and lazy operations =====
@@ -218,7 +223,10 @@ export class ProxyFactory {
         .then(() => {
           // A terminal scope is diagnosed by dispatch, which also preserves
           // physical disconnect precedence over domain closure.
-          if (state.resource?.released && !state.binding.scope?.closed) {
+          if (
+            state.resource?.identity.released &&
+            !state.binding.scope?.closed
+          ) {
             return Result.err(
               new NexusResourceError(
                 `Remote resource "${state.resource.resourceId}" has been released.`,

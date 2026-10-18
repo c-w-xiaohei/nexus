@@ -22,6 +22,7 @@ export type CallBinding = {
   timeout: number;
   connectionId: string;
   scope?: ResourceScope;
+  transfer?: boolean;
 };
 export type DispatchCallOptions = CallBinding & {
   path: (string | number)[];
@@ -71,14 +72,11 @@ export class CallProcessor {
     const pending = this.deps.pendingCallManager.register(id, {
       connectionId,
       timeout: options.timeout,
+      transfer: options.transfer,
       ...(options.scope ? { scope: options.scope } : {}),
       onSettled: (result) => {
         settled = true;
-        if (
-          options.scope?.closed ||
-          (result.isErr() && result.error.code === "E_CALL_TIMEOUT")
-        )
-          abort.abort();
+        if (result.isErr() || options.scope?.closed) abort.abort();
       },
     });
     const stopAbort = options.scope?.onClosed(() => abort.abort());
@@ -116,6 +114,7 @@ export class CallProcessor {
               if (settled) value.releaseAll();
             },
           },
+          options.transfer,
         );
         const outcome = await Promise.race([
           preparing.then((result) => ({ kind: "prepared" as const, result })),

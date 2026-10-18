@@ -9,6 +9,18 @@ import type { IEndpoint } from "@/transport";
 import { isPlainTarget, Token } from "../token";
 import { NexusConfigurationError } from "@/errors";
 import { Result } from "better-result";
+import * as v from "valibot";
+
+/** Local outbound ownership policy, shared by handles and providers. */
+export const RpcOptionsSchema = v.object({
+  /** Transfer supported outbound buffers at native submission; default is copy. */
+  transfer: v.optional(v.boolean()),
+});
+export type RpcOptions = v.InferOutput<typeof RpcOptionsSchema>;
+
+export function hasValidRpcOptions<T>(value: T): value is T & RpcOptions {
+  return v.safeParse(RpcOptionsSchema, value).success;
+}
 
 /** Rejects duplicate declarations within one submission, before cross-layer last-wins composition. */
 export function validateProviderBatch<M extends AdapterModel>(
@@ -20,6 +32,7 @@ export function validateProviderBatch<M extends AdapterModel>(
       (provider) =>
         provider !== null &&
         typeof provider === "object" &&
+        hasValidRpcOptions(provider) &&
         provider.token instanceof Token &&
         provider.service !== null &&
         (typeof provider.service === "object" ||
@@ -138,9 +151,15 @@ export interface NexusAuthorizationPolicy<M extends AdapterModel> {
 export type AuthorizationPolicy<M extends AdapterModel> =
   NexusAuthorizationPolicy<M>;
 
-export interface ServiceProvider<T, M extends AdapterModel> {
+export interface ServiceProvider<
+  T,
+  M extends AdapterModel,
+> extends ProviderOptions<M> {
   token: Token<T> | Token<T, M>;
   service: T;
+}
+
+export interface ProviderOptions<M extends AdapterModel> extends RpcOptions {
   policy?: AuthorizationPolicy<M>;
 }
 
@@ -155,9 +174,9 @@ export interface NexusConfig<M extends AdapterModel> {
 export function serviceProvider<T, M extends AdapterModel>(
   token: Token<T, any>,
   service: T,
-  options?: { policy?: AuthorizationPolicy<M> },
+  options?: ProviderOptions<M>,
 ): ServiceProvider<T, M> {
-  return { token, service, policy: options?.policy };
+  return { token, service, ...options };
 }
 
 /** Preserves inferred configuration literals while checking the public configuration shape. */

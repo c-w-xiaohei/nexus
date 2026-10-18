@@ -5,6 +5,7 @@ import type { ResourceScope } from "./resource-scope";
 interface ExposedServiceRecord {
   readonly service: object;
   readonly policy?: NexusAuthorizationPolicy<AdapterModel>;
+  readonly transfer?: boolean;
 }
 
 interface LocalResourceRecord {
@@ -14,6 +15,13 @@ interface LocalResourceRecord {
   /** Authorization snapshot captured when the capability was returned. */
   serviceName?: string;
   servicePolicy?: NexusAuthorizationPolicy<AdapterModel>;
+  transfer?: boolean;
+}
+
+/** Session tombstone plus a weak anchor: aliases share release without retaining facades. */
+export interface RemoteResourceIdentity {
+  released: boolean;
+  anchor?: WeakRef<object>;
 }
 
 /** Owns local capabilities and remote identities for one Engine. Registries never escape. */
@@ -22,7 +30,7 @@ export class ResourceManager {
   private readonly localResources = new Map<string, LocalResourceRecord>();
   private readonly remoteProxies = new Map<
     string,
-    Map<ResourceScope | undefined, Set<string>>
+    Map<ResourceScope | undefined, Map<string, RemoteResourceIdentity>>
   >();
   private resourceIdSeq = 1;
 
@@ -42,8 +50,8 @@ export class ResourceManager {
   public registerExposedServices(
     providers: readonly (ExposedServiceRecord & { name: string })[],
   ): void {
-    for (const { name, service, policy } of providers) {
-      this.exposedServices.set(name, { service, policy });
+    for (const { name, service, policy, transfer } of providers) {
+      this.exposedServices.set(name, { service, policy, transfer });
     }
   }
 
@@ -59,6 +67,7 @@ export class ResourceManager {
     serviceName?: string,
     servicePolicy?: NexusAuthorizationPolicy<AdapterModel>,
     scope?: ResourceScope,
+    transfer?: boolean,
   ): string {
     const id = `res-${this.resourceIdSeq++}`;
     this.localResources.set(id, {
@@ -67,6 +76,7 @@ export class ResourceManager {
       serviceName,
       servicePolicy,
       scope,
+      transfer,
     });
     return id;
   }
@@ -86,12 +96,20 @@ export class ResourceManager {
     id: string,
     source: string,
     scope?: ResourceScope,
-  ): void {
+  ): RemoteResourceIdentity {
     let scopes = this.remoteProxies.get(source);
     if (!scopes) this.remoteProxies.set(source, (scopes = new Map()));
     let ids = scopes.get(scope);
-    if (!ids) scopes.set(scope, (ids = new Set()));
-    ids.add(id);
+    if (!ids) scopes.set(scope, (ids = new Map()));
+    let identity = ids.get(id);
+    if (!identity) {
+      // Released identities remain tombstones until their scope/session ends.
+      if (ids.size >= 100_000)
+        throw new TypeError("Remote resource identity limit exceeded.");
+      identity = { released: false };
+      ids.set(id, identity);
+    }
+    return identity;
   }
 
   /** Stop tracking one remote identity without affecting sibling identities. */
@@ -100,11 +118,8 @@ export class ResourceManager {
     source: string,
     scope?: ResourceScope,
   ): void {
-    const scopes = this.remoteProxies.get(source);
-    if (!scopes) return;
-    const ids = scopes.get(scope);
-    if (ids?.delete(id) && !ids.size) scopes.delete(scope);
-    if (!scopes.size) this.remoteProxies.delete(source);
+    const identity = this.remoteProxies.get(source)?.get(scope)?.get(id);
+    if (identity) identity.released = true;
   }
 
   /** Check remote ownership using separate identity and session keys. */
@@ -113,7 +128,8 @@ export class ResourceManager {
     source: string,
     scope?: ResourceScope,
   ): boolean {
-    return this.remoteProxies.get(source)?.get(scope)?.has(id) ?? false;
+    const identity = this.remoteProxies.get(source)?.get(scope)?.get(id);
+    return identity !== undefined && !identity.released;
   }
 
   /** Check whether a local capability is still registered. */
@@ -130,7 +146,8 @@ export class ResourceManager {
   public countRemoteProxies(): number {
     let count = 0;
     for (const scopes of this.remoteProxies.values())
-      for (const ids of scopes.values()) count += ids.size;
+      for (const ids of scopes.values())
+        for (const identity of ids.values()) if (!identity.released) count++;
     return count;
   }
 
@@ -148,6 +165,8 @@ export class ResourceManager {
     for (const [id, resource] of this.localResources)
       if (resource.ownerConnectionId === connectionId)
         this.localResources.delete(id);
+    for (const ids of this.remoteProxies.get(connectionId)?.values() ?? [])
+      for (const identity of ids.values()) identity.released = true;
     this.remoteProxies.delete(connectionId);
   }
 
@@ -156,6 +175,8 @@ export class ResourceManager {
     for (const [id, resource] of this.localResources)
       if (resource.scope === scope) this.localResources.delete(id);
     for (const [source, scopes] of this.remoteProxies) {
+      for (const identity of scopes.get(scope)?.values() ?? [])
+        identity.released = true;
       scopes.delete(scope);
       if (!scopes.size) this.remoteProxies.delete(source);
     }

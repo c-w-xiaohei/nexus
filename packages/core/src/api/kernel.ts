@@ -66,10 +66,20 @@ export async function buildKernel<M extends AdapterModel>(
           ? await options.factory({ targetClass, token, localMeta: meta })
           : new targetClass();
         const checked = validateProviderBatch([
-          { token, service, policy: options?.policy },
+          {
+            token,
+            service,
+            policy: options?.policy,
+            transfer: options?.transfer,
+          },
         ]);
         if (checked.isErr()) return err(checked.error);
-        providers.push({ token, service, policy: options?.policy });
+        providers.push({
+          token,
+          service,
+          policy: options?.policy,
+          transfer: options?.transfer,
+        });
       }
       // Constructors do not start transport traffic; Nexus starts listening only
       // after both sides of this dependency are installed.

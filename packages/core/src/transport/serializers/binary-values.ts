@@ -9,13 +9,18 @@ const marker = "\u0000nexus-binary-v1";
 const escaped = "\u0000nexus-escaped-object-v1";
 const mapMarker = "\u0000nexus-map-v1";
 const setMarker = "\u0000nexus-set-v1";
-export type Attachment = Pick<BinaryValue, "kind" | "mimeType" | "bytes">;
+export type Attachment = Pick<BinaryValue, "kind" | "mimeType" | "bytes"> & {
+  transfer?: boolean;
+};
 
 const MAX_CODEC_DEPTH = 128;
 const MAX_CODEC_NODES = 100_000;
 
 /** Check traversal limits and reserve a conservative byte estimate in one pass. */
-export function preflightCodecBytes(value: unknown): number {
+export function preflightCodecBytes(
+  value: unknown,
+  onBinary?: (binary: BinaryValue) => void,
+): number {
   const ancestors = new Set<object>();
   const budget = { nodes: 0, bytes: 4 };
   const visit = (item: unknown, depth: number): void => {
@@ -25,6 +30,7 @@ export function preflightCodecBytes(value: unknown): number {
     if (typeof item === "string") {
       budget.bytes += item.length * 6;
     } else if (isBinaryValue(item)) {
+      onBinary?.(item);
       budget.bytes +=
         item.bytes.byteLength +
         Math.ceil(item.bytes.byteLength / 3) * 4 +
@@ -109,6 +115,7 @@ export function encodeBinaryValues(
       kind: binary.kind,
       mimeType: binary.mimeType,
       bytes: binary.bytes,
+      transfer: binary.transfer,
     });
     return { [marker]: index, length: binary.bytes.byteLength };
   });

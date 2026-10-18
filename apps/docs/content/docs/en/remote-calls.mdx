@@ -49,9 +49,9 @@ Node.js `Buffer`, and `Blob`, including when nested in supported containers.
 `Blob` with its content and MIME type. A `File` is transferred with Blob content
 semantics only; pass its name and other file metadata as separate fields.
 
-Nexus snapshots bytes for transport and does not detach the caller's buffer.
-This does not preserve object identity or shared memory and is not a zero-copy
-or ownership-transfer API. No per-call binary or chunk option is needed.
+By default, Nexus snapshots bytes for transport and preserves the sender's buffer.
+Object identity and shared memory are not preserved. No binary or chunk option
+is needed for this copy path.
 
 Large encoded messages are split into bounded frames transparently on each
 connection hop and reassembled before normal RPC handling. Defaults are a 64 KiB
@@ -65,6 +65,36 @@ inspect them through `await` or `Nexus.safeCall(...)`. Delivery can be uncertain
 if the final frame was submitted but its acknowledgment or RPC response was not
 received. Nexus does not retry or replay the call, so do not infer that the
 remote method did not run.
+
+### Transfer buffer ownership
+
+Set `transfer: true` when this handle can give up its outbound buffers.
+For a shared `BinaryToken` whose service defines `echo(bytes: ArrayBuffer): ArrayBuffer`,
+use an acquired iframe connection:
+
+```ts
+import { BinaryToken } from "./binary-contract";
+
+const binary = connection.get(BinaryToken, { transfer: true });
+const source = new Uint8Array([1, 2, 3]).buffer;
+const received = await binary.echo(source);
+// source is detached; received contains [1, 2, 3].
+```
+
+The provider independently enables its outbound transfer with
+`hostNexus.provide(BinaryToken, implementation, { transfer: true })` or the same
+`Expose` option. Either side can keep the default copy policy. Receiving needs
+no option. `ref()` always keeps its target local and stops payload traversal.
+
+Transfer supports fixed-length `ArrayBuffer` and complete `Uint8Array` views.
+The message, including metadata, must fit one frame, normally 64 KiB.
+Iframe supports native attachments; Chrome ports, Node IPC, and WebSocket do not.
+Unsupported transfers fail before submission without falling back to copy.
+
+Stop using source buffers at first consumption. Native submission detaches them;
+failure or timeout does not restore ownership and may follow remote execution.
+See the [transfer reference](/nexus/docs/reference/resources/#buffer-transfer)
+for callback/ref policies, supported values, and failure recovery.
 
 ## Calls Start When Consumed
 

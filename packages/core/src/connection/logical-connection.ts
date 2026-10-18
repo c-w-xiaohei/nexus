@@ -19,7 +19,7 @@ import { Logger } from "@/logger";
 import { createEvtChannel } from "@/utils/evt-channel";
 import { toSerializedError } from "@/utils/error";
 import { NexusProtocolError, NexusProtocolIncompatibleError } from "@/errors";
-import { isDeterminateTransferError } from "@/transport/port-processor";
+import { isRecoverableSendError } from "@/transport/port-processor";
 import { Result } from "better-result";
 import { delay } from "es-toolkit/promise";
 import type { ResolvedTransportConfig } from "../transport/transport-config";
@@ -780,7 +780,10 @@ export class LogicalConnection<M extends AdapterModel> {
           local.receive.maxFrameBytes ||
         message.transport.responderReceive.maxMessageBytes !==
           local.receive.maxMessageBytes ||
-        message.transport.selectedPacketMode !== expectedMode
+        message.transport.selectedPacketMode !== expectedMode ||
+        (message.transport.arrayBufferTransfer === true) !==
+          (local.arrayBufferTransfer === true &&
+            peer?.arrayBufferTransfer === true)
       ) {
         this.reject(
           message.id,
@@ -800,6 +803,7 @@ export class LogicalConnection<M extends AdapterModel> {
           peer!.receive.maxMessageBytes,
         ),
         packetMode: message.transport.selectedPacketMode,
+        arrayBufferTransfer: message.transport.arrayBufferTransfer,
       });
       if (activated?.isErr()) {
         this.reject(message.id, activated.error);
@@ -835,7 +839,7 @@ export class LogicalConnection<M extends AdapterModel> {
     const fixedLocalMode =
       !this.bootstrapJson && localOffer.packetModes.length === 1;
     if (
-      message.transport.version !== 1 ||
+      message.transport.version !== 2 ||
       !peerModes.length ||
       (fixedLocalMode &&
         (peerModes.length !== 1 || peerModes[0] !== localOffer.packetModes[0]))
@@ -872,7 +876,13 @@ export class LogicalConnection<M extends AdapterModel> {
       this.activationPending = true;
       this.activationIngressBytes = 0;
       const selectedMode = this.selectPacketMode(message.transport.packetModes);
-      const activationStarted = this.port.beginActivation?.(selectedMode);
+      const arrayBufferTransfer =
+        this.port.arrayBufferTransfer === true &&
+        message.transport.arrayBufferTransfer === true;
+      const activationStarted = this.port.beginActivation?.(
+        selectedMode,
+        arrayBufferTransfer,
+      );
       if (activationStarted?.isErr()) {
         this.activationPending = false;
         this.reject(message.id, activationStarted.error);
@@ -887,6 +897,7 @@ export class LogicalConnection<M extends AdapterModel> {
           initiatorReceive: this.localTransportOffer().receive,
           responderReceive: message.transport.receive,
           selectedPacketMode: selectedMode,
+          arrayBufferTransfer,
         },
       });
       if (readySent.isErr()) {
@@ -905,6 +916,7 @@ export class LogicalConnection<M extends AdapterModel> {
           message.transport.receive.maxMessageBytes,
         ),
         packetMode: this.selectPacketMode(message.transport.packetModes),
+        arrayBufferTransfer,
       });
       if (activated?.isErr()) {
         this.activationPending = false;
@@ -951,7 +963,8 @@ export class LogicalConnection<M extends AdapterModel> {
 
   private localTransportOffer(): HandshakeReqMessage["transport"] {
     return {
-      version: 1,
+      version: 2,
+      arrayBufferTransfer: this.port.arrayBufferTransfer === true,
       receive: {
         maxFrameBytes: this.transportConfig.maxFrameBytes,
         maxMessageBytes: this.transportConfig.maxMessageBytes,
@@ -1055,7 +1068,7 @@ export class LogicalConnection<M extends AdapterModel> {
         if (
           result.isErr() &&
           !queued.options?.signal?.aborted &&
-          !isDeterminateTransferError(result.error)
+          !isRecoverableSendError(result.error)
         )
           this.close("protocol");
         queued.resolve(result);

@@ -122,8 +122,16 @@ export class VirtualPort implements IPort {
     }
   }
 
-  postMessage(payload: unknown, transfer?: Transferable[]): void {
-    if (!this.isOpen) return;
+  postMessage(
+    payload: unknown,
+    transfer?: Transferable[],
+    signal?: AbortSignal,
+  ): void {
+    if (!this.isOpen || signal?.aborted)
+      throw new VirtualPortConnectError(
+        "Virtual port is closed or submission was aborted",
+        { channelId: this.base.channelId },
+      );
     // IPort is the throw-style native boundary; internals retain Result errors.
     const sent = this.send(
       {

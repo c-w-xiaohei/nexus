@@ -69,7 +69,7 @@ const messages = [
     id: "handshake-req",
     metadata: { opaque: true },
     transport: {
-      version: 1,
+      version: 2,
       receive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
       packetModes: ["json"],
     },
@@ -81,7 +81,7 @@ const messages = [
     capabilities: ["capability"],
     providers: ["provider"],
     transport: {
-      version: 1,
+      version: 2,
       receive: { maxFrameBytes: 1024, maxMessageBytes: 4096 },
       packetModes: ["json"],
     },
@@ -279,6 +279,14 @@ describe("Nexus message schemas", () => {
   });
 
   it("requires transport negotiation on each handshake phase", () => {
+    for (const version of [0, 1, 3]) {
+      expect(
+        safeParse(HandshakeReqMessageSchema, {
+          ...messages[8],
+          transport: { ...messages[8].transport, version },
+        }).success,
+      ).toBe(false);
+    }
     for (const [index, schema] of [
       HandshakeReqMessageSchema,
       HandshakeAckMessageSchema,
@@ -291,7 +299,7 @@ describe("Nexus message schemas", () => {
       safeParse(HandshakeReqMessageSchema, {
         ...messages[8],
         transport: {
-          version: 1,
+          version: 2,
           receive: { maxFrameBytes: 0, maxMessageBytes: 4096 },
           packetModes: ["json"],
         },

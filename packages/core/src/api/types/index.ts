@@ -10,21 +10,13 @@ import type {
   NexusEndpointDecorator,
 } from "../decorators/endpoint";
 import type { ExposeOptions, NexusClassDecorator } from "../decorators/expose";
-import type {
-  AuthorizationPolicy,
-  NexusConfig,
-  ServiceProvider,
-} from "./config";
+import type { ProviderOptions, NexusConfig, ServiceProvider } from "./config";
 import type { Connection, ConnectionCollection } from "../connection";
 import type { RelayHandle, RelayOptions } from "../nexus";
 
 /** A token needs an implementation; descriptors and batches already carry theirs. */
 export type ProviderArgs<T extends object, M extends AdapterModel> =
-  | [
-      token: Token<T> | Token<T, M>,
-      service: T,
-      options?: { policy?: AuthorizationPolicy<M> },
-    ]
+  | [token: Token<T> | Token<T, M>, service: T, options?: ProviderOptions<M>]
   | [
       registration:
         | ServiceProvider<T, M>

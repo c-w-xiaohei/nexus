@@ -26,6 +26,7 @@ import type {
 import type { PendingCallManager } from "../pending-call-manager";
 import type { ResourceManager } from "../resource-manager";
 import { scopeClosedError, type ResourceScope } from "../resource-scope";
+import { isDeterminateTransferError } from "../../transport/port-processor";
 import {
   getServiceInvocationHook,
   isServiceWithHooks,
@@ -36,6 +37,7 @@ import {
 export type AuthorizedCall<M extends AdapterModel> = {
   serviceName: string;
   servicePolicy: NexusAuthorizationPolicy<M> | undefined;
+  transfer?: boolean;
 };
 type InvocationTarget = { root: any; target: any; parent: any };
 
@@ -72,7 +74,8 @@ export class MessageHandler<M extends AdapterModel> {
       pendingCalls: Pick<
         PendingCallManager,
         "handleResponse" | "canHandleResponse" | "getCallTimeout"
-      >;
+      > &
+        Partial<Pick<PendingCallManager, "getTransfer">>;
       resourceManager: ResourceManager;
       payloadProcessor: Pick<
         PayloadProcessor,
@@ -131,6 +134,7 @@ export class MessageHandler<M extends AdapterModel> {
             source,
             pending.getCallTimeout(message.id, source, scope),
             scope,
+            pending.getTransfer?.(message.id, source, scope),
           );
           pending.handleResponse(
             message.id,
@@ -242,6 +246,23 @@ export class MessageHandler<M extends AdapterModel> {
       this.context.payloadProcessor.releaseSanitizedResources(encoded.value);
     lease?.releaseAll();
     stopAbort?.();
+    // No payload was submitted: report a local transfer rejection as the RPC
+    // outcome. Uncertain submission must never produce a second response.
+    if (
+      sent.isErr() &&
+      encoded.isOk() &&
+      isDeterminateTransferError(sent.error) &&
+      !scope?.closed
+    )
+      return this.context.safeSendMessage(
+        {
+          type: NexusMessageType.ERR,
+          id: message.id,
+          ...(scope ? { scopeId: scope.id } : {}),
+          error: serializeFrameworkError(sent.error),
+        },
+        source,
+      );
     return sent;
   }
 
@@ -265,7 +286,15 @@ export class MessageHandler<M extends AdapterModel> {
       !(authorization instanceof Promise)
         ? authorization
         : await authorization;
-    if (authorized.isErr()) return authorized;
+    if (authorized.isErr()) {
+      this.context.payloadProcessor.releaseOrphanedResponseResources(
+        message,
+        source,
+        (id) => this.context.dispatchRelease(id, source, scope),
+        scope,
+      );
+      return authorized;
+    }
 
     // Authorization may await application code. Recheck before any getter or proxy trap.
     if (scope?.closed) return Result.err(scopeClosedError(scope));
@@ -284,6 +313,7 @@ export class MessageHandler<M extends AdapterModel> {
           source,
           undefined,
           scope,
+          authorized.value.transfer,
         );
         if (revived.isErr()) return revived.mapError(toFrameworkProtocolError);
         if (!propertyPath.length)
@@ -305,6 +335,7 @@ export class MessageHandler<M extends AdapterModel> {
           authorized.value.serviceName,
           resolved.value,
           scope,
+          authorized.value.transfer,
         );
         if (invoked.isErr()) return invoked;
         result = await invoked.value;
@@ -321,6 +352,7 @@ export class MessageHandler<M extends AdapterModel> {
         authorized.value.servicePolicy,
         scope,
         reservation,
+        authorized.value.transfer,
       )
     ).mapError(toFrameworkProtocolError);
   }
@@ -336,6 +368,7 @@ export class MessageHandler<M extends AdapterModel> {
     serviceName: string,
     { root, target, parent }: InvocationTarget,
     scope?: ResourceScope,
+    transfer?: boolean,
   ): Result<any, Error> {
     if (typeof target !== "function")
       return Result.err(
@@ -368,6 +401,7 @@ export class MessageHandler<M extends AdapterModel> {
         source,
         undefined,
         scope,
+        transfer,
       );
       if (args.isErr()) return args.mapError(toFrameworkProtocolError);
       return Result.ok(
@@ -396,12 +430,14 @@ export class MessageHandler<M extends AdapterModel> {
     if (checked.isErr()) return checked;
     let serviceName: string;
     let servicePolicy: NexusAuthorizationPolicy<M> | undefined;
+    let transfer: boolean | undefined;
     if (message.resourceId !== null) {
       const resource = this.ownedResource(message.resourceId, source, scope);
       if (resource.isErr()) return resource;
       serviceName =
         resource.value.serviceName ?? `resource:${message.resourceId}`;
       servicePolicy = resource.value.servicePolicy;
+      transfer = resource.value.transfer;
       if (
         message.invocationServiceName !== undefined &&
         message.invocationServiceName !== serviceName
@@ -421,16 +457,16 @@ export class MessageHandler<M extends AdapterModel> {
       }
     } else {
       serviceName = String(message.path[0]);
-      servicePolicy =
-        this.context.resourceManager.getExposedServiceRecord(
-          serviceName,
-        )?.policy;
+      const provider =
+        this.context.resourceManager.getExposedServiceRecord(serviceName);
+      servicePolicy = provider?.policy;
+      transfer = provider?.transfer;
     }
     const policy =
       !serviceName.startsWith("resource:") && servicePolicy?.canCall
         ? servicePolicy
         : this.context.policy;
-    const authorized = { serviceName, servicePolicy: policy };
+    const authorized = { serviceName, servicePolicy: policy, transfer };
     const canCall = policy?.canCall;
     if (!canCall) return Result.ok(authorized);
     const denied = () =>

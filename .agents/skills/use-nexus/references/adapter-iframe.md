@@ -93,6 +93,12 @@ Adapter source, origin, app id, channel, and nonce checks are transport gates. A
 
 ## Heartbeat And Reconnect
 
+Iframe endpoints support native ArrayBuffer attachments independently of ordinary
+JSON/binary packet mode. User buffers default to copy; enable `transfer: true`
+on the local handle or provider to give up its outbound buffers. Native messages
+must fit the negotiated single-frame limit, including metadata. `ref()` always
+exports a reference and stops traversal. See the [ownership rules](https://c-w-xiaohei.github.io/nexus/docs/remote-calls/#transfer-buffer-ownership).
+
 The browser `postMessage` bus has no native disconnect guarantee. Iframe helpers rely on the core virtual-port heartbeat to detect unresponsive links.
 
 Use the default heartbeat for application code unless tests or runtime constraints need faster or slower disconnect detection.

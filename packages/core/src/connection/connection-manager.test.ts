@@ -45,7 +45,7 @@ const matchesTarget = (target: TestUserMeta, contextMeta: TestUserMeta) =>
   );
 
 const testTransportOffer = {
-  version: 1 as const,
+  version: 2 as const,
   receive: { maxFrameBytes: 64 * 1024, maxMessageBytes: 16 * 1024 * 1024 },
   packetModes: ["json" as const],
 };

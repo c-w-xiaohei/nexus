@@ -114,9 +114,10 @@ const PacketModesSchema = v.pipe(
   v.check((modes) => new Set(modes).size === modes.length),
 );
 const HandshakeTransportSchema = v.strictObject({
-  version: v.literal(1),
+  version: v.literal(2),
   receive: ReceiveLimitsSchema,
   packetModes: PacketModesSchema,
+  arrayBufferTransfer: v.optional(v.boolean()),
 });
 export const CHUNKABLE_PACKET_TYPES = [
   NexusMessageType.GET,
@@ -135,6 +136,7 @@ const HandshakeReadyTransportSchema = v.strictObject({
   initiatorReceive: ReceiveLimitsSchema,
   responderReceive: ReceiveLimitsSchema,
   selectedPacketMode: v.picklist(["json", "binary"]),
+  arrayBufferTransfer: v.optional(v.boolean()),
 });
 const ChunkBytesSchema = v.pipe(
   v.union([v.instance(Uint8Array), v.instance(ArrayBuffer)]),

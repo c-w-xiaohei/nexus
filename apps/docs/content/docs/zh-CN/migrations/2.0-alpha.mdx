@@ -24,7 +24,20 @@ State 的 `validation.state` 和 `validation.actionResults` 现在接受同步�
 
 校验保留原始快照和动作结果，不要依赖 schema 的默认值、强制转换或 transform 来规范化共享数据。不支持异步验证器。参阅 [State 校验 Schema](/nexus/docs/state/core-api/#validation-schemas)。
 
-内部协议校验改用 Valibot，在分发前拒绝格式错误的消息字段。已有合法 wire 格式及旧 invocation packet 布局保持兼容。
+内部协议校验使用 Valibot，在分发前拒绝格式错误的消息字段。
+兼容会话内仍支持旧 invocation 数组布局。
+
+## 原生 buffer 转移 [#native-buffer-transfer]
+
+Transport 握手版本 2 要求通信各端和 Relay 中间跳一起升级；
+即使未开启 transfer，也会拒绝版本 1。这项变更尚待发布。
+默认仍然复制，参阅[开启 transfer](/nexus/docs/remote-calls/#transfer-buffer-ownership)。
+
+自定义 Endpoint 只有在端口支持 `{ nexusAttachments: 1, metadata: string, buffers: ArrayBuffer[] }`
+附件包，并遵守原生 transfer list 时，才能声明 `capabilities.arrayBufferTransfer: true`。
+端口必须拒绝关闭后的发送，并在延迟提交原生消息前检查传入的 abort signal。
+仅支持 `binaryPackets` 或内部包转移不会开启该能力。
+Virtual port 在关闭后发送会抛错，不再静默接受。
 
 ## 替换服务获取 [#replace-service-acquisition]
 

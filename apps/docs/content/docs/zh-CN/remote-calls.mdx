@@ -43,8 +43,8 @@ await document.setTitle("New title");
 `Uint8Array` 和 Node `Buffer` 会以只包含该视图可见字节的 `Uint8Array` 返回。
 `Blob` 会保留内容和 MIME 类型。`File` 只按 Blob 内容语义传递；文件名等元数据应作为独立字段传递。
 
-Nexus 会为传输快照字节，不会分离调用方的 buffer。这不保留对象身份或共享内存，
-也不提供零拷贝或所有权转移。每次调用无需额外的二进制或分块选项。
+默认情况下，Nexus 会为传输快照字节，保留发送方的 buffer。
+复制路径不保留对象身份或共享内存，每次调用无需额外的二进制或分块选项。
 
 较大的编码消息会在每条连接上透明地拆分为有界数据帧，并在进入普通 RPC 处理前重组。
 默认单帧上限为 64 KiB、单消息上限为 16 MiB、每个 Endpoint runtime 的框架聚合缓冲预算为
@@ -52,6 +52,34 @@ Nexus 会为传输快照字节，不会分离调用方的 buffer。这不保留�
 都会通过结构化错误使普通调用失败，可通过 `await` 或 `Nexus.safeCall(...)` 观察。如果最后一帧
 已提交但未收到确认或 RPC 响应，交付结果可能不确定。Nexus 不会重试或重放调用，因此不能据此
 认定远程方法没有执行。
+
+### 转移 buffer 所有权 [#transfer-buffer-ownership]
+
+当前句柄可以交出其出站 buffer 时，设置 `transfer: true`。
+假设共享 `BinaryToken` 的服务定义了 `echo(bytes: ArrayBuffer): ArrayBuffer`，
+取得 iframe 连接后：
+
+```ts
+import { BinaryToken } from "./binary-contract";
+
+const binary = connection.get(BinaryToken, { transfer: true });
+const source = new Uint8Array([1, 2, 3]).buffer;
+const received = await binary.echo(source);
+// source 已分离，received 包含 [1, 2, 3]。
+```
+
+提供方通过 `hostNexus.provide(BinaryToken, implementation, { transfer: true })`
+或相同的 `Expose` 选项，独立开启自己的出站转移。任一端都可以保留默认 copy 策略，
+接收无需开启选项。`ref()` 始终保留本地目标，并在引用处停止遍历。
+
+转移支持固定长度 `ArrayBuffer` 和完整 `Uint8Array` 视图。
+包含元数据的消息必须放进一个数据帧，默认上限 64 KiB。
+iframe 支持原生附件；Chrome 端口、Node IPC 和 WebSocket 不支持。
+不满足转移条件时会在提交前拒绝，不回退为 copy。
+
+首次触发操作执行后，应停止使用源 buffer。原生提交会将它分离；
+失败或超时不会恢复所有权，远端方法也可能已经执行。
+回调/ref 策略、支持范围和失败恢复见[转移参考](/nexus/docs/reference/resources/#buffer-transfer)。
 
 ## 等待结果时才执行 [#calls-start-when-consumed]
 

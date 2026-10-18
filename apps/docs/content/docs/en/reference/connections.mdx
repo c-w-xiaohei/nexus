@@ -46,9 +46,12 @@ The signal only cancels the caller's wait. See
 | `onDisconnected(listener)`    | Returns a cancel function; delivers the terminal reason once, including late registration         |
 | `subscribeIdentity(listener)` | Returns a cancel function; delivers the current identity and each accepted update while connected |
 
-Get options are `ResourceOptions = { callTimeout?: number }`. The override belongs
-to the returned handle, not the shared Connection. Get checks current readiness,
+Get options are `ResourceOptions = { callTimeout?: number; scope?: ResourceScope; transfer?: boolean }`.
+`transfer` defaults to `false` and controls this handle's outbound buffer ownership.
+Options belong to the returned handle. Get checks current readiness,
 valid options, and service catalog availability without dialing or waiting.
+Transfer capability is checked when a payload is sent. See
+[buffer ownership](/nexus/docs/remote-calls/#transfer-buffer-ownership).
 
 Identity listeners receive complete snapshots without value deduplication. A
 disconnected handle supplies no identity replay. Listener synchronous errors are

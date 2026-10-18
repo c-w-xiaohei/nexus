@@ -66,6 +66,7 @@ export class Engine<M extends AdapterModel> {
   // Expose only the factory's creation capability, not the factory itself.
   public readonly createServiceProxy: ProxyFactory["createServiceProxy"];
   private readonly messageHandler: MessageHandler<M>;
+  private readonly payloadProcessor: PayloadProcessor;
 
   /** One L2-to-call error boundary shared by calls, replies and releases. */
   private readonly safeSendMessage = async (
@@ -86,7 +87,7 @@ export class Engine<M extends AdapterModel> {
             : new NexusProtocolError("Unknown outbound resource scope."),
         );
     }
-    return (
+    const sent = (
       await (options
         ? this.connectionManagerState.safeSendMessage(
             message,
@@ -105,6 +106,15 @@ export class Engine<M extends AdapterModel> {
           )
         : error,
     );
+    if (
+      sent.isErr() &&
+      sent.error instanceof NexusProtocolError &&
+      sent.error.context?.transferOutcome === "uncertain" &&
+      "scopeId" in message &&
+      message.scopeId
+    )
+      this.scopes.get(connectionId, message.scopeId)?.close();
+    return sent;
   };
 
   /** Local release is final; remote notification is best effort, without an ACK. */
@@ -163,10 +173,10 @@ export class Engine<M extends AdapterModel> {
     );
     this.createServiceProxy =
       proxyFactory.createServiceProxy.bind(proxyFactory);
-    const payloadProcessor = new PayloadProcessor(
+    const payloadProcessor = (this.payloadProcessor = new PayloadProcessor(
       this.resourceManager,
       proxyFactory,
-    );
+    ));
     const payloadReservation = {
       reserveBytes: (bytes: number) =>
         this.connectionManagerState.reserveBytes(bytes),
@@ -200,11 +210,14 @@ export class Engine<M extends AdapterModel> {
   ): void {
     if (providers.some(({ token }) => this.relays.has(token.id)))
       throw new NexusUsageError("A relay already owns this service entry.");
-    const registrations = providers.map(({ token, service, policy }) => ({
-      name: token.id,
-      service,
-      policy,
-    }));
+    const registrations = providers.map(
+      ({ token, service, policy, transfer }) => ({
+        name: token.id,
+        service,
+        policy,
+        transfer,
+      }),
+    );
     this.resourceManager.registerExposedServices(registrations);
     this.connectionManagerState.publishProviders(
       registrations.map(({ name }) => name),
@@ -505,6 +518,30 @@ export class Engine<M extends AdapterModel> {
   }
 
   private reject(message: RpcRequest, source: string, error: Error): void {
+    // Rejected arguments never entered application code. Release only newly
+    // received capabilities; existing remote identities may still be in use.
+    this.payloadProcessor.releaseOrphanedResponseResources(
+      message,
+      source,
+      (resourceId) => {
+        void this.connectionManagerState
+          .safeSendMessage(
+            {
+              type: NexusMessageType.RELEASE,
+              id: null,
+              resourceId,
+              ...(message.scopeId ? { scopeId: message.scopeId } : {}),
+            },
+            source,
+          )
+          .then((result) =>
+            result.tapError((failure) =>
+              this.logger.debug("Rejected argument release failed", failure),
+            ),
+          );
+      },
+      message.scopeId ? this.scopes.get(source, message.scopeId) : undefined,
+    );
     const framework =
       error instanceof NexusError ? error : toFrameworkProtocolError(error);
     // Rejections can address an unknown/closed scope; bypass the outgoing liveness guard.

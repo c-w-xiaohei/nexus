@@ -145,6 +145,7 @@ async function callChildEcho(frameId: string, value: string) {
 async function callChildBinary(
   frameId: string,
   value: Uint8Array | ArrayBuffer | Blob,
+  transfer = false,
 ) {
   const service = await parent
     .connect({
@@ -154,7 +155,7 @@ async function callChildBinary(
         frameId,
       },
     })
-    .then((connection) => connection.get(EchoToken));
+    .then((connection) => connection.get(EchoToken, { transfer }));
   return service.echoBinary(value);
 }
 

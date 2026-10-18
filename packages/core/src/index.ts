@@ -59,6 +59,7 @@ export type {
   ConnectionAuthContext,
   EndpointConfig,
   ServiceProvider,
+  ProviderOptions,
   AuthorizationPolicy,
   ServiceCallAuthContext,
 } from "./api/types/config"; // 配置和寻址相关类型

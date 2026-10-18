@@ -40,9 +40,23 @@ Validation preserves the original snapshot and action result. Do not depend on
 schema defaults, coercions, or transforms to normalize shared values. Async
 validators are not supported. See [State validation schemas](/nexus/docs/state/core-api/#validation-schemas).
 
-Internal protocol validation now uses Valibot and rejects malformed message
-fields before dispatch. Existing valid wire formats and legacy invocation packet
-layouts remain supported.
+Internal protocol validation uses Valibot and rejects malformed message fields
+before dispatch. Legacy invocation array layouts remain supported within a
+compatible session.
+
+## Native buffer transfer
+
+Transport handshake version 2 requires coordinated upgrades across all peers and
+Relay hops; version 1 is rejected even with transfer disabled. This change is
+pending release. Copy remains the default; see
+[opting into transfer](/nexus/docs/remote-calls/#transfer-buffer-ownership).
+
+Custom endpoints can advertise `capabilities.arrayBufferTransfer: true` only if
+their ports carry `{ nexusAttachments: 1, metadata: string, buffers: ArrayBuffer[] }`
+packets and honor their native transfer lists. Ports must reject closed sends and
+check the supplied abort signal immediately before any deferred submission.
+`binaryPackets` and internal packet transfer support alone do not opt in.
+Virtual ports now throw on sends after close instead of silently accepting them.
 
 ## Replace Service Acquisition
 

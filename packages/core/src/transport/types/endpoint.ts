@@ -29,6 +29,8 @@ export interface IEndpoint<M extends AdapterModel> {
   close?(): void | Promise<void>;
   readonly capabilities?: {
     binaryPackets?: boolean;
+    /** Supports raw ArrayBuffer attachment packets and honors their transfer list. */
+    arrayBufferTransfer?: boolean;
     transferables?: boolean;
     supportsTransferables?: boolean;
   };

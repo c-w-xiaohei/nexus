@@ -21,6 +21,7 @@ type PendingCall = {
   connectionId: string;
   scope?: ResourceScope;
   timeout: number;
+  transfer?: boolean;
   timer: ReturnType<typeof setTimeout>;
   resolve(result: Result<any, NexusCallError>): void;
   onSettled?: (result: Result<any, NexusCallError>) => void;
@@ -36,6 +37,7 @@ export class PendingCallManager {
     options: {
       connectionId: string;
       timeout: number;
+      transfer?: boolean;
       scope?: ResourceScope;
       onSettled?: (result: Result<any, NexusCallError>) => void;
     },
@@ -76,6 +78,17 @@ export class PendingCallManager {
     const pending = this.calls.get(id);
     return pending?.connectionId === source && pending.scope === scope
       ? pending.timeout
+      : undefined;
+  }
+
+  /** Complete a matching request, reviving framework errors when possible. */
+  getTransfer(
+    id: MessageId,
+    source: string,
+    scope?: ResourceScope,
+  ): boolean | undefined {
+    return this.canHandleResponse(id, source, scope)
+      ? this.calls.get(id)?.transfer
       : undefined;
   }
 

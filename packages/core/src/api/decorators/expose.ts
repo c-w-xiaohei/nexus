@@ -1,5 +1,9 @@
 import { Token } from "../token";
-import type { AuthorizationPolicy } from "../types/config";
+import {
+  RpcOptionsSchema,
+  type RpcOptions,
+  type AuthorizationPolicy,
+} from "../types/config";
 import { nexus } from "../nexus";
 import { NexusUsageError } from "@/errors";
 import { args, fn } from "@/utils/fn";
@@ -15,7 +19,7 @@ export type ExposeFactoryContext = {
   localMeta?: object;
 };
 
-export interface ExposeOptions {
+export interface ExposeOptions extends RpcOptions {
   /**
    * （可选）为此服务定义一个独立的授权策略。
    * 这会覆盖任何全局定义的策略。
@@ -44,6 +48,7 @@ export type NexusClassDecorator<T extends object = object> = (
 
 const ExposeOptionsSchema = optional(
   object({
+    ...RpcOptionsSchema.entries,
     policy: optional(
       custom<AuthorizationPolicy<DefaultAdapterModel>>(
         (value) => typeof value === "object" && value !== null,

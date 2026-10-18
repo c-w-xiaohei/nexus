@@ -1223,6 +1223,7 @@ describe("MessageHandler", () => {
         sourceConnectionId,
         undefined,
         undefined,
+        undefined,
       );
       expect(sanitizeSpy).toHaveBeenCalledWith([3], sourceConnectionId);
       expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
@@ -1476,6 +1477,7 @@ describe("MessageHandler", () => {
         sourceConnectionId,
         undefined,
         undefined,
+        undefined,
       );
       expect(mockStore.user?.name).toBe("John");
       expect(mockEngine.safeSendMessage).toHaveBeenCalledWith(
@@ -1531,6 +1533,7 @@ describe("MessageHandler", () => {
         sourceConnectionId,
         5_000,
         undefined,
+        undefined,
       );
       expect(mockEngine.handleResponse).toHaveBeenCalledWith(
         30,
@@ -1559,6 +1562,7 @@ describe("MessageHandler", () => {
         ["original_result"],
         sourceConnectionId,
         5_000,
+        undefined,
         undefined,
       );
     });

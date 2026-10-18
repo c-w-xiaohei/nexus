@@ -68,7 +68,7 @@ describe("PayloadProcessor resource identity", () => {
     expect(resourceManager.countRemoteProxies()).toBe(0);
   });
 
-  it("discards a failed revive's temporary facade for an existing identity", () => {
+  it("retains the shared finalizer after a failed revival of an existing identity", () => {
     const registrations = new Map<object, unknown>();
     let latestRegistrationToken: object | undefined;
     let finalize!: (heldValue: unknown) => void;
@@ -107,7 +107,8 @@ describe("PayloadProcessor resource identity", () => {
       if (heldValue) finalize(heldValue);
 
       expect(result.isErr()).toBe(true);
-      expect(registrations.has(temporaryFacadeToken!)).toBe(false);
+      expect(registrations.has(temporaryFacadeToken!)).toBe(true);
+      expect(registrations.size).toBe(1);
       expect(engine.dispatchRelease).not.toHaveBeenCalled();
       expect(
         resourceManager.hasRemoteProxy("res-existing", sourceConnectionId),

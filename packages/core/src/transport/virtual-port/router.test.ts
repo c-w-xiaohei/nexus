@@ -666,7 +666,7 @@ describe("VirtualPortRouter", () => {
         port.onDisconnect(disconnected);
         notifiedDuringSend = disconnected.mock.calls.length === 1;
         port.close();
-        port.postMessage("must-not-send");
+        expect(() => port.postMessage("must-not-send")).toThrow();
       }
       send(message, transfer);
     });
@@ -915,7 +915,7 @@ describe("VirtualPortRouter", () => {
       },
     });
     expect(clientDisconnect).toHaveBeenCalledOnce();
-    port.postMessage("after-close");
+    expect(() => port.postMessage("after-close")).toThrow();
     expect(bus.left.sent).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
