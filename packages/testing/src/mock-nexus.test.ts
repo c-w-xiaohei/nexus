@@ -57,6 +57,19 @@ const provider = (context: AppMeta["context"], origin: string = context) => ({
 });
 
 describe("createMockNexus", () => {
+  it("rejects Relay explicitly without publishing a mock provider or acquiring connections", async () => {
+    const mock = createMockNexus<TestAdapterModel>();
+    const options = { services: [ExampleToken], to: {} };
+    const result = mock.nexus.safeRelay(options);
+    expect(result.isErr()).toBe(true);
+    if (result.isErr())
+      expect(result.error).toMatchObject({ code: "E_USAGE_INVALID" });
+    expect(() => mock.nexus.relay(options)).toThrow(/real Nexus runtimes/);
+    expect(mock.calls.connect()).toHaveLength(0);
+    mock.service(MissingToken, service("unrelated"));
+    const connection = await mock.nexus.connect();
+    expect(connection.safeGet(ExampleToken).isErr()).toBe(true);
+  });
   it("supports unscoped service, configured providers, and live providers", async () => {
     const manual = createMockNexus<TestAdapterModel>();
     manual.service(ExampleToken, service("manual"));

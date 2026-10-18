@@ -16,6 +16,7 @@ import type {
   ServiceProvider,
 } from "./config";
 import type { Connection, ConnectionCollection } from "../connection";
+import type { RelayHandle, RelayOptions } from "../nexus";
 
 /** A token needs an implementation; descriptors and batches already carry theirs. */
 export type ProviderArgs<T extends object, M extends AdapterModel> =
@@ -75,6 +76,14 @@ export type RemoteValue<
 export type Asyncified<T> = Remote<T>;
 
 export interface NexusInstance<M extends AdapterModel = AdapterModel> {
+  /** Registers selected services for forwarding; omitted to.nexus uses this runtime. */
+  relay<T extends AdapterModel = never>(
+    options: RelayOptions<M, T>,
+  ): RelayHandle;
+  /** Returns registration errors synchronously. Protocol forwarding requires real Nexus runtimes. */
+  safeRelay<T extends AdapterModel = never>(
+    options: RelayOptions<M, T>,
+  ): Result<RelayHandle, Error>;
   /** Acquires one ready session; targetless calls wait passively for a unique match. */
   connect(options?: ConnectOptions<M>): Promise<Connection<M>>;
   /** Captures acquisition failures without cancelling shared runtime work. */

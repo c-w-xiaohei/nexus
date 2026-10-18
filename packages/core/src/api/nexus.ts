@@ -61,17 +61,19 @@ export interface RelayHandle extends Disposable {
 
 export interface RelayOptions<
   From extends AdapterModel,
-  To extends AdapterModel,
+  To extends AdapterModel = never,
 > {
-  from: NexusInstance<From>;
-  to: { nexus: NexusInstance<To> } & Pick<
-    ConnectOptions<To>,
-    "target" | "where"
-  >;
+  /** Omit nexus to acquire through the instance that owns this registration. */
+  to:
+    | ({ nexus?: never } & Pick<ConnectOptions<From>, "target" | "where">)
+    | ({ nexus: NexusInstance<To> } & Pick<
+        ConnectOptions<NoInfer<To>>,
+        "target" | "where"
+      >);
   services: readonly (
     | Token<object>
     | Token<object, From>
-    | Token<object, To>
+    | Token<object, NoInfer<To>>
   )[];
 }
 
@@ -133,44 +135,54 @@ export class Nexus<
     this.endpointDeclaration = registration as EndpointRegistration<M>;
   }) as NexusInstance<M>["Endpoint"];
 
-  // ===== Static API =====
-  /** Registers cross-instance service forwarding without dialing or creating business proxies. */
-  public static relay<F extends AdapterModel, T extends AdapterModel>(
-    options: RelayOptions<F, T>,
+  /** Registers forwarding on this instance; upstream acquisition is deferred until a call. */
+  public relay<T extends AdapterModel = never>(
+    options: RelayOptions<M, T>,
   ): RelayHandle {
-    return unwrapResultOrThrow(Nexus.safeRelay(options));
+    return unwrapResultOrThrow(this.safeRelay(options));
   }
 
-  public static safeRelay<F extends AdapterModel, T extends AdapterModel>(
-    options: RelayOptions<F, T>,
+  public safeRelay<T extends AdapterModel = never>(
+    options: RelayOptions<M, T>,
   ): Result<RelayHandle, Error> {
     return Result.try({
-      try: () => Nexus.installRelay(options),
+      try: () => {
+        const { to, services } = options;
+        return to.nexus === undefined
+          ? this.installRelay<M>({ ...to, nexus: this }, services)
+          : this.installRelay<T>(to, services);
+      },
       catch: () => new NexusUsageError("Invalid relay configuration."),
     }).andThen((result) => result);
   }
 
-  private static installRelay<F extends AdapterModel, T extends AdapterModel>(
-    options: RelayOptions<F, T>,
+  private installRelay<T extends AdapterModel>(
+    selection: { nexus: NexusInstance<T> } & Pick<
+      ConnectOptions<T>,
+      "target" | "where"
+    >,
+    tokens: readonly { readonly id: string }[],
   ): Result<RelayHandle, Error> {
     if (
-      !options ||
-      !(options.from instanceof Nexus) ||
-      !(options.to?.nexus instanceof Nexus) ||
-      !Array.isArray(options.services) ||
-      !options.services.length ||
-      !Array.from(options.services).every((token) => token instanceof Token)
+      !Array.isArray(tokens) ||
+      !tokens.length ||
+      !Array.from(tokens).every((token) => token instanceof Token)
     )
       return err(
         new NexusUsageError(
-          "relay requires Nexus instances and a nonempty Token list.",
+          "relay requires connection selection and a nonempty Token list.",
         ),
       );
-    const from: Nexus<F> = options.from;
-    const to: Nexus<T> = options.to.nexus;
+    const to = selection.nexus;
+    if (!(to instanceof Nexus))
+      return err(
+        new NexusUsageError(
+          "Relay upstream must be a Nexus runtime; mock or custom NexusInstance implementations cannot forward protocol resources.",
+        ),
+      );
     if (
-      from.lifecycle.phase === "starting" ||
-      from.lifecycle.phase === "listening"
+      this.lifecycle.phase === "starting" ||
+      this.lifecycle.phase === "listening"
     )
       return err(
         new NexusConfigurationError(
@@ -178,32 +190,32 @@ export class Nexus<
           "E_NEXUS_BOOTSTRAPPING_LOCKED",
         ),
       );
-    if (from.lifecycle.phase === "failed") return err(from.lifecycle.error);
-    const services = options.services.map((token) => token.id);
+    if (this.lifecycle.phase === "failed") return err(this.lifecycle.error);
+    const services = tokens.map((token) => token.id);
     if (
       new Set(services).size !== services.length ||
       services.some(
         (id) =>
-          from.relayDeclarations.has(id) ||
-          from.serviceDeclarations.has(id) ||
-          from.config.providers?.some(({ token }) => token.id === id),
+          this.relayDeclarations.has(id) ||
+          this.serviceDeclarations.has(id) ||
+          this.config.providers?.some(({ token }) => token.id === id),
       )
     )
       return err(
         new NexusUsageError("Relay service conflicts with an existing entry."),
       );
     if (
-      (options.to.target !== undefined && !isPlainTarget(options.to.target)) ||
-      (options.to.where !== undefined && typeof options.to.where !== "function")
+      (selection.target !== undefined && !isPlainTarget(selection.target)) ||
+      (selection.where !== undefined && typeof selection.where !== "function")
     )
       return err(new NexusUsageError("Invalid relay connection selection."));
     const selected = Result.try({
       try: () => ({
         target:
-          options.to.target === undefined
+          selection.target === undefined
             ? undefined
-            : structuredClone(options.to.target),
-        where: options.to.where,
+            : structuredClone(selection.target),
+        where: selection.where,
       }),
       catch: () => new NexusUsageError("Relay target cannot be captured."),
     });
@@ -227,25 +239,26 @@ export class Nexus<
         return ok(to.lifecycle.engine.relayPeer(connected.value.id));
       },
     };
-    if (from.lifecycle.phase === "ready") {
-      const installed = from.lifecycle.engine.installRelay(registration);
+    if (this.lifecycle.phase === "ready") {
+      const installed = this.lifecycle.engine.installRelay(registration);
       if (installed.isErr()) return installed;
     }
-    for (const id of services) from.relayDeclarations.set(id, registration);
+    for (const id of services) this.relayDeclarations.set(id, registration);
     const dispose = () => {
       if (controller.signal.aborted) return;
       controller.abort();
       for (const id of services)
-        if (from.relayDeclarations.get(id) === registration)
-          from.relayDeclarations.delete(id);
+        if (this.relayDeclarations.get(id) === registration)
+          this.relayDeclarations.delete(id);
       if (
-        from.lifecycle.phase === "ready" ||
-        from.lifecycle.phase === "listening"
+        this.lifecycle.phase === "ready" ||
+        this.lifecycle.phase === "listening"
       )
-        from.lifecycle.engine.removeRelay(registration);
+        this.lifecycle.engine.removeRelay(registration);
     };
     return ok({ dispose, [Symbol.dispose]: dispose });
   }
+  // ===== Static API =====
   /** Consumes one genuine lazy operation, sharing execution with await and returning its RPC Result. */
   public static safeCall<T, M extends AdapterModel>(
     value: RemoteValue<T, M>,

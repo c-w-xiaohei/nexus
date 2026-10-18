@@ -684,8 +684,7 @@ export default defineBackground(() => {
     const wsNexus = new Nexus<WebSocketAdapterModel>().configure(
       usingWebSocketClient({ configure: false }),
     );
-    Nexus.relay({
-      from: nexus,
+    nexus.relay({
       to: {
         nexus: wsNexus,
         target: { context: "websocket-server", url: targetInfo.url },
@@ -1223,10 +1222,8 @@ export default defineBackground(() => {
     }
     relayState.registration?.dispose();
     relayState.target = current;
-    relayState.registration = Nexus.relay({
-      from: nexus,
+    relayState.registration = nexus.relay({
       to: {
-        nexus,
         target: chromeTarget.contentDocument({
           tabId: current.tabId,
           documentId: current.documentId,

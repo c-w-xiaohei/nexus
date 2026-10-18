@@ -1,37 +1,109 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { Nexus } from "./nexus";
 import { Token } from "./token";
 import type { DefaultAdapterModel } from "../types/adapter-model";
 import type { IPort } from "../transport/types/port";
 import { createMockPortPair } from "../utils/test-utils";
+import type { NexusInstance } from "./types";
 
-describe("Nexus.relay registration", () => {
+type LocalModel = {
+  contextMeta: { local: string };
+  connectionMeta: { localFact: number };
+  connectionTarget: { context: "local"; tabId: number };
+};
+type RemoteModel = {
+  contextMeta: { remote: string };
+  connectionMeta: { remoteFact: boolean };
+  connectionTarget: { context: "remote"; url: string };
+};
+
+// Checked by tsc without creating registrations or starting runtimes.
+function checkRelayTypes(
+  local: NexusInstance<LocalModel>,
+  remote: NexusInstance<RemoteModel>,
+) {
+  const token = new Token<{ read(): string }>("portable");
+  local.relay({
+    services: [token],
+    to: {
+      target: { context: "local", tabId: 1 },
+      where: (identity, facts) => {
+        expectTypeOf(identity).toEqualTypeOf<LocalModel["contextMeta"]>();
+        expectTypeOf(facts).toEqualTypeOf<LocalModel["connectionMeta"]>();
+        return true;
+      },
+    },
+  });
+  local.safeRelay({
+    services: [token],
+    to: {
+      nexus: remote,
+      target: { context: "remote", url: "ws://localhost" },
+      where: (identity, facts) => {
+        expectTypeOf(identity).toEqualTypeOf<RemoteModel["contextMeta"]>();
+        expectTypeOf(facts).toEqualTypeOf<RemoteModel["connectionMeta"]>();
+        return true;
+      },
+    },
+  });
+  // @ts-expect-error A remote target cannot infer a different runtime when nexus is omitted.
+  local.relay({
+    services: [token],
+    to: { target: { context: "remote", url: "ws://localhost" } },
+  });
+  // @ts-expect-error Explicit runtime controls target typing, not the target object.
+  local.relay({
+    services: [token],
+    to: { nexus: remote, target: { context: "local", tabId: 1 } },
+  });
+}
+void checkRelayTypes;
+
+describe("instance Relay registration", () => {
+  it("registers on its owner by default and rejects unsupported upstream implementations", () => {
+    const owner = new Nexus<DefaultAdapterModel>();
+    const token = new Token<{ read(): string }>("same-runtime");
+    const handle = owner.relay({ services: [token], to: {} });
+    expect(owner.safeProvide(token, { read: () => "local" }).isErr()).toBe(
+      true,
+    );
+    handle.dispose();
+    const invalid = owner.safeRelay({
+      services: [token],
+      to: { nexus: {} as NexusInstance<DefaultAdapterModel> },
+    });
+    expect(invalid.isErr()).toBe(true);
+    if (invalid.isErr())
+      expect(invalid.error).toMatchObject({
+        code: "E_USAGE_INVALID",
+        message: expect.stringContaining("Nexus runtime"),
+      });
+    expect(owner.safeProvide(token, { read: () => "local" }).isOk()).toBe(true);
+  });
   it("contains invalid and hostile configuration at the safe boundary", () => {
-    const throwing = Object.defineProperty({}, "from", {
+    const from = new Nexus<DefaultAdapterModel>();
+    const throwing = Object.defineProperty({}, "to", {
       get() {
         throw new Error("hostile");
       },
     });
-    expect(() => Nexus.safeRelay(throwing as never)).not.toThrow();
-    expect(Nexus.safeRelay(throwing as never).isErr()).toBe(true);
-    const from = new Nexus<DefaultAdapterModel>();
+    expect(() => from.safeRelay(throwing as never)).not.toThrow();
+    expect(from.safeRelay(throwing as never).isErr()).toBe(true);
     const to = new Nexus<DefaultAdapterModel>();
     expect(
-      Nexus.safeRelay({ from, to: { nexus: to }, services: Array(1) }).isErr(),
+      from.safeRelay({ to: { nexus: to }, services: Array(1) }).isErr(),
     ).toBe(true);
   });
   it("registers before bootstrap without acquiring an upstream connection", () => {
-    expect(typeof Nexus.relay).toBe("function");
     const from = new Nexus<DefaultAdapterModel>();
     const to = new Nexus<DefaultAdapterModel>();
     const token = new Token<{ read(): string }>("documents");
-    const registration = Nexus.relay({
-      from,
+    const registration = from.relay({
       to: { nexus: to, target: { context: "provider" } },
       services: [token],
     });
     expect(
-      Nexus.safeRelay({ from, to: { nexus: to }, services: [token] }).isErr(),
+      from.safeRelay({ to: { nexus: to }, services: [token] }).isErr(),
     ).toBe(true);
     expect(from.safeProvide(token, { read: () => "local" }).isErr()).toBe(true);
     registration.dispose();
@@ -48,14 +120,14 @@ describe("Nexus.relay registration", () => {
     from.provide(local, { read: () => "local" });
 
     expect(
-      Nexus.safeRelay({
-        from,
-        to: { nexus: to },
-        services: [first, local],
-      }).isErr(),
+      from
+        .safeRelay({
+          to: { nexus: to },
+          services: [first, local],
+        })
+        .isErr(),
     ).toBe(true);
-    const original = Nexus.relay({
-      from,
+    const original = from.relay({
       to: { nexus: to },
       services: [first],
     });
@@ -64,8 +136,7 @@ describe("Nexus.relay registration", () => {
     ).toBe(true);
 
     original.dispose();
-    const replacement = Nexus.relay({
-      from,
+    const replacement = from.relay({
       to: { nexus: to },
       services: [first, second],
     });
@@ -83,14 +154,13 @@ describe("Nexus.relay registration", () => {
     const from = new Nexus<DefaultAdapterModel>();
     const to = new Nexus<DefaultAdapterModel>();
     const token = new Token<{ read(): string }>("locked");
-    let result: ReturnType<typeof Nexus.safeRelay> | undefined;
+    let result: ReturnType<typeof from.safeRelay> | undefined;
     from.configure({
       endpoint: {
         meta: { context: "from" },
         implementation: {
           listen: () => {
-            result = Nexus.safeRelay({
-              from,
+            result = from.safeRelay({
               to: { nexus: to },
               services: [token],
             });
@@ -125,8 +195,7 @@ describe("Nexus.relay registration", () => {
         },
       },
     });
-    const first = Nexus.relay({
-      from,
+    const first = from.relay({
       to: { nexus: upstream, target: { context: "upstream" } },
       services: [token],
     });
@@ -153,8 +222,7 @@ describe("Nexus.relay registration", () => {
       expect(connection.safeGet(token).isErr()).toBe(true),
     );
 
-    const replacement = Nexus.relay({
-      from,
+    const replacement = from.relay({
       to: { nexus: upstream, target: { context: "upstream" } },
       services: [token],
     });

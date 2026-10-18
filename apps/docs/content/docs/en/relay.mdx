@@ -1,223 +1,351 @@
 ---
 title: Nexus Relay
-description: Access services through an intermediate context and manage the lifetime of forwarded resources.
+description: Forward service calls through an intermediate context and manage callbacks, remote references, and disconnect cleanup.
 ---
 
-**Nexus Relay** lets callers use a service through an intermediate context. The
-application registers a forwarding entry for selected Tokens on that context's
-Nexus instance. The caller still connects and gets a service proxy; the actual
-provider still implements the shared contract.
+Nexus Relay forwards service calls to a selected peer. Callers use the same
+service interface, and callbacks and remote references can be called through
+Relay too.
+
+## Use cases [#why-relay]
+
+A side panel displays document changes, and the background tracks the selected
+page. The panel connects to the background's document service. The background
+uses Relay to send calls to that page's content script.
 
 <Mermaid
-  showCaption={false}
-  caption="The popup and content script connect to the background through separate sessions. Relay forwards one selected service between them."
+  caption="The panel connects to the background, and the background connects to the content script. These are separate Connections."
   chart={`flowchart LR
-    subgraph P[Popup]
-      PROXY["DocumentToken proxy"]
-    end
-    subgraph B[Background]
-      RELAY["Relay entry for DocumentToken"]
-    end
-    subgraph C[Content script]
-      PROVIDER["DocumentToken provider"]
-    end
-    PROXY <-->|"Popup–background Connection"| RELAY
-    RELAY <-->|"Background–content Connection"| PROVIDER`}
+    UI[Side panel] <-->|Connection| B[Background Relay]
+    B <-->|Connection| CS[Selected content script]`}
 />
 
-The background selects the content script. Relay forwards calls, results,
-callbacks, and remote references without combining the two connections into a
-single session.
+Page selection stays in the background. If the panel selects the page itself,
+it can connect directly to the content script. Relay also connects networks
+using different adapters, such as a host forwarding iframe calls to a Chrome
+background.
 
-## Register A Forwarding Entry [#register-a-bridge]
+## Service forwarding [#register-a-bridge]
 
-These examples reuse `DocumentToken` and `DocumentService` from
-[Getting Started](/nexus/docs/getting-started/). All three contexts import the
-same contract. The content script provides the service:
+The panel, background, and content script share `DocumentToken` and
+`DocumentService`. Its `watch()` method accepts a document-change callback and
+returns a reference to an observation object with a `stop()` method. See
+[Remote resources](/nexus/docs/remote-resources/) for the contract and implementation.
 
-```ts title="content.ts"
-import { usingContentScript } from "@nexus-js/chrome";
-import { DocumentToken, type DocumentService } from "./shared";
+The content script registers the service on its configured instance:
 
-const contentNexus = usingContentScript();
-const documents: DocumentService = {
-  async summarize(documentId) {
-    return `Summary of ${documentId}`;
-  },
-};
-
+```ts
 contentNexus.provide(DocumentToken, documents);
 ```
 
-Configure the background instance and register the Relay in its startup module. `selectedDocument` is an application-selected destination containing `tabId` and `documentId`, obtained through Chrome APIs or the application's page registry:
+The background registers forwarding with `relay()`. `selectedDocument` contains
+the application's selected `tabId` and `documentId`. The application loads the
+content script; Relay connects to it when a call needs it.
 
 ```ts title="background.ts"
-import { Nexus } from "@nexus-js/core";
 import { chromeTarget, usingBackgroundScript } from "@nexus-js/chrome";
 import { DocumentToken } from "./shared";
 import { selectedDocument } from "./selection";
 
 const backgroundNexus = usingBackgroundScript();
 
-const relay = Nexus.relay({
-  from: backgroundNexus,
+const relay = backgroundNexus.relay({
+  services: [DocumentToken],
   to: {
-    nexus: backgroundNexus,
     target: chromeTarget.contentDocument(selectedDocument),
   },
-  services: [DocumentToken],
 });
 ```
 
-- `from`: the local instance that offers the forwarding entry to callers.
-- `to.nexus`: the local instance that connects to the actual provider. It is the same instance here; a bridge between adapters can use another instance in the same context.
-- `to.target`: the exact connection target for that instance.
-- `services`: the shared Tokens to forward.
+Once registered, `DocumentToken` appears in the background's service catalog.
+`services` selects which services to forward, and `to.target` selects their
+provider. With `to.nexus` omitted, `backgroundNexus` connects to that target.
 
-Registration returns a `RelayHandle` synchronously. An upstream connection is acquired when a call first needs it. Successful registration makes the forwarding entry available; it does not mean the destination service is online. Use `Nexus.safeRelay()` to handle registration errors as a `Result`.
+The side panel connects to the background and gets the same Token:
 
-Register synchronously in the startup module, as above, or dynamically after `await backgroundNexus.ready()`. On one instance, a Token can belong to either a local service or a Relay entry. A conflict rejects the entire registration batch.
+<span id="call-through-relay" />
 
-## Call Through Relay [#call-through-relay]
-
-The popup connects to the background and gets the same Token:
-
-```ts title="popup.ts"
-import { chromeTarget, usingPopup } from "@nexus-js/chrome";
+```ts title="sidepanel.ts"
+import { chromeTarget, usingSidePanel } from "@nexus-js/chrome";
 import { DocumentToken } from "./shared";
 
-const popupNexus = usingPopup();
-const connection = await popupNexus.connect({
+const panelNexus = usingSidePanel();
+const connection = await panelNexus.connect({
   target: chromeTarget.background(),
 });
 const documents = connection.get(DocumentToken);
 
-const summary = await documents.summarize("intro");
+const observation = await documents.watch("intro", (change) => {
+  panel.apply(change);
+});
 ```
 
-The caller does not need to connect to the content script. `get` creates a
-proxy from the background's service catalog; the first consumed call starts
-upstream acquisition:
+`panel` is the application's UI object. `get()` creates a proxy in the panel;
+`await documents.watch(...)` starts the remote call. The connection from the
+background to the content script is called the upstream connection.
 
 <Mermaid
-  caption="The two Connections remain distinct. The background acquires the selected content-script session when it first needs to forward a call."
+  caption="The first watch call needs an upstream Connection. The background reuses an eligible connection if one already exists."
   chart={`sequenceDiagram
-    participant P as Popup
+    participant UI as Side panel
     participant B as Background Relay
-    participant C as Content-script provider
-    P->>B: connect(background)
-    B-->>P: Ready Connection + DocumentToken catalog
-    Note over P: connection.get(DocumentToken) is local
-    P->>B: await documents.summarize(id)
-    B->>C: connect(contentDocument target), if needed
-    C-->>B: Ready Connection
-    B->>C: summarize(id)
-    C-->>B: Summary
-    B-->>P: Summary`}
+    participant CS as Content script
+    Note over B: Register DocumentToken forwarding
+    UI->>B: connect(background)
+    B-->>UI: Ready Connection and service catalog
+    Note over UI: connection.get(DocumentToken)
+    UI->>B: await documents.watch(id, onChange)
+    B->>CS: Open or reuse a connection to the target
+    B->>CS: watch(id, onChange reference)
+    CS-->>B: Observation reference
+    B-->>UI: Observation reference`}
 />
 
-Callbacks and object references returned through `ref()` can also cross the
-bridge; they remain owned by the context where they were created. See
-[Callbacks](/nexus/docs/callbacks/) and
-[Remote Resources](/nexus/docs/remote-resources/) for complete examples.
+`relay()` synchronously returns a `RelayHandle` for disposing the registration.
+It does not wait for the content script to be online. Even after `get()` succeeds,
+`watch()` can fail if the background cannot reach the content script.
 
-## Select A Destination And Chain Relays [#keep-routing-in-the-application]
+Use `safeRelay()` to receive a synchronous `Result` for registration. Use `await`
+or `Nexus.safeCall()` to receive the result of a remote method such as `watch()`.
 
-`to.target` and `to.where` follow ordinary [connection acquisition](/nexus/docs/connections/) rules:
+Register synchronously in the startup module, or dynamically after
+`await backgroundNexus.ready()`. An instance cannot register the same Token
+twice, whether as a local service or a Relay.
 
-- With a `target`, Nexus can connect to that destination. If `where` is also supplied, the connection must satisfy it.
-- Without a `target`, acquisition waits for exactly one matching existing session. It does not discover providers.
-- `where(contextMeta, connectionMeta)` filters peer identity and local connection facts. Authorization remains in `policy.canConnect` and `policy.canCall`.
+All Tokens in `services` use the same destination selection and are disposed
+together. If any Token conflicts, the entire batch fails to register.
 
-A Relay registration captures its destination selection. To forward to another page after a page change, dispose the registration and create one with the new target.
+## Callbacks and remote references [#callbacks-and-refs]
 
-For multiple hops, configure each intermediate context separately. On a path
-`A → B → C → D`, B forwards the service to C, and C forwards it to D. Each
-hop selects only its next destination. The Token identifies the contract, not
-a path or an address.
+The callback and its captured `panel` stay in the side panel. When the content
+script invokes that callback, the function runs in the panel and updates its UI.
 
-## Manage A Group Of Resources Independently [#resource-scopes]
+The observation object stays in the content script. The service returns its
+reference through `ref(...)`. Calling `observation.stop()` runs that object's
+method in the content script. The background delivers these calls and their
+results to the appropriate context.
 
-Ordinary `connection.get(Token)` calls use a default resource scope managed by Nexus. When several panels or tasks share a connection and one group of resources needs its own lifetime, create an explicit `ResourceScope`:
+<Mermaid
+  caption="Callback and object calls both have responses. The caller can await the result."
+  chart={`sequenceDiagram
+    participant UI as Side panel
+    participant B as Background Relay
+    participant CS as Content script
+    Note over UI: Owns onChange and panel
+    Note over CS: Owns the observation object
+    CS->>B: await onChange(change)
+    B->>UI: onChange(change)
+    UI-->>B: Callback result
+    B-->>CS: Callback result
+    UI->>B: await observation.stop()
+    B->>CS: observation.stop()
+    CS-->>B: Stopped
+    B-->>UI: Stopped`}
+/>
+
+After stopping an observation, call `Nexus.release(observation)` to release that
+reference, or close the scope it belongs to.
+
+## Resource scopes [#resource-scopes]
+
+Several views can observe the same document through the background, reusing one
+content-script connection. When view A closes, view B still needs updates.
+Disconnecting their shared connection would interrupt B too.
+
+A `ResourceScope` groups related calls, callbacks, and remote references for
+cleanup. Give A and B separate scopes. When A closes its scope, Relay tells the
+other instances on the path to release A's communication resources.
+
+<Mermaid
+  caption="Closing A's scope leaves B using the shared Connection. Dashed lines show connection sharing; solid lines show calls."
+  chart={`flowchart TB
+    subgraph A[Resource scope A]
+      AC[View A callback] <--> AR[Observation object A in content script]
+    end
+    subgraph B[Resource scope B]
+      BC[View B callback] <--> BR[Observation object B in content script]
+    end
+    AR -.- SHARED[Shared background to content Connection]
+    BR -.- SHARED`}
+/>
+
+Calling `connection.get(DocumentToken)` uses a default scope. Getting the same
+Token again on the same Connection reuses the current live default scope.
+
+Create a scope for each view when views share a connection and need to clean up
+their resource groups independently:
 
 ```ts
 const scope = connection.createScope(DocumentToken);
 const documents = connection.get(DocumentToken, { scope });
 
 try {
-  const summary = await documents.summarize("intro");
-  console.log(summary);
+  const observation = await documents.watch("intro", (change) => {
+    panel.apply(change);
+  });
+
+  await waitUntilPanelCloses();
+  await observation.stop();
 } finally {
   scope.close();
 }
 ```
 
-A scope belongs to the Connection and Token that created it. It groups calls,
-callbacks, and remote references. Relay pairs that scope with an upstream
-scope, but the two Connections remain shared:
+The application implements `waitUntilPanelCloses()` to resolve when the view
+closes. The code calls `stop()` to end observation in the content script, then
+closes the scope to release its callbacks and references. The `finally` block
+closes the scope even if `stop()` fails.
+
+`scope.close()` invalidates the scope's calls, callbacks, and references while
+leaving the shared Connection open. The service remains responsible for removing
+its business listeners. Completed operations are not undone.
+
+<span id="provider-lifecycle" />
+
+The panel may disconnect before it can call `observation.stop()`. The service in
+the content script must handle that case too, removing the document listener it
+installed for this observation. Releasing a callback reference does not remove
+an application-installed listener. See the
+[remote resource cleanup example](/nexus/docs/remote-resources/).
+
+Calling `close()` again has no further effect. `[Symbol.dispose]()` performs the
+same closure. Read `closed` to check whether the scope has closed, or use
+`onClosed(listener)` for notification. Listeners added after closure run immediately.
+
+Each scope belongs to the Connection and Token that created it. Once an explicit
+scope closes, create a new one to continue.
+
+## Disconnects and recovery [#lifecycle]
+
+Suppose the content script exits while the panel remains connected to the
+background. Once the background detects the disconnect, it closes the affected
+scopes and notifies the panel. The panel's pending calls fail, and its old
+observation references become invalid.
 
 <Mermaid
-  caption="Each caller has its own scope across the bridge, even when the background reuses the same upstream Connection."
-  chart={`flowchart LR
-    A["Popup A scope"] --> BI_A["Relay inbound A"] --> BO_A["Relay outbound A"] --> CA["Content scope A"]
-    B["Popup B scope"] --> BI_B["Relay inbound B"] --> BO_B["Relay outbound B"] --> CB["Content scope B"]
-    BO_A -.-> SHARED["Shared background–content Connection"]
-    BO_B -.-> SHARED`}
+  caption="After the content script exits, the panel cannot use the old observation reference. Its Connection to the background remains available."
+  chart={`sequenceDiagram
+    participant UI as Side panel
+    participant B as Background Relay
+    participant CS as Content script
+    UI->>B: Call an observation method
+    B->>CS: Forward call
+    Note over CS: Content script exits before replying
+    Note over B: Detect upstream loss and close dependent scopes
+    B-->>UI: Notify scope closure
+    Note over UI: Pending call fails; old observation ref is invalid
+    Note over UI,B: Panel to background Connection remains available`}
 />
 
-Closing A's scope invalidates only A's calls, callbacks, and refs. B's scope
-and the shared Connection remain available. A scope cannot be passed to a
-different Connection or Token.
+The effect depends on what closes:
 
-`close()` is idempotent and is also available through `[Symbol.dispose]()`. Read `closed` to check its state, or use `onClosed(listener)` to observe termination. A listener added after closure runs immediately.
+- Closing only A's scope leaves B receiving updates.
+- Losing the shared background-to-content connection invalidates both A's and
+  B's observation references created through that connection.
+- Losing the panel-to-background connection requires the panel to call
+  `connect()` again and get a fresh service proxy.
 
-Closing a scope does not call business methods such as `stop()` or `unsubscribe()`, or undo completed operations. When business cleanup is needed, invoke the appropriate method before releasing the reference or closing the scope.
+The adapter takes time to detect a disconnect. A call can time out first. A
+request may also have executed without its result arriving, so Nexus does not
+automatically repeat failed calls.
 
-### Provider Cleanup [#provider-lifecycle]
+### Connection recovery [#recover-a-route]
 
-A service can use `SERVICE_INVOKE_START` from `ServiceInvocationHooks` to access `context.scope`, then use `scope.onClosed(...)` to clean up its own listeners or other business resources. Register cleanup when the resource is created rather than adding the same listener on every ordinary call.
+The background keeps its Relay registration after the upstream disconnects.
+When the panel's connection to the background still works and the original
+target is available again, call `documents.watch(...)` again. A proxy without an
+explicit scope establishes a new scope, and the background acquires a connection
+using the original target.
 
-If an async method needs its invocation context, return `context` from the start hook. Nexus appends it to the local method's arguments as a `ServiceInvocationContext`. This argument is not part of the remote service contract. Keep it in a local variable for that invocation instead of sharing a mutable "current scope" across concurrent calls.
+A successful call returns a new observation reference. Calls through the old
+`observation.stop()` still fail.
 
-## Forward Nexus State [#state-and-relay]
+If you created an explicit scope, create a new one and get its service proxy
+first. Resubscribe to replace a disconnected State mirror.
 
-Include the shared StoreToken in `services` to forward a Store. The caller uses `connectNexusStore()` as usual, targeting the context that hosts the Relay:
+A Relay configured with only `where` waits for a matching connection to appear.
+Supplying `target` allows it to initiate that connection.
 
-```ts
-import { connectNexusStore } from "@nexus-js/core/state";
-import { chromeTarget } from "@nexus-js/chrome";
-import { WorkspaceStoreToken } from "./shared";
+### Target changes [#replace-the-target]
 
-// The background Relay includes WorkspaceStoreToken in services.
-const workspace = await connectNexusStore(popupNexus, WorkspaceStoreToken, {
-  target: chromeTarget.background(),
-});
-
-try {
-  console.log(workspace.getState());
-  await waitUntilPopupCloses();
-} finally {
-  workspace.destroy();
-}
-```
-
-`waitUntilPopupCloses()` represents the application's own UI lifecycle logic. Each remote Store subscription automatically owns an independent scope; destroying one mirror cleans up its subscription without affecting other callers' mirrors. See [Nexus State](/nexus/docs/state/) for reads, actions, and React usage.
-
-## Stop Forwarding And Handle Disconnects [#lifecycle]
-
-When the background no longer needs the forwarding entry, dispose its registration:
+The example's `contentDocument` target identifies a specific `documentId`.
+Navigation creates a document with its own ID. When the background selects that
+new document, dispose the old registration and register the new target:
 
 ```ts
 relay.dispose();
+
+const nextRelay = backgroundNexus.relay({
+  services: [DocumentToken],
+  to: {
+    target: chromeTarget.contentDocument(nextDocument),
+  },
+});
 ```
 
-This removes the service entries owned by that registration and closes their
-resource scopes. Shared connections remain open.
+`nextDocument` is the document the application selected. `dispose()` removes the
+service entries published by this registration and closes its scopes, keeping
+shared Connections open. The new registration sends subsequent calls to the new
+document.
 
-When a connection on the path breaks, its dependent scopes end. Existing refs, callbacks, and Store mirrors cannot be reused. In-flight calls are not replayed automatically because the service may already have performed the operation.
+## Connections and routing [#keep-routing-in-the-application]
 
-- **The caller's connection to Relay is still available:** a later root service call using the default scope can acquire an upstream connection and establish a new scope.
-- **The caller's own connection has closed:** call `connect()` again and get a fresh service proxy.
-- **The caller used an explicit scope or State mirror:** create a new scope or call `connectNexusStore()` again to obtain fresh handles and a state baseline.
+### Cross-instance forwarding [#cross-instance-relay]
 
-See [Connection Lifecycle](/nexus/docs/proxy-lifecycle/) and [State Lifecycle And Errors](/nexus/docs/state/lifecycle-and-errors/) for further lifecycle rules.
+One context can own several Nexus instances. For example, a host can receive
+calls from an embedded page through its iframe instance and connect to the
+background through its Chrome instance. Specify `to.nexus` for that case:
+
+```ts
+// Both local instances are configured through their respective adapters.
+const relay = iframeNexus.relay({
+  services: [DocumentToken],
+  to: {
+    nexus: chromeNexus,
+    target: chromeTarget.background(),
+  },
+});
+```
+
+The embedded page connects to `iframeNexus` and gets `DocumentToken` from its
+catalog. When a call arrives, the host uses `chromeNexus` to connect to the
+Chrome background. Both instances run in the host.
+
+`target` and `where` use the adapter types of `chromeNexus`. When `to.nexus` is
+omitted, the instance receiving `relay()` also connects to the target.
+
+### Multiple hops and target selection [#relay-targeting]
+
+On a path `A → B → C → D`, B registers forwarding to C, and C registers forwarding
+to D. A connects to B, and D provides the service. Callbacks and references use
+the established path, with separate sessions at each hop.
+
+`to.target` and `to.where` follow [connection acquisition](/nexus/docs/connections/)
+rules. `target` supplies the address, and `where(contextMeta, connectionMeta)`
+checks the peer's identity and adapter-observed connection information. Both
+conditions must pass.
+
+Without a target, acquisition waits for exactly one matching existing session;
+multiple matches produce an ambiguity error.
+
+A registration uses the same `target` and `where` for every caller. Once a scope
+is established, it uses the upstream session acquired at that time. New
+connections do not redirect existing observation references.
+
+Each instance checks permissions through `policy.canConnect` and
+`policy.canCall`. The content script's direct peer is the background, so its
+authorization checks see the background's connection identity.
+
+If the service needs to know which user or view started the call, pass that
+information in the contract and validate it in the service. See
+[Authorization](/nexus/docs/auth-and-policy/).
+
+## State forwarding [#state-and-relay]
+
+Include a shared StoreToken in `services`. The panel can then connect to the
+background with `connectNexusStore()` and subscribe to the Store. Each
+subscription automatically creates its own scope.
+
+Calling `destroy()` on a mirror cleans up that subscription. Other mirrors keep
+receiving updates. After a scope closes, resubscribe to read a fresh complete
+snapshot. See [Nexus State](/nexus/docs/state/).

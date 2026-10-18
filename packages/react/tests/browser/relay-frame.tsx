@@ -118,8 +118,7 @@ const iframeParentNexus = new Nexus<IframeAdapterModel>().configure({
   },
 });
 
-Nexus.relay({
-  from: iframeParentNexus,
+iframeParentNexus.relay({
   to: { nexus: chromeNexus, target: relayHostTarget },
   services: [RelayProfileToken, iframeCounterStore],
 });

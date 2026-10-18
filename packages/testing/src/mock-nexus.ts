@@ -504,6 +504,18 @@ export function createMockNexus<
         registerService(registration.token, registration.service);
       return ok(nexus);
     }) as NexusInstance<M>["safeProvide"],
+    /** Protocol forwarding belongs in runtime integration tests, not service mocks. */
+    relay: () => {
+      throw usageError(
+        "Mock Nexus does not support Relay. Use real Nexus runtimes for forwarding tests.",
+      );
+    },
+    safeRelay: () =>
+      err(
+        usageError(
+          "Mock Nexus does not support Relay. Use real Nexus runtimes for forwarding tests.",
+        ),
+      ),
     /** Resolves immediately because the mock has no bootstrap transport. */
     ready: async () => undefined,
     /** Returns immediate mock readiness as a Result. */

@@ -1,203 +1,266 @@
 ---
 title: Nexus Relay
-description: 通过中间上下文访问远端服务，并管理转发调用的资源生命周期。
+description: 通过中间上下文转发服务调用，并管理回调、远程引用和断连清理。
 ---
 
-**Nexus Relay** 让调用方通过中间上下文访问服务。应用在该上下文的 Nexus 实例上为指定 Token 注册转发入口。调用方照常连接并获取服务代理，实际提供方仍实现共享契约。
+Nexus Relay 把收到的服务调用转发给指定的远端。调用方使用相同的服务接口，回调和远程引用也能经过 Relay 调用。
+
+## 适用场景 [#why-relay]
+
+侧边栏需要持续显示文档变化，后台负责记录当前选中的页面。侧边栏连接后台的文档服务，后台通过 Relay 把调用交给那个页面的内容脚本。
 
 <Mermaid
-  showCaption={false}
-  caption="弹窗和内容脚本分别通过连接与后台通信。Relay 在两条连接之间转发指定服务。"
+  caption="侧边栏连接后台，后台连接内容脚本。这是两条独立的 Connection。"
   chart={`flowchart LR
-    subgraph P[弹窗]
-      PROXY["DocumentToken 代理"]
-    end
-    subgraph B[后台]
-      RELAY["DocumentToken 的 Relay 入口"]
-    end
-    subgraph C[内容脚本]
-      PROVIDER["DocumentToken 提供方"]
-    end
-    PROXY <-->|"弹窗–后台 Connection"| RELAY
-    RELAY <-->|"后台–内容脚本 Connection"| PROVIDER`}
+    UI[侧边栏] <-->|Connection| B[后台 Relay]
+    B <-->|Connection| CS[选定页面的内容脚本]`}
 />
 
-后台负责选择内容脚本。Relay 转发调用、结果、回调和远程引用，但不会把两条连接合并成一个会话。
+页面选择因此集中在后台。如果侧边栏自己选择页面，可以直接连接内容脚本。跨适配器通信也可以使用 Relay，例如由宿主把 iframe 的调用转发给 Chrome 后台。
 
-## 注册转发入口 [#register-a-bridge]
+## 服务转发 [#register-a-bridge]
 
-以下示例复用[快速开始](/nexus/docs/getting-started/)中的 `DocumentToken` 和 `DocumentService`。三个上下文都导入同一份契约。内容脚本提供服务：
+侧边栏、后台和内容脚本共享 `DocumentToken` 和 `DocumentService`。`watch()` 接收文档变化回调，返回带有 `stop()` 方法的观察对象引用。接口和实现见[远程资源](/nexus/docs/remote-resources/)。
 
-```ts title="content.ts"
-import { usingContentScript } from "@nexus-js/chrome";
-import { DocumentToken, type DocumentService } from "./shared";
+内容脚本用配置好的实例注册服务：
 
-const contentNexus = usingContentScript();
-const documents: DocumentService = {
-  async summarize(documentId) {
-    return `Summary of ${documentId}`;
-  },
-};
-
+```ts
 contentNexus.provide(DocumentToken, documents);
 ```
 
-在后台的启动模块中配置实例并注册 Relay。`selectedDocument` 是应用通过 Chrome API 或自身页面登记逻辑取得的目标，包含 `tabId` 和 `documentId`：
+后台用 `relay()` 注册转发。`selectedDocument` 包含应用选定的 `tabId` 和 `documentId`。应用负责加载内容脚本，Relay 在调用需要时连接它。
 
 ```ts title="background.ts"
-import { Nexus } from "@nexus-js/core";
 import { chromeTarget, usingBackgroundScript } from "@nexus-js/chrome";
 import { DocumentToken } from "./shared";
 import { selectedDocument } from "./selection";
 
 const backgroundNexus = usingBackgroundScript();
 
-const relay = Nexus.relay({
-  from: backgroundNexus,
+const relay = backgroundNexus.relay({
+  services: [DocumentToken],
   to: {
-    nexus: backgroundNexus,
     target: chromeTarget.contentDocument(selectedDocument),
   },
-  services: [DocumentToken],
 });
 ```
 
-- `from`：向调用方提供转发入口的本地实例。
-- `to.nexus`：负责连接实际服务提供方的本地实例。这里与 `from` 相同；跨适配器桥接时也可以使用同一上下文中的另一个实例。
-- `to.target`：该实例使用的精确连接目标。
-- `services`：需要转发的共享 Token 列表。
+注册后，后台的服务目录包含 `DocumentToken`。`services` 指定转发哪些服务，`to.target` 指定它们的提供方。省略 `to.nexus` 时，由当前的 `backgroundNexus` 连接目标。
 
-注册同步返回 `RelayHandle`，首次调用需要时才获取上游连接。注册成功表示转发入口可用，不代表目标服务已经在线。需要以 `Result` 处理注册错误时，使用 `Nexus.safeRelay()`。
+侧边栏连接后台，获取相同的 Token：
 
-可以像示例一样在启动模块中同步注册，也可以在 `await backgroundNexus.ready()` 后动态注册。同一实例上，一个 Token 只能注册为本地服务或 Relay 入口；批量注册发生冲突时，整批拒绝。
+<span id="call-through-relay" />
 
-## 从调用方访问 [#call-through-relay]
-
-弹窗只需连接后台，获取相同的 Token：
-
-```ts title="popup.ts"
-import { chromeTarget, usingPopup } from "@nexus-js/chrome";
+```ts title="sidepanel.ts"
+import { chromeTarget, usingSidePanel } from "@nexus-js/chrome";
 import { DocumentToken } from "./shared";
 
-const popupNexus = usingPopup();
-const connection = await popupNexus.connect({
+const panelNexus = usingSidePanel();
+const connection = await panelNexus.connect({
   target: chromeTarget.background(),
 });
 const documents = connection.get(DocumentToken);
 
-const summary = await documents.summarize("intro");
+const observation = await documents.watch("intro", (change) => {
+  panel.apply(change);
+});
 ```
 
-调用方不需要直接连接内容脚本。`get` 根据后台的服务目录创建代理；首次消费远程调用时才开始获取上游连接：
+`panel` 是应用自己的 UI 对象。`get()` 在侧边栏创建代理，`await documents.watch(...)` 发起远程调用。后台到内容脚本的连接称为上游连接。
 
 <Mermaid
-  caption="两条 Connection 始终独立。后台首次需要转发调用时，才获取选定的内容脚本会话。"
+  caption="首次 watch 调用需要取得上游连接，已有合适的连接时会复用。"
   chart={`sequenceDiagram
-    participant P as 弹窗
+    participant UI as 侧边栏
     participant B as 后台 Relay
-    participant C as 内容脚本提供方
-    P->>B: connect(background)
-    B-->>P: 就绪 Connection + DocumentToken 目录
-    Note over P: connection.get(DocumentToken) 在本地完成
-    P->>B: await documents.summarize(id)
-    B->>C: 如有需要，连接 contentDocument 目标
-    C-->>B: 就绪 Connection
-    B->>C: summarize(id)
-    C-->>B: 摘要
-    B-->>P: 摘要`}
+    participant CS as 内容脚本
+    Note over B: 注册 DocumentToken 转发入口
+    UI->>B: connect(background)
+    B-->>UI: 就绪连接与服务目录
+    Note over UI: connection.get(DocumentToken)
+    UI->>B: await documents.watch(id, onChange)
+    B->>CS: 建立或复用到目标的连接
+    B->>CS: watch(id, onChange 引用)
+    CS-->>B: 观察对象的引用
+    B-->>UI: 观察对象的引用`}
 />
 
-回调和通过 `ref()` 返回的对象引用也可以穿过桥接，仍由创建它们的上下文持有。完整用法见[回调](/nexus/docs/callbacks/)和[远程资源](/nexus/docs/remote-resources/)。
+`relay()` 同步返回用于释放注册的 `RelayHandle`，不会等待内容脚本上线。因此，即使 `get()` 成功，后面的 `watch()` 也可能因连不上内容脚本而失败。
 
-## 选择目标与多跳转发 [#keep-routing-in-the-application]
+需要检查注册是否成功时，使用同步返回 `Result` 的 `safeRelay()`。调用 `watch()` 等远程方法时，通过 `await` 或 `Nexus.safeCall()` 接收结果。
 
-`to.target` 和 `to.where` 遵循普通[连接获取](/nexus/docs/connections/)的规则：
+可以在启动模块中同步注册，也可以等 `await backgroundNexus.ready()` 完成后注册。同一实例不能重复注册同一个 Token，包括本地服务和 Relay。
 
-- 有 `target` 时，可以连接指定目标；同时提供 `where` 时，还必须满足筛选条件。
-- 无 `target` 时，只等待已有连接中唯一匹配的会话，不会主动寻找服务提供方。
-- `where(contextMeta, connectionMeta)` 筛选对端身份和本地连接事实。授权仍由 `policy.canConnect` 和 `policy.canCall` 控制。
+`services` 中的 Token 使用相同的目标选择条件，也会一起释放。其中任何一个 Token 冲突，整批注册都会失败。
 
-Relay 注册会捕获目标选择。页面切换后需要转发到另一个目标时，释放原注册，再用新目标注册。
+## 回调与远程引用 [#callbacks-and-refs]
 
-多跳路径由各中间上下文分别配置。例如 `A → B → C → D` 中，B 将服务转发到 C，C 再转发到 D。每一跳只配置自己的下一站；Token 表示服务契约，不表示路径或地址。
+回调和它捕获的 `panel` 留在侧边栏。内容脚本调用这个回调时，函数最终在侧边栏执行，可以直接更新本地 UI。
 
-## 独立管理一组资源 [#resource-scopes]
+观察对象留在内容脚本，服务通过 `ref(...)` 返回它的引用。侧边栏调用 `observation.stop()` 时，执行的是内容脚本里那个对象的方法。后台负责把这些调用和结果送到对应的一端。
 
-通常可以直接使用 `connection.get(Token)`，由 Nexus 管理默认资源域。若一个连接被多个面板或任务共享，而其中一组资源需要单独结束，可以显式创建 `ResourceScope`：
+<Mermaid
+  caption="回调和对象方法的调用都有响应，发起方可以 await 结果。"
+  chart={`sequenceDiagram
+    participant UI as 侧边栏
+    participant B as 后台 Relay
+    participant CS as 内容脚本
+    Note over UI: 持有 onChange 和 panel
+    Note over CS: 持有观察对象
+    CS->>B: await onChange(change)
+    B->>UI: onChange(change)
+    UI-->>B: 回调结果
+    B-->>CS: 回调结果
+    UI->>B: await observation.stop()
+    B->>CS: observation.stop()
+    CS-->>B: 已停止
+    B-->>UI: 已停止`}
+/>
+
+停止观察后，用 `Nexus.release(observation)` 释放单个引用，或关闭它所属的资源域。
+
+## 资源域 [#resource-scopes]
+
+多个界面可以通过后台观察同一份文档，后台复用同一条内容脚本连接。关闭界面 A 时，界面 B 还需要接收更新，因此不能为了清理 A 而断开这条共享连接。
+
+`ResourceScope` 把相关调用、回调和远程引用放在一组，方便一起清理。给 A、B 各建一个资源域，A 关闭自己的域时，Relay 会通知路径上的其他实例释放 A 的通信资源。
+
+<Mermaid
+  caption="关闭 A 的资源域后，B 仍可使用共享连接。虚线表示共用连接，实线表示调用关系。"
+  chart={`flowchart TB
+    subgraph A[A 的资源域]
+      AC[界面 A 的回调] <--> AR[内容脚本中的观察对象 A]
+    end
+    subgraph B[B 的资源域]
+      BC[界面 B 的回调] <--> BR[内容脚本中的观察对象 B]
+    end
+    AR -.- SHARED[后台与内容脚本的共享 Connection]
+    BR -.- SHARED`}
+/>
+
+直接调用 `connection.get(DocumentToken)` 时，Nexus 会使用默认资源域。在同一条 Connection 上再次获取同一个 Token，仍会使用当前有效的默认域。
+
+多个界面共享连接且需要分别清理整组资源时，为它们各建一个域：
 
 ```ts
 const scope = connection.createScope(DocumentToken);
 const documents = connection.get(DocumentToken, { scope });
 
 try {
-  const summary = await documents.summarize("intro");
-  console.log(summary);
+  const observation = await documents.watch("intro", (change) => {
+    panel.apply(change);
+  });
+
+  await waitUntilPanelCloses();
+  await observation.stop();
 } finally {
   scope.close();
 }
 ```
 
-资源域绑定到创建它的 Connection 和 Token，包含该域中的调用、回调和远程引用。Relay 将它与对应的上游资源域关联，但两条 Connection 仍可被共享：
+`waitUntilPanelCloses()` 由应用实现，在界面关闭时结束等待。代码先调用 `stop()`，让内容脚本停止观察，再关闭资源域、释放其中的回调和引用。即使 `stop()` 失败，`finally` 也会关闭域。
+
+`scope.close()` 使域内的调用、回调和引用失效，共享 Connection 保持打开。业务监听器需要由服务清理，已经完成的操作也不会被撤销。
+
+<span id="provider-lifecycle" />
+
+侧边栏意外断开时，可能来不及调用 `observation.stop()`。内容脚本中的服务还需要处理这种情况，移除它为这次观察安装的文档监听器。Nexus 释放回调引用后，应用安装的监听器不会自动移除。见[远程资源的清理示例](/nexus/docs/remote-resources/)。
+
+重复调用 `close()` 没有额外效果，`[Symbol.dispose]()` 也执行相同的关闭操作。用 `closed` 检查是否已关闭，用 `onClosed(listener)` 接收关闭通知；关闭后添加的监听器会立即执行。
+
+每个资源域只属于创建它的 Connection 和 Token。显式创建的域一旦关闭，需要创建新域才能继续使用。
+
+## 断连与恢复 [#lifecycle]
+
+假设内容脚本退出了，侧边栏与后台仍然连接。后台检测到与内容脚本断开后，会关闭相关资源域，并通知侧边栏。侧边栏正在等待的调用会失败，手里的旧观察引用也随之失效。
 
 <Mermaid
-  caption="后台复用同一条上游 Connection 时，各调用方依然有独立的资源域。"
-  chart={`flowchart LR
-    A["弹窗 A 资源域"] --> BI_A["Relay 入站域 A"] --> BO_A["Relay 出站域 A"] --> CA["内容脚本资源域 A"]
-    B["弹窗 B 资源域"] --> BI_B["Relay 入站域 B"] --> BO_B["Relay 出站域 B"] --> CB["内容脚本资源域 B"]
-    BO_A -.-> SHARED["共享的后台–内容脚本 Connection"]
-    BO_B -.-> SHARED`}
+  caption="内容脚本退出后，侧边栏不能再使用旧观察引用。侧边栏到后台的连接仍可使用。"
+  chart={`sequenceDiagram
+    participant UI as 侧边栏
+    participant B as 后台 Relay
+    participant CS as 内容脚本
+    UI->>B: 调用观察对象的方法
+    B->>CS: 转发调用
+    Note over CS: 内容脚本退出，尚未回复
+    Note over B: 检测到上游断开，关闭相关域
+    B-->>UI: 通知资源域结束
+    Note over UI: 待完成调用失败，旧观察引用失效
+    Note over UI,B: 侧边栏到后台的 Connection 仍可用`}
 />
 
-关闭 A 的资源域只会使 A 的调用、回调和 ref 失效；B 的资源域和共享连接仍可使用。资源域不能传给其他 Connection 或 Token。
+几种关闭操作的影响如下：
 
-`close()` 是幂等操作，也可通过 `[Symbol.dispose]()` 调用。使用 `closed` 检查状态，或通过 `onClosed(listener)` 监听终止；关闭后注册的监听器会立即执行。
+- 只关闭 A 的资源域时，B 仍能收到更新。
+- 后台到内容脚本的共享连接断开时，A、B 通过这条连接创建的观察引用都会失效。
+- 侧边栏到后台的连接断开时，侧边栏需要重新 `connect()` 并获取服务代理。
 
-关闭资源域不会自动调用业务对象的 `stop()` 或 `unsubscribe()`，也不会撤销已完成的操作。需要业务清理时，应先调用相应方法，再释放引用或关闭资源域。
+适配器发现断开需要时间，调用可能在此之前先超时。请求也可能已经执行，只是结果没有返回，所以 Nexus 不会自动重新执行失败的调用。
 
-### 服务提供方的清理 [#provider-lifecycle]
+### 连接恢复 [#recover-a-route]
 
-服务可以通过 `ServiceInvocationHooks` 的 `SERVICE_INVOKE_START` 获取 `context.scope`，并使用 `scope.onClosed(...)` 清理自己持有的监听器或其他业务资源。应按资源实际创建的时机注册清理逻辑，避免每次普通调用都重复添加同一个监听器。
+上游断开后，后台仍保留 Relay 注册。侧边栏到后台的连接仍可用、原目标也已恢复时，可以再次调用 `documents.watch(...)`。未指定显式资源域的代理会建立新域，后台按原来的目标重新获取连接。
 
-如果方法需要在异步处理中使用调用上下文，可以让 start hook 返回 `context`；Nexus 会把它追加为本地方法的最后一个参数，类型为 `ServiceInvocationContext`。这个参数不属于远程服务契约。将上下文保存在本次调用的局部变量中，避免在并发调用之间共享可变的“当前资源域”。
+调用成功后会返回新的观察引用。通过旧 `observation.stop()` 发起的调用仍会失败。
 
-## 转发 Nexus State [#state-and-relay]
+如果之前显式创建了资源域，需要先创建新域，再取得服务代理。State 镜像失效后需要重新订阅。
 
-将共享的 StoreToken 加入 `services`，即可转发 Store。调用方照常使用 `connectNexusStore()` 连接 Relay 所在的上下文：
+只配置 `where` 的 Relay 会等待匹配的连接出现；配置了 `target` 才能主动连接该目标。
 
-```ts
-import { connectNexusStore } from "@nexus-js/core/state";
-import { chromeTarget } from "@nexus-js/chrome";
-import { WorkspaceStoreToken } from "./shared";
+### 目标变更 [#replace-the-target]
 
-// 后台的 Relay 已将 WorkspaceStoreToken 加入 services。
-const workspace = await connectNexusStore(popupNexus, WorkspaceStoreToken, {
-  target: chromeTarget.background(),
-});
-
-try {
-  console.log(workspace.getState());
-  await waitUntilPopupCloses();
-} finally {
-  workspace.destroy();
-}
-```
-
-`waitUntilPopupCloses()` 表示应用自己的界面生命周期逻辑。每个远程 Store 订阅自动拥有独立资源域；销毁一个镜像会清理其订阅，不影响其他调用方的镜像。读取、动作调用及 React 用法见 [Nexus State](/nexus/docs/state/)。
-
-## 结束转发与处理断连 [#lifecycle]
-
-后台不再需要这个转发入口时，调用注册句柄的 `dispose()`：
+示例中的 `contentDocument` 目标绑定具体的 `documentId`。页面导航后，新文档有自己的 ID。后台选中新文档时，需要释放旧注册，再用新目标注册：
 
 ```ts
 relay.dispose();
+
+const nextRelay = backgroundNexus.relay({
+  services: [DocumentToken],
+  to: {
+    target: chromeTarget.contentDocument(nextDocument),
+  },
+});
 ```
 
-这会移除该注册提供的服务入口并关闭其资源域，共享连接仍保持打开。
+`nextDocument` 是应用新选中的文档。`dispose()` 移除这份注册发布的服务入口，并关闭所属资源域，保留共享 Connection。新注册把后续调用送到新文档。
 
-路径中的连接断开时，依赖它的资源域会结束，已有 ref、回调和 Store 镜像不能继续使用。在途调用不会自动重放，因为服务可能已经执行了操作。
+## 连接与路由 [#keep-routing-in-the-application]
 
-- **调用方到 Relay 的连接仍然可用**：默认资源域上的后续根服务调用可以重新获取上游连接，建立新域。
-- **调用方自身的连接已断开**：重新 `connect()`，再获取服务代理。
-- **使用了显式资源域或 State 镜像**：创建新的资源域或重新调用 `connectNexusStore()`，获取新的句柄和状态基线。
+### 跨实例转发 [#cross-instance-relay]
 
-更多生命周期规则见[连接生命周期](/nexus/docs/proxy-lifecycle/)和 [State 生命周期与错误](/nexus/docs/state/lifecycle-and-errors/)。
+同一个上下文可以拥有多个 Nexus 实例。例如宿主用 iframe 实例接收嵌入页面的调用，再通过 Chrome 实例连接后台。此时显式指定 `to.nexus`：
+
+```ts
+// 两个本地实例已通过各自的适配器完成配置。
+const relay = iframeNexus.relay({
+  services: [DocumentToken],
+  to: {
+    nexus: chromeNexus,
+    target: chromeTarget.background(),
+  },
+});
+```
+
+嵌入页面连接 `iframeNexus`，从它的服务目录获取 `DocumentToken`。收到调用后，宿主通过 `chromeNexus` 连接 Chrome 后台。两个实例都在宿主里。
+
+`target` 和 `where` 使用 `chromeNexus` 对应的适配器类型。省略 `to.nexus` 时，由调用 `relay()` 的实例连接目标。
+
+### 多跳转发与目标选择 [#relay-targeting]
+
+路径 `A → B → C → D` 中，B 注册转发到 C，C 注册转发到 D。A 连接 B，D 提供服务。回调和引用沿已经建立的路径通信，每一跳都保留各自的连接会话。
+
+`to.target` 与 `to.where` 遵循[连接获取](/nexus/docs/connections/)规则。`target` 指定连接地址，`where(contextMeta, connectionMeta)` 检查对端身份和适配器观察到的连接信息，两者都必须满足。
+
+没有 `target` 时，只等待已有会话中的唯一匹配；多个匹配会产生歧义错误。
+
+同一份注册对所有调用方使用相同的 `target` 和 `where`。资源域建立后，就固定使用当时取得的上游会话。后来出现新连接，也不会把已有的观察引用切换过去。
+
+各实例通过 `policy.canConnect` 和 `policy.canCall` 检查权限。内容脚本的直接对端是后台，因此授权时看到的是后台的连接身份。
+
+如果服务需要知道最初是哪个用户或界面发起调用，应用应在契约中传递相应信息，并由服务验证。见[授权策略](/nexus/docs/auth-and-policy/)。
+
+## State 转发 [#state-and-relay]
+
+把共享 StoreToken 加入 `services`，侧边栏就可以通过 `connectNexusStore()` 连接后台并订阅 Store。每次订阅都会自动创建独立资源域。
+
+调用镜像的 `destroy()` 会清理这次订阅，其他镜像继续接收更新。资源域关闭后，需要重新订阅，读取一份新的完整状态。见 [Nexus State](/nexus/docs/state/)。

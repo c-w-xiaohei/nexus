@@ -145,10 +145,8 @@ class RelayNetwork {
         ];
     for (const [from, to] of bridges) {
       this.relayHandles.push(
-        Nexus.relay({
-          from: this.get(from),
+        this.get(from).relay({
           to: {
-            nexus: this.get(from),
             ...(from === "B" && this.options.passiveAtB
               ? {}
               : { target: { context: to } }),
@@ -436,8 +434,7 @@ describe("Relay resource scopes (R07-R17, R21-R22)", () => {
     upstream.configure({
       endpoint: { meta: { context: "upstream" }, implementation: endpoint },
     });
-    const handle = Nexus.relay({
-      from: source,
+    const handle = source.relay({
       to: { nexus: upstream },
       services: [RelayToken],
     });

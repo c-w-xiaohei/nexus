@@ -139,14 +139,12 @@ class StateRelayNetwork {
           : {}),
       });
     }
-    Nexus.relay({
-      from: this.get("B"),
-      to: { nexus: this.get("B"), target: { context: "C" } },
+    this.get("B").relay({
+      to: { target: { context: "C" } },
       services: [token, bytesToken],
     });
-    Nexus.relay({
-      from: this.get("C"),
-      to: { nexus: this.get("C"), target: { context: "E" } },
+    this.get("C").relay({
+      to: { target: { context: "E" } },
       services: [token, bytesToken],
     });
     await Promise.all([...this.nodes.values()].map((nexus) => nexus.ready()));
