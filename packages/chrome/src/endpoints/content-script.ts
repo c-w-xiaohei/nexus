@@ -13,6 +13,7 @@ import type {
 import { ChromePort, connectRuntimePort } from "../ports/chrome-port.js";
 import { chromePortName } from "../ports/chrome-port-name.js";
 import { listenForChromePort } from "../ports/chrome-port-listener.js";
+import { supportsBinaryMessaging } from "../ports/binary-messaging.js";
 import {
   createChromeConnectionMeta,
   matchesChromeTarget,
@@ -24,6 +25,7 @@ import {
  */
 export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
   readonly config;
+  readonly bootstrapJson = true;
   private stopListening?: () => void;
 
   capabilities = {
@@ -31,7 +33,10 @@ export class ContentScriptEndpoint implements IEndpoint<ChromeAdapterModel> {
   };
 
   constructor(options: { transport?: TransportLimits } = {}) {
-    this.config = resolveTransportConfig(options.transport, false);
+    this.config = resolveTransportConfig(
+      options.transport,
+      supportsBinaryMessaging(),
+    );
   }
 
   matchesTarget(

@@ -18,6 +18,7 @@ import {
 } from "../ports/chrome-port.js";
 import { chromePortName } from "../ports/chrome-port-name.js";
 import { listenForChromePort } from "../ports/chrome-port-listener.js";
+import { supportsBinaryMessaging } from "../ports/binary-messaging.js";
 import {
   createChromeConnectionMeta,
   matchesChromeTarget,
@@ -26,6 +27,7 @@ import {
 /** Endpoint for extension pages, including popup, side panel and offscreen pages. */
 export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
   readonly config;
+  readonly bootstrapJson = true;
   capabilities = { supportsTransferables: false };
   private stopListening?: () => void;
   private readonly acceptedPorts = new Set<chrome.runtime.Port>();
@@ -52,7 +54,10 @@ export class UIClientEndpoint implements IEndpoint<ChromeAdapterModel> {
     this.receiver = receiver;
     this.exclusiveReceiver = exclusiveReceiver;
     this.canConnectContent = canConnectContent;
-    this.config = resolveTransportConfig(options.transport, false);
+    this.config = resolveTransportConfig(
+      options.transport,
+      supportsBinaryMessaging(),
+    );
   }
 
   matchesTarget = (

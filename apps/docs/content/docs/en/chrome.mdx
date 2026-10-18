@@ -254,8 +254,23 @@ not accepted by the addressed protocol.
 
 ## Transport Limits [#transport-limits]
 
-Chrome uses JSON packets with Base64-encoded binary attachments. User binary RPC
-values are supported; `binaryPackets` is not configurable for this adapter.
+The adapter automatically enables binary packets on Google Chrome 152+ when the
+MV3 extension opts into Structured Clone messaging in `manifest.json`:
+
+```json
+{
+  "manifest_version": 3,
+  "message_serialization": "structured_clone"
+}
+```
+
+The adapter checks the Google Chrome brand and major version through
+`navigator.userAgentData.brands`, together with the manifest setting. Older
+versions, other browser brands, missing Client Hints, and extensions without the
+opt-in use JSON packets with Base64-encoded binary attachments. Both paths support
+binary RPC values. Binary packets are copied; transferables remain unsupported.
+Packet mode is selected automatically; `binaryPackets` is not configurable.
+
 Configure the frame, message, and aggregate buffering limits through the helper's
 `transport` option. Defaults are 64 KiB, 16 MiB, and 64 MiB respectively:
 

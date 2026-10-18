@@ -187,8 +187,22 @@ const outcomes = await Promise.allSettled(
 
 ## 传输限额 [#transport-limits]
 
-Chrome 使用 JSON 数据包，并以 Base64 编码二进制附件。适配器支持用户 RPC 二进制值，
-但不开放 `binaryPackets` 配置。可通过 helper 的 `transport` 选项配置帧、消息和聚合缓冲限额；
+在 Google Chrome 152+ 中，MV3 扩展在 `manifest.json` 开启 Structured Clone 消息序列化后，
+适配器会自动启用二进制数据包：
+
+```json
+{
+  "manifest_version": 3,
+  "message_serialization": "structured_clone"
+}
+```
+
+适配器通过 `navigator.userAgentData.brands` 检查 Google Chrome 品牌和主版本，
+并读取 manifest 配置。旧版本、其他浏览器品牌、缺少 Client Hints 或未开启该配置时，
+使用 JSON 数据包和 Base64 二进制附件。两条路径都支持 RPC 二进制值。
+二进制数据包采用复制语义，不支持 transferable。数据包模式自动选择，不开放 `binaryPackets` 配置。
+
+可通过 helper 的 `transport` 选项配置帧、消息和聚合缓冲限额；
 默认值分别为 64 KiB、16 MiB 和 64 MiB：
 
 ```ts

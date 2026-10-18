@@ -1,5 +1,5 @@
 import { Nexus, Token } from "@nexus-js/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackgroundEndpoint } from "./endpoints/background";
 import { ContentScriptEndpoint } from "./endpoints/content-script";
 import type { ChromeAdapterModel } from "./types/meta";
@@ -27,12 +27,21 @@ function createLinkedPorts(options: {
   readonly clientSender?: chrome.runtime.MessageSender;
   readonly serverSender?: chrome.runtime.MessageSender;
   readonly name: string;
+  readonly binary?: boolean;
 }) {
   let clientMessageListener: Listener<unknown> | undefined;
   let serverMessageListener: Listener<unknown> | undefined;
   let clientDisconnectListener: (() => void) | undefined;
   let serverDisconnectListener: (() => void) | undefined;
   let disconnected = false;
+  const sentMessages: unknown[] = [];
+  const copyMessage = (message: unknown) => {
+    const copy = options.binary
+      ? structuredClone(message)
+      : JSON.parse(JSON.stringify(message));
+    sentMessages.push(copy);
+    return copy;
+  };
 
   const disconnect = () => {
     if (disconnected) return;
@@ -44,8 +53,10 @@ function createLinkedPorts(options: {
   const client = {
     name: options.name,
     sender: options.clientSender,
-    postMessage: (message: unknown) =>
-      setTimeout(() => serverMessageListener?.(message)),
+    postMessage: (message: unknown) => {
+      const copy = copyMessage(message);
+      setTimeout(() => serverMessageListener?.(copy));
+    },
     onMessage: {
       addListener: (listener: Listener<unknown>) =>
         (clientMessageListener = listener),
@@ -59,8 +70,10 @@ function createLinkedPorts(options: {
   const server = {
     name: options.name,
     sender: options.serverSender,
-    postMessage: (message: unknown) =>
-      setTimeout(() => clientMessageListener?.(message)),
+    postMessage: (message: unknown) => {
+      const copy = copyMessage(message);
+      setTimeout(() => clientMessageListener?.(copy));
+    },
     onMessage: {
       addListener: (listener: Listener<unknown>) =>
         (serverMessageListener = listener),
@@ -72,7 +85,7 @@ function createLinkedPorts(options: {
     disconnect,
   } as unknown as chrome.runtime.Port;
 
-  return { client, server, disconnect };
+  return { client, server, disconnect, sentMessages };
 }
 
 describe("Chrome exact content-script targets", () => {
@@ -81,14 +94,19 @@ describe("Chrome exact content-script targets", () => {
   let connectedPorts: ReturnType<typeof createLinkedPorts>[];
   let runtimeConnect: ReturnType<typeof vi.fn>;
   let tabsConnect: ReturnType<typeof vi.fn>;
+  let nativeBinary: boolean;
+
+  afterEach(() => vi.unstubAllGlobals());
 
   beforeEach(() => {
+    nativeBinary = false;
     connectedPorts = [];
     backgroundConnectListener = undefined;
     contentConnectListener = undefined;
     runtimeConnect = vi.fn(() => {
       const ports = createLinkedPorts({
         name: chromePortName.background,
+        binary: nativeBinary,
         serverSender: {
           tab: { id: 7 } as chrome.tabs.Tab,
           frameId: 2,
@@ -112,6 +130,10 @@ describe("Chrome exact content-script targets", () => {
     });
     global.chrome = {
       runtime: {
+        getManifest: () => ({
+          manifest_version: 3,
+          message_serialization: nativeBinary ? "structured_clone" : "json",
+        }),
         onConnect: {
           addListener: (listener: Listener<chrome.runtime.Port>) => {
             if (!backgroundConnectListener)
@@ -129,6 +151,75 @@ describe("Chrome exact content-script targets", () => {
       tabs: { connect: tabsConnect },
     } as unknown as typeof chrome;
   });
+
+  it.each([
+    { binary: false, clientHints: true },
+    { binary: true, clientHints: true },
+    { binary: true, clientHints: false },
+  ])(
+    "round-trips chunked binary RPC values: %j",
+    async ({ binary, clientHints }) => {
+      nativeBinary = binary;
+      vi.stubGlobal("navigator", {
+        userAgentData: {
+          brands: [{ brand: "Google Chrome", version: "152" }],
+        },
+      });
+      const token = new Token<
+        {
+          echo(bytes: Uint8Array): Uint8Array;
+        },
+        ChromeAdapterModel
+      >("chrome-binary-echo");
+      const backgroundEndpoint = new BackgroundEndpoint();
+      if (!clientHints) vi.stubGlobal("navigator", {});
+      const contentEndpoint = new ContentScriptEndpoint();
+      expect(backgroundEndpoint.config.binaryPackets).toBe(binary);
+      expect(contentEndpoint.config.binaryPackets).toBe(binary && clientHints);
+      const background = new Nexus<ChromeAdapterModel>().configure({
+        endpoint: {
+          meta: { context: "background", extensionId: "test" },
+          implementation: backgroundEndpoint,
+        },
+        providers: [{ token, service: { echo: (bytes: Uint8Array) => bytes } }],
+      });
+      const content = new Nexus<ChromeAdapterModel>().configure({
+        endpoint: {
+          meta: {
+            context: "content-script",
+            url: "https://example.test",
+            origin: "https://example.test",
+          },
+          implementation: contentEndpoint,
+        },
+      });
+      try {
+        await background.ready();
+        const connection = await content.connect({
+          target: chromeTarget.background(),
+        });
+        const proxy = await connection.get(token);
+        // Exceed the default frame size to exercise both chunk codecs.
+        const input = Uint8Array.from(
+          { length: 128 * 1024 },
+          (_, i) => i % 256,
+        );
+        const output = await proxy.echo(input);
+        expect(output).toBeInstanceOf(Uint8Array);
+        expect(output).toEqual(input);
+        expect(input.byteLength).toBe(128 * 1024);
+        const packets = connectedPorts.flatMap((ports) => ports.sentMessages);
+        expect(packets.some((packet) => packet instanceof ArrayBuffer)).toBe(
+          binary && clientHints,
+        );
+        expect(packets.some((packet) => typeof packet === "string")).toBe(true);
+      } finally {
+        for (const ports of connectedPorts) ports.disconnect();
+        backgroundEndpoint.close();
+        contentEndpoint.close();
+      }
+    },
+  );
 
   it("accepts a content-initiated connection and reuses it for an exact background-to-content RPC", async () => {
     const background = new Nexus<ChromeAdapterModel>().configure({
