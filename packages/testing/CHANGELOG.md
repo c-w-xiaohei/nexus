@@ -1,5 +1,41 @@
 # @nexus-js/testing
 
+## 0.7.0-alpha.2
+
+### Minor Changes
+
+- c9e15ca: Move Relay registration to `nexus.relay()` and `nexus.safeRelay()`. The receiver
+  owns the registration, and omitted `to.nexus` uses that same runtime. Explicit
+  upstream runtimes retain their own target and metadata types.
+
+  Breaking change: replace `Nexus.relay({ from, to, services })` with
+  `from.relay({ to, services })`, and likewise for `safeRelay`. Remove `to.nexus`
+  when it is the same instance as `from`.
+
+  Testing mocks explicitly reject Relay registration with `E_USAGE_INVALID`;
+  forwarding integration tests must use real Nexus runtimes.
+
+### Patch Changes
+
+- e41edc4: Core: add local outbound `transfer` options to service handles, providers, and
+  `Expose`. Transfer original fixed ArrayBuffers and complete Uint8Array backing
+  buffers through negotiated native attachments. Keep copy as the default and
+  `ref()` as a traversal boundary. Capture callback/resource policies and share
+  release state across facades of the same remote identity.
+
+  Breaking: transport handshake version 2 requires coordinated upgrades across
+  all peers and Relay hops. Native transfers must fit a single frame and reject
+  unsupported capabilities or views without falling back to copy. Native failure
+  can partially detach sources and closes the affected resource scope when delivery
+  is uncertain. Virtual ports now reject sends after close. See the Core 2.0 alpha
+  migration guide for custom endpoint requirements.
+
+  Iframe: advertise native ArrayBuffer attachment support with either ordinary
+  packet mode. Internal packet transfer remains independent of user buffer policy.
+
+  Testing: accept the `transfer` handle option in application mocks. Mocks do not
+  simulate native ownership transfer; use runtime integration tests for detach.
+
 ## 0.7.0-alpha.1
 
 ### Minor Changes

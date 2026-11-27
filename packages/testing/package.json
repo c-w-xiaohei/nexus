@@ -1,6 +1,6 @@
 {
   "name": "@nexus-js/testing",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "description": "Testing utilities for Nexus applications",
   "private": false,
   "license": "MIT",
